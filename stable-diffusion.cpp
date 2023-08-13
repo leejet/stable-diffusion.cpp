@@ -10,6 +10,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <cstring>
+#include <iterator>
 
 #include "ggml/ggml.h"
 #include "stable-diffusion.h"
