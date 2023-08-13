@@ -1,0 +1,4 @@
+*.bin
+*.ckpt
+*.safetensor
+*.log

@@ -1,0 +1,4 @@
+numpy
+torch
+safetensors
+pytorch_lightning
