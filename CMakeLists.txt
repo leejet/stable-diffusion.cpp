@@ -12,6 +12,5 @@ add_executable(${SD_TARGET} main.cpp stb_image_write.h)
 target_link_libraries(${SD_LIB} PUBLIC ggml)
 target_link_libraries(${SD_TARGET} ${SD_LIB})
 
+target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
 target_compile_features(${SD_TARGET} PUBLIC cxx_std_11)
-
-set(CMAKE_CXX_STANDARD 11)
