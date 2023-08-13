@@ -30,8 +30,9 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] Make inference faster
     - The current implementation of ggml_conv_2d is slow and has high memory usage
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
-- [ ] [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer
+- [ ] [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (eg: token weighting, ...)
 - [ ] LoRA support
+- [ ] k-quants support
 
 ## Usage
 
