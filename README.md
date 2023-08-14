@@ -33,6 +33,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (eg: token weighting, ...)
 - [ ] LoRA support
 - [ ] k-quants support
+- [ ] Cross-platform reproducibility (perhaps ensuring consistency with the original SD)
 
 ## Usage
 
