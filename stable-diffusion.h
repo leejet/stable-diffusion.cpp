@@ -22,7 +22,8 @@ class StableDiffusion {
     std::shared_ptr<StableDiffusionGGML> sd;
 
    public:
-    StableDiffusion(int n_threads = -1);
+    StableDiffusion(int n_threads = -1,
+                    bool vae_decode_only = false);
     bool load_from_file(const std::string& file_path);
     std::vector<uint8_t> txt2img(
         const std::string& prompt,
@@ -32,6 +33,17 @@ class StableDiffusion {
         int height,
         SampleMethod sample_method,
         int sample_steps,
+        int seed);
+    std::vector<uint8_t> img2img(
+        const std::vector<uint8_t>& init_img,
+        const std::string& prompt,
+        const std::string& negative_prompt,
+        float cfg_scale,
+        int width,
+        int height,
+        SampleMethod sample_method,
+        int sample_steps,
+        float strength,
         int seed);
 };
 

@@ -7,7 +7,7 @@ set(SD_TARGET sd)
 add_subdirectory(ggml)
 
 add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp)
-add_executable(${SD_TARGET} main.cpp stb_image_write.h)
+add_executable(${SD_TARGET} main.cpp stb_image.h stb_image_write.h)
 
 target_link_libraries(${SD_LIB} PUBLIC ggml)
 target_link_libraries(${SD_TARGET} ${SD_LIB})
