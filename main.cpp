@@ -4,12 +4,62 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
 #include "stb_image_write.h"
+
+#if defined(__APPLE__) && defined(__MACH__)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#endif
+
+#if !defined(_WIN32)
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
+
+// get_num_physical_cores is copy from 
+// https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
+// LICENSE: https://github.com/ggerganov/llama.cpp/blob/master/LICENSE
+int32_t get_num_physical_cores() {
+#ifdef __linux__
+    // enumerate the set of thread siblings, num entries is num cores
+    std::unordered_set<std::string> siblings;
+    for (uint32_t cpu=0; cpu < UINT32_MAX; ++cpu) {
+        std::ifstream thread_siblings("/sys/devices/system/cpu"
+            + std::to_string(cpu) + "/topology/thread_siblings");
+        if (!thread_siblings.is_open()) {
+            break; // no more cpus
+        }
+        std::string line;
+        if (std::getline(thread_siblings, line)) {
+            siblings.insert(line);
+        }
+    }
+    if (siblings.size() > 0) {
+        return static_cast<int32_t>(siblings.size());
+    }
+#elif defined(__APPLE__) && defined(__MACH__)
+    int32_t num_physical_cores;
+    size_t len = sizeof(num_physical_cores);
+    int result = sysctlbyname("hw.perflevel0.physicalcpu", &num_physical_cores, &len, NULL, 0);
+    if (result == 0) {
+        return num_physical_cores;
+    }
+    result = sysctlbyname("hw.physicalcpu", &num_physical_cores, &len, NULL, 0);
+    if (result == 0) {
+        return num_physical_cores;
+    }
+#elif defined(_WIN32)
+    //TODO: Implement
+#endif
+    unsigned int n_threads = std::thread::hardware_concurrency();
+    return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
+}
 
 struct Option {
     int n_threads = -1;
@@ -47,7 +97,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
     printf("  -t, --threads N                    number of threads to use during computation (default: -1).\n");
-    printf("                                     If threads <= 0, then threads will be set to the number of CPU cores\n");
+    printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to model\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: .\\output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
@@ -145,7 +195,7 @@ void parse_args(int argc, const char* argv[], Option* opt) {
     }
 
     if (opt->n_threads <= 0) {
-        opt->n_threads = std::thread::hardware_concurrency();
+        opt->n_threads = get_num_physical_cores();
     }
 
     if (opt->prompt.length() == 0) {
