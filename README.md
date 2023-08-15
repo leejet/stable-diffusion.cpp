@@ -13,7 +13,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Original `txt2img` mode
+- Original `txt2img` and `img2img` mode
 - Negative prompt
 - Sampling method
     - `Euler A`
@@ -24,7 +24,6 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 
 ### TODO
 
-- [ ] Original `img2img` mode
 - [ ] More sampling methods
 - [ ] GPU support
 - [ ] Make inference faster
@@ -97,13 +96,17 @@ usage: ./sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
+  -M, --mode [txt2img or img2img]    generation mode (default: txt2img)
   -t, --threads N                    number of threads to use during computation (default: -1).
-                                     If threads <= 0, then threads will be set to the number of CPU cores
+                                     If threads <= 0, then threads will be set to the number of CPU physical cores
   -m, --model [MODEL]                path to model
+  -i, --init-img [IMAGE]             path to the input image, required by img2img
   -o, --output OUTPUT                path to write result image to (default: .\output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
   --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)
+  --strength STRENGTH                strength for noising/unnoising (default: 0.75)
+                                     1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
   --sample-method SAMPLE_METHOD      sample method (default: "eular a")
@@ -112,7 +115,7 @@ arguments:
   -v, --verbose                      print extra info
 ```
 
-For example
+#### txt2img example
 
 ```
 ./sd -m ../models/sd-v1-4-ggml-model-f16.bin -p "a lovely cat"
@@ -123,6 +126,19 @@ Using formats of different precisions will yield results of varying quality.
 | f32  | f16  |q8_0  |q5_0  |q5_1  |q4_0  |q4_1  |
 | ----  |----  |----  |----  |----  |----  |----  |
 | ![](./assets/f32.png) |![](./assets/f16.png) |![](./assets/q8_0.png) |![](./assets/q5_0.png) |![](./assets/q5_1.png) |![](./assets/q4_0.png) |![](./assets/q4_1.png) |
+
+#### img2img example
+
+- `./output.png` is the image generated from the above txt2img pipeline
+
+
+```
+./sd --mode img2img -m ../models/sd-v1-4-ggml-model-f16.bin -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
+```
+
+<p align="center">
+  <img src="./assets/img2img_output.png" width="256x">
+</p>
 
 ## Memory/Disk Requirements
 
