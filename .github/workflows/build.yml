@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/**', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu']
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: ['**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu']
+
+jobs:
+  ubuntu-latest-cmake:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential
+
+      - name: Build
+        id: cmake_build
+        run: |
+          mkdir build
+          cd build
+          cmake ..
+          cmake --build . --config Release
+
+      #- name: Test
+        #id: cmake_test
+        #run: |
+          #cd build
+          #ctest --verbose --timeout 900
+
+  macOS-latest-cmake:
+    runs-on: macos-latest
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Dependencies
+        id: depends
+        continue-on-error: true
+        run: |
+          brew update
+
+      - name: Build
+        id: cmake_build
+        run: |
+          sysctl -a
+          mkdir build
+          cd build
+          cmake -DLLAMA_AVX2=OFF -DLLAMA_FMA=OFF ..
+          cmake --build . --config Release
+
+      #- name: Test
+        #id: cmake_test
+        #run: |
+          #cd build
+          #ctest --verbose --timeout 900
+
+  windows-latest-cmake:
+    runs-on: windows-latest
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Build
+        id: cmake_build
+        run: |
+          mkdir build
+          cd build
+          cmake ..
+          cmake --build . --config Release
+
+      #- name: Test
+        #id: cmake_test
+        #run: |
+          #cd build
+          #ctest -C Release --verbose --timeout 900
+
