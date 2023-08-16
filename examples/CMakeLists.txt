@@ -1,5 +1,5 @@
-#TODO: move into its own subdirectoy
-#TODO: make stb libs a target (maybe common)
+# TODO: move into its own subdirectoy
+# TODO: make stb libs a target (maybe common)
 set(SD_TARGET sd)
 
 add_executable(${SD_TARGET} main.cpp stb_image.h stb_image_write.h)
