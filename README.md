@@ -43,6 +43,14 @@ git clone --recursive https://github.com/leejet/stable-diffusion.cpp
 cd stable-diffusion.cpp
 ```
 
+- If you have already cloned the repository, you can use the following command to update the repository to the latest code.
+
+```
+cd stable-diffusion.cpp
+git pull origin master
+git submodule update
+```
+
 ### Convert weights
 
 - download original weights(.ckpt or .safetensors). For example
