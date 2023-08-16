@@ -322,7 +322,8 @@ int main(int argc, const char* argv[]) {
         }
         init_img.assign(img_data, img_data + (opt.w * opt.h * c));
     }
-    StableDiffusion sd(opt.n_threads, vae_decode_only);
+
+    StableDiffusion sd(opt.n_threads, vae_decode_only, true);
     if (!sd.load_from_file(opt.model_path)) {
         return 1;
     }

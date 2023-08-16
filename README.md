@@ -12,6 +12,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - 16-bit, 32-bit float support
 - 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
+    - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image
 - AVX, AVX2 and AVX512 support for x86 architectures
 - Original `txt2img` and `img2img` mode
 - Negative prompt
@@ -152,8 +153,8 @@ Using formats of different precisions will yield results of varying quality.
 
 | precision | f32  | f16  |q8_0  |q5_0  |q5_1  |q4_0  |q4_1  |
 | ----         | ----  |----  |----  |----  |----  |----  |----  |
-|  **Disk**        | 2.8G | 2.0G | 1.7G | 1.6G | 1.6G | 1.5G | 1.5G |
-|  **Memory**(txt2img - 512 x 512) | ~4.9G | ~4.1G | ~3.8G | ~3.7G | ~3.7G | ~3.6G | ~3.6G |
+|  **Disk**        | 2.7G | 2.0G | 1.7G | 1.6G | 1.6G | 1.5G | 1.5G |
+|  **Memory**(txt2img - 512 x 512) | ~2.8G | ~2.3G | ~2.1G | ~2.0G | ~2.0G | ~2.0G | ~2.0G |
 
 
 ## References

@@ -23,7 +23,8 @@ class StableDiffusion {
 
    public:
     StableDiffusion(int n_threads = -1,
-                    bool vae_decode_only = false);
+                    bool vae_decode_only = false,
+                    bool free_params_immediately = false);
     bool load_from_file(const std::string& file_path);
     std::vector<uint8_t> txt2img(
         const std::string& prompt,
