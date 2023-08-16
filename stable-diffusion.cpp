@@ -1182,7 +1182,11 @@ struct DownSample {
         }
     }
 
-    static void asymmetric_pad(struct ggml_tensor* dst, const struct ggml_tensor* a, const struct ggml_tensor* b) {
+    // TODO: making it parallel
+    static void asymmetric_pad(struct ggml_tensor* dst,
+                               const struct ggml_tensor* a,
+                               const struct ggml_tensor* b,
+                               int ith, int nth, void * userdata) {
         assert(sizeof(dst->nb[0]) == sizeof(float));
         assert(sizeof(a->nb[0]) == sizeof(float));
         assert(sizeof(b->nb[0]) == sizeof(float));
@@ -1213,7 +1217,7 @@ struct DownSample {
             auto pad_x = ggml_new_tensor_4d(ctx, x->type, x->ne[0] + 1, x->ne[1] + 1, x->ne[2], x->ne[3]);
             ggml_set_dynamic(ctx, dynamic);
 
-            x = ggml_map_custom2_inplace_f32(ctx, pad_x, x, asymmetric_pad);
+            x = ggml_map_custom2_inplace(ctx, pad_x, x, asymmetric_pad, 1, NULL);
             x = ggml_conv_2d(ctx, op_w, x, 2, 2, 0, 0, 1, 1);
         } else {
             x = ggml_conv_2d(ctx, op_w, x, 2, 2, 1, 1, 1, 1);
@@ -2684,13 +2688,7 @@ class StableDiffusionGGML {
 
                 const size_t num_bytes = nelements / ggml_blck_size(ggml_type(ttype)) * ggml_type_size(ggml_type(ttype));
 
-                if (num_bytes != ggml_nbytes(tensor)) {
-                    LOG_ERROR("tensor '%s' has wrong size in model file: got %zu, expected %zu",
-                              name.data(), num_bytes, ggml_nbytes(tensor));
-                    return false;
-                }
-
-                file.read(reinterpret_cast<char*>(tensor->data), ggml_nbytes(tensor));
+                file.read(reinterpret_cast<char*>(tensor->data), num_bytes);
 
                 total_size += ggml_nbytes(tensor);
             }
