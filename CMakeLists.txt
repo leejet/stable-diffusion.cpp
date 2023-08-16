@@ -1,16 +1,15 @@
 cmake_minimum_required(VERSION 3.12)
 project(stable-diffusion)
 
-set(SD_LIB stable-diffusion)
-set(SD_TARGET sd)
-
+# deps
 add_subdirectory(ggml)
 
+set(SD_LIB stable-diffusion)
+
 add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp)
-add_executable(${SD_TARGET} main.cpp stb_image.h stb_image_write.h)
-
 target_link_libraries(${SD_LIB} PUBLIC ggml)
-target_link_libraries(${SD_TARGET} ${SD_LIB})
-
+target_include_directories(${SD_LIB} PUBLIC .)
 target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
-target_compile_features(${SD_TARGET} PUBLIC cxx_std_11)
+
+# examples
+add_subdirectory(examples)
