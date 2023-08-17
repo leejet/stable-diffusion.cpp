@@ -63,7 +63,7 @@ jobs:
           sysctl -a
           mkdir build
           cd build
-          cmake -DLLAMA_AVX2=OFF -DLLAMA_FMA=OFF ..
+          cmake ..
           cmake --build . --config Release
 
       #- name: Test
