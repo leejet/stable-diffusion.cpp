@@ -101,7 +101,7 @@ cmake --build . --config Release
 ### Run
 
 ```
-usage: ./sd [arguments]
+usage: ./bin/sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
@@ -127,7 +127,7 @@ arguments:
 #### txt2img example
 
 ```
-./sd -m ../models/sd-v1-4-ggml-model-f16.bin -p "a lovely cat"
+./bin/sd -m ../models/sd-v1-4-ggml-model-f16.bin -p "a lovely cat"
 ```
 
 Using formats of different precisions will yield results of varying quality.
@@ -142,7 +142,7 @@ Using formats of different precisions will yield results of varying quality.
 
 
 ```
-./sd --mode img2img -m ../models/sd-v1-4-ggml-model-f16.bin -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
+./bin/sd --mode img2img -m ../models/sd-v1-4-ggml-model-f16.bin -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
 ```
 
 <p align="center">
