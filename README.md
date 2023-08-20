@@ -16,6 +16,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - AVX, AVX2 and AVX512 support for x86 architectures
 - Original `txt2img` and `img2img` mode
 - Negative prompt
+- [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
 - Sampling method
     - `Euler A`
 - Supported platforms
@@ -30,7 +31,6 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] Make inference faster
     - The current implementation of ggml_conv_2d is slow and has high memory usage
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
-- [ ] [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (eg: token weighting, ...)
 - [ ] LoRA support
 - [ ] k-quants support
 - [ ] Cross-platform reproducibility (perhaps ensuring consistency with the original SD)
