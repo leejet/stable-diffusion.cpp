@@ -49,6 +49,7 @@ cd stable-diffusion.cpp
 ```
 cd stable-diffusion.cpp
 git pull origin master
+git submodule init
 git submodule update
 ```
 
