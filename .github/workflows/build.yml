@@ -1,9 +1,16 @@
 name: CI
 
 on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
   push:
     branches:
       - master
+      - ci
     paths: ['.github/workflows/**', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu']
   pull_request:
     types: [opened, synchronize, reopened]
@@ -75,6 +82,18 @@ jobs:
   windows-latest-cmake:
     runs-on: windows-latest
 
+    strategy:
+      matrix:
+        include:
+          - build: 'noavx'
+            defines: '-DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF'
+          - build: 'avx2'
+            defines: '-DGGML_AVX2=ON'
+          - build: 'avx'
+            defines: '-DGGML_AVX2=OFF'
+          - build: 'avx512'
+            defines: '-DGGML_AVX512=ON'
+
     steps:
       - name: Clone
         id: checkout
@@ -87,12 +106,45 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake ..
+          cmake .. ${{ matrix.defines }}
           cmake --build . --config Release
+
+      - name: Check AVX512F support
+        id: check_avx512f
+        if: ${{ matrix.build == 'avx512' }}
+        continue-on-error: true
+        run: |
+          cd build
+          $vcdir = $(vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
+          $msvc = $(join-path $vcdir $('VC\Tools\MSVC\'+$(gc -raw $(join-path $vcdir 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()))
+          $cl =  $(join-path $msvc 'bin\Hostx64\x64\cl.exe')
+          echo 'int main(void){unsigned int a[4];__cpuid(a,7);return !(a[1]&65536);}' >> avx512f.c
+          & $cl /O2 /GS- /kernel avx512f.c /link /nodefaultlib /entry:main
+          .\avx512f.exe && echo "AVX512F: YES" && ( echo HAS_AVX512F=1 >> $env:GITHUB_ENV ) || echo "AVX512F: NO"
 
       #- name: Test
         #id: cmake_test
         #run: |
           #cd build
           #ctest -C Release --verbose --timeout 900
+
+      - name: Get commit hash
+        id: commit
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: pr-mpt/actions-commit-hash@v2
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          Copy-Item ggml/LICENSE .\build\bin\Release\ggml.txt
+          Copy-Item LICENSE .\build\bin\Release\stable-diffusion.cpp.txt
+          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip .\build\bin\Release\*
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v3
+        with:
+          path: |
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip
 
