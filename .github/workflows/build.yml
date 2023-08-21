@@ -92,7 +92,7 @@ jobs:
           - build: 'avx'
             defines: '-DGGML_AVX2=OFF'
           - build: 'avx512'
-            defines: '-DGGML_AVX512=ON -DBUILD_SHARED_LIBS=ON'
+            defines: '-DGGML_AVX512=ON'
 
     steps:
       - name: Clone
