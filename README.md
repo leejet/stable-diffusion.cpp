@@ -86,6 +86,8 @@ You can specify the output model format using the --out_type parameter
 
 ### Build
 
+#### Build from scratch
+
 ```shell
 mkdir build
 cd build
@@ -93,7 +95,7 @@ cmake ..
 cmake --build . --config Release
 ```
 
-#### Using OpenBLAS
+##### Using OpenBLAS
 
 ```
 cmake .. -DGGML_OPENBLAS=ON
@@ -150,6 +152,22 @@ Using formats of different precisions will yield results of varying quality.
 <p align="center">
   <img src="./assets/img2img_output.png" width="256x">
 </p>
+
+### Docker
+
+#### Building using Docker
+
+```shell
+docker build -t sd .
+```
+
+#### Run
+
+```shell
+docker run -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
+# For example
+# docker run -v ./models:/models -v ./build:/output sd -m /models/sd-v1-4-ggml-model-f16.bin -p "a lovely cat" -v -o /output/output.png
+```
 
 ## Memory/Disk Requirements
 
