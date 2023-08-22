@@ -34,6 +34,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] LoRA support
 - [ ] k-quants support
 - [ ] Cross-platform reproducibility (perhaps ensuring consistency with the original SD)
+- [ ] Adapting to more weight formats
 
 ## Usage
 
