@@ -29,4 +29,4 @@ for /f "delims=" %%a in ('cl.exe 2^>^&1') do (
     endlocal
 )
 
-cl.exe /fp:fast /Ox /EHsc /I. /I ggml\include\ggml /I ggml\include main.cpp stable-diffusion.cpp ggml\src\ggml.c /link /out:sd.exe
+cl.exe /fp:fast /Ox /EHsc /arch:AVX2 /GL /I. /I ggml\include\ggml /I ggml\include main.cpp stable-diffusion.cpp ggml\src\ggml.c /link /out:sd.exe
