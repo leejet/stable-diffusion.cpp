@@ -23,6 +23,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - Linux
     - Mac OS
     - Windows
+    - Android (via Termux)
 
 ### TODO
 
