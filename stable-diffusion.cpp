@@ -3256,6 +3256,10 @@ class StableDiffusionGGML {
                         }
                     }
                 }
+
+#ifdef GGML_PERF
+                ggml_graph_print(&diffusion_graph);
+#endif
                 int64_t t1 = ggml_time_ms();
                 LOG_INFO("step %d sampling completed, taking %.2fs", i + 1, (t1 - t0) * 1.0f / 1000);
                 LOG_DEBUG("diffusion graph use %.2fMB runtime memory: static %.2fMB, dynamic %.2fMB",
@@ -3345,6 +3349,10 @@ class StableDiffusionGGML {
             int64_t t0 = ggml_time_ms();
             ggml_graph_compute_with_ctx(ctx, &vae_graph, n_threads);
             int64_t t1 = ggml_time_ms();
+
+#ifdef GGML_PERF
+            ggml_graph_print(&vae_graph);
+#endif
             LOG_DEBUG("computing vae graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
             result = ggml_dup_tensor(res_ctx, moments);
@@ -3470,6 +3478,10 @@ class StableDiffusionGGML {
             int64_t t0 = ggml_time_ms();
             ggml_graph_compute_with_ctx(ctx, &vae_graph, n_threads);
             int64_t t1 = ggml_time_ms();
+
+#ifdef GGML_PERF
+            ggml_graph_print(&vae_graph);
+#endif
             LOG_DEBUG("computing vae graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
             result_img = ggml_dup_tensor(res_ctx, img);
