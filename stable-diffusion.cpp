@@ -251,6 +251,11 @@ void image_vec_to_ggml(const std::vector<uint8_t>& vec,
     }
 }
 
+struct ggml_tensor * ggml_group_norm_32(struct ggml_context * ctx,
+                                        struct ggml_tensor * a) {
+    return ggml_group_norm(ctx, a, 32);
+}
+
 /*================================================== CLIPTokenizer ===================================================*/
 
 const std::string UNK_TOKEN = "<|endoftext|>";
@@ -899,7 +904,7 @@ struct ResBlock {
 
         // in_layers
         // group norm 32
-        auto h = ggml_group_norm(ctx, x);
+        auto h = ggml_group_norm_32(ctx, x);
         h = ggml_add(ctx,
                      ggml_mul(ctx,
                               ggml_repeat(ctx,
@@ -929,7 +934,7 @@ struct ResBlock {
         // out_layers
         h = ggml_add(ctx, h, emb_out);
         // group norm 32
-        h = ggml_group_norm_inplace(ctx, h);
+        h = ggml_group_norm_inplace(ctx, h, 32);
         h = ggml_add(ctx,
                      ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, out_layer_0_w, 1, 1, out_layer_0_w->ne[0], 1), h), h),
                      ggml_repeat(ctx, ggml_reshape_4d(ctx, out_layer_0_b, 1, 1, out_layer_0_b->ne[0], 1), h));
@@ -1122,7 +1127,7 @@ struct SpatialTransformer {
 
         auto x_in = x;
         // group norm 32
-        x = ggml_group_norm(ctx, x);
+        x = ggml_group_norm_32(ctx, x);
         x = ggml_add(ctx,
                      ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_w, 1, 1, norm_w->ne[0], 1), x), x),
                      ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_b, 1, 1, norm_b->ne[0], 1), x));
@@ -1424,7 +1429,7 @@ struct UpSample {
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [N, channels, h, w]
-        x = ggml_upscale(ctx, x);  // [N, channels, h*2, w*2]
+        x = ggml_upscale(ctx, x, 2);  // [N, channels, h*2, w*2]
         x = ggml_conv_2d(ctx, conv_w, x, 1, 1, 1, 1, 1, 1);
 
         x = ggml_add(ctx,
@@ -1815,7 +1820,7 @@ struct UNetModel {
 
         // out
         // group norm 32
-        h = ggml_group_norm(ctx, h);
+        h = ggml_group_norm_32(ctx, h);
         h = ggml_add(ctx,
                      ggml_mul(ctx,
                               ggml_repeat(ctx,
@@ -1919,7 +1924,7 @@ struct ResnetBlock {
         // z: [N, in_channels, h, w]
 
         // group norm 32
-        auto h = ggml_group_norm(ctx, z);
+        auto h = ggml_group_norm_32(ctx, z);
         h = ggml_mul(ctx,
                      ggml_repeat(ctx,
                                  ggml_reshape_4d(ctx, norm1_w, 1, 1, norm1_w->ne[0], 1),
@@ -1941,7 +1946,7 @@ struct ResnetBlock {
                                  h));  // [N, out_channels, h, w]
 
         // group norm 32
-        h = ggml_group_norm(ctx, h);
+        h = ggml_group_norm_32(ctx, h);
         h = ggml_add(ctx,
                      ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, norm2_w, 1, 1, norm2_w->ne[0], 1), h), h),
                      ggml_repeat(ctx, ggml_reshape_4d(ctx, norm2_b, 1, 1, norm2_b->ne[0], 1), h));
@@ -2028,7 +2033,7 @@ struct AttnBlock {
         // x: [N, in_channels, h, w]
 
         // group norm 32
-        auto h_ = ggml_group_norm(ctx, x);
+        auto h_ = ggml_group_norm_32(ctx, x);
         h_ = ggml_add(ctx,
                       ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_w, 1, 1, norm_w->ne[0], 1), h_), h_),
                       ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_b, 1, 1, norm_b->ne[0], 1), h_));
@@ -2253,7 +2258,7 @@ struct Encoder {
         h = mid.block_2.forward(ctx, h);  // [N, block_in, h, w]
 
         // group norm 32
-        h = ggml_group_norm(ctx, h);
+        h = ggml_group_norm_32(ctx, h);
         h = ggml_add(ctx,
                      ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_out_w, 1, 1, norm_out_w->ne[0], 1), h), h),
                      ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_out_b, 1, 1, norm_out_b->ne[0], 1), h));
@@ -2435,7 +2440,7 @@ struct Decoder {
         }
 
         // group norm 32
-        h = ggml_group_norm(ctx, h);
+        h = ggml_group_norm_32(ctx, h);
         h = ggml_add(ctx,
                      ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_out_w, 1, 1, norm_out_w->ne[0], 1), h), h),
                      ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_out_b, 1, 1, norm_out_b->ne[0], 1), h));
