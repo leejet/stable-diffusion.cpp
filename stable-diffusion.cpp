@@ -26,12 +26,16 @@ static SDLogLevel log_level = SDLogLevel::INFO;
         }                                                                                             \
         if (level == SDLogLevel::DEBUG) {                                                             \
             printf("[DEBUG] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
+            fflush(stdout);                                                                           \
         } else if (level == SDLogLevel::INFO) {                                                       \
             printf("[INFO]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
+            fflush(stdout);                                                                           \
         } else if (level == SDLogLevel::WARN) {                                                       \
             fprintf(stderr, "[WARN]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
+            fflush(stdout);                                                                           \
         } else if (level == SDLogLevel::ERROR) {                                                      \
             fprintf(stderr, "[ERROR] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
+            fflush(stdout);                                                                           \
         }                                                                                             \
     } while (0)
 
@@ -135,6 +139,7 @@ float ggml_tensor_get_f32(const ggml_tensor* tensor, int l, int k = 0, int j = 0
 
 void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false) {
     printf("shape(%zu, %zu, %zu, %zu)\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+    fflush(stdout);
     if (shape_only) {
         return;
     }
@@ -156,6 +161,7 @@ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false) {
                         continue;
                     }
                     printf("  [%d, %d, %d, %d] = %f\n", i, j, k, l, ggml_tensor_get_f32(tensor, l, k, j, i));
+                    fflush(stdout);
                 }
             }
         }
