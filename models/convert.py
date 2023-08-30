@@ -31,7 +31,7 @@ ggml_ttype_str_to_int = {
 
 QK4_0 = 32
 def quantize_q4_0(x):
-    assert x.shape[-1] % QK4_0 == 0
+    assert x.shape[-1] % QK4_0 == 0 and x.shape[-1] > QK4_0
     x = x.reshape(-1, QK4_0)
     max = np.take_along_axis(x, np.argmax(np.abs(x), axis=-1)[:, np.newaxis], axis=-1)
     d = max / -8
@@ -44,7 +44,7 @@ def quantize_q4_0(x):
 
 QK4_1 = 32
 def quantize_q4_1(x):
-    assert x.shape[-1] % QK4_1 == 0
+    assert x.shape[-1] % QK4_1 == 0 and x.shape[-1] > QK4_1
     x = x.reshape(-1, QK4_1)
     min = np.min(x, axis=-1, keepdims=True)
     max = np.max(x, axis=-1, keepdims=True)
@@ -59,7 +59,7 @@ def quantize_q4_1(x):
 
 QK5_0 = 32
 def quantize_q5_0(x):
-    assert x.shape[1] % QK5_0 == 0
+    assert x.shape[-1] % QK5_0 == 0 and x.shape[-1] > QK5_0
     x = x.reshape(-1, QK5_0)
     max = np.take_along_axis(x, np.argmax(np.abs(x), axis=-1)[:, np.newaxis], axis=-1)
     d = max / -16
@@ -76,7 +76,7 @@ def quantize_q5_0(x):
 
 QK5_1 = 32
 def quantize_q5_1(x):
-    assert x.shape[-1] % QK5_1 == 0
+    assert x.shape[-1] % QK5_1 == 0 and x.shape[-1] > QK5_1
     x = x.reshape(-1, QK5_1)
     min = np.min(x, axis=-1, keepdims=True)
     max = np.max(x, axis=-1, keepdims=True)
@@ -95,7 +95,7 @@ def quantize_q5_1(x):
 
 QK8_0 = 32
 def quantize_q8_0(x):
-    assert x.shape[-1] % QK8_0 == 0
+    assert x.shape[-1] % QK8_0 == 0 and x.shape[-1] > QK8_0
     x = x.reshape(-1, QK8_0)
     amax = np.max(np.abs(x), axis=-1, keepdims=True) 
     d = amax / ((1 << 7) - 1)
@@ -156,7 +156,10 @@ unused_tensors = [
     "posterior_mean_coef2",
     "cond_stage_model.transformer.text_model.embeddings.position_ids",
     "model_ema.decay",
-    "model_ema.num_updates"
+    "model_ema.num_updates",
+    "control_model",
+    "lora_te_text_model",
+    "embedding_manager"
 ]
 
 def convert(model_path, out_type = None, out_file=None):
@@ -182,6 +185,10 @@ def convert(model_path, out_type = None, out_file=None):
             out_type = "f32"
         elif weight.dtype == np.float16:
             out_type = "f16"
+        elif weight.dtype == np.float64:
+            out_type = "f32"
+        else:
+            raise Exception("unsupported weight type %s" % weight.dtype)
     if out_file == None:
         out_file = os.path.splitext(os.path.basename(model_path))[0] + f"-ggml-model-{out_type}.bin"
         out_file = os.path.join(os.getcwd(), out_file)
@@ -206,6 +213,13 @@ def convert(model_path, out_type = None, out_file=None):
         # weights
         for name in state_dict.keys():
             if not isinstance(state_dict[name], torch.Tensor):
+                continue
+            skip = False
+            for unused_tensor in unused_tensors:
+                if name.startswith(unused_tensor):
+                    skip = True
+                    break
+            if skip:
                 continue
             if name in unused_tensors:
                 continue

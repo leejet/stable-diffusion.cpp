@@ -2864,6 +2864,8 @@ class StableDiffusionGGML {
                     nelements *= ne[i];
                 }
 
+                const size_t num_bytes = nelements / ggml_blck_size(ggml_type(ttype)) * ggml_type_size(ggml_type(ttype));
+
                 std::string name(length, 0);
                 file.read(&name[0], length);
 
@@ -2891,7 +2893,7 @@ class StableDiffusionGGML {
                             return false;
                         }
                     }
-                    file.ignore(nelements * ggml_type_size((ggml_type)ttype));
+                    file.ignore(num_bytes);
                     continue;
                 }
 
@@ -2918,8 +2920,6 @@ class StableDiffusionGGML {
                               name.data(), ggml_type_name(ggml_type(ttype)), ggml_type_name(tensor->type));
                     return false;
                 }
-
-                const size_t num_bytes = nelements / ggml_blck_size(ggml_type(ttype)) * ggml_type_size(ggml_type(ttype));
 
                 file.read(reinterpret_cast<char*>(tensor->data), num_bytes);
 
