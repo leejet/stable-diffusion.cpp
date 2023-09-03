@@ -14,6 +14,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image
 - AVX, AVX2 and AVX512 support for x86 architectures
+- SD1.x and SD2.x support
 - Original `txt2img` and `img2img` mode
 - Negative prompt
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
@@ -60,10 +61,12 @@ git submodule update
 - download original weights(.ckpt or .safetensors). For example
     - Stable Diffusion v1.4 from https://huggingface.co/CompVis/stable-diffusion-v-1-4-original
     - Stable Diffusion v1.5 from https://huggingface.co/runwayml/stable-diffusion-v1-5
+    - Stable Diffuison v2.1 from https://huggingface.co/stabilityai/stable-diffusion-2-1
 
     ```shell
     curl -L -O https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4.ckpt
     # curl -L -O https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
+    # curl -L -o https://huggingface.co/stabilityai/stable-diffusion-2-1/blob/main/v2-1_768-nonema-pruned.safetensors
     ```
 
 - convert weights to ggml model format
@@ -182,5 +185,6 @@ docker run -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
 
 - [ggml](https://github.com/ggerganov/ggml)
 - [stable-diffusion](https://github.com/CompVis/stable-diffusion)
+- [stable-diffusion-stability-ai](https://github.com/Stability-AI/stablediffusion)
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
 - [k-diffusion](https://github.com/crowsonkb/k-diffusion)
