@@ -40,7 +40,7 @@ class StableDiffusion {
         int height,
         SampleMethod sample_method,
         int sample_steps,
-        int seed);
+        int64_t seed);
     std::vector<uint8_t> img2img(
         const std::vector<uint8_t>& init_img,
         const std::string& prompt,
@@ -51,7 +51,7 @@ class StableDiffusion {
         SampleMethod sample_method,
         int sample_steps,
         float strength,
-        int seed);
+        int64_t seed);
 };
 
 void set_sd_log_level(SDLogLevel level);

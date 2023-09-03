@@ -93,7 +93,7 @@ class PhiloxRNG : public RNG {
         this->offset = 0;
     }
 
-    void manual_seed(uint32_t seed) {
+    void manual_seed(uint64_t seed) {
         this->seed = seed;
         this->offset = 0;
     }

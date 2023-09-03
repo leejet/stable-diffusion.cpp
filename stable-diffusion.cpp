@@ -3823,7 +3823,7 @@ std::vector<uint8_t> StableDiffusion::txt2img(const std::string& prompt,
                                               int height,
                                               SampleMethod sample_method,
                                               int sample_steps,
-                                              int seed) {
+                                              int64_t seed) {
     std::vector<uint8_t> result;
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10M
@@ -3911,7 +3911,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
                                               SampleMethod sample_method,
                                               int sample_steps,
                                               float strength,
-                                              int seed) {
+                                              int64_t seed) {
     std::vector<uint8_t> result;
     if (init_img_vec.size() != width * height * 3) {
         return result;

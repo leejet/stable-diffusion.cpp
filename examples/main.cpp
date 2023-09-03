@@ -87,7 +87,7 @@ struct Option {
     int sample_steps = 20;
     float strength = 0.75f;
     RNGType rng_type = STD_DEFAULT_RNG;
-    int seed = 42;
+    int64_t seed = 42;
     bool verbose = false;
 
     void print() {
@@ -106,7 +106,7 @@ struct Option {
         printf("    sample_steps:    %d\n", sample_steps);
         printf("    strength:        %.2f\n", strength);
         printf("    rng:             %s\n", rng_type_to_str[rng_type]);
-        printf("    seed:            %d\n", seed);
+        printf("    seed:            %ld\n", seed);
     }
 };
 
@@ -233,7 +233,7 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 invalid_arg = true;
                 break;
             }
-            opt->seed = std::stoi(argv[i]);
+            opt->seed = std::stoll(argv[i]);
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv);
             exit(0);
