@@ -3099,7 +3099,7 @@ class StableDiffusionGGML {
         struct ggml_tensor* c = ggml_new_tensor_4d(res_ctx, GGML_TYPE_F32, 1024, 2, 1, 1);
         ggml_set_f32(c, 0.5);
 
-        size_t ctx_size = 1 * 1024 * 1024;  // 1MB
+        size_t ctx_size = 10 * 1024 * 1024;  // 10MB
         // calculate the amount of memory required
         {
             struct ggml_init_params params;
@@ -3201,7 +3201,7 @@ class StableDiffusionGGML {
                                                             true);
         std::vector<int>& tokens = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
-        size_t ctx_size = 1 * 1024 * 1024;  // 1MB
+        size_t ctx_size = 10 * 1024 * 1024;  // 10MB
         // calculate the amount of memory required
         {
             struct ggml_init_params params;
@@ -3335,7 +3335,7 @@ class StableDiffusionGGML {
         struct ggml_tensor* x = ggml_dup_tensor(res_ctx, x_t);
         copy_ggml_tensor(x, x_t);
 
-        size_t ctx_size = 1 * 1024 * 1024;  // 1MB
+        size_t ctx_size = 10 * 1024 * 1024;  // 10MB
         // calculate the amount of memory required
         {
             struct ggml_init_params params;
@@ -3590,7 +3590,7 @@ class StableDiffusionGGML {
         struct ggml_tensor* result = NULL;
 
         // calculate the amount of memory required
-        size_t ctx_size = 1 * 1024 * 1024;
+        size_t ctx_size = 10 * 1024 * 1024; // 10MB
         {
             struct ggml_init_params params;
             params.mem_size = ctx_size;
@@ -3719,7 +3719,7 @@ class StableDiffusionGGML {
         }
 
         // calculate the amount of memory required
-        size_t ctx_size = 1 * 1024 * 1024;
+        size_t ctx_size = 10 * 1024 * 1024; // 10MB
         {
             struct ggml_init_params params;
             params.mem_size = ctx_size;
