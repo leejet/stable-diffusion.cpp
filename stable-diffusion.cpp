@@ -3029,6 +3029,9 @@ class StableDiffusionGGML {
             }
             bool some_tensor_not_init = false;
             for (auto pair : tensors) {
+                if (pair.first.find("cond_stage_model.transformer.text_model.encoder.layers.23") != std::string::npos) {
+                    continue;
+                }
                 if (tensor_names_in_file.find(pair.first) == tensor_names_in_file.end()) {
                     LOG_ERROR("tensor '%s' not in model file", pair.first.c_str());
                     some_tensor_not_init = true;
