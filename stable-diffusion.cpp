@@ -3222,8 +3222,8 @@ class StableDiffusionGGML {
 
             struct ggml_tensor* hidden_states = cond_stage_model.text_model.forward(ctx, input_ids);
 
-            struct ggml_cgraph* cond_graph = ggml_build_forward_ctx(ctx, hidden_states);
-            struct ggml_cplan cplan = ggml_graph_plan(cond_graph, n_threads);
+            struct ggml_cgraph cond_graph = ggml_build_forward(hidden_states);
+            struct ggml_cplan cplan = ggml_graph_plan(&cond_graph, n_threads);
             ctx_size += cplan.work_size;
 
             ctx_size += ggml_used_mem(ctx) + ggml_used_mem_of_data(ctx);
