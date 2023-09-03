@@ -4,11 +4,16 @@
 #include <memory>
 #include <vector>
 
-enum class SDLogLevel {
+enum SDLogLevel {
     DEBUG,
     INFO,
     WARN,
     ERROR
+};
+
+enum RNGType {
+    STD_DEFAULT_RNG,
+    CUDA_RNG
 };
 
 enum SampleMethod {
@@ -24,7 +29,8 @@ class StableDiffusion {
    public:
     StableDiffusion(int n_threads = -1,
                     bool vae_decode_only = false,
-                    bool free_params_immediately = false);
+                    bool free_params_immediately = false,
+                    RNGType rng_type = STD_DEFAULT_RNG);
     bool load_from_file(const std::string& file_path);
     std::vector<uint8_t> txt2img(
         const std::string& prompt,

@@ -20,6 +20,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
 - Sampling method
     - `Euler A`
+- Cross-platform reproducibility (`--rng cuda`, consistent with the `stable-diffusion-webui GPU RNG`)
 - Supported platforms
     - Linux
     - Mac OS
@@ -35,8 +36,6 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
 - [ ] LoRA support
 - [ ] k-quants support
-- [ ] Cross-platform reproducibility (perhaps ensuring consistency with the original SD)
-- [ ] Adapting to more weight formats
 
 ## Usage
 

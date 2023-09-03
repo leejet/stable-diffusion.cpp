@@ -15,6 +15,8 @@
 
 #include "ggml/ggml.h"
 #include "stable-diffusion.h"
+#include "rng.h"
+#include "rng_philox.h"
 
 static SDLogLevel log_level = SDLogLevel::INFO;
 
@@ -117,19 +119,11 @@ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_pa
     return tensor;
 }
 
-static std::default_random_engine generator;
-
-void set_random_seed(int seed) {
-    generator.seed(seed);
-}
-
-void ggml_tensor_set_f32_randn(struct ggml_tensor* tensor) {
-    float mean = 0.0;
-    float stddev = 1.0;
-    std::normal_distribution<float> distribution(mean, stddev);
-    for (int i = 0; i < ggml_nelements(tensor); i++) {
-        float random_number = distribution(generator);
-        ggml_set_f32_1d(tensor, i, random_number);
+void ggml_tensor_set_f32_randn(struct ggml_tensor* tensor, std::shared_ptr<RNG> rng) {
+    uint32_t n = ggml_nelements(tensor);
+    std::vector<float> random_numbers = rng->randn(n);
+    for (int i = 0; i < n; i++) {
+        ggml_set_f32_1d(tensor, i, random_numbers[i]);
     }
 }
 
@@ -2747,6 +2741,8 @@ class StableDiffusionGGML {
     bool dynamic = true;
     bool vae_decode_only = false;
     bool free_params_immediately = false;
+
+    std::shared_ptr<RNG> rng = std::make_shared<STDDefaultRNG>();
     int32_t ftype = 1;
     int n_threads = -1;
     float scale_factor = 0.18215f;
@@ -2765,11 +2761,17 @@ class StableDiffusionGGML {
 
     StableDiffusionGGML(int n_threads,
                         bool vae_decode_only,
-                        bool free_params_immediately)
+                        bool free_params_immediately,
+                        RNGType rng_type)
         : n_threads(n_threads),
           vae_decode_only(vae_decode_only),
           free_params_immediately(free_params_immediately) {
         first_stage_model.decode_only = vae_decode_only;
+        if (rng_type == STD_DEFAULT_RNG) {
+            rng = std::make_shared<STDDefaultRNG>();
+        } else if (rng_type == CUDA_RNG) {
+            rng = std::make_shared<PhiloxRNG>();
+        }
     }
 
     ~StableDiffusionGGML() {
@@ -3539,7 +3541,7 @@ class StableDiffusionGGML {
 
                 if (sigmas[i + 1] > 0) {
                     // x = x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
-                    ggml_tensor_set_f32_randn(noise);
+                    ggml_tensor_set_f32_randn(noise, rng);
                     // noise = load_tensor_from_file(res_ctx, "./rand" + std::to_string(i+1) + ".bin");
                     {
                         float* vec_x = (float*)x->data;
@@ -3674,7 +3676,7 @@ class StableDiffusionGGML {
         ggml_tensor* latent = ggml_new_tensor_4d(res_ctx, moments->type, moments->ne[0],
                                                  moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
         struct ggml_tensor* noise = ggml_dup_tensor(res_ctx, latent);
-        ggml_tensor_set_f32_randn(noise);
+        ggml_tensor_set_f32_randn(noise, rng);
         // noise = load_tensor_from_file(res_ctx, "noise.bin");
         {
             float mean = 0;
@@ -3802,10 +3804,12 @@ class StableDiffusionGGML {
 
 StableDiffusion::StableDiffusion(int n_threads,
                                  bool vae_decode_only,
-                                 bool free_params_immediately) {
+                                 bool free_params_immediately,
+                                 RNGType rng_type) {
     sd = std::make_shared<StableDiffusionGGML>(n_threads,
                                                vae_decode_only,
-                                               free_params_immediately);
+                                               free_params_immediately,
+                                               rng_type);
 }
 
 bool StableDiffusion::load_from_file(const std::string& file_path) {
@@ -3835,7 +3839,7 @@ std::vector<uint8_t> StableDiffusion::txt2img(const std::string& prompt,
     if (seed < 0) {
         seed = (int)time(NULL);
     }
-    set_random_seed(seed);
+    sd->rng->manual_seed(seed);
 
     int64_t t0 = ggml_time_ms();
     ggml_tensor* c = sd->get_learned_condition(ctx, prompt);
@@ -3856,7 +3860,7 @@ std::vector<uint8_t> StableDiffusion::txt2img(const std::string& prompt,
     int W = width / 8;
     int H = height / 8;
     struct ggml_tensor* x_t = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, W, H, C, 1);
-    ggml_tensor_set_f32_randn(x_t);
+    ggml_tensor_set_f32_randn(x_t, sd->rng);
 
     std::vector<float> sigmas = sd->denoiser->get_sigmas(sample_steps);
 
@@ -3935,7 +3939,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     if (seed < 0) {
         seed = (int)time(NULL);
     }
-    set_random_seed(seed);
+    sd->rng->manual_seed(seed);
 
     ggml_tensor* init_img = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, height, 3, 1);
     image_vec_to_ggml(init_img_vec, init_img);
