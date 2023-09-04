@@ -2659,10 +2659,19 @@ struct DiscreteSchedule {
     float sigmas[TIMESTEPS];
     float log_sigmas[TIMESTEPS];
 
-    std::vector<float> get_sigmas(int n) {
+    std::vector<float> get_sigmas(uint32_t n) {
         std::vector<float> result;
 
         int t_max = TIMESTEPS - 1;
+
+        if (n == 0) {
+            return result;
+        } else if (n == 1) {
+            result.push_back(t_to_sigma(t_max));
+            result.push_back(0);
+            return result;
+        }
+
         float step = static_cast<float>(t_max) / static_cast<float>(n - 1);
         for (int i = 0; i < n; ++i) {
             float t = t_max - step * i;
