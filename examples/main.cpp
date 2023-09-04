@@ -86,7 +86,7 @@ struct Option {
     SampleMethod sample_method = EULAR_A;
     int sample_steps = 20;
     float strength = 0.75f;
-    RNGType rng_type = STD_DEFAULT_RNG;
+    RNGType rng_type = CUDA_RNG;
     int64_t seed = 42;
     bool verbose = false;
 
@@ -130,7 +130,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
     printf("  --sample-method SAMPLE_METHOD      sample method (default: \"eular a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
-    printf("  --rng {std_default, cuda}          RNG (default: std_default)\n");
+    printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
