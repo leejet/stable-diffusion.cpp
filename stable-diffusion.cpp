@@ -3830,6 +3830,7 @@ std::vector<uint8_t> StableDiffusion::txt2img(const std::string& prompt,
     std::vector<uint8_t> result;
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10M
+    params.mem_size += width * height * 3 * sizeof(float) * 2;
     params.mem_buffer = NULL;
     params.no_alloc = false;
     params.dynamic = false;
