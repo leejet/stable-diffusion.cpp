@@ -285,13 +285,13 @@ void parse_args(int argc, const char* argv[], Option* opt) {
         exit(1);
     }
 
-    if (opt->w <= 0 || opt->w % 32 != 0) {
-        fprintf(stderr, "error: the width must be a multiple of 32\n");
+    if (opt->w <= 0 || opt->w % 64 != 0) {
+        fprintf(stderr, "error: the width must be a multiple of 64\n");
         exit(1);
     }
 
-    if (opt->h <= 0 || opt->h % 32 != 0) {
-        fprintf(stderr, "error: the height must be a multiple of 32\n");
+    if (opt->h <= 0 || opt->h % 64 != 0) {
+        fprintf(stderr, "error: the height must be a multiple of 64\n");
         exit(1);
     }
 
@@ -337,13 +337,13 @@ int main(int argc, const char* argv[]) {
             free(img_data);
             return 1;
         }
-        if (opt.w <= 0 || opt.w % 32 != 0) {
-            fprintf(stderr, "error: the width of image must be a multiple of 32\n");
+        if (opt.w <= 0 || opt.w % 64 != 0) {
+            fprintf(stderr, "error: the width of image must be a multiple of 64\n");
             free(img_data);
             return 1;
         }
-        if (opt.h <= 0 || opt.h % 32 != 0) {
-            fprintf(stderr, "error: the height of image must be a multiple of 32\n");
+        if (opt.h <= 0 || opt.h % 64 != 0) {
+            fprintf(stderr, "error: the height of image must be a multiple of 64\n");
             free(img_data);
             return 1;
         }
