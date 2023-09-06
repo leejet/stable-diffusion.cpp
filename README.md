@@ -125,7 +125,7 @@ arguments:
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
-  --sample-method SAMPLE_METHOD      sample method (default: "eular a")
+  --sample-method SAMPLE_METHOD      sample method (default: "euler")
   --steps  STEPS                     number of sample steps (default: 20)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -v, --verbose                      print extra info

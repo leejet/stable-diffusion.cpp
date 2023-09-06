@@ -17,7 +17,9 @@ enum RNGType {
 };
 
 enum SampleMethod {
-    EULAR_A,
+    EULER_A,
+    EULER,
+    N_SAMPLE_METHODS
 };
 
 class StableDiffusionGGML;
