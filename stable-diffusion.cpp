@@ -3664,6 +3664,49 @@ class StableDiffusionGGML {
                     }
                 }
                 break;
+            case DPMPP2M: // DPM++ (2M) from Karras et al (2022)
+                {
+                    LOG_INFO("sampling using DPM++ (2M) method");
+                    ggml_set_dynamic(ctx, false);
+                    struct ggml_tensor* old_denoised = ggml_dup_tensor(ctx, x);
+                    ggml_set_dynamic(ctx, params.dynamic);
+
+                    auto t_fn = [](float sigma)->float{return -log(sigma);};
+
+                    for (int i = 0; i < steps; i++) {
+                        // denoise
+                        denoise(x, sigmas[i], i+1);
+
+                        float t = t_fn(sigmas[i]);
+                        float t_next = t_fn(sigmas[i+1]);
+                        float h = t_next - t;
+                        float a = sigmas[i+1] / sigmas[i];
+                        float b = exp(-h)-1.;
+                        float* vec_x = (float*)x->data;
+                        float* vec_denoised = (float*)denoised->data;
+                        float* vec_old_denoised = (float*)old_denoised->data;
+
+                        if(i==0 || sigmas[i+1] == 0) {
+                            // Simpler step for the edge cases
+                            for (int j = 0; j < ggml_nelements(x); j++) {
+                                vec_x[j] = a*vec_x[j] - b * vec_denoised[j];
+                            }
+                        } else {
+                            float h_last = t - t_fn(sigmas[i-1]);
+                            float r = h_last / h;
+                            for (int j = 0; j < ggml_nelements(x); j++) {
+                                float denoised_d = (1. + 1. / (2. * r)) * vec_denoised[j] - (1. / (2. * r)) * vec_old_denoised[j];
+                                vec_x[j] = a * vec_x[j] - b * denoised_d;
+                            }
+                        }
+
+                        // old_denoised = denoised
+                        for (int j = 0; j < ggml_nelements(x); j++) {
+                            vec_old_denoised[j] = vec_denoised[j];
+                        }
+                    }
+                }
+                break;
 
             default:
                 LOG_ERROR("Attempting to sample with nonexisting sample method %i",method);

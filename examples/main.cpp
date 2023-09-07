@@ -76,7 +76,8 @@ const char* rng_type_to_str[] = {
 const char* sample_method_str[] = {
     "euler_a",
     "euler",
-    "heun"
+    "heun",
+    "dpm++2m"
 };
 
 struct Option {
