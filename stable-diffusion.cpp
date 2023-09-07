@@ -3502,18 +3502,21 @@ class StableDiffusionGGML {
             ggml_graph_print(&diffusion_graph);
 #endif
             int64_t t1 = ggml_time_ms();
-            LOG_INFO("step %d sampling completed, taking %.2fs", step, (t1 - t0) * 1.0f / 1000);
-            LOG_DEBUG("diffusion graph use %.2fMB runtime memory: static %.2fMB, dynamic %.2fMB",
-                      (ctx_size + ggml_curr_max_dynamic_size()) * 1.0f / 1024 / 1024,
-                      ctx_size * 1.0f / 1024 / 1024,
-                      ggml_curr_max_dynamic_size() * 1.0f / 1024 / 1024);
-            LOG_DEBUG("%zu bytes of dynamic memory has not been released yet", ggml_dynamic_size());
+            if(step > 0) {
+                LOG_INFO("step %d sampling completed, taking %.2fs", step, (t1 - t0) * 1.0f / 1000);
+                LOG_DEBUG("diffusion graph use %.2fMB runtime memory: static %.2fMB, dynamic %.2fMB",
+                        (ctx_size + ggml_curr_max_dynamic_size()) * 1.0f / 1024 / 1024,
+                        ctx_size * 1.0f / 1024 / 1024,
+                        ggml_curr_max_dynamic_size() * 1.0f / 1024 / 1024);
+                LOG_DEBUG("%zu bytes of dynamic memory has not been released yet", ggml_dynamic_size());
+            }
         };
 
         // sample_euler_ancestral
         switch(method) {
             case EULER_A:
                 {
+                    LOG_INFO("sampling using Euler A method");
                     ggml_set_dynamic(ctx, false);
                     struct ggml_tensor* noise = ggml_dup_tensor(ctx, x);
                     struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
@@ -3571,6 +3574,7 @@ class StableDiffusionGGML {
                 break;
             case EULER: // Implemented without any sigma churn
                 {
+                    LOG_INFO("sampling using Euler method");
                     ggml_set_dynamic(ctx, false);
                     struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
                     ggml_set_dynamic(ctx, params.dynamic);
@@ -3597,6 +3601,61 @@ class StableDiffusionGGML {
                             float* vec_x = (float*)x->data;
 
                             for (int i = 0; i < ggml_nelements(x); i++) {
+                                vec_x[i] = vec_x[i] + vec_d[i] * dt;
+                            }
+                        }
+                    }
+                }
+                break;
+            case HEUN:
+                {
+                    LOG_INFO("sampling using Heun method");
+                    ggml_set_dynamic(ctx, false);
+                    struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
+                    struct ggml_tensor* x2 = ggml_dup_tensor(ctx, x);
+                    ggml_set_dynamic(ctx, params.dynamic);
+
+                    for (int i = 0; i < steps; i++) {
+                        // denoise, first step
+                        denoise(x, sigmas[i], -(i+1));
+
+                        // d = (x - denoised) / sigma
+                        {
+                            float* vec_d = (float*)d->data;
+                            float* vec_x = (float*)x->data;
+                            float* vec_denoised = (float*)denoised->data;
+
+                            for (int i = 0; i < ggml_nelements(d); i++) {
+                                vec_d[i] = (vec_x[i] - vec_denoised[i]) / sigmas[i];
+                            }
+                        }
+
+                        float dt = sigmas[i+1] - sigmas[i];
+                        if(sigmas[i+1]==0) {
+                            // Euler step
+                            // x = x + d * dt
+                            float* vec_d = (float*)d->data;
+                            float* vec_x = (float*)x->data;
+
+                            for (int i = 0; i < ggml_nelements(x); i++) {
+                                vec_x[i] = vec_x[i] + vec_d[i] * dt;
+                            }
+                        } else {
+                            // Heun step
+                            float* vec_d = (float*)d->data;
+                            float* vec_d2 = (float*)d->data;
+                            float* vec_x = (float*)x->data;
+                            float* vec_x2 = (float*)x2->data;
+
+                            for (int i = 0; i < ggml_nelements(x); i++) {
+                                vec_x2[i] = vec_x[i] + vec_d[i] * dt;
+                            }
+
+                            denoise(x2, sigmas[i+1], i+1);
+                            float* vec_denoised = (float*)denoised->data;
+                            for (int i = 0; i < ggml_nelements(d); i++) {
+                                float d2 = (vec_x2[i] - vec_denoised[i]) / sigmas[i+1];
+                                vec_d[i] = (vec_d[i] + d2) / 2;
                                 vec_x[i] = vec_x[i] + vec_d[i] * dt;
                             }
                         }

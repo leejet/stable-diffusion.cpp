@@ -74,8 +74,9 @@ const char* rng_type_to_str[] = {
 
 // Names of the sampler method, same order as enum SampleMethod in stable-diffusion.h
 const char* sample_method_str[] = {
-	"euler_a",
-	"euler"
+    "euler_a",
+    "euler",
+    "heun"
 };
 
 struct Option {

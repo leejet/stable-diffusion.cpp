@@ -19,6 +19,7 @@ enum RNGType {
 enum SampleMethod {
     EULER_A,
     EULER,
+    HEUN,
     N_SAMPLE_METHODS
 };
 
