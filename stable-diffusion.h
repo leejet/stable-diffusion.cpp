@@ -21,6 +21,7 @@ enum SampleMethod {
     EULER,
     HEUN,
     DPMPP2M,
+    DPMPP2Mv2,
     N_SAMPLE_METHODS
 };
 

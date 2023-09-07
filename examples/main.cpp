@@ -77,7 +77,8 @@ const char* sample_method_str[] = {
     "euler_a",
     "euler",
     "heun",
-    "dpm++2m"
+    "dpm++2m",
+    "dpm++2mv2"
 };
 
 struct Option {
@@ -136,7 +137,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sample-method SAMPLE_METHOD      sample method (default: \"euler\")\n");
+    printf("  --sampling-method SAMPLE_METHOD    sampling method (default: \"euler\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
@@ -256,6 +257,7 @@ void parse_args(int argc, const char* argv[], Option* opt) {
             }
             if(sample_method_found == -1) {
               invalid_arg = true;
+              break;
             }
             opt->sample_method = (SampleMethod)sample_method_found;
         } else if (arg == "-h" || arg == "--help") {
