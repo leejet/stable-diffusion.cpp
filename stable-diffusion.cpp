@@ -3580,8 +3580,10 @@ class StableDiffusionGGML {
                     ggml_set_dynamic(ctx, params.dynamic);
 
                     for (int i = 0; i < steps; i++) {
+                        float sigma = sigmas[i];
+
                         // denoise
-                        denoise(x, sigmas[i], i+1);
+                        denoise(x, sigma, i+1);
 
                         // d = (x - denoised) / sigma
                         {
@@ -3589,19 +3591,19 @@ class StableDiffusionGGML {
                             float* vec_x = (float*)x->data;
                             float* vec_denoised = (float*)denoised->data;
 
-                            for (int i = 0; i < ggml_nelements(d); i++) {
-                                vec_d[i] = (vec_x[i] - vec_denoised[i]) / sigmas[i];
+                            for (int j = 0; j < ggml_nelements(d); j++) {
+                                vec_d[j] = (vec_x[j] - vec_denoised[j]) / sigma;
                             }
                         }
 
-                        float dt = sigmas[i+1] - sigmas[i];
+                        float dt = sigmas[i+1] - sigma;
                         // x = x + d * dt
                         {
                             float* vec_d = (float*)d->data;
                             float* vec_x = (float*)x->data;
 
-                            for (int i = 0; i < ggml_nelements(x); i++) {
-                                vec_x[i] = vec_x[i] + vec_d[i] * dt;
+                            for (int j = 0; j < ggml_nelements(x); j++) {
+                                vec_x[j] = vec_x[j] + vec_d[j] * dt;
                             }
                         }
                     }
@@ -3616,7 +3618,7 @@ class StableDiffusionGGML {
                     ggml_set_dynamic(ctx, params.dynamic);
 
                     for (int i = 0; i < steps; i++) {
-                        // denoise, first step
+                        // denoise
                         denoise(x, sigmas[i], -(i+1));
 
                         // d = (x - denoised) / sigma
@@ -3625,8 +3627,8 @@ class StableDiffusionGGML {
                             float* vec_x = (float*)x->data;
                             float* vec_denoised = (float*)denoised->data;
 
-                            for (int i = 0; i < ggml_nelements(d); i++) {
-                                vec_d[i] = (vec_x[i] - vec_denoised[i]) / sigmas[i];
+                            for (int j = 0; j < ggml_nelements(x); j++) {
+                                vec_d[j] = (vec_x[j] - vec_denoised[j]) / sigmas[i];
                             }
                         }
 
@@ -3637,8 +3639,8 @@ class StableDiffusionGGML {
                             float* vec_d = (float*)d->data;
                             float* vec_x = (float*)x->data;
 
-                            for (int i = 0; i < ggml_nelements(x); i++) {
-                                vec_x[i] = vec_x[i] + vec_d[i] * dt;
+                            for (int j = 0; j < ggml_nelements(x); j++) {
+                                vec_x[j] = vec_x[j] + vec_d[j] * dt;
                             }
                         } else {
                             // Heun step
@@ -3647,16 +3649,16 @@ class StableDiffusionGGML {
                             float* vec_x = (float*)x->data;
                             float* vec_x2 = (float*)x2->data;
 
-                            for (int i = 0; i < ggml_nelements(x); i++) {
-                                vec_x2[i] = vec_x[i] + vec_d[i] * dt;
+                            for (int j = 0; j < ggml_nelements(x); j++) {
+                                vec_x2[j] = vec_x[j] + vec_d[j] * dt;
                             }
 
                             denoise(x2, sigmas[i+1], i+1);
                             float* vec_denoised = (float*)denoised->data;
-                            for (int i = 0; i < ggml_nelements(d); i++) {
-                                float d2 = (vec_x2[i] - vec_denoised[i]) / sigmas[i+1];
-                                vec_d[i] = (vec_d[i] + d2) / 2;
-                                vec_x[i] = vec_x[i] + vec_d[i] * dt;
+                            for (int j = 0; j < ggml_nelements(x); j++) {
+                                float d2 = (vec_x2[j] - vec_denoised[j]) / sigmas[i+1];
+                                vec_d[j] = (vec_d[j] + d2) / 2;
+                                vec_x[j] = vec_x[j] + vec_d[j] * dt;
                             }
                         }
                     }
