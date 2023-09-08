@@ -78,8 +78,7 @@ const char* sample_method_str[] = {
     "euler",
     "heun",
     "dpm++2m",
-    "dpm++2mv2"
-};
+    "dpm++2mv2"};
 
 struct Option {
     int n_threads = -1;
@@ -92,7 +91,7 @@ struct Option {
     float cfg_scale = 7.0f;
     int w = 512;
     int h = 512;
-    SampleMethod sample_method = EULER;
+    SampleMethod sample_method = EULER_A;
     int sample_steps = 20;
     float strength = 0.75f;
     RNGType rng_type = CUDA_RNG;
@@ -111,7 +110,7 @@ struct Option {
         printf("    cfg_scale:       %.2f\n", cfg_scale);
         printf("    width:           %d\n", w);
         printf("    height:          %d\n", h);
-        printf("    sample-method:   %s\n", sample_method_str[sample_method]);
+        printf("    sample_method:   %s\n", sample_method_str[sample_method]);
         printf("    sample_steps:    %d\n", sample_steps);
         printf("    strength:        %.2f\n", strength);
         printf("    rng:             %s\n", rng_type_to_str[rng_type]);
@@ -137,7 +136,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method SAMPLE_METHOD    sampling method (default: \"euler\")\n");
+    printf("  --sampling-method {euler, euler_a, heun, dpm++2m, dpm++2mv2}\n");
+    printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
@@ -250,14 +250,14 @@ void parse_args(int argc, const char* argv[], Option* opt) {
             }
             const char* sample_method_selected = argv[i];
             int sample_method_found = -1;
-            for(int m=0; m<N_SAMPLE_METHODS; m++) {
-                if(!strcmp(sample_method_selected,sample_method_str[m])) {
+            for (int m = 0; m < N_SAMPLE_METHODS; m++) {
+                if (!strcmp(sample_method_selected, sample_method_str[m])) {
                     sample_method_found = m;
                 }
             }
-            if(sample_method_found == -1) {
-              invalid_arg = true;
-              break;
+            if (sample_method_found == -1) {
+                invalid_arg = true;
+                break;
             }
             opt->sample_method = (SampleMethod)sample_method_found;
         } else if (arg == "-h" || arg == "--help") {

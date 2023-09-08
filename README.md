@@ -20,6 +20,10 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
 - Sampling method
     - `Euler A`
+    - `Euler`
+    - `Heun`
+    - `DPM++ 2M`
+    - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
 - Cross-platform reproducibility (`--rng cuda`, consistent with the `stable-diffusion-webui GPU RNG`)
 - Supported platforms
     - Linux
@@ -125,8 +129,10 @@ arguments:
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
-  --sample-method SAMPLE_METHOD      sample method (default: "euler")
+  --sampling-method {euler, euler_a, heun, dpm++2m, dpm++2mv2}
+                                     sampling method (default: "euler_a")
   --steps  STEPS                     number of sample steps (default: 20)
+  --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -v, --verbose                      print extra info
 ```
