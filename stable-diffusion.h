@@ -25,6 +25,13 @@ enum SampleMethod {
     N_SAMPLE_METHODS
 };
 
+enum Schedule {
+    DEFAULT,
+    DISCRETE,
+    KARRAS,
+    N_SCHEDULES
+};
+
 class StableDiffusionGGML;
 
 class StableDiffusion {
@@ -36,7 +43,7 @@ class StableDiffusion {
                     bool vae_decode_only = false,
                     bool free_params_immediately = false,
                     RNGType rng_type = STD_DEFAULT_RNG);
-    bool load_from_file(const std::string& file_path);
+    bool load_from_file(const std::string& file_path, Schedule d = DEFAULT);
     std::vector<uint8_t> txt2img(
         const std::string& prompt,
         const std::string& negative_prompt,

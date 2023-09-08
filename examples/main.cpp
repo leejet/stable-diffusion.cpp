@@ -80,6 +80,12 @@ const char* sample_method_str[] = {
     "dpm++2m",
     "dpm++2mv2"};
 
+// Names of the sigma schedule overrides, same order as Schedule in stable-diffusion.h
+const char* schedule_str[] = {
+    "default",
+    "discrete",
+    "karras"};
+
 struct Option {
     int n_threads = -1;
     std::string mode = TXT2IMG;
@@ -92,6 +98,7 @@ struct Option {
     int w = 512;
     int h = 512;
     SampleMethod sample_method = EULER_A;
+    Schedule schedule = DEFAULT;
     int sample_steps = 20;
     float strength = 0.75f;
     RNGType rng_type = CUDA_RNG;
@@ -111,6 +118,7 @@ struct Option {
         printf("    width:           %d\n", w);
         printf("    height:          %d\n", h);
         printf("    sample_method:   %s\n", sample_method_str[sample_method]);
+        printf("    schedule:        %s\n", schedule_str[schedule]);
         printf("    sample_steps:    %d\n", sample_steps);
         printf("    strength:        %.2f\n", strength);
         printf("    rng:             %s\n", rng_type_to_str[rng_type]);
@@ -141,6 +149,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
+    printf("  --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -237,6 +246,23 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 invalid_arg = true;
                 break;
             }
+        } else if (arg == "--schedule") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            const char* schedule_selected = argv[i];
+            int schedule_found = -1;
+            for (int d = 0; d < N_SCHEDULES; d++) {
+                if (!strcmp(schedule_selected, schedule_str[d])) {
+                    schedule_found = d;
+                }
+            }
+            if (schedule_found == -1) {
+                invalid_arg = true;
+                break;
+            }
+            opt->schedule = (Schedule)schedule_found;
         } else if (arg == "-s" || arg == "--seed") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -377,7 +403,7 @@ int main(int argc, const char* argv[]) {
     }
 
     StableDiffusion sd(opt.n_threads, vae_decode_only, true, opt.rng_type);
-    if (!sd.load_from_file(opt.model_path)) {
+    if (!sd.load_from_file(opt.model_path, opt.schedule)) {
         return 1;
     }
 
