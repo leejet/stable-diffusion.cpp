@@ -3762,6 +3762,85 @@ class StableDiffusionGGML {
                 }
 
             } break;
+            case DPMPP2S_A:
+            {
+                LOG_INFO("sampling using DPM++ (2s) a method");
+                ggml_set_dynamic(ctx, false);
+                struct ggml_tensor* noise = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* x2 = ggml_dup_tensor(ctx, x);
+                ggml_set_dynamic(ctx, params.dynamic);
+
+                for (int i = 0; i < steps; i++) {
+                    // denoise
+                    denoise(x, sigmas[i], i + 1);
+
+                    // get_ancestral_step
+                    float sigma_up = std::min(sigmas[i + 1],
+                            std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
+                    float sigma_down = std::sqrt(sigmas[i + 1] * sigmas[i + 1] - sigma_up * sigma_up);
+                    auto t_fn = [](float sigma) -> float { return -log(sigma); };
+                    auto sigma_fn = [](float t) -> float {return exp(-t); };
+
+                    if(sigma_down == 0) {
+                        // Euler step
+                        float* vec_d = (float*)d->data;
+                        float* vec_x = (float*)x->data;
+                        float* vec_denoised = (float*)denoised->data;
+
+                        for (int j = 0; j < ggml_nelements(d); j++) {
+                            vec_d[j] = (vec_x[j] - vec_denoised[j]) / sigmas[i];
+                        }
+
+                        // TODO: If sigma_down == 0, isn't this wrong?
+                        // But
+                        // https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/sampling.py#L525
+                        // has this exactly the same way.
+                        float dt = sigma_down - sigmas[i];
+                        for (int j = 0; j < ggml_nelements(d); j++) {
+                            vec_x[j] = vec_x[j] + vec_d[j] * dt;
+                        }
+                    } else {
+                        // DPM-Solver++(2S)
+                        float t = t_fn(sigmas[i]);
+                        float t_next = t_fn(sigma_down);
+                        float h = t_next - t;
+                        float s = t + 0.5 * h;
+
+                        float* vec_d = (float*)d->data;
+                        float* vec_x = (float*)x->data;
+                        float* vec_x2 = (float*)x2->data;
+                        float* vec_denoised = (float*)denoised->data;
+
+                        // First half-step
+                        for (int j = 0; j < ggml_nelements(x); j++) {
+                            vec_x2[j] = (sigma_fn(s) / sigma_fn(t)) * vec_x[j]
+                                - (exp(-h * 0.5)-1) * vec_denoised[j];
+                        }
+
+                        denoise(x2, sigmas[i + 1], i + 1);
+
+                        // Second half-step
+                        for (int j = 0; j < ggml_nelements(x); j++) {
+                            vec_x[j] = (sigma_fn(t_next) / sigma_fn(t)) * vec_x[j]
+                                - (exp(-h)-1) * vec_denoised[j];
+                        }
+                    }
+
+                    // Noise addition
+                    if (sigmas[i + 1] > 0) {
+                        ggml_tensor_set_f32_randn(noise, rng);
+                        {
+                            float* vec_x = (float*)x->data;
+                            float* vec_noise = (float*)noise->data;
+
+                            for (int i = 0; i < ggml_nelements(x); i++) {
+                                vec_x[i] = vec_x[i] + vec_noise[i] * sigma_up;
+                            }
+                        }
+                    }
+                }
+            } break;
             case DPMPP2M:  // DPM++ (2M) from Karras et al (2022)
             {
                 LOG_INFO("sampling using DPM++ (2M) method");
