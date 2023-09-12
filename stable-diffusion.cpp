@@ -3706,8 +3706,7 @@ class StableDiffusionGGML {
                     }
                 }
             } break;
-            case DPM2:
-            {
+            case DPM2: {
                 LOG_INFO("sampling using DPM2 method");
                 ggml_set_dynamic(ctx, false);
                 struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
@@ -3741,9 +3740,9 @@ class StableDiffusionGGML {
                         }
                     } else {
                         // DPM-Solver-2
-                        float sigma_mid = exp(0.5 * (log(sigmas[i]) + log(sigmas[i+1])));
+                        float sigma_mid = exp(0.5 * (log(sigmas[i]) + log(sigmas[i + 1])));
                         float dt_1 = sigma_mid - sigmas[i];
-                        float dt_2 = sigmas[i+1] - sigmas[i];
+                        float dt_2 = sigmas[i + 1] - sigmas[i];
 
                         float* vec_d = (float*)d->data;
                         float* vec_x = (float*)x->data;
@@ -3762,8 +3761,7 @@ class StableDiffusionGGML {
                 }
 
             } break;
-            case DPMPP2S_A:
-            {
+            case DPMPP2S_A: {
                 LOG_INFO("sampling using DPM++ (2s) a method");
                 ggml_set_dynamic(ctx, false);
                 struct ggml_tensor* noise = ggml_dup_tensor(ctx, x);
@@ -3777,12 +3775,12 @@ class StableDiffusionGGML {
 
                     // get_ancestral_step
                     float sigma_up = std::min(sigmas[i + 1],
-                            std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
+                                              std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
                     float sigma_down = std::sqrt(sigmas[i + 1] * sigmas[i + 1] - sigma_up * sigma_up);
                     auto t_fn = [](float sigma) -> float { return -log(sigma); };
-                    auto sigma_fn = [](float t) -> float {return exp(-t); };
+                    auto sigma_fn = [](float t) -> float { return exp(-t); };
 
-                    if(sigma_down == 0) {
+                    if (sigma_down == 0) {
                         // Euler step
                         float* vec_d = (float*)d->data;
                         float* vec_x = (float*)x->data;
@@ -3814,16 +3812,14 @@ class StableDiffusionGGML {
 
                         // First half-step
                         for (int j = 0; j < ggml_nelements(x); j++) {
-                            vec_x2[j] = (sigma_fn(s) / sigma_fn(t)) * vec_x[j]
-                                - (exp(-h * 0.5)-1) * vec_denoised[j];
+                            vec_x2[j] = (sigma_fn(s) / sigma_fn(t)) * vec_x[j] - (exp(-h * 0.5) - 1) * vec_denoised[j];
                         }
 
                         denoise(x2, sigmas[i + 1], i + 1);
 
                         // Second half-step
                         for (int j = 0; j < ggml_nelements(x); j++) {
-                            vec_x[j] = (sigma_fn(t_next) / sigma_fn(t)) * vec_x[j]
-                                - (exp(-h)-1) * vec_denoised[j];
+                            vec_x[j] = (sigma_fn(t_next) / sigma_fn(t)) * vec_x[j] - (exp(-h) - 1) * vec_denoised[j];
                         }
                     }
 
