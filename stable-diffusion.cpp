@@ -3706,6 +3706,62 @@ class StableDiffusionGGML {
                     }
                 }
             } break;
+            case DPM2:
+            {
+                LOG_INFO("sampling using DPM2 method");
+                ggml_set_dynamic(ctx, false);
+                struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* x2 = ggml_dup_tensor(ctx, x);
+                ggml_set_dynamic(ctx, params.dynamic);
+
+                for (int i = 0; i < steps; i++) {
+                    // denoise
+                    denoise(x, sigmas[i], i + 1);
+
+                    // d = (x - denoised) / sigma
+                    {
+                        float* vec_d = (float*)d->data;
+                        float* vec_x = (float*)x->data;
+                        float* vec_denoised = (float*)denoised->data;
+
+                        for (int j = 0; j < ggml_nelements(x); j++) {
+                            vec_d[j] = (vec_x[j] - vec_denoised[j]) / sigmas[i];
+                        }
+                    }
+
+                    if (sigmas[i + 1] == 0) {
+                        // Euler step
+                        // x = x + d * dt
+                        float dt = sigmas[i + 1] - sigmas[i];
+                        float* vec_d = (float*)d->data;
+                        float* vec_x = (float*)x->data;
+
+                        for (int j = 0; j < ggml_nelements(x); j++) {
+                            vec_x[j] = vec_x[j] + vec_d[j] * dt;
+                        }
+                    } else {
+                        // DPM-Solver-2
+                        float sigma_mid = exp(0.5 * (log(sigmas[i]) + log(sigmas[i+1])));
+                        float dt_1 = sigma_mid - sigmas[i];
+                        float dt_2 = sigmas[i+1] - sigmas[i];
+
+                        float* vec_d = (float*)d->data;
+                        float* vec_x = (float*)x->data;
+                        float* vec_x2 = (float*)x2->data;
+                        for (int j = 0; j < ggml_nelements(x); j++) {
+                            vec_x2[j] = vec_x[j] + vec_d[j] * dt_1;
+                        }
+
+                        denoise(x2, sigma_mid, i + 1);
+                        float* vec_denoised = (float*)denoised->data;
+                        for (int j = 0; j < ggml_nelements(x); j++) {
+                            float d2 = (vec_x2[j] - vec_denoised[j]) / sigma_mid;
+                            vec_x[j] = vec_x[j] + d2 * dt_2;
+                        }
+                    }
+                }
+
+            } break;
             case DPMPP2M:  // DPM++ (2M) from Karras et al (2022)
             {
                 LOG_INFO("sampling using DPM++ (2M) method");
