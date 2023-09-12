@@ -77,6 +77,8 @@ const char* sample_method_str[] = {
     "euler_a",
     "euler",
     "heun",
+    "dpm2",
+    "dpm++2s_a",
     "dpm++2m",
     "dpm++2mv2"};
 
@@ -144,7 +146,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm++2m, dpm++2mv2}\n");
+    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2}\n");
     printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");

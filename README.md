@@ -22,8 +22,10 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - `Euler A`
     - `Euler`
     - `Heun`
+    - `DPM2`
     - `DPM++ 2M`
     - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
+    - `DPM++ 2S a`
 - Cross-platform reproducibility (`--rng cuda`, consistent with the `stable-diffusion-webui GPU RNG`)
 - Supported platforms
     - Linux
