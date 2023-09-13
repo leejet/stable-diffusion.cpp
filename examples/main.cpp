@@ -437,7 +437,17 @@ int main(int argc, const char* argv[]) {
         return 1;
     }
 
-    stbi_write_png(opt.output_path.c_str(), opt.w, opt.h, 3, img.data(), 0);
+    std::string parameter_string = opt.prompt + "\n";
+    if(opt.negative_prompt.size() != 0) {
+       parameter_string += "Negative prompt: "  + opt.negative_prompt + "\n";
+    }
+    parameter_string += "CFG scale: " + std::to_string(opt.cfg_scale) + ", ";
+    parameter_string += "Seed: " + std::to_string(opt.seed) + ", ";
+    parameter_string += "Size: " + std::to_string(opt.w) + "x" + std::to_string(opt.h) + ", ";
+    parameter_string += "Sampler: " + std::string(sample_method_str[opt.sample_method]) + ", ";
+    parameter_string += "Version: stable-diffusion.cpp";
+
+    stbi_write_png(opt.output_path.c_str(), opt.w, opt.h, 3, img.data(), 0, parameter_string.c_str());
     printf("save result image to '%s'\n", opt.output_path.c_str());
 
     return 0;
