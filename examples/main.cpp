@@ -444,7 +444,11 @@ int main(int argc, const char* argv[]) {
     parameter_string += "CFG scale: " + std::to_string(opt.cfg_scale) + ", ";
     parameter_string += "Seed: " + std::to_string(opt.seed) + ", ";
     parameter_string += "Size: " + std::to_string(opt.w) + "x" + std::to_string(opt.h) + ", ";
-    parameter_string += "Sampler: " + std::string(sample_method_str[opt.sample_method]) + ", ";
+    parameter_string += "Sampler: " + std::string(sample_method_str[opt.sample_method]);
+    if(opt.schedule == KARRAS) {
+        parameter_string += " karras";
+    }
+    parameter_string += ", ";
     parameter_string += "Version: stable-diffusion.cpp";
 
     stbi_write_png(opt.output_path.c_str(), opt.w, opt.h, 3, img.data(), 0, parameter_string.c_str());
