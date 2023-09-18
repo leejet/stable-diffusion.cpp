@@ -27,6 +27,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
     - `DPM++ 2S a`
 - Cross-platform reproducibility (`--rng cuda`, consistent with the `stable-diffusion-webui GPU RNG`)
+- Embedds generation parameters into png output as webui-compatible text string
 - Supported platforms
     - Linux
     - Mac OS

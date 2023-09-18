@@ -365,6 +365,18 @@ void parse_args(int argc, const char* argv[], Option* opt) {
     }
 }
 
+std::string basename(const std::string& path) {
+    size_t pos = path.find_last_of('/');
+    if (pos != std::string::npos) {
+        return path.substr(pos + 1);
+    }
+    pos = path.find_last_of('\\');
+    if (pos != std::string::npos) {
+        return path.substr(pos + 1);
+    }
+    return path;
+}
+
 int main(int argc, const char* argv[]) {
     Option opt;
     parse_args(argc, argv, &opt);
@@ -437,7 +449,24 @@ int main(int argc, const char* argv[]) {
         return 1;
     }
 
-    stbi_write_png(opt.output_path.c_str(), opt.w, opt.h, 3, img.data(), 0);
+    std::string parameter_string = opt.prompt + "\n";
+    if (opt.negative_prompt.size() != 0) {
+        parameter_string += "Negative prompt: " + opt.negative_prompt + "\n";
+    }
+    parameter_string += "Steps: " + std::to_string(opt.sample_steps) + ", ";
+    parameter_string += "CFG scale: " + std::to_string(opt.cfg_scale) + ", ";
+    parameter_string += "Seed: " + std::to_string(opt.seed) + ", ";
+    parameter_string += "Size: " + std::to_string(opt.w) + "x" + std::to_string(opt.h) + ", ";
+    parameter_string += "Model: " + basename(opt.model_path) + ", ";
+    parameter_string += "RNG: " + std::string(rng_type_to_str[opt.rng_type]) + ", ";
+    parameter_string += "Sampler: " + std::string(sample_method_str[opt.sample_method]);
+    if (opt.schedule == KARRAS) {
+        parameter_string += " karras";
+    }
+    parameter_string += ", ";
+    parameter_string += "Version: stable-diffusion.cpp";
+
+    stbi_write_png(opt.output_path.c_str(), opt.w, opt.h, 3, img.data(), 0, parameter_string.c_str());
     printf("save result image to '%s'\n", opt.output_path.c_str());
 
     return 0;
