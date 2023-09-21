@@ -26,6 +26,12 @@ endif ()
 option(SD_BUILD_EXAMPLES "sd: build examples" ${SD_STANDALONE})
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
+# Instruction set specific
+option(SD_AVX                    "sd: enable AVX"                                     ON)
+option(SD_AVX2                   "sd: enable AVX2"                                    ON)
+option(SD_AVX512                 "sd: enable AVX512"                                  OFF)
+option(SD_FMA                    "sd: enable FMA"                                     ON)
+
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 set(CMAKE_C_STANDARD 11)
@@ -41,6 +47,53 @@ if (MSVC)
     endif ()
 endif ()
 
+if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm" OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+    message(STATUS "ARM detected")
+    if (MSVC)
+        # TODO [llama.cpp]: arm msvc?
+    else()
+        if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+            add_compile_options(-mcpu=native)
+        endif()
+        # TODO [llama.cpp]: armv6,7,8 version specific flags
+    endif()
+elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "^(x86_64|i686|AMD64)$")
+    message(STATUS "x86 detected")
+    if (MSVC)
+        if (SD_AVX512)
+            add_compile_options($<$<COMPILE_LANGUAGE:C>:/arch:AVX512>)
+            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX512>)
+            # MSVC has no compile-time flags enabling specific
+            # AVX512 extensions, neither it defines the
+            # macros corresponding to the extensions.
+            # Do it manually.
+        elseif (SD_AVX2)
+            add_compile_options($<$<COMPILE_LANGUAGE:C>:/arch:AVX2>)
+            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>)
+        elseif (SD_AVX)
+            add_compile_options($<$<COMPILE_LANGUAGE:C>:/arch:AVX>)
+            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX>)
+        endif()
+    else()
+        add_compile_options(-mf16c)
+        if (SD_FMA)
+            add_compile_options(-mfma)
+        endif()
+        if (SD_AVX)
+            add_compile_options(-mavx)
+        endif()
+        if (SD_AVX2)
+            add_compile_options(-mavx2)
+        endif()
+        if (SD_AVX512)
+            add_compile_options(-mavx512f)
+            add_compile_options(-mavx512bw)
+        endif()
+    endif()
+else()
+    # TODO [llama.cpp]: support PowerPC
+    message(STATUS "Unknown architecture")
+endif()
 # deps
 #add_subdirectory(ggml)
 
@@ -83,4 +136,3 @@ target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
 if (SD_BUILD_EXAMPLES AND NOT BUILD_SHARED_LIBS)
     add_subdirectory(examples)
 endif ()
-
