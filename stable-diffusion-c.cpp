@@ -1,15 +1,47 @@
 #include "stable-diffusion-c.h"
+
 /*================================================= StableDiffusion C API  =============================================*/
+
+const static std::map<std::string, enum SDLogLevel> SDLogLevelMap = {
+        {"DEBUG", DEBUG},
+        {"INFO", INFO},
+        {"WARN", WARN},
+        {"ERROR", ERROR},
+};
+
+const static std::map<std::string, enum RNGType> RNGTypeMap = {
+        {"STD_DEFAULT_RNG", STD_DEFAULT_RNG},
+        {"CUDA_RNG", CUDA_RNG},
+};
+
+const static std::map<std::string, enum SampleMethod> SampleMethodMap = {
+        {"EULER_A",          EULER_A},
+        {"EULER",            EULER},
+        {"HEUN",             HEUN},
+        {"DPM2",             DPM2},
+        {"DPMPP2S_A",        DPMPP2S_A},
+        {"DPMPP2M",          DPMPP2M},
+        {"DPMPP2Mv2",        DPMPP2Mv2},
+        {"N_SAMPLE_METHODS", N_SAMPLE_METHODS},
+};
+
+const static std::map<std::string, enum Schedule> ScheduleMap = {
+        {"DEFAULT", DEFAULT},
+        {"DISCRETE", DISCRETE},
+        {"KARRAS", KARRAS},
+        {"N_SCHEDULES", N_SCHEDULES},
+};
 
 // Use setter to handle purego max args limit less than 9
 // see https://github.com/ebitengine/purego/pull/7
+//     https://github.com/ebitengine/purego/blob/4db9e9e813d0f24f3ccc85a843d2316d2d2a70c6/func.go#L104
 struct sd_txt2img_options {
     const char *prompt;
     const char *negative_prompt;
     float cfg_scale;
     int width;
     int height;
-    SampleMethod sample_method;
+    const char *sample_method;
     int sample_steps;
     int64_t seed;
 };
@@ -22,7 +54,7 @@ struct sd_img2img_options {
     float cfg_scale;
     int width;
     int height;
-    SampleMethod sample_method;
+    const char *sample_method;
     int sample_steps;
     float strength;
     int64_t seed;
@@ -49,9 +81,8 @@ void set_txt2img_negative_prompt(sd_txt2img_options *opt, const char *negative_p
     opt->negative_prompt = negative_prompt;
 }
 
-void set_txt2img_cfg_scale(sd_txt2img_options *opt, const char *cfg_scale) {
-    // Assuming cfg_scale is a floating point number in string format
-    opt->cfg_scale = strtof(cfg_scale, nullptr);
+void set_txt2img_cfg_scale(sd_txt2img_options *opt, float cfg_scale) {
+    opt->cfg_scale = cfg_scale;
 }
 
 void set_txt2img_size(sd_txt2img_options *opt, int width, int height) {
@@ -59,7 +90,7 @@ void set_txt2img_size(sd_txt2img_options *opt, int width, int height) {
     opt->height = height;
 }
 
-void set_txt2img_sample_method(sd_txt2img_options *opt, SampleMethod sample_method) {
+void set_txt2img_sample_method(sd_txt2img_options *opt, const char *sample_method) {
     opt->sample_method = sample_method;
 }
 
@@ -88,9 +119,9 @@ void set_img2img_negative_prompt(sd_img2img_options *opt, const char *negative_p
     opt->negative_prompt = negative_prompt;
 }
 
-void set_img2img_cfg_scale(sd_img2img_options *opt, const char *cfg_scale) {
+void set_img2img_cfg_scale(sd_img2img_options *opt, float cfg_scale) {
     // Assuming cfg_scale is a floating point number in string format
-    opt->cfg_scale = strtof(cfg_scale, nullptr);
+    opt->cfg_scale = cfg_scale;
 }
 
 void set_img2img_size(sd_img2img_options *opt, int width, int height) {
@@ -98,7 +129,7 @@ void set_img2img_size(sd_img2img_options *opt, int width, int height) {
     opt->height = height;
 }
 
-void set_img2img_sample_method(sd_img2img_options *opt, SampleMethod sample_method) {
+void set_img2img_sample_method(sd_img2img_options *opt, const char *sample_method) {
     opt->sample_method = sample_method;
 }
 
@@ -115,8 +146,13 @@ void set_img2img_seed(sd_img2img_options *opt, int64_t seed) {
     opt->seed = seed;
 }
 
-void *create_stable_diffusion(int n_threads, bool vae_decode_only, bool free_params_immediately, RNGType rng_type) {
-    return new StableDiffusion(n_threads, vae_decode_only, free_params_immediately, rng_type);
+void *create_stable_diffusion(int n_threads, bool vae_decode_only, bool free_params_immediately, const char *rng_type) {
+    auto s = std::string(rng_type);
+    auto it = RNGTypeMap.find(s);
+    if (it != RNGTypeMap.end()) {
+        return new StableDiffusion(n_threads, vae_decode_only, free_params_immediately, it->second);
+    }
+    return NULL;
 };
 
 void destroy_stable_diffusion(void *sd) {
@@ -124,51 +160,71 @@ void destroy_stable_diffusion(void *sd) {
     delete s;
 };
 
-int load_from_file(void *sd, const char *file_path, Schedule schedule) {
+bool load_from_file(void *sd, const char *file_path, const char *schedule) {
     auto *s = (StableDiffusion *) sd;
-    s->load_from_file(std::string(file_path), schedule);
+    auto sc = std::string(schedule);
+    auto it = ScheduleMap.find(sc);
+    if (it != ScheduleMap.end()) {
+        return s->load_from_file(std::string(file_path), it->second);
+    }
+    return false;
 };
 
 uint8_t *txt2img(void *sd, sd_txt2img_options *opt) {
-    auto *s = (StableDiffusion *) sd;
-    std::vector<uint8_t> result;
-    result = s->txt2img(
-            /* const std::string &prompt */             std::string(opt->prompt),
-            /* const std::string &negative_prompt */    std::string(opt->negative_prompt),
-            /* float cfg_scale */                       opt->cfg_scale,
-            /* int width */                             opt->width,
-            /* int height */                            opt->height,
-            /* SampleMethod sample_method */            opt->sample_method,
-            /* int sample_steps */                      opt->sample_steps,
-            /* int64_t seed */                          opt->seed
-    );
-    static auto *data = (uint8_t *) result.data();
-    return data;
+    auto sm = std::string(opt->sample_method);
+    auto it = SampleMethodMap.find(sm);
+    if (it != SampleMethodMap.end()) {
+        auto *s = (StableDiffusion *) sd;
+        auto result = s->txt2img(
+                /* const std::string &prompt */             std::string(opt->prompt),
+                /* const std::string &negative_prompt */    std::string(opt->negative_prompt),
+                /* float cfg_scale */                       opt->cfg_scale,
+                /* int width */                             opt->width,
+                /* int height */                            opt->height,
+                /* SampleMethod sample_method */            it->second,
+                /* int sample_steps */                      opt->sample_steps,
+                /* int64_t seed */                          opt->seed
+        );
+        static auto *data = (uint8_t *) result.data();
+        delete opt;
+        return data;
+    }
+    return NULL;
 };
 
 uint8_t *img2img(void *sd, sd_img2img_options *opt) {
-    auto *s = (StableDiffusion *) sd;
-    std::vector<uint8_t> result;
-    std::vector<uint8_t> vec;
-    std::memcpy(vec.data(), opt->init_img, opt->init_img_size);
-    result = s->img2img(
-            /* const std::vector<uint8_t>& init_img */ vec,
-            /* const std::string &prompt */             std::string(opt->prompt),
-            /* const std::string &negative_prompt */    std::string(opt->negative_prompt),
-            /* float cfg_scale */                       opt->cfg_scale,
-            /* int width */                             opt->width,
-            /* int height */                            opt->height,
-            /* SampleMethod sample_method */            opt->sample_method,
-            /* int sample_steps */                      opt->sample_steps,
-            /* float strength */                        opt->strength,
-            /* int64_t seed */                          opt->seed
-    );
-    static auto *data = (uint8_t *) result.data();
-    return data;
+    auto sm = std::string(opt->sample_method);
+    auto it = SampleMethodMap.find(sm);
+    if (it != SampleMethodMap.end()) {
+        auto *s = (StableDiffusion *) sd;
+        std::vector<uint8_t> result;
+        std::vector<uint8_t> vec;
+        std::memcpy(vec.data(), opt->init_img, opt->init_img_size);
+        result = s->img2img(
+                /* const std::vector<uint8_t>& init_img */ vec,
+                /* const std::string &prompt */             std::string(opt->prompt),
+                /* const std::string &negative_prompt */    std::string(opt->negative_prompt),
+                /* float cfg_scale */                       opt->cfg_scale,
+                /* int width */                             opt->width,
+                /* int height */                            opt->height,
+                /* SampleMethod sample_method */            it->second,
+                /* int sample_steps */                      opt->sample_steps,
+                /* float strength */                        opt->strength,
+                /* int64_t seed */                          opt->seed
+        );
+        static auto *data = (uint8_t *) result.data();
+        delete opt;
+        return data;
+    }
+    return NULL;
 };
 
-void set_stable_diffusion_log_level(SDLogLevel level) {
-    set_sd_log_level(level);
+void set_stable_diffusion_log_level(const char *level) {
+    auto ll = std::string(level);
+    auto it = SDLogLevelMap.find(ll);
+    if (it != SDLogLevelMap.end()) {
+        set_sd_log_level(it->second);
+    }
 };
 
 const char *get_stable_diffusion_system_info() {
