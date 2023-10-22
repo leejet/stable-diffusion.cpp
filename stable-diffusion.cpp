@@ -586,7 +586,7 @@ struct ResidualAttentionBlock {
 
         // layer norm 1
         {
-            x = ggml_norm(ctx, x);
+            x = ggml_norm(ctx, x, 1e-6f);
             x = ggml_add(ctx,
                          ggml_mul(ctx, ggml_repeat(ctx, ln1_w, x), x),
                          ggml_repeat(ctx, ln1_b, x));
@@ -636,7 +636,7 @@ struct ResidualAttentionBlock {
 
         // layer norm 2
         {
-            x = ggml_norm(ctx, x);
+            x = ggml_norm(ctx, x, 1e-6f);
 
             x = ggml_add(ctx, ggml_mul(ctx, ggml_repeat(ctx, ln2_w, x), x),
                          ggml_repeat(ctx, ln2_b, x));
@@ -766,7 +766,7 @@ struct CLIPTextModel {
 
         // final layer norm
         {
-            x = ggml_norm(ctx, x);
+            x = ggml_norm(ctx, x, 1e-6f);
 
             x = ggml_add(ctx, ggml_mul(ctx, ggml_repeat(ctx, final_ln_w, x), x),
                          ggml_repeat(ctx, final_ln_b, x));
@@ -1200,7 +1200,7 @@ struct SpatialTransformer {
             // layer norm 1
             {
                 x = ggml_reshape_2d(ctx, x, c, w * h * n);
-                x = ggml_norm(ctx, x);
+                x = ggml_norm(ctx, x, 1e-6f);
                 x = ggml_add(ctx,
                              ggml_mul(ctx,
                                       ggml_repeat(ctx, transformer.norm1_w, x),
@@ -1248,7 +1248,7 @@ struct SpatialTransformer {
 
             // layer norm 2
             {
-                x = ggml_norm(ctx, x);
+                x = ggml_norm(ctx, x, 1e-6f);
                 x = ggml_add(ctx,
                              ggml_mul(ctx,
                                       ggml_repeat(ctx, transformer.norm2_w, x), x),
@@ -1299,7 +1299,7 @@ struct SpatialTransformer {
             // layer norm 3
             {
                 x = ggml_reshape_2d(ctx, x, c, h * w * n);  // [N * h * w, in_channels]
-                x = ggml_norm(ctx, x);
+                x = ggml_norm(ctx, x, 1e-6f);
                 x = ggml_add(ctx,
                              ggml_mul(ctx,
                                       ggml_repeat(ctx, transformer.norm3_w, x), x),
