@@ -163,6 +163,7 @@ unused_tensors = [
     "cond_stage_model.model.text_projection",
     "model_ema.decay",
     "model_ema.num_updates",
+    "model_ema.diffusion_model",
     "control_model",
     "lora_te_text_model",
     "embedding_manager"
