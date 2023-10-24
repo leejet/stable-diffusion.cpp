@@ -16,6 +16,13 @@
 #include "ggml/ggml.h"
 #include "ggml/ggml-alloc.h"
 #include "ggml/ggml-backend.h"
+
+//#define GGML_USE_CUBLAS
+
+#ifdef GGML_USE_CUBLAS
+#include "ggml-cuda.h"
+#endif
+
 #include "rng.h"
 #include "rng_philox.h"
 #include "stable-diffusion.h"
@@ -592,14 +599,13 @@ struct ResidualAttentionBlock {
     struct ggml_tensor* ln2_w;  // [hidden_size, ]
     struct ggml_tensor* ln2_b;  // [hidden_size, ]
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += 4 * hidden_size * hidden_size * ggml_type_sizef(wtype);        // q_w/k_w/v_w/out_w
         mem_size += 8 * hidden_size * ggml_type_sizef(GGML_TYPE_F32);              // q_b/k_b/v_b/out_b/ln1_w/ln1_b/ln2_w/ln2_b
         mem_size += 2 * hidden_size * intermediate_size * ggml_type_sizef(wtype);  // fc1_w/fc2_w
         mem_size += intermediate_size * ggml_type_sizef(GGML_TYPE_F32);            // fc1_b
         mem_size += hidden_size * ggml_type_sizef(GGML_TYPE_F32);                  // fc2_b
-        mem_size += 16 * ggml_tensor_overhead();                                   // tensor overhead
         return static_cast<size_t>(mem_size);
     }
 
@@ -775,9 +781,15 @@ struct CLIPTextModel {
     struct ggml_tensor* final_ln_w;
     struct ggml_tensor* final_ln_b;
 
+    // context and memory buffers
     struct ggml_context* ctx_clip;
-    ggml_backend_buffer_t buffer_clip;
+    ggml_backend_buffer_t buffer_params_clip;
+    ggml_backend_buffer_t buffer_compute_clip; // for compute
+    struct ggml_allocr * allocr_compute = NULL;
+
     size_t memory_buffer_size = 0;
+    ggml_type wtype;
+    ggml_backend_t backend_clip;
 
     CLIPTextModel(ModelType model_type = SD1)
         : model_type(model_type) {
@@ -801,11 +813,19 @@ struct CLIPTextModel {
         }
     }
 
-    bool init_ctx(ggml_backend_t backend, ggml_type wtype) {
+    bool initialize(ggml_type wtype_) {
+#ifdef GGML_USE_CUBLAS
+        LOG_DEBUG("Using cuda backend");
+        backend_clip = ggml_backend_cuda_init();
+#else
+        backend_clip = ggml_backend_cpu_init();
+#endif
+        wtype = wtype_;
         memory_buffer_size = 1 * 1024 * 1024;  // 1 MB, for padding
-        memory_buffer_size += compute_params_mem_size(wtype);
+        memory_buffer_size += calculate_mem_size();
+
         LOG_DEBUG("clip params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
-        int num_tensors = (3 + 2 + num_hidden_layers * 36);
+        int num_tensors = (3 + 2 + 36 * num_hidden_layers);
 
         LOG_DEBUG("clip tensor count = %i", num_tensors);
 
@@ -819,37 +839,44 @@ struct CLIPTextModel {
             LOG_ERROR("ggml_init() failed");
             return false;
         }
-        buffer_clip = ggml_backend_alloc_buffer(backend, memory_buffer_size);
+        buffer_params_clip = ggml_backend_alloc_buffer(backend_clip, memory_buffer_size);
         return true;
     }
 
-    void destroy_ctx() {
+    void destroy() {
         if (ctx_clip != NULL) {
             ggml_free(ctx_clip);
             ctx_clip = NULL;
         }
     }
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size() {
         double mem_size = 0;
         mem_size += hidden_size * max_position_embeddings * ggml_type_sizef(GGML_TYPE_I32);  // position_ids
         mem_size += hidden_size * vocab_size * ggml_type_sizef(wtype);                       // token_embed_weight
         mem_size += hidden_size * max_position_embeddings * ggml_type_sizef(wtype);          // position_embed_weight
         for (int i = 0; i < num_hidden_layers; i++) {
-            mem_size += resblocks[i].compute_params_mem_size(wtype);
+            mem_size += resblocks[i].calculate_mem_size(wtype);
         }
         mem_size += 2 * hidden_size * ggml_type_sizef(GGML_TYPE_F32);  // final_ln_w/b
-        mem_size += ggml_tensor_overhead();                            // object overhead
         return static_cast<size_t>(mem_size);
     }
 
-    void init_params(ggml_type wtype) {
-        ggml_allocr * alloc = ggml_allocr_new_from_buffer(buffer_clip);
+    void alloc_params() {
+        ggml_allocr * alloc = ggml_allocr_new_from_buffer(buffer_params_clip);
         position_ids = ggml_new_tensor_1d(ctx_clip, GGML_TYPE_I32, max_position_embeddings);
         ggml_allocr_alloc(alloc, position_ids);
 
-        for (int i = 0; i < max_position_embeddings; i++) {
-            ggml_set_i32_1d(position_ids, i, i);
+        if(ggml_backend_is_cpu(backend_clip)) {
+            for (int i = 0; i < max_position_embeddings; i++) {
+                ggml_set_i32_1d(position_ids, i, i);
+            }
+        } else {
+            std::vector<int> pos_temp;
+            for (int i = 0; i < max_position_embeddings; i++) {
+                pos_temp.push_back(i);
+            }
+            ggml_backend_tensor_set(position_ids, pos_temp.data(), 0, ggml_nbytes(position_ids));
         }
 
         token_embed_weight = ggml_new_tensor_2d(ctx_clip, wtype, hidden_size, vocab_size);
@@ -943,26 +970,51 @@ struct CLIPTextModel {
         return gf;
     }
 
-    struct ggml_tensor* compute(struct ggml_allocr * allocr,
-        const int n_threads,std::vector<int> tokens, ggml_backend_t backend) {
-        struct ggml_cgraph * gf = build_graph(allocr, tokens);
-        ggml_allocr_alloc_graph(allocr, gf);
+    void begin(int max_tokens) {
+        // calculate the amount of memory required
+        {
+             // alignment required by the backend
+            size_t align = ggml_backend_get_alignment(backend_clip);
+            allocr_compute = ggml_allocr_new_measure(align);
 
-        if (ggml_backend_is_cpu(backend)) {
-            ggml_backend_cpu_set_n_threads(backend, n_threads);
+            struct ggml_cgraph * gf = build_graph(allocr_compute, std::vector<int>(max_tokens));
+            // compute the required memory
+            size_t mem_size = ggml_allocr_alloc_graph(allocr_compute, gf);
+
+            // recreate the allocator with the required memory
+            ggml_allocr_free(allocr_compute);
+            buffer_compute_clip = ggml_backend_alloc_buffer(backend_clip, mem_size);
+            allocr_compute = ggml_allocr_new_from_buffer(buffer_compute_clip);
+
+            fprintf(stderr, "%s: learned condition compute buffer size: %.2f MB\n", __func__, mem_size / 1024.0 / 1024.0);
+        }
+    }
+
+    struct ggml_tensor* compute(const int n_threads,std::vector<int> tokens) {
+        struct ggml_cgraph * gf = build_graph(allocr_compute, tokens);
+        ggml_allocr_alloc_graph(allocr_compute, gf);
+
+        if (ggml_backend_is_cpu(backend_clip)) {
+            ggml_backend_cpu_set_n_threads(backend_clip, n_threads);
         }
 #ifdef GGML_USE_METAL
-        if (ggml_backend_is_metal(backend)) {
-            ggml_backend_metal_set_n_cb(backend, n_threads);
+        if (ggml_backend_is_metal(backend_clip)) {
+            ggml_backend_metal_set_n_cb(backend_clip, n_threads);
         }
 #endif
-        ggml_backend_graph_compute(backend, gf);
+        ggml_backend_graph_compute(backend_clip, gf);
 
 #ifdef GGML_PERF
-        ggml_graph_print(&gf);
+        ggml_graph_print(gf);
 #endif
 
         return gf->nodes[gf->n_nodes - 1];
+    }
+
+    void end() {
+        //ggml_allocr_free(allocr_compute);
+        //ggml_backend_buffer_free(buffer_compute_clip);
+        allocr_compute = NULL;
     }
 };
 
@@ -1079,7 +1131,7 @@ struct ResBlock {
     struct ggml_tensor* skip_w;  // [out_channels, channels, 1, 1]
     struct ggml_tensor* skip_b;  // [out_channels, ]
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += 2 * channels * ggml_type_sizef(GGML_TYPE_F32);                         // in_layer_0_w/b
         mem_size += out_channels * channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);      // in_layer_2_w
@@ -1087,13 +1139,9 @@ struct ResBlock {
         mem_size += out_channels * emb_channels * ggml_type_sizef(wtype);                  // emb_layer_1_w
         mem_size += out_channels * out_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // out_layer_3_w
 
-        mem_size += 10 * ggml_tensor_overhead();  // object overhead
-
         if (out_channels != channels) {
             mem_size += out_channels * channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // skip_w
             mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                     // skip_b
-
-            mem_size += 2 * ggml_tensor_overhead();  // object overhead
         }
         return static_cast<size_t>(mem_size);
     }
@@ -1273,7 +1321,7 @@ struct SpatialTransformer {
     struct ggml_tensor* proj_out_w;  // [in_channels, in_channels, 1, 1]
     struct ggml_tensor* proj_out_b;  // [in_channels,]
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += 2 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // norm_w/norm_b
         mem_size += 2 * in_channels * in_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // proj_in_w/proj_out_w
@@ -1289,7 +1337,6 @@ struct SpatialTransformer {
             mem_size += in_channels * 4 * in_channels * ggml_type_sizef(wtype);      // ff_2_w
             mem_size += in_channels * ggml_type_sizef(GGML_TYPE_F32);                // ff_2_b
         }
-        mem_size += 26 * ggml_tensor_overhead();  // object overhead
         return static_cast<size_t>(mem_size);
     }
 
@@ -1604,11 +1651,10 @@ struct DownSample {
 
     bool vae_downsample = false;
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += out_channels * channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // op_w
         mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                     // op_b
-        mem_size += 2 * ggml_tensor_overhead();                                        // object overhead
         return static_cast<size_t>(mem_size);
     }
 
@@ -1686,11 +1732,10 @@ struct UpSample {
     struct ggml_tensor* conv_w;  // [out_channels, channels, 3, 3]
     struct ggml_tensor* conv_b;  // [out_channels,]
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += out_channels * channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // op_w
         mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                     // op_b
-        mem_size += 2 * ggml_tensor_overhead();                                        // object overhead
         return static_cast<size_t>(mem_size);
     }
 
@@ -1770,6 +1815,7 @@ struct UNetModel {
     struct ggml_context* ctx_unet;
     ggml_backend_buffer_t buffer_unet;
     int memory_buffer_size = 0;
+    ggml_type wtype;
 
     UNetModel(ModelType model_type = SD1) {
         if (model_type == SD2) {
@@ -1874,7 +1920,7 @@ struct UNetModel {
         }
     }
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size() {
         double mem_size = 0;
         mem_size += time_embed_dim * model_channels * ggml_type_sizef(wtype);  // time_embed_0_w
         mem_size += time_embed_dim * ggml_type_sizef(GGML_TYPE_F32);           // time_embed_0_b
@@ -1884,40 +1930,38 @@ struct UNetModel {
         mem_size += model_channels * in_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // input_block_0_w
         mem_size += model_channels * ggml_type_sizef(GGML_TYPE_F32);                        // input_block_0_b
 
-        mem_size += 6 * ggml_tensor_overhead();  // object overhead
-
         // input_blocks
         int ds        = 1;
         int len_mults = sizeof(channel_mult) / sizeof(int);
         for (int i = 0; i < len_mults; i++) {
             for (int j = 0; j < num_res_blocks; j++) {
-                mem_size += input_res_blocks[i][j].compute_params_mem_size(wtype);
+                mem_size += input_res_blocks[i][j].calculate_mem_size(wtype);
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    mem_size += input_transformers[i][j].compute_params_mem_size(wtype);
+                    mem_size += input_transformers[i][j].calculate_mem_size(wtype);
                 }
             }
             if (i != len_mults - 1) {
                 ds *= 2;
-                mem_size += input_down_samples[i].compute_params_mem_size(wtype);
+                mem_size += input_down_samples[i].calculate_mem_size(wtype);
             }
         }
 
         // middle_block
-        mem_size += middle_block_0.compute_params_mem_size(wtype);
-        mem_size += middle_block_1.compute_params_mem_size(wtype);
-        mem_size += middle_block_2.compute_params_mem_size(wtype);
+        mem_size += middle_block_0.calculate_mem_size(wtype);
+        mem_size += middle_block_1.calculate_mem_size(wtype);
+        mem_size += middle_block_2.calculate_mem_size(wtype);
 
         // output_blocks
         for (int i = len_mults - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
-                mem_size += output_res_blocks[i][j].compute_params_mem_size(wtype);
+                mem_size += output_res_blocks[i][j].calculate_mem_size(wtype);
 
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    mem_size += output_transformers[i][j].compute_params_mem_size(wtype);
+                    mem_size += output_transformers[i][j].calculate_mem_size(wtype);
                 }
 
                 if (i > 0 && j == num_res_blocks) {
-                    mem_size += output_up_samples[i - 1].compute_params_mem_size(wtype);
+                    mem_size += output_up_samples[i - 1].calculate_mem_size(wtype);
 
                     ds /= 2;
                 }
@@ -1929,16 +1973,10 @@ struct UNetModel {
         mem_size += out_channels * model_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // out_2_w
         mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                           // out_2_b
 
-        mem_size += 4 * ggml_tensor_overhead();
-
         return static_cast<size_t>(mem_size);
     }
 
-    bool init_ctx(ggml_backend_t backend, ggml_type wtype) {
-        memory_buffer_size = 1 * 1024 * 1024;  // 1 MB, for padding
-        memory_buffer_size += compute_params_mem_size(wtype);
-        LOG_DEBUG("unet params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
-
+    int getNumTensors() {
         // in
         int num_tensors = 6;
 
@@ -1980,6 +2018,17 @@ struct UNetModel {
 
         // out
         num_tensors += 4;
+        return num_tensors;
+    }
+
+    bool initialize(ggml_backend_t backend, ggml_type wtype_) {
+        wtype = wtype_;
+        memory_buffer_size = 1 * 1024 * 1024;  // 1 MB, for padding
+        memory_buffer_size += calculate_mem_size();
+
+        LOG_DEBUG("unet params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
+
+        int num_tensors = getNumTensors();
 
         LOG_DEBUG("unet tensor count = %i", num_tensors);
 
@@ -1998,14 +2047,14 @@ struct UNetModel {
         return true;
     }
 
-    void destroy_ctx() {
+    void destroy() {
         if (ctx_unet != NULL) {
             ggml_free(ctx_unet);
             ctx_unet = NULL;
         }
     }
 
-    void init_params(ggml_type wtype) {
+    void alloc_params() {
         ggml_allocr * alloc = ggml_allocr_new_from_buffer(buffer_unet);
         time_embed_0_w = ggml_new_tensor_2d(ctx_unet, wtype, model_channels, time_embed_dim);
         time_embed_0_b = ggml_new_tensor_1d(ctx_unet, GGML_TYPE_F32, time_embed_dim);
@@ -2290,7 +2339,7 @@ struct UNetModel {
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
-        ggml_graph_print(&gf);
+        ggml_graph_print(gf);
 #endif
 
         return gf->nodes[gf->n_nodes - 1];
@@ -2321,20 +2370,16 @@ struct ResnetBlock {
     struct ggml_tensor* nin_shortcut_w;  // [out_channels, in_channels, 1, 1]
     struct ggml_tensor* nin_shortcut_b;  // [out_channels, ]
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += 2 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                      // norm1_w/b
         mem_size += out_channels * in_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);   // conv1_w
         mem_size += 4 * out_channels * ggml_type_sizef(GGML_TYPE_F32);                     // conv1_b/norm2_w/norm2_b/conv2_b
         mem_size += out_channels * out_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv2_w
 
-        mem_size += 8 * ggml_tensor_overhead();  // object overhead
-
         if (out_channels != in_channels) {
             mem_size += out_channels * in_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // nin_shortcut_w
             mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                        // nin_shortcut_b
-
-            mem_size += 2 * ggml_tensor_overhead();  // object overhead
         }
         return static_cast<size_t>(mem_size);
     }
@@ -2457,11 +2502,10 @@ struct AttnBlock {
     struct ggml_tensor* proj_out_w;  // [in_channels, in_channels, 1, 1]
     struct ggml_tensor* proj_out_b;  // [in_channels,]
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += 6 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // norm_w/norm_b/q_b/k_v/v_b/proj_out_b
-        mem_size += 4 * in_channels * in_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // q_w/k_w/v_w/proj_out_w
-        mem_size += 10 * ggml_tensor_overhead();                                             // object overhead
+        mem_size += 4 * in_channels * in_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // q_w/k_w/v_w/proj_out_w                                            // object overhead
         return static_cast<size_t>(mem_size);
     }
 
@@ -2645,7 +2689,7 @@ struct Encoder {
         return num_tensors;
     }
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         int len_mults   = sizeof(ch_mult) / sizeof(int);
         int block_in    = ch * ch_mult[len_mults - 1];
@@ -2658,18 +2702,16 @@ struct Encoder {
         mem_size += z_channels * 2 * block_in * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv_out_w
         mem_size += z_channels * 2 * ggml_type_sizef(GGML_TYPE_F32);                     // conv_out_b
 
-        mem_size += 6 * ggml_tensor_overhead();  // object overhead
-
-        mem_size += mid.block_1.compute_params_mem_size(wtype);
-        mem_size += mid.attn_1.compute_params_mem_size(wtype);
-        mem_size += mid.block_2.compute_params_mem_size(wtype);
+        mem_size += mid.block_1.calculate_mem_size(wtype);
+        mem_size += mid.attn_1.calculate_mem_size(wtype);
+        mem_size += mid.block_2.calculate_mem_size(wtype);
 
         for (int i = len_mults - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
-                mem_size += down_blocks[i][j].compute_params_mem_size(wtype);
+                mem_size += down_blocks[i][j].calculate_mem_size(wtype);
             }
             if (i != 0) {
-                mem_size += down_samples[i - 1].compute_params_mem_size(wtype);
+                mem_size += down_samples[i - 1].calculate_mem_size(wtype);
             }
         }
 
@@ -2832,7 +2874,7 @@ struct Decoder {
         }
     }
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         int len_mults   = sizeof(ch_mult) / sizeof(int);
         int block_in    = ch * ch_mult[len_mults - 1];
@@ -2845,18 +2887,16 @@ struct Decoder {
         mem_size += (ch * ch_mult[0]) * out_ch * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv_out_w
         mem_size += out_ch * ggml_type_sizef(GGML_TYPE_F32);                              // conv_out_b
 
-        mem_size += 8 * ggml_tensor_overhead();  // object overhead
-
-        mem_size += mid.block_1.compute_params_mem_size(wtype);
-        mem_size += mid.attn_1.compute_params_mem_size(wtype);
-        mem_size += mid.block_2.compute_params_mem_size(wtype);
+        mem_size += mid.block_1.calculate_mem_size(wtype);
+        mem_size += mid.attn_1.calculate_mem_size(wtype);
+        mem_size += mid.block_2.calculate_mem_size(wtype);
 
         for (int i = len_mults - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
-                mem_size += up_blocks[i][j].compute_params_mem_size(wtype);
+                mem_size += up_blocks[i][j].calculate_mem_size(wtype);
             }
             if (i != 0) {
-                mem_size += up_samples[i - 1].compute_params_mem_size(wtype);
+                mem_size += up_samples[i - 1].calculate_mem_size(wtype);
             }
         }
 
@@ -3012,6 +3052,7 @@ struct AutoEncoderKL {
     struct ggml_context* ctx_vae;
     ggml_backend_buffer_t buffer_vae;
     int memory_buffer_size = 0;
+    ggml_type wtype;
 
     AutoEncoderKL(bool decode_only = false)
         : decode_only(decode_only) {
@@ -3035,25 +3076,27 @@ struct AutoEncoderKL {
         }
     }
 
-    size_t compute_params_mem_size(ggml_type wtype) {
+    size_t calculate_mem_size() {
         double mem_size = 0;
 
         if (!decode_only) {
             mem_size += 2 * embed_dim * 2 * dd_config.z_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // quant_conv_w
             mem_size += 2 * embed_dim * ggml_type_sizef(GGML_TYPE_F32);                                     // quant_conv_b
-            mem_size += encoder.compute_params_mem_size(wtype);
+            mem_size += encoder.calculate_mem_size(wtype);
         }
 
         mem_size += dd_config.z_channels * embed_dim * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // post_quant_conv_w
         mem_size += dd_config.z_channels * ggml_type_sizef(GGML_TYPE_F32);                      // post_quant_conv_b
 
-        mem_size += decoder.compute_params_mem_size(wtype);
+        mem_size += decoder.calculate_mem_size(wtype);
         return static_cast<size_t>(mem_size);
     }
 
-    bool init_ctx(ggml_backend_t backend, ggml_type wtype) {
+    bool initialize(ggml_backend_t backend, ggml_type wtype_) {
+        wtype = wtype_;
         memory_buffer_size = 1 * 1024 * 1024;  // 1 MB, for padding
-        memory_buffer_size += compute_params_mem_size(wtype);
+        memory_buffer_size += calculate_mem_size();
+
         LOG_DEBUG("vae params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
         int num_tensors = 0;
         if (!decode_only) {
@@ -3080,14 +3123,14 @@ struct AutoEncoderKL {
         return true;
     }
 
-    void destroy_ctx() {
+    void destroy() {
         if (ctx_vae != NULL) {
             ggml_free(ctx_vae);
             ctx_vae = NULL;
         }
     }
 
-    void init_params(ggml_type wtype) {
+    void alloc_params() {
         ggml_allocr * alloc = ggml_allocr_new_from_buffer(buffer_vae);
         if (!decode_only) {
             quant_conv_w = ggml_new_tensor_4d(ctx_vae, GGML_TYPE_F16, 1, 1, 2 * dd_config.z_channels, 2 * embed_dim);
@@ -3188,7 +3231,7 @@ struct AutoEncoderKL {
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
-        ggml_graph_print(&gf);
+        ggml_graph_print(gf);
 #endif
 
         return gf->nodes[gf->n_nodes - 1];
@@ -3321,12 +3364,10 @@ class StableDiffusionGGML {
     bool vae_decode_only = false;
     bool free_params_immediately = false;
 
-    std::shared_ptr<RNG> rng    = std::make_shared<STDDefaultRNG>();
-    int32_t ftype               = 1;
-    int n_threads               = -1;
-    float scale_factor          = 0.18215f;
-    size_t max_mem_size         = 0;
-    size_t curr_params_mem_size = 0;
+    std::shared_ptr<RNG> rng = std::make_shared<STDDefaultRNG>();
+    int32_t ftype = 1;
+    int n_threads = -1;
+    float scale_factor = 0.18215f;
     size_t max_params_mem_size = 0;
 
     FrozenCLIPEmbedderWithCustomWords cond_stage_model;
@@ -3370,9 +3411,9 @@ class StableDiffusionGGML {
     }
 
     ~StableDiffusionGGML() {
-        cond_stage_model.text_model.destroy_ctx();
-        diffusion_model.destroy_ctx();
-        first_stage_model.destroy_ctx();
+        cond_stage_model.text_model.destroy();
+        diffusion_model.destroy();
+        first_stage_model.destroy();
     }
 
     bool load_from_file(const std::string& file_path, Schedule schedule) {
@@ -3470,9 +3511,9 @@ class StableDiffusionGGML {
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
         
         if(
-            !cond_stage_model.text_model.init_ctx(backend, wtype) ||
-            !diffusion_model.init_ctx(backend, wtype) ||
-            !first_stage_model.init_ctx(backend, custom_vae ? wtype_vae : wtype)) {
+            !cond_stage_model.text_model.initialize(wtype) ||
+            !diffusion_model.initialize(backend, wtype) ||
+            !first_stage_model.initialize(backend, custom_vae ? wtype_vae : wtype)) {
             return false;
         }
 
@@ -3480,15 +3521,15 @@ class StableDiffusionGGML {
         // prepare memory for the weights
         {
             // cond_stage_model(FrozenCLIPEmbedder)
-            cond_stage_model.text_model.init_params(wtype);
+            cond_stage_model.text_model.alloc_params();
             cond_stage_model.text_model.map_by_name(tensors, "cond_stage_model.transformer.text_model.");
 
             // diffusion_model(UNetModel)
-            diffusion_model.init_params(wtype);
+            diffusion_model.alloc_params();
             diffusion_model.map_by_name(tensors, "model.diffusion_model.");
 
             // firest_stage_model(AutoEncoderKL)
-            first_stage_model.init_params(custom_vae ? wtype_vae : wtype);
+            first_stage_model.alloc_params();
             first_stage_model.map_by_name(tensors, "first_stage_model.");
         }
 
@@ -3664,9 +3705,9 @@ class StableDiffusionGGML {
                     return false;
                 }
 
-                if (ggml_backend_is_cpu  (backend)
+                if (ggml_backend_is_cpu  (ggml_get_backend(tensor))
 #ifdef GGML_USE_METAL
-                || ggml_backend_is_metal(backend)
+                || ggml_backend_is_metal(ggml_get_backend(tensor))
 #endif
                 ) {
                     // for the CPU and Metal backend, we can read directly into the tensor
@@ -3699,10 +3740,12 @@ class StableDiffusionGGML {
             }
             LOG_DEBUG("model size = %.2fMB", total_size / 1024.0 / 1024.0);
         }
-        max_params_mem_size = cond_stage_model.text_model.memory_buffer_size + diffusion_model.memory_buffer_size + first_stage_model.memory_buffer_size;
-        max_mem_size = max_params_mem_size;
-        curr_params_mem_size = max_params_mem_size;
-        LOG_INFO("total params size = %.2fMB (clip %.2fMB, unet %.2fMB, vae %.2fMB)",
+
+        max_params_mem_size =
+            cond_stage_model.text_model.memory_buffer_size +
+            diffusion_model.memory_buffer_size +
+            first_stage_model.memory_buffer_size;
+        LOG_INFO("total memory buffer size = %.2fMB (clip %.2fMB, unet %.2fMB, vae %.2fMB)",
                 max_params_mem_size / 1024.0 / 1024.0,
                 cond_stage_model.text_model.memory_buffer_size / 1024.0 / 1024.0,
                 diffusion_model.memory_buffer_size / 1024.0 / 1024.0,
@@ -3726,6 +3769,7 @@ class StableDiffusionGGML {
             if (is_using_v_parameterization_for_sd2(ctx)) {
                 is_using_v_parameterization = true;
             }
+            ggml_free(ctx);
         }
 
         if (is_using_v_parameterization) {
@@ -3780,7 +3824,7 @@ class StableDiffusionGGML {
             allocr = ggml_allocr_new_measure(align);
 
             struct ggml_tensor* timesteps = ggml_new_tensor_1d(draft_ctx, GGML_TYPE_F32, 1);                           // [N, ]
-            struct ggml_tensor* t_emb = new_timestep_embedding(draft_ctx, allocr, timesteps, diffusion_model.model_channels);  // [N, model_channels]
+            struct ggml_tensor* t_emb = new_timestep_embedding(draft_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
 
             struct ggml_cgraph * gf = diffusion_model.build_graph(allocr, x_t, NULL, c, t_emb);
 
@@ -4126,37 +4170,15 @@ class StableDiffusionGGML {
         std::vector<int>& tokens = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
 
-        // calculate memory for computation
-        ggml_backend_buffer_t buf_compute; // for compute
-        struct ggml_allocr * allocr = NULL;
-
-        // calculate the amount of memory required
-        {
-             // alignment required by the backend
-            size_t align = ggml_backend_get_alignment(backend);
-            allocr = ggml_allocr_new_measure(align);
-
-            struct ggml_cgraph * gf = cond_stage_model.text_model.build_graph(allocr, tokens);
-            // compute the required memory
-            size_t mem_size = ggml_allocr_alloc_graph(allocr, gf);
-
-            // recreate the allocator with the required memory
-            ggml_allocr_free(allocr);
-            buf_compute = ggml_backend_alloc_buffer(backend, mem_size);
-            allocr = ggml_allocr_new_from_buffer(buf_compute);
-
-            fprintf(stderr, "%s: learned condition compute buffer size: %.2f MB\n", __func__, mem_size / 1024.0 / 1024.0);
-        }
+        cond_stage_model.text_model.begin(tokens.size());
 
         int64_t t0 = ggml_time_ms();
-        struct ggml_tensor* hidden_states = cond_stage_model.text_model.compute(allocr, n_threads, tokens, backend);
-        ggml_allocr_free(allocr);
-
+        struct ggml_tensor* hidden_states = cond_stage_model.text_model.compute(n_threads, tokens);
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-
         ggml_tensor* result = ggml_dup_tensor(draft_ctx, hidden_states);  // [N, n_token, hidden_size]
-
+        
+        cond_stage_model.text_model.end();
         {
             int64_t nelements   = ggml_nelements(hidden_states);
             float original_mean = 0.f;
@@ -4202,7 +4224,6 @@ class StableDiffusionGGML {
         // print_ggml_tensor(x_t);
         struct ggml_tensor* x = ggml_dup_tensor(draft_ctx, x_t);
         copy_ggml_tensor(x, x_t);
-        struct ggml_cplan cplan;
 
         // calculate memory for computation
         ggml_backend_buffer_t buf_compute; // for compute
@@ -4871,8 +4892,7 @@ std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
     LOG_INFO("get_learned_condition completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     if (sd->free_params_immediately) {
-        sd->curr_params_mem_size -= sd->cond_stage_model.text_model.memory_buffer_size;
-        sd->cond_stage_model.text_model.destroy_ctx();
+        sd->cond_stage_model.text_model.destroy();
     }
 
     int C                   = 4;
@@ -4891,8 +4911,7 @@ std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
     LOG_INFO("sampling completed, taking %.2fs", (t2 - t1) * 1.0f / 1000);
 
     if (sd->free_params_immediately) {
-        sd->curr_params_mem_size -= sd->diffusion_model.memory_buffer_size;
-        sd->diffusion_model.destroy_ctx();
+        sd->diffusion_model.destroy();
     }
 
     struct ggml_tensor* img = sd->compute_first_stage(ctx, x_0, true);
@@ -4903,8 +4922,7 @@ std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t3 - t2) * 1.0f / 1000);
 
     if (sd->free_params_immediately) {
-        sd->curr_params_mem_size -= sd->first_stage_model.memory_buffer_size;
-        sd->first_stage_model.destroy_ctx();
+        sd->first_stage_model.destroy();
     }
 
     LOG_INFO(
@@ -4989,8 +5007,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     int64_t t2 = ggml_time_ms();
     LOG_INFO("get_learned_condition completed, taking %.2fs", (t2 - t1) * 1.0f / 1000);
     if (sd->free_params_immediately) {
-        sd->curr_params_mem_size -= sd->cond_stage_model.text_model.memory_buffer_size;
-        sd->cond_stage_model.text_model.destroy_ctx();
+        sd->cond_stage_model.text_model.destroy();
     }
 
     LOG_INFO("start sampling");
@@ -5000,8 +5017,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     int64_t t3 = ggml_time_ms();
     LOG_INFO("sampling completed, taking %.2fs", (t3 - t2) * 1.0f / 1000);
     if (sd->free_params_immediately) {
-       sd->curr_params_mem_size -= sd->diffusion_model.memory_buffer_size;
-        sd->diffusion_model.destroy_ctx();
+        sd->diffusion_model.destroy();
     }
 
     struct ggml_tensor* img = sd->compute_first_stage(ctx, x_0, true);
@@ -5012,16 +5028,12 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
 
     if (sd->free_params_immediately) {
-        sd->curr_params_mem_size -= sd->first_stage_model.memory_buffer_size;
-        sd->first_stage_model.destroy_ctx();
+        sd->first_stage_model.destroy();
     }
 
     LOG_INFO(
-        "img2img completed in %.2fs, use %.2fMB of memory: peak params memory %.2fMB, "
-        "peak runtime memory %.2fMB",
-        (t4 - t0) * 1.0f / 1000,
-        sd->max_mem_size * 1.0f / 1024 / 1024,
-        sd->max_params_mem_size * 1.0f / 1024 / 1024);
+        "img2img completed in %.2fs",
+        (t4 - t0) * 1.0f / 1000);
 
     ggml_free(ctx);
 
