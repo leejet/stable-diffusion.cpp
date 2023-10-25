@@ -4902,7 +4902,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     ggml_tensor* init_latent = sd->get_first_stage_encoding(ctx, moments);
     // print_ggml_tensor(init_latent);
     t1 = ggml_time_ms();
-    LOG_INFO("encode_first_stage completed, taking %i ms", t1 - t0);
+    LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     ggml_tensor* c = sd->get_learned_condition(ctx, prompt);
     struct ggml_tensor* uc = NULL;
@@ -4930,7 +4930,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
         result = ggml_to_image_vec(img);
     }
     int64_t t4 = ggml_time_ms();
-    LOG_INFO("decode_first_stage completed, taking %i ms", t4 - t3);
+    LOG_INFO("decode_first_stage completed, taking %.2fs", (t3 - t4) * 1.0f / 1000);
 
     if (sd->free_params_immediately) {
         sd->first_stage_model.destroy();
