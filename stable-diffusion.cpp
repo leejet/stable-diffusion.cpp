@@ -17,7 +17,7 @@
 #include "ggml/ggml-alloc.h"
 #include "ggml/ggml-backend.h"
 
-//#define GGML_USE_CUBLAS
+// #define GGML_USE_CUBLAS
 
 #ifdef GGML_USE_CUBLAS
 #include "ggml-cuda.h"
@@ -656,7 +656,7 @@ struct ResidualAttentionBlock {
         tensors[prefix + "mlp.fc2.bias"]   = fc2_b;
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [N, n_token, hidden_size]
         int64_t N           = x->ne[2];
         int64_t n_token     = x->ne[1];
@@ -707,10 +707,11 @@ struct ResidualAttentionBlock {
             x = ggml_reshape_2d(ctx, kqv, d_model * n_head, n_token * N);  // // [N * n_token, d_model * n_head]
         }
 
-        // attention output
-        x = ggml_add(ctx, ggml_repeat(ctx, out_b, x), ggml_mul_mat(ctx, out_w, x));
+        //attention output
+        x = ggml_mul_mat(ctx, out_w, x);
+        x = ggml_add(ctx, ggml_repeat(ctx, out_b, x), x);
 
-        // residual
+        //residual
         x = ggml_add(ctx, x, r);
         r = x;
 
@@ -737,7 +738,6 @@ struct ResidualAttentionBlock {
 
         // residual 2
         x = ggml_add(ctx, x, r);
-
         return x;
     }
 };
@@ -770,6 +770,7 @@ struct CLIPTextModel {
     ggml_backend_buffer_t buffer_params_clip;
     ggml_backend_buffer_t buffer_compute_clip; // for compute
     struct ggml_allocr * allocr_compute = NULL;
+    size_t compute_memory_buffer_size = -1;
 
     size_t memory_buffer_size = 0;
     ggml_type wtype;
@@ -893,7 +894,7 @@ struct CLIPTextModel {
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_allocr* allocr, struct ggml_tensor* input_ids) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* input_ids) {
         // input_ids: [N, n_token]
         GGML_ASSERT(input_ids->ne[0] <= position_ids->ne[0]);
 
@@ -910,7 +911,7 @@ struct CLIPTextModel {
             if (model_type == SD2 && i == num_hidden_layers - 1) {  // layer: "penultimate"
                 break;
             }
-            x = resblocks[i].forward(ctx, allocr, x);  // [N, n_token, hidden_size]
+            x = resblocks[i].forward(ctx, x);  // [N, n_token, hidden_size]
         }
 
         // final layer norm
@@ -946,7 +947,7 @@ struct CLIPTextModel {
             ggml_backend_tensor_set(input_ids, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids));
         }
 
-        struct ggml_tensor* hidden_states = forward(ctx0, allocr, input_ids);
+        struct ggml_tensor* hidden_states = forward(ctx0, input_ids);
 
         ggml_build_forward_expand(gf, hidden_states);
         ggml_free(ctx0);
@@ -956,22 +957,22 @@ struct CLIPTextModel {
 
     void begin(int max_tokens) {
         // calculate the amount of memory required
-        {
+        if(compute_memory_buffer_size == -1) {
              // alignment required by the backend
             size_t align = ggml_backend_get_alignment(backend_clip);
             allocr_compute = ggml_allocr_new_measure(align);
 
             struct ggml_cgraph * gf = build_graph(allocr_compute, std::vector<int>(max_tokens));
             // compute the required memory
-            size_t mem_size = ggml_allocr_alloc_graph(allocr_compute, gf);
+            compute_memory_buffer_size = ggml_allocr_alloc_graph(allocr_compute, gf);
 
             // recreate the allocator with the required memory
             ggml_allocr_free(allocr_compute);
-            buffer_compute_clip = ggml_backend_alloc_buffer(backend_clip, mem_size);
-            allocr_compute = ggml_allocr_new_from_buffer(buffer_compute_clip);
 
-            fprintf(stderr, "%s: learned condition compute buffer size: %.2f MB\n", __func__, mem_size / 1024.0 / 1024.0);
+            fprintf(stderr, "%s: learned condition compute buffer size: %.2f MB\n", __func__, compute_memory_buffer_size / 1024.0 / 1024.0);
         }
+        buffer_compute_clip = ggml_backend_alloc_buffer(backend_clip, compute_memory_buffer_size);
+        allocr_compute = ggml_allocr_new_from_buffer(buffer_compute_clip);
     }
 
     struct ggml_tensor* compute(const int n_threads,std::vector<int> tokens) {
@@ -996,8 +997,8 @@ struct CLIPTextModel {
     }
 
     void end() {
-        //ggml_allocr_free(allocr_compute);
-        //ggml_backend_buffer_free(buffer_compute_clip);
+        ggml_allocr_free(allocr_compute);
+        ggml_backend_buffer_free(buffer_compute_clip);
         allocr_compute = NULL;
     }
 };
@@ -1011,7 +1012,7 @@ struct FrozenCLIPEmbedder {
         std::vector<int32_t> tokens = tokenizer.tokenize(prompt, text_model.max_position_embeddings, true);
         struct ggml_tensor* input_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, tokens.size());
         memcpy(input_ids->data, tokens.data(), tokens.size() * ggml_element_size(input_ids));
-        struct ggml_tensor* hidden_states = text_model.forward(ctx, allocr, input_ids);
+        struct ggml_tensor* hidden_states = text_model.forward(ctx, input_ids);
         return hidden_states;
     }
 };
@@ -4074,16 +4075,20 @@ class StableDiffusionGGML {
                                                             true);
         std::vector<int>& tokens = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
-
         cond_stage_model.text_model.begin(tokens.size());
-
         int64_t t0 = ggml_time_ms();
         struct ggml_tensor* hidden_states = cond_stage_model.text_model.compute(n_threads, tokens);
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %i ms", t1 - t0);
         ggml_tensor* result = ggml_dup_tensor(draft_ctx, hidden_states);  // [N, n_token, hidden_size]
-        
-        cond_stage_model.text_model.end();
+
+        // bring data from gpu if is needed
+        if(!ggml_backend_is_cpu(cond_stage_model.text_model.backend_clip)) {
+            ggml_tensor* hs_cpy = ggml_dup_tensor(draft_ctx, hidden_states);
+            ggml_backend_tensor_get(hidden_states, hs_cpy->data, 0, ggml_nbytes(hidden_states));
+            hidden_states = hs_cpy;
+        }
+        // print_ggml_tensor(hidden_states);
         {
             int64_t nelements   = ggml_nelements(hidden_states);
             float original_mean = 0.f;
@@ -4112,7 +4117,7 @@ class StableDiffusionGGML {
                 vec[i] = vec[i] * (original_mean / new_mean);
             }
         }
-
+        cond_stage_model.text_model.end();
         return result;  // [1, 77, 768]
     }
 
