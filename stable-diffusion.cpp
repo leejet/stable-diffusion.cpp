@@ -3455,7 +3455,9 @@ class StableDiffusionGGML {
         struct ggml_tensor* out = diffusion_model.forward(ctx, noised_input, NULL, context, t_emb);
         ggml_hold_dynamic_tensor(out);
 
-        struct ggml_cgraph* diffusion_graph = ggml_build_forward_ctx(ctx, out);
+        struct ggml_cgraph* diffusion_graph = ggml_new_graph(ctx);
+        diffusion_graph->order = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT;
+        ggml_build_forward_expand(diffusion_graph, out);
         cplan = ggml_graph_plan(diffusion_graph, n_threads);
 
         ggml_set_dynamic(ctx, false);
@@ -4012,7 +4014,10 @@ class StableDiffusionGGML {
             }
 
             struct ggml_tensor* moments = first_stage_model.encode(ctx, x);
-            struct ggml_cgraph* vae_graph = ggml_build_forward_ctx(ctx, moments);
+
+            struct ggml_cgraph* vae_graph = ggml_new_graph(ctx);
+            vae_graph->order = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT;
+            ggml_build_forward_expand(vae_graph, moments);
 
             int64_t t0 = ggml_time_ms();
             ggml_graph_compute_with_ctx(ctx, vae_graph, n_threads);
@@ -4142,7 +4147,10 @@ class StableDiffusionGGML {
             }
 
             struct ggml_tensor* img = first_stage_model.decode(ctx, z);
-            struct ggml_cgraph* vae_graph = ggml_build_forward_ctx(ctx, img);
+
+            struct ggml_cgraph* vae_graph = ggml_new_graph(ctx);
+            vae_graph->order = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT;
+            ggml_build_forward_expand(vae_graph, img);
 
             int64_t t0 = ggml_time_ms();
             ggml_graph_compute_with_ctx(ctx, vae_graph, n_threads);
