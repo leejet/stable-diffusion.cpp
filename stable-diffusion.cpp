@@ -18,7 +18,7 @@
 #include "rng_philox.h"
 #include "stable-diffusion.h"
 
-#define EPS 1e-05
+#define EPS 1e-05f
 
 static SDLogLevel log_level = SDLogLevel::INFO;
 
@@ -122,9 +122,9 @@ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_pa
 }
 
 void ggml_tensor_set_f32_randn(struct ggml_tensor* tensor, std::shared_ptr<RNG> rng) {
-    uint32_t n = ggml_nelements(tensor);
+    uint32_t n = (uint32_t)ggml_nelements(tensor);
     std::vector<float> random_numbers = rng->randn(n);
-    for (int i = 0; i < n; i++) {
+    for (uint32_t i = 0; i < n; i++) {
         ggml_set_f32_1d(tensor, i, random_numbers[i]);
     }
 }
@@ -438,12 +438,12 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
         std::string weight = m[1];
 
         if (text == "(") {
-            round_brackets.push_back(res.size());
+            round_brackets.push_back((int)res.size());
         } else if (text == "[") {
-            square_brackets.push_back(res.size());
+            square_brackets.push_back((int)res.size());
         } else if (!weight.empty()) {
             if (!round_brackets.empty()) {
-                multiply_range(round_brackets.back(), std::stod(weight));
+                multiply_range(round_brackets.back(), std::stof(weight));
                 round_brackets.pop_back();
             }
         } else if (text == ")" && !round_brackets.empty()) {
@@ -2707,13 +2707,13 @@ struct DiscreteSchedule : SigmaSchedule {
         if (n == 0) {
             return result;
         } else if (n == 1) {
-            result.push_back(t_to_sigma(t_max));
+            result.push_back(t_to_sigma((float)t_max));
             result.push_back(0);
             return result;
         }
 
         float step = static_cast<float>(t_max) / static_cast<float>(n - 1);
-        for (int i = 0; i < n; ++i) {
+        for (uint32_t i = 0; i < n; ++i) {
             float t = t_max - step * i;
             result.push_back(t_to_sigma(t));
         }
@@ -2726,17 +2726,17 @@ struct KarrasSchedule : SigmaSchedule {
     std::vector<float> get_sigmas(uint32_t n) {
         // These *COULD* be function arguments here,
         // but does anybody ever bother to touch them?
-        float sigma_min = 0.1;
-        float sigma_max = 10.;
-        float rho = 7.;
+        float sigma_min = 0.1f;
+        float sigma_max = 10.f;
+        float rho = 7.f;
 
         std::vector<float> result(n + 1);
 
-        float min_inv_rho = pow(sigma_min, (1. / rho));
-        float max_inv_rho = pow(sigma_max, (1. / rho));
-        for (int i = 0; i < n; i++) {
+        float min_inv_rho = pow(sigma_min, (1.f / rho));
+        float max_inv_rho = pow(sigma_max, (1.f / rho));
+        for (uint32_t i = 0; i < n; i++) {
             // Eq. (5) from Karras et al 2022
-            result[i] = pow(max_inv_rho + (float)i / ((float)n - 1.) * (min_inv_rho - max_inv_rho), rho);
+            result[i] = pow(max_inv_rho + (float)i / ((float)n - 1.f) * (min_inv_rho - max_inv_rho), rho);
         }
         result[n] = 0.;
         return result;
@@ -3748,7 +3748,7 @@ class StableDiffusionGGML {
                         }
                     } else {
                         // DPM-Solver-2
-                        float sigma_mid = exp(0.5 * (log(sigmas[i]) + log(sigmas[i + 1])));
+                        float sigma_mid = exp(0.5f * (log(sigmas[i]) + log(sigmas[i + 1])));
                         float dt_1 = sigma_mid - sigmas[i];
                         float dt_2 = sigmas[i + 1] - sigmas[i];
 
@@ -3811,7 +3811,7 @@ class StableDiffusionGGML {
                         float t = t_fn(sigmas[i]);
                         float t_next = t_fn(sigma_down);
                         float h = t_next - t;
-                        float s = t + 0.5 * h;
+                        float s = t + 0.5f * h;
 
                         float* vec_d = (float*)d->data;
                         float* vec_x = (float*)x->data;
@@ -3820,7 +3820,7 @@ class StableDiffusionGGML {
 
                         // First half-step
                         for (int j = 0; j < ggml_nelements(x); j++) {
-                            vec_x2[j] = (sigma_fn(s) / sigma_fn(t)) * vec_x[j] - (exp(-h * 0.5) - 1) * vec_denoised[j];
+                            vec_x2[j] = (sigma_fn(s) / sigma_fn(t)) * vec_x[j] - (exp(-h * 0.5f) - 1) * vec_denoised[j];
                         }
 
                         denoise(x2, sigmas[i + 1], i + 1);
@@ -3862,7 +3862,7 @@ class StableDiffusionGGML {
                     float t_next = t_fn(sigmas[i + 1]);
                     float h = t_next - t;
                     float a = sigmas[i + 1] / sigmas[i];
-                    float b = exp(-h) - 1.;
+                    float b = exp(-h) - 1.f;
                     float* vec_x = (float*)x->data;
                     float* vec_denoised = (float*)denoised->data;
                     float* vec_old_denoised = (float*)old_denoised->data;
@@ -3876,7 +3876,7 @@ class StableDiffusionGGML {
                         float h_last = t - t_fn(sigmas[i - 1]);
                         float r = h_last / h;
                         for (int j = 0; j < ggml_nelements(x); j++) {
-                            float denoised_d = (1. + 1. / (2. * r)) * vec_denoised[j] - (1. / (2. * r)) * vec_old_denoised[j];
+                            float denoised_d = (1.f + 1.f / (2.f * r)) * vec_denoised[j] - (1.f / (2.f * r)) * vec_old_denoised[j];
                             vec_x[j] = a * vec_x[j] - b * denoised_d;
                         }
                     }
@@ -3910,7 +3910,7 @@ class StableDiffusionGGML {
 
                     if (i == 0 || sigmas[i + 1] == 0) {
                         // Simpler step for the edge cases
-                        float b = exp(-h) - 1.;
+                        float b = exp(-h) - 1.f;
                         for (int j = 0; j < ggml_nelements(x); j++) {
                             vec_x[j] = a * vec_x[j] - b * vec_denoised[j];
                         }
@@ -3919,10 +3919,10 @@ class StableDiffusionGGML {
                         float h_min = std::min(h_last, h);
                         float h_max = std::max(h_last, h);
                         float r = h_max / h_min;
-                        float h_d = (h_max + h_min) / 2.;
-                        float b = exp(-h_d) - 1.;
+                        float h_d = (h_max + h_min) / 2.f;
+                        float b = exp(-h_d) - 1.f;
                         for (int j = 0; j < ggml_nelements(x); j++) {
-                            float denoised_d = (1. + 1. / (2. * r)) * vec_denoised[j] - (1. / (2. * r)) * vec_old_denoised[j];
+                            float denoised_d = (1.f + 1.f / (2.f * r)) * vec_denoised[j] - (1.f / (2.f * r)) * vec_old_denoised[j];
                             vec_x[j] = a * vec_x[j] - b * denoised_d;
                         }
                     }

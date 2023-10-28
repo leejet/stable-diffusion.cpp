@@ -16,8 +16,8 @@ class PhiloxRNG : public RNG {
    private:
     std::vector<uint32_t> philox_m = {0xD2511F53, 0xCD9E8D57};
     std::vector<uint32_t> philox_w = {0x9E3779B9, 0xBB67AE85};
-    float two_pow32_inv = 2.3283064e-10;
-    float two_pow32_inv_2pi = 2.3283064e-10 * 6.2831855;
+    float two_pow32_inv = 2.3283064e-10f;
+    float two_pow32_inv_2pi = 2.3283064e-10f * 6.2831855f;
 
     std::vector<uint32_t> uint32(uint64_t x) {
         std::vector<uint32_t> result(2);
@@ -27,10 +27,10 @@ class PhiloxRNG : public RNG {
     }
 
     std::vector<std::vector<uint32_t>> uint32(const std::vector<uint64_t>& x) {
-        int N = x.size();
+        uint32_t N = (uint32_t)x.size();
         std::vector<std::vector<uint32_t>> result(2, std::vector<uint32_t>(N));
 
-        for (int i = 0; i < N; ++i) {
+        for (uint32_t i = 0; i < N; ++i) {
             result[0][i] = static_cast<uint32_t>(x[i] & 0xFFFFFFFF);
             result[1][i] = static_cast<uint32_t>(x[i] >> 32);
         }
@@ -41,7 +41,7 @@ class PhiloxRNG : public RNG {
     //  A single round of the Philox 4x32 random number generator.
     void philox4_round(std::vector<std::vector<uint32_t>>& counter,
                        const std::vector<std::vector<uint32_t>>& key) {
-        uint32_t N = counter[0].size();
+        uint32_t N = (uint32_t)counter[0].size();
         for (uint32_t i = 0; i < N; i++) {
             std::vector<uint32_t> v1 = uint32(static_cast<uint64_t>(counter[0][i]) * static_cast<uint64_t>(philox_m[0]));
             std::vector<uint32_t> v2 = uint32(static_cast<uint64_t>(counter[2][i]) * static_cast<uint64_t>(philox_m[1]));
@@ -63,7 +63,7 @@ class PhiloxRNG : public RNG {
     std::vector<std::vector<uint32_t>> philox4_32(std::vector<std::vector<uint32_t>>& counter,
                                                   std::vector<std::vector<uint32_t>>& key,
                                                   int rounds = 10) {
-        uint32_t N = counter[0].size();
+        uint32_t N = (uint32_t)counter[0].size();
         for (int i = 0; i < rounds - 1; ++i) {
             philox4_round(counter, key);
 
@@ -81,7 +81,7 @@ class PhiloxRNG : public RNG {
         float u = x * two_pow32_inv + two_pow32_inv / 2;
         float v = y * two_pow32_inv_2pi + two_pow32_inv_2pi / 2;
 
-        float s = sqrt(-2.0 * log(u));
+        float s = sqrt(-2.0f * log(u));
 
         float r1 = s * sin(v);
         return r1;
@@ -115,8 +115,8 @@ class PhiloxRNG : public RNG {
         std::vector<std::vector<uint32_t>> g = philox4_32(counter, key_uint32);
 
         std::vector<float> result;
-        for (int i = 0; i < n; ++i) {
-            result.push_back(box_muller(g[0][i], g[1][i]));
+        for (uint32_t i = 0; i < n; ++i) {
+            result.push_back(box_muller((float)g[0][i], (float)g[1][i]));
         }
         return result;
     }
