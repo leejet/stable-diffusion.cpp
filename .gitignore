@@ -6,3 +6,4 @@ test/
 .vscode/
 *.bat
 *.bin
+*.exe

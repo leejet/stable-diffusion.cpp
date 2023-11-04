@@ -24,9 +24,19 @@ endif()
 # general
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
+option(SD_CUBLAS                     "sd: cuda backend" OFF)
+option(SD_DUMP_OUT_TENSORS           "sd: dump output tensors (DEBUG)" OFF)
 option(BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
+if(SD_CUBLAS)
+    set(GGML_CUBLAS ON)
+    add_definitions(-DSD_USE_CUBLAS)
+endif()
+
+if(SD_DUMP_OUT_TENSORS)
+    add_definitions(-DSD_DUMP_TENSORS)
+endif()
 
 # deps
 add_subdirectory(ggml)
