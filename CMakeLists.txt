@@ -30,6 +30,7 @@ option(BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
 if(SD_CUBLAS)
+	message("Use CUBLAS as backend stable-diffusion")
     set(GGML_CUBLAS ON)
     add_definitions(-DSD_USE_CUBLAS)
 endif()
@@ -38,6 +39,8 @@ if(SD_DUMP_OUT_TENSORS)
     add_definitions(-DSD_DUMP_TENSORS)
 endif()
 
+
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 # deps
 add_subdirectory(ggml)
 
