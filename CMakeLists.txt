@@ -51,6 +51,7 @@ target_link_libraries(${SD_LIB} PUBLIC ggml)
 target_include_directories(${SD_LIB} PUBLIC .)
 target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
 
+add_subdirectory(common)
 
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)

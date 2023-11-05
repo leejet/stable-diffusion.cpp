@@ -1,20 +1,10 @@
-#include <stdio.h>
-#include <ctime>
-#include <fstream>
-#include <iostream>
-#include <random>
+#include <vector>
 #include <string>
+#include "common.h"
 #include <thread>
 #include <unordered_set>
-
-#include "stable-diffusion.h"
-
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_STATIC
-#include "stb_image_write.h"
+#include <fstream>
+#include <string.h>
 
 #if defined(__APPLE__) && defined(__MACH__)
 #include <sys/sysctl.h>
@@ -25,9 +15,6 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #endif
-
-#define TXT2IMG "txt2img"
-#define IMG2IMG "img2img"
 
 // get_num_physical_cores is copy from
 // https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
@@ -67,12 +54,13 @@ int32_t get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
+
 const char* rng_type_to_str[] = {
     "std_default",
     "cuda",
 };
 
-// Names of the sampler method, same order as enum SampleMethod in stable-diffusion.h
+// Names of the sampler method, same order as enum sample_method in stable-diffusion.h
 const char* sample_method_str[] = {
     "euler_a",
     "euler",
@@ -84,53 +72,35 @@ const char* sample_method_str[] = {
     "lcm",
 };
 
-// Names of the sigma schedule overrides, same order as Schedule in stable-diffusion.h
+// Names of the sigma schedule overrides, same order as sample_schedule in stable-diffusion.h
 const char* schedule_str[] = {
     "default",
     "discrete",
     "karras"};
 
-struct Option {
-    int n_threads    = -1;
-    std::string mode = TXT2IMG;
-    std::string model_path;
-    std::string lora_model_dir;
-    std::string output_path = "output.png";
-    std::string init_img;
-    std::string prompt;
-    std::string negative_prompt;
-    float cfg_scale            = 7.0f;
-    int w                      = 512;
-    int h                      = 512;
-    SampleMethod sample_method = EULER_A;
-    Schedule schedule          = DEFAULT;
-    int sample_steps           = 20;
-    float strength             = 0.75f;
-    RNGType rng_type           = CUDA_RNG;
-    int64_t seed               = 42;
-    bool verbose               = false;
+const char* modes_str[] = {
+    "txt2img",
+    "img2img"};
 
-    void print() {
-        printf("Option: \n");
-        printf("    n_threads:       %d\n", n_threads);
-        printf("    mode:            %s\n", mode.c_str());
-        printf("    model_path:      %s\n", model_path.c_str());
-        printf("    lora_model_dir:  %s\n", lora_model_dir.c_str());
-        printf("    output_path:     %s\n", output_path.c_str());
-        printf("    init_img:        %s\n", init_img.c_str());
-        printf("    prompt:          %s\n", prompt.c_str());
-        printf("    negative_prompt: %s\n", negative_prompt.c_str());
-        printf("    cfg_scale:       %.2f\n", cfg_scale);
-        printf("    width:           %d\n", w);
-        printf("    height:          %d\n", h);
-        printf("    sample_method:   %s\n", sample_method_str[sample_method]);
-        printf("    schedule:        %s\n", schedule_str[schedule]);
-        printf("    sample_steps:    %d\n", sample_steps);
-        printf("    strength:        %.2f\n", strength);
-        printf("    rng:             %s\n", rng_type_to_str[rng_type]);
-        printf("    seed:            %ld\n", seed);
-    }
-};
+void print_params(sd_params params) {
+    printf("Option: \n");
+    printf("    n_threads:       %d\n", params.n_threads);
+    printf("    mode:            %s\n", modes_str[params.mode]);
+    printf("    model_path:      %s\n", params.model_path.c_str());
+    printf("    output_path:     %s\n", params.output_path.c_str());
+    printf("    init_img:        %s\n", params.input_path.c_str());
+    printf("    prompt:          %s\n", params.prompt.c_str());
+    printf("    negative_prompt: %s\n", params.negative_prompt.c_str());
+    printf("    cfg_scale:       %.2f\n", params.cfg_scale);
+    printf("    width:           %d\n", params.width);
+    printf("    height:          %d\n", params.height);
+    printf("    sample_method:   %s\n", sample_method_str[params.sample_method]);
+    printf("    schedule:        %s\n", schedule_str[params.schedule]);
+    printf("    sample_steps:    %d\n", params.sample_steps);
+    printf("    strength:        %.2f\n", params.strength);
+    printf("    rng:             %s\n", rng_type_to_str[params.rng_type]);
+    printf("    seed:            %ld\n", params.seed);
+}
 
 void print_usage(int argc, const char* argv[]) {
     printf("usage: %s [arguments]\n", argv[0]);
@@ -160,7 +130,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -v, --verbose                      print extra info\n");
 }
 
-void parse_args(int argc, const char* argv[], Option* opt) {
+void parse_args(int argc, const char** argv,sd_params & params) {
     bool invalid_arg = false;
 
     for (int i = 1; i < argc; i++) {
@@ -171,80 +141,92 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 invalid_arg = true;
                 break;
             }
-            opt->n_threads = std::stoi(argv[i]);
+            params.n_threads = std::stoi(argv[i]);
         } else if (arg == "-M" || arg == "--mode") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->mode = argv[i];
-
+            static_assert(MODE_COUNT == 2);
+            const char* mode_selected = argv[i];
+            int mode_found = -1;
+            for (int d = 0; d < MODE_COUNT; d++) {
+                if (!strcmp(mode_selected, modes_str[d])) {
+                    mode_found = d;
+                }
+            }
+            if (mode_found == -1) {
+                fprintf(stderr, "error: invalid mode %s, must be one of [txt2img, img2img]\n",
+                        mode_selected);
+                exit(1);
+            }
+            params.mode = (sd_mode)mode_found;
         } else if (arg == "-m" || arg == "--model") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->model_path = argv[i];
+            params.model_path = argv[i];
         } else if (arg == "--lora-model-dir") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->lora_model_dir = argv[i];
+            params.lora_model_dir = argv[i];
         } else if (arg == "-i" || arg == "--init-img") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->init_img = argv[i];
+            params.input_path = argv[i];
         } else if (arg == "-o" || arg == "--output") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->output_path = argv[i];
+            params.output_path = argv[i];
         } else if (arg == "-p" || arg == "--prompt") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->prompt = argv[i];
+            params.prompt = argv[i];
         } else if (arg == "-n" || arg == "--negative-prompt") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->negative_prompt = argv[i];
+            params.negative_prompt = argv[i];
         } else if (arg == "--cfg-scale") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->cfg_scale = std::stof(argv[i]);
+            params.cfg_scale = std::stof(argv[i]);
         } else if (arg == "--strength") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->strength = std::stof(argv[i]);
+            params.strength = std::stof(argv[i]);
         } else if (arg == "-H" || arg == "--height") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->h = std::stoi(argv[i]);
+            params.height = std::stoi(argv[i]);
         } else if (arg == "-W" || arg == "--width") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->w = std::stoi(argv[i]);
+            params.width = std::stoi(argv[i]);
         } else if (arg == "--steps") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->sample_steps = std::stoi(argv[i]);
+            params.sample_steps = std::stoi(argv[i]);
         } else if (arg == "--rng") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -252,9 +234,9 @@ void parse_args(int argc, const char* argv[], Option* opt) {
             }
             std::string rng_type_str = argv[i];
             if (rng_type_str == "std_default") {
-                opt->rng_type = STD_DEFAULT_RNG;
+                params.rng_type = STD_DEFAULT_RNG;
             } else if (rng_type_str == "cuda") {
-                opt->rng_type = CUDA_RNG;
+                params.rng_type = CUDA_RNG;
             } else {
                 invalid_arg = true;
                 break;
@@ -275,13 +257,13 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 invalid_arg = true;
                 break;
             }
-            opt->schedule = (Schedule)schedule_found;
+            params.schedule = (sd_sample_schedule)schedule_found;
         } else if (arg == "-s" || arg == "--seed") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            opt->seed = std::stoll(argv[i]);
+            params.seed = std::stoll(argv[i]);
         } else if (arg == "--sampling-method") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -298,12 +280,12 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 invalid_arg = true;
                 break;
             }
-            opt->sample_method = (SampleMethod)sample_method_found;
+            params.sample_method = (sd_sample_method)sample_method_found;
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv);
             exit(0);
         } else if (arg == "-v" || arg == "--verbose") {
-            opt->verbose = true;
+            params.verbose = true;
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -316,63 +298,57 @@ void parse_args(int argc, const char* argv[], Option* opt) {
         }
     }
 
-    if (opt->n_threads <= 0) {
-        opt->n_threads = get_num_physical_cores();
+    if (params.n_threads <= 0) {
+        params.n_threads = get_num_physical_cores();
     }
 
-    if (opt->mode != TXT2IMG && opt->mode != IMG2IMG) {
-        fprintf(stderr, "error: invalid mode %s, must be one of ['%s', '%s']\n",
-                opt->mode.c_str(), TXT2IMG, IMG2IMG);
-        exit(1);
-    }
-
-    if (opt->prompt.length() == 0) {
+    if (params.prompt.length() == 0) {
         fprintf(stderr, "error: the following arguments are required: prompt\n");
         print_usage(argc, argv);
         exit(1);
     }
 
-    if (opt->model_path.length() == 0) {
+    if (params.model_path.length() == 0) {
         fprintf(stderr, "error: the following arguments are required: model_path\n");
         print_usage(argc, argv);
         exit(1);
     }
 
-    if (opt->mode == IMG2IMG && opt->init_img.length() == 0) {
+    if (params.mode == IMG2IMG && params.input_path.length() == 0) {
         fprintf(stderr, "error: when using the img2img mode, the following arguments are required: init-img\n");
         print_usage(argc, argv);
         exit(1);
     }
 
-    if (opt->output_path.length() == 0) {
+    if (params.output_path.length() == 0) {
         fprintf(stderr, "error: the following arguments are required: output_path\n");
         print_usage(argc, argv);
         exit(1);
     }
 
-    if (opt->w <= 0 || opt->w % 64 != 0) {
+    if (params.width <= 0 || params.width % 64 != 0) {
         fprintf(stderr, "error: the width must be a multiple of 64\n");
         exit(1);
     }
 
-    if (opt->h <= 0 || opt->h % 64 != 0) {
+    if (params.height <= 0 || params.height % 64 != 0) {
         fprintf(stderr, "error: the height must be a multiple of 64\n");
         exit(1);
     }
 
-    if (opt->sample_steps <= 0) {
+    if (params.sample_steps <= 0) {
         fprintf(stderr, "error: the sample_steps must be greater than 0\n");
         exit(1);
     }
 
-    if (opt->strength < 0.f || opt->strength > 1.f) {
+    if (params.strength < 0.f || params.strength > 1.f) {
         fprintf(stderr, "error: can only work with strength in [0.0, 1.0]\n");
         exit(1);
     }
 
-    if (opt->seed < 0) {
+    if (params.seed < 0) {
         srand((int)time(NULL));
-        opt->seed = rand();
+        params.seed = rand();
     }
 }
 
@@ -388,98 +364,22 @@ std::string basename(const std::string& path) {
     return path;
 }
 
-int main(int argc, const char* argv[]) {
-    Option opt;
-    parse_args(argc, argv, &opt);
-
-    if (opt.verbose) {
-        opt.print();
-        printf("%s", sd_get_system_info().c_str());
-        set_sd_log_level(SDLogLevel::DEBUG);
+const char* get_image_params(sd_params params) {
+    std::string parameter_string = params.prompt + "\n";
+    if (params.negative_prompt.size() != 0) {
+        parameter_string += "Negative prompt: " + params.negative_prompt + "\n";
     }
-
-    bool vae_decode_only = true;
-    std::vector<uint8_t> init_img;
-    if (opt.mode == IMG2IMG) {
-        vae_decode_only = false;
-
-        int c = 0;
-
-        unsigned char* img_data = stbi_load(opt.init_img.c_str(), &opt.w, &opt.h, &c, 3);
-        if (img_data == NULL) {
-            fprintf(stderr, "load image from '%s' failed\n", opt.init_img.c_str());
-            return 1;
-        }
-        if (c != 3) {
-            fprintf(stderr, "input image must be a 3 channels RGB image, but got %d channels\n", c);
-            free(img_data);
-            return 1;
-        }
-        if (opt.w <= 0 || opt.w % 64 != 0) {
-            fprintf(stderr, "error: the width of image must be a multiple of 64\n");
-            free(img_data);
-            return 1;
-        }
-        if (opt.h <= 0 || opt.h % 64 != 0) {
-            fprintf(stderr, "error: the height of image must be a multiple of 64\n");
-            free(img_data);
-            return 1;
-        }
-        init_img.assign(img_data, img_data + (opt.w * opt.h * c));
-    }
-
-    StableDiffusion sd(opt.n_threads, vae_decode_only, true, opt.lora_model_dir, opt.rng_type);
-    if (!sd.load_from_file(opt.model_path, opt.schedule)) {
-        return 1;
-    }
-
-    std::vector<uint8_t> img;
-    if (opt.mode == TXT2IMG) {
-        img = sd.txt2img(opt.prompt,
-                         opt.negative_prompt,
-                         opt.cfg_scale,
-                         opt.w,
-                         opt.h,
-                         opt.sample_method,
-                         opt.sample_steps,
-                         opt.seed);
-    } else {
-        img = sd.img2img(init_img,
-                         opt.prompt,
-                         opt.negative_prompt,
-                         opt.cfg_scale,
-                         opt.w,
-                         opt.h,
-                         opt.sample_method,
-                         opt.sample_steps,
-                         opt.strength,
-                         opt.seed);
-    }
-
-    if (img.size() == 0) {
-        fprintf(stderr, "generate failed\n");
-        return 1;
-    }
-
-    std::string parameter_string = opt.prompt + "\n";
-    if (opt.negative_prompt.size() != 0) {
-        parameter_string += "Negative prompt: " + opt.negative_prompt + "\n";
-    }
-    parameter_string += "Steps: " + std::to_string(opt.sample_steps) + ", ";
-    parameter_string += "CFG scale: " + std::to_string(opt.cfg_scale) + ", ";
-    parameter_string += "Seed: " + std::to_string(opt.seed) + ", ";
-    parameter_string += "Size: " + std::to_string(opt.w) + "x" + std::to_string(opt.h) + ", ";
-    parameter_string += "Model: " + basename(opt.model_path) + ", ";
-    parameter_string += "RNG: " + std::string(rng_type_to_str[opt.rng_type]) + ", ";
-    parameter_string += "Sampler: " + std::string(sample_method_str[opt.sample_method]);
-    if (opt.schedule == KARRAS) {
+    parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
+    parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
+    parameter_string += "Seed: " + std::to_string(params.seed) + ", ";
+    parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
+    parameter_string += "Model: " + basename(params.model_path) + ", ";
+    parameter_string += "RNG: " + std::string(rng_type_to_str[params.rng_type]) + ", ";
+    parameter_string += "Sampler: " + std::string(sample_method_str[params.sample_method]);
+    if (params.schedule == KARRAS) {
         parameter_string += " karras";
     }
     parameter_string += ", ";
     parameter_string += "Version: stable-diffusion.cpp";
-
-    stbi_write_png(opt.output_path.c_str(), opt.w, opt.h, 3, img.data(), 0, parameter_string.c_str());
-    printf("save result image to '%s'\n", opt.output_path.c_str());
-
-    return 0;
+    return parameter_string.c_str();
 }

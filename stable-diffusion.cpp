@@ -33,7 +33,7 @@ static std::string tensors_path = "C:/proyects/output-tensors/";
 static std::string cuda_func = "-nv-full";
 #endif
 
-static SDLogLevel log_level = SDLogLevel::INFO;
+static sd_log_level log_level = sd_log_level::INFO;
 
 #define __FILENAME__ "stable-diffusion.cpp"
 #define SD_LOG(level, format, ...)                                                                    \
@@ -41,25 +41,25 @@ static SDLogLevel log_level = SDLogLevel::INFO;
         if (level < log_level) {                                                                      \
             break;                                                                                    \
         }                                                                                             \
-        if (level == SDLogLevel::DEBUG) {                                                             \
+        if (level == sd_log_level::DEBUG) {                                                             \
             printf("[DEBUG] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
             fflush(stdout);                                                                           \
-        } else if (level == SDLogLevel::INFO) {                                                       \
+        } else if (level == sd_log_level::INFO) {                                                       \
             printf("[INFO]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
             fflush(stdout);                                                                           \
-        } else if (level == SDLogLevel::WARN) {                                                       \
+        } else if (level == sd_log_level::WARN) {                                                       \
             fprintf(stderr, "[WARN]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
             fflush(stdout);                                                                           \
-        } else if (level == SDLogLevel::ERROR) {                                                      \
+        } else if (level == sd_log_level::ERROR) {                                                      \
             fprintf(stderr, "[ERROR] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
             fflush(stdout);                                                                           \
         }                                                                                             \
     } while (0)
 
-#define LOG_DEBUG(format, ...) SD_LOG(SDLogLevel::DEBUG, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...) SD_LOG(SDLogLevel::INFO, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...) SD_LOG(SDLogLevel::WARN, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) SD_LOG(SDLogLevel::ERROR, format, ##__VA_ARGS__)
+#define LOG_DEBUG(format, ...) SD_LOG(sd_log_level::DEBUG, format, ##__VA_ARGS__)
+#define LOG_INFO(format, ...) SD_LOG(sd_log_level::INFO, format, ##__VA_ARGS__)
+#define LOG_WARN(format, ...) SD_LOG(sd_log_level::WARN, format, ##__VA_ARGS__)
+#define LOG_ERROR(format, ...) SD_LOG(sd_log_level::ERROR, format, ##__VA_ARGS__)
 
 #define GGML_FILE_MAGIC 0x67676d6c
 
@@ -77,7 +77,7 @@ const char* model_type_to_str[] = {
 
 /*================================================== Helper Functions ================================================*/
 
-void set_sd_log_level(SDLogLevel level) {
+void set_sd_log_level(sd_log_level level) {
     log_level = level;
 }
 
@@ -1029,6 +1029,7 @@ struct CLIPTextModel {
         ggml_allocr_free(allocr_compute);
         ggml_backend_buffer_free(buffer_compute_clip);
         allocr_compute = NULL;
+        compute_memory_buffer_size = -1;
     }
 };
 
@@ -2345,6 +2346,7 @@ struct UNetModel {
             allocr_compute = ggml_allocr_new_measure(align);
 
             struct ggml_cgraph * gf = build_graph(x, NULL, context, t_emb);
+
             // compute the required memory
             compute_memory_buffer_size = ggml_allocr_alloc_graph(allocr_compute, gf);
 
@@ -2386,6 +2388,7 @@ struct UNetModel {
         ggml_allocr_free(allocr_compute);
         ggml_backend_buffer_free(buffer_compute_unet);
         allocr_compute = NULL;
+        compute_memory_buffer_size = -1;
     }
 };
 
@@ -3398,7 +3401,7 @@ class StableDiffusionGGML {
                         bool vae_decode_only,
                         bool free_params_immediately,
                         std::string lora_model_dir,
-                        RNGType rng_type)
+                        sd_rng_type rng_type)
         : n_threads(n_threads),
           vae_decode_only(vae_decode_only),
           free_params_immediately(free_params_immediately),
@@ -3422,7 +3425,7 @@ class StableDiffusionGGML {
         first_stage_model.destroy();
     }
 
-    bool load_from_file(const std::string& file_path, Schedule schedule) {
+    bool load_from_file(const std::string& file_path, sd_sample_schedule schedule) {
         LOG_INFO("loading model from '%s'", file_path.c_str());
         bool custom_vae = false;
 
@@ -3829,6 +3832,7 @@ class StableDiffusionGGML {
             ggml_backend_tensor_get(out, out->data, 0, ggml_nbytes(out));
             out = o_cpy;
         }
+
         double result = 0.f;
         {
             float* vec_x   = (float*)x_t->data;
@@ -4200,7 +4204,7 @@ class StableDiffusionGGML {
                         ggml_tensor* c,
                         ggml_tensor* uc,
                         float cfg_scale,
-                        SampleMethod method,
+                        sd_sample_method method,
                         const std::vector<float>& sigmas) {
         
         size_t steps = sigmas.size() - 1;
@@ -4802,7 +4806,7 @@ StableDiffusion::StableDiffusion(int n_threads,
                                  bool vae_decode_only,
                                  bool free_params_immediately,
                                  std::string lora_model_dir,
-                                 RNGType rng_type) {
+                                 sd_rng_type rng_type) {
     sd = std::make_shared<StableDiffusionGGML>(n_threads,
                                                vae_decode_only,
                                                free_params_immediately,
@@ -4810,7 +4814,7 @@ StableDiffusion::StableDiffusion(int n_threads,
                                                rng_type);
 }
 
-bool StableDiffusion::load_from_file(const std::string& file_path, Schedule s) {
+bool StableDiffusion::load_from_file(const std::string& file_path, sd_sample_schedule s) {
     return sd->load_from_file(file_path, s);
 }
 
@@ -4819,7 +4823,7 @@ std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
                                               float cfg_scale,
                                               int width,
                                               int height,
-                                              SampleMethod sample_method,
+                                              sd_sample_method sample_method,
                                               int sample_steps,
                                               int64_t seed) {
     std::vector<uint8_t> result;
@@ -4913,7 +4917,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
                                               float cfg_scale,
                                               int width,
                                               int height,
-                                              SampleMethod sample_method,
+                                              sd_sample_method sample_method,
                                               int sample_steps,
                                               float strength,
                                               int64_t seed) {

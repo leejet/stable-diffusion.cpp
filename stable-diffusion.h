@@ -4,19 +4,19 @@
 #include <memory>
 #include <vector>
 
-enum SDLogLevel {
+enum sd_log_level {
     DEBUG,
     INFO,
     WARN,
     ERROR
 };
 
-enum RNGType {
+enum sd_rng_type {
     STD_DEFAULT_RNG,
     CUDA_RNG
 };
 
-enum SampleMethod {
+enum sd_sample_method {
     EULER_A,
     EULER,
     HEUN,
@@ -28,7 +28,7 @@ enum SampleMethod {
     N_SAMPLE_METHODS
 };
 
-enum Schedule {
+enum sd_sample_schedule {
     DEFAULT,
     DISCRETE,
     KARRAS,
@@ -46,17 +46,18 @@ public:
                     bool vae_decode_only         = false,
                     bool free_params_immediately = false,
                     std::string lora_model_dir   = "",
-                    RNGType rng_type             = STD_DEFAULT_RNG);
-    bool load_from_file(const std::string& file_path, Schedule d = DEFAULT);
+                    sd_rng_type rng_type = STD_DEFAULT_RNG);
+    bool load_from_file(const std::string& file_path, sd_sample_schedule d = DEFAULT);
     std::vector<uint8_t> txt2img(
         std::string prompt,
         std::string negative_prompt,
         float cfg_scale,
         int width,
         int height,
-        SampleMethod sample_method,
+        sd_sample_method sample_method,
         int sample_steps,
         int64_t seed);
+
     std::vector<uint8_t> img2img(
         const std::vector<uint8_t>& init_img,
         std::string prompt,
@@ -64,13 +65,13 @@ public:
         float cfg_scale,
         int width,
         int height,
-        SampleMethod sample_method,
+        sd_sample_method sample_method,
         int sample_steps,
         float strength,
         int64_t seed);
 };
 
-void set_sd_log_level(SDLogLevel level);
+void set_sd_log_level(sd_log_level level);
 std::string sd_get_system_info();
 
 #endif  // __STABLE_DIFFUSION_H__
