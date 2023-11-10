@@ -132,9 +132,9 @@ void print_usage(int argc, const char* argv[]) {
 
 void parse_args(int argc, const char** argv,sd_params & params) {
     bool invalid_arg = false;
-
+    std::string arg;
     for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
+        arg = argv[i];
 
         if (arg == "-t" || arg == "--threads") {
             if (++i >= argc) {
@@ -147,7 +147,6 @@ void parse_args(int argc, const char** argv,sd_params & params) {
                 invalid_arg = true;
                 break;
             }
-            static_assert(MODE_COUNT == 2);
             const char* mode_selected = argv[i];
             int mode_found = -1;
             for (int d = 0; d < MODE_COUNT; d++) {
@@ -291,13 +290,12 @@ void parse_args(int argc, const char** argv,sd_params & params) {
             print_usage(argc, argv);
             exit(1);
         }
-        if (invalid_arg) {
-            fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
-            print_usage(argc, argv);
-            exit(1);
-        }
     }
-
+    if (invalid_arg) {
+        fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
+        print_usage(argc, argv);
+        exit(1);
+    }
     if (params.n_threads <= 0) {
         params.n_threads = get_num_physical_cores();
     }

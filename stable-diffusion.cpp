@@ -61,19 +61,18 @@ static sd_log_level log_level = sd_log_level::INFO;
 #define LOG_WARN(format, ...) SD_LOG(sd_log_level::WARN, format, ##__VA_ARGS__)
 #define LOG_ERROR(format, ...) SD_LOG(sd_log_level::ERROR, format, ##__VA_ARGS__)
 
-#define GGML_FILE_MAGIC 0x67676d6c
-
 #define TIMESTEPS 1000
 
-enum ModelType {
-    SD1 = 0,
-    SD2 = 1,
-    MODEL_TYPE_COUNT,
+enum sd_version {
+    VERSION_1_x,
+    VERSION_2_x,
+//  VERSION_XL
+    VERSION_COUNT,
 };
 
-const char* model_type_to_str[] = {
-    "SD1.x",
-    "SD2.x"};
+const char* model_version_to_str[] = {
+    "1.x",
+    "2.x"};
 
 /*================================================== Helper Functions ================================================*/
 
@@ -390,8 +389,8 @@ const int PAD_TOKEN_ID = 49407;
 // Ref: https://github.com/openai/CLIP/blob/main/clip/simple_tokenizer.py
 // TODO: implement bpe
 class CLIPTokenizer {
-private:
-    ModelType model_type = SD1;
+   private:
+    sd_version version = VERSION_1_x;
     std::map<std::string, int32_t> encoder;
     std::regex pat;
 
@@ -413,9 +412,9 @@ private:
         return text;
     }
 
-public:
-    CLIPTokenizer(ModelType model_type = SD1)
-        : model_type(model_type){};
+   public:
+    CLIPTokenizer(sd_version version = VERSION_1_x)
+        : version(version){};
     std::string bpe(std::string token) {
         std::string word = token + "</w>";
         if (encoder.find(word) != encoder.end()) {
@@ -441,7 +440,7 @@ public:
                 tokens.push_back(EOS_TOKEN_ID);
                 if (padding) {
                     int pad_token_id = PAD_TOKEN_ID;
-                    if (model_type == SD2) {
+                    if (version == VERSION_2_x) {
                         pad_token_id = 0;
                     }
                     tokens.insert(tokens.end(), max_length - tokens.size(), pad_token_id);
@@ -770,10 +769,10 @@ struct ResidualAttentionBlock {
     }
 };
 
-// SD1.x: https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
-// SD2.x: https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json
+// VERSION_1_x.x: https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
+// VERSION_2_x.x: https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json
 struct CLIPTextModel {
-    ModelType model_type = SD1;
+    sd_version version = VERSION_1_x;
     // network hparams
     int32_t vocab_size              = 49408;
     int32_t max_position_embeddings = 77;
@@ -804,10 +803,10 @@ struct CLIPTextModel {
     ggml_type wtype;
     ggml_backend_t backend_clip = NULL;
 
-    CLIPTextModel(ModelType model_type = SD1)
-        : model_type(model_type) {
-        if (model_type == SD2) {
-            hidden_size       = 1024;
+    CLIPTextModel(sd_version version = VERSION_1_x)
+        : version(version) {
+        if (version == VERSION_2_x) {
+            hidden_size = 1024;
             intermediate_size = 4096;
             n_head            = 16;
             num_hidden_layers = 24;
@@ -923,7 +922,7 @@ struct CLIPTextModel {
         tensors[prefix + "final_layer_norm.weight"]              = final_ln_w;
         tensors[prefix + "final_layer_norm.bias"]                = final_ln_b;
         for (int i = 0; i < num_hidden_layers; i++) {
-            resblocks[i].map_by_name(tensors, prefix + "encoder.layers." + std::to_string(i) + ".");
+            resblocks[i].map_by_name(tensors, prefix + "enc.layers." + std::to_string(i) + ".");
         }
     }
 
@@ -941,7 +940,7 @@ struct CLIPTextModel {
 
         // transformer
         for (int i = 0; i < num_hidden_layers; i++) {
-            if (model_type == SD2 && i == num_hidden_layers - 1) {  // layer: "penultimate"
+            if (version == VERSION_2_x && i == num_hidden_layers - 1) {  // layer: "penultimate"
                 break;
             }
             x = resblocks[i].forward(ctx, x);  // [N, n_token, hidden_size]
@@ -1049,12 +1048,12 @@ struct FrozenCLIPEmbedder {
 
 // Ref: https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/cad87bf4e3e0b0a759afa94e933527c3123d59bc/modules/sd_hijack_clip.py#L283
 struct FrozenCLIPEmbedderWithCustomWords {
-    ModelType model_type = SD1;
+    sd_version version = VERSION_1_x;
     CLIPTokenizer tokenizer;
     CLIPTextModel text_model;
 
-    FrozenCLIPEmbedderWithCustomWords(ModelType model_type = SD1)
-        : model_type(model_type), tokenizer(model_type), text_model(model_type) {}
+    FrozenCLIPEmbedderWithCustomWords(sd_version version = VERSION_1_x)
+        : version(version), tokenizer(version), text_model(version) {}
 
     std::pair<std::vector<int>, std::vector<float>> tokenize(std::string text,
                                                              size_t max_length = 0,
@@ -1094,7 +1093,7 @@ struct FrozenCLIPEmbedderWithCustomWords {
                 weights.push_back(1.0);
                 if (padding) {
                     int pad_token_id = PAD_TOKEN_ID;
-                    if (model_type == SD2) {
+                    if (version == VERSION_2_x) {
                         pad_token_id = 0;
                     }
                     tokens.insert(tokens.end(), max_length - tokens.size(), pad_token_id);
@@ -1270,8 +1269,8 @@ struct SpatialTransformer {
     int in_channels;        // mult * model_channels
     int n_head;             // num_heads
     int d_head;             // in_channels // n_heads
-    int depth       = 1;    // 1
-    int context_dim = 768;  // hidden_size, 1024 for SD2.x
+    int depth = 1;          // 1
+    int context_dim = 768;  // hidden_size, 1024 for VERSION_2_x.x
 
     // group norm
     struct ggml_tensor* norm_w;  // [in_channels,]
@@ -1391,7 +1390,7 @@ struct SpatialTransformer {
 
         // transformer
         {
-            std::string transformer_prefix                    = prefix + "transformer_blocks.0.";
+            std::string transformer_prefix = prefix + "transf_blks.0.";
             tensors[transformer_prefix + "attn1.to_q.weight"] = transformer.attn1_q_w;
             tensors[transformer_prefix + "attn1.to_k.weight"] = transformer.attn1_k_w;
             tensors[transformer_prefix + "attn1.to_v.weight"] = transformer.attn1_v_w;
@@ -1746,11 +1745,11 @@ struct UNetModel {
     int out_channels             = 4;
     int num_res_blocks           = 2;
     int attention_resolutions[3] = {4, 2, 1};
-    int channel_mult[4]          = {1, 2, 4, 4};
-    int time_embed_dim           = 1280;  // model_channels*4
-    int num_heads                = 8;
-    int num_head_channels        = -1;   // channels // num_heads
-    int context_dim              = 768;  // 1024 for SD2.x
+    int channel_mult[4] = {1, 2, 4, 4};
+    int time_embed_dim = 1280;  // model_channels*4
+    int num_heads = 8;
+    int num_head_channels = -1;  // channels // num_heads
+    int context_dim = 768;       // 1024 for VERSION_2_x.x
 
     // network params
     struct ggml_tensor* time_embed_0_w;  // [time_embed_dim, model_channels]
@@ -1796,9 +1795,9 @@ struct UNetModel {
     ggml_backend_t backend_unet = NULL;
     bool use_gpu = false;
 
-    UNetModel(ModelType model_type = SD1) {
-        if (model_type == SD2) {
-            context_dim       = 1024;
+    UNetModel(sd_version version = VERSION_1_x) {
+        if (version == VERSION_2_x) {
+            context_dim = 1024;
             num_head_channels = 64;
             num_heads         = -1;
         }
@@ -2116,8 +2115,8 @@ struct UNetModel {
         tensors[prefix + "time_embed.2.bias"]   = time_embed_2_b;
 
         // input_blocks
-        tensors[prefix + "input_blocks.0.0.weight"] = input_block_0_w;
-        tensors[prefix + "input_blocks.0.0.bias"]   = input_block_0_b;
+        tensors[prefix + "in_blks.0.0.weight"] = input_block_0_w;
+        tensors[prefix + "in_blks.0.0.bias"] = input_block_0_b;
 
         int len_mults       = sizeof(channel_mult) / sizeof(int);
         int input_block_idx = 0;
@@ -2126,37 +2125,37 @@ struct UNetModel {
             for (int j = 0; j < num_res_blocks; j++) {
                 input_block_idx += 1;
 
-                input_res_blocks[i][j].map_by_name(tensors, prefix + "input_blocks." + std::to_string(input_block_idx) + ".0.");
+                input_res_blocks[i][j].map_by_name(tensors, prefix + "in_blks." + std::to_string(input_block_idx) + ".0.");
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    input_transformers[i][j].map_by_name(tensors, prefix + "input_blocks." + std::to_string(input_block_idx) + ".1.");
+                    input_transformers[i][j].map_by_name(tensors, prefix + "in_blks." + std::to_string(input_block_idx) + ".1.");
                 }
             }
             if (i != len_mults - 1) {
                 input_block_idx += 1;
-                input_down_samples[i].map_by_name(tensors, prefix + "input_blocks." + std::to_string(input_block_idx) + ".0.");
+                input_down_samples[i].map_by_name(tensors, prefix + "in_blks." + std::to_string(input_block_idx) + ".0.");
                 ds *= 2;
             }
         }
 
         // middle_blocks
-        middle_block_0.map_by_name(tensors, prefix + "middle_block.0.");
-        middle_block_1.map_by_name(tensors, prefix + "middle_block.1.");
-        middle_block_2.map_by_name(tensors, prefix + "middle_block.2.");
+        middle_block_0.map_by_name(tensors, prefix + "mddl_blk.0.");
+        middle_block_1.map_by_name(tensors, prefix + "mddl_blk.1.");
+        middle_block_2.map_by_name(tensors, prefix + "mddl_blk.2.");
 
         // output_blocks
         int output_block_idx = 0;
         for (int i = len_mults - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
-                output_res_blocks[i][j].map_by_name(tensors, prefix + "output_blocks." + std::to_string(output_block_idx) + ".0.");
+                output_res_blocks[i][j].map_by_name(tensors, prefix + "out_blks." + std::to_string(output_block_idx) + ".0.");
 
                 int up_sample_idx = 1;
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    output_transformers[i][j].map_by_name(tensors, prefix + "output_blocks." + std::to_string(output_block_idx) + ".1.");
+                    output_transformers[i][j].map_by_name(tensors, prefix + "out_blks." + std::to_string(output_block_idx) + ".1.");
                     up_sample_idx++;
                 }
 
                 if (i > 0 && j == num_res_blocks) {
-                    output_up_samples[i - 1].map_by_name(tensors, prefix + "output_blocks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx) + ".");
+                    output_up_samples[i - 1].map_by_name(tensors, prefix + "out_blks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx) + ".");
 
                     ds /= 2;
                 }
@@ -3168,13 +3167,13 @@ struct AutoEncoderKL {
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         if (!decode_only) {
             tensors[prefix + "quant_conv.weight"] = quant_conv_w;
-            tensors[prefix + "quant_conv.bias"]   = quant_conv_b;
-            encoder.map_by_name(tensors, prefix + "encoder.");
+            tensors[prefix + "quant_conv.bias"] = quant_conv_b;
+            encoder.map_by_name(tensors, prefix + "enc.");
         }
 
         tensors[prefix + "post_quant_conv.weight"] = post_quant_conv_w;
-        tensors[prefix + "post_quant_conv.bias"]   = post_quant_conv_b;
-        decoder.map_by_name(tensors, prefix + "decoder.");
+        tensors[prefix + "post_quant_conv.bias"] = post_quant_conv_b;
+        decoder.map_by_name(tensors, prefix + "dec.");
     }
 
     struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
@@ -3374,7 +3373,6 @@ class StableDiffusionGGML {
     bool free_params_immediately = false;
 
     std::shared_ptr<RNG> rng = std::make_shared<STDDefaultRNG>();
-    int32_t ftype = 1;
     int n_threads = -1;
     float scale_factor = 0.18215f;
     size_t max_params_mem_size = 0;
@@ -3427,89 +3425,57 @@ class StableDiffusionGGML {
 
     bool load_from_file(const std::string& file_path, sd_sample_schedule schedule) {
         LOG_INFO("loading model from '%s'", file_path.c_str());
-        bool custom_vae = false;
-
-        std::ifstream file(file_path, std::ios::binary);
-        //std::ifstream file_vae("C:\\proyects\\stable-diffusion.cpp\\models\\custom-vae.bin", std::ios::binary);
-        if (!file.is_open()) {
+        ggml_context* ctx_meta = NULL;
+        gguf_context* ctx_gguf = gguf_init_from_file(file_path.c_str(), {true, &ctx_meta});
+        if (!ctx_gguf) {
             LOG_ERROR("failed to open '%s'", file_path.c_str());
             return false;
         }
 
-        LOG_DEBUG("verifying magic");
-        // verify magic
+        FILE* fp = std::fopen(file_path.c_str(), "rb");
+
+        sd_version version = VERSION_COUNT;
+
+        int n_kv      = gguf_get_n_kv(ctx_gguf);
+        int n_tensors = gguf_get_n_tensors(ctx_gguf);
+
+        for (int i = 0; i < n_kv; i++) {
+            const char * name         = gguf_get_key(ctx_gguf, i);
+            const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
+            printf("%s: - kv %3d: %42s %-8s\n", __func__, i, name, gguf_type_name(type));
+        }
+
         {
-            uint32_t magic;
-            file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-            if (magic != GGML_FILE_MAGIC) {
-                LOG_ERROR("invalid model file '%s' (bad magic)", file_path.c_str());
-                return false;
+            int idx = gguf_find_key(ctx_gguf, "sd.model.version");
+            if(idx >= 0) {
+                version = (sd_version)gguf_get_val_i8(ctx_gguf, idx);
+                cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
+                diffusion_model = UNetModel(version);
+                LOG_DEBUG("Stable Diffusion %s", model_version_to_str[version]);
             }
-            // if(custom_vae) {
-            //     file_vae.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-            //     if (magic != GGML_FILE_MAGIC) {
-            //         LOG_ERROR("invalid model file vae '%s' (bad magic)", file_path.c_str());
-            //         return false;
-            //     }
-            // }
         }
 
-        LOG_DEBUG("loading hparams");
-        int32_t ftype_vae = 1;
-
-        // load hparams
-        file.read(reinterpret_cast<char*>(&ftype), sizeof(ftype));
-
-        // if(custom_vae) {
-        //     file_vae.read(reinterpret_cast<char*>(&ftype_vae), sizeof(ftype_vae));
-        // }
-
-        int model_type = (ftype >> 16) & 0xFFFF;
-        if (model_type >= MODEL_TYPE_COUNT) {
-            LOG_ERROR("invalid model file '%s' (bad model type value %d)", file_path.c_str(), ftype);
-            return false;
-        }
-        LOG_INFO("model type: %s", model_type_to_str[model_type]);
-
-        if (model_type == SD2) {
-            cond_stage_model = FrozenCLIPEmbedderWithCustomWords((ModelType)model_type);
-            diffusion_model  = UNetModel((ModelType)model_type);
+        ggml_type wtype = GGML_TYPE_COUNT;
+        {
+            int idx = gguf_find_key(ctx_gguf, "sd.model.dtype");
+            if(idx >= 0) {
+                wtype = (ggml_type)gguf_get_val_i32(ctx_gguf, idx);
+                LOG_DEBUG("model data type: %s", ggml_type_name(wtype));
+            }
         }
 
-        ggml_type wtype = ggml_ftype_to_ggml_type((ggml_ftype)(ftype & 0xFFFF));
-        ggml_type wtype_vae = GGML_TYPE_F32;
-        if(custom_vae) {
-            wtype_vae = ggml_ftype_to_ggml_type((ggml_ftype)(ftype_vae & 0xFFFF));
-        }
-        LOG_INFO("ftype: %s", ggml_type_name(wtype));
-        if (wtype == GGML_TYPE_COUNT) {
-            LOG_ERROR("invalid model file '%s' (bad ftype value %d)", file_path.c_str(), ftype);
-            return false;
-        }
         LOG_DEBUG("loading vocab");
+
         // load vocab
         {
-            int32_t n_vocab = 0;
-            file.read(reinterpret_cast<char*>(&n_vocab), sizeof(n_vocab));
-
-            if (n_vocab != cond_stage_model.text_model.vocab_size) {
-                LOG_ERROR("invalid model file '%s' (bad vocab size %d != %d)",
-                          file_path.c_str(), n_vocab, cond_stage_model.text_model.vocab_size);
+            int tidx = gguf_find_key(ctx_gguf, "sd.vocab.tokens");
+            if(tidx == -1) {
+                LOG_ERROR("vocab not found");
                 return false;
             }
-
-            std::string word;
-            std::vector<char> buf(128);
-
-            for (int i = 0; i < n_vocab; i++) {
-                uint32_t len;
-                file.read((char*)&len, sizeof(len));
-
-                buf.resize(len);
-                file.read((char*)buf.data(), len);
-                word.assign(buf.data(), len);
-
-                cond_stage_model.tokenizer.add_token(word, i);
+            int n_vocab = gguf_get_arr_n(ctx_gguf, tidx);
+            for(int i = 0; i < n_vocab;i ++) {
+                cond_stage_model.tokenizer.add_token(gguf_get_arr_str(ctx_gguf, tidx, i), i);
             }
         }
 
@@ -3522,7 +3488,7 @@ class StableDiffusionGGML {
         if(
             !cond_stage_model.text_model.initialize(wtype) ||
             !diffusion_model.initialize(wtype) ||
-            !first_stage_model.initialize(backend, custom_vae ? wtype_vae : wtype)) {
+            !first_stage_model.initialize(backend, wtype)) {
             return false;
         }
 
@@ -3531,218 +3497,124 @@ class StableDiffusionGGML {
         {
             // cond_stage_model(FrozenCLIPEmbedder)
             cond_stage_model.text_model.alloc_params();
-            cond_stage_model.text_model.map_by_name(tensors, "cond_stage_model.transformer.text_model.");
+            cond_stage_model.text_model.map_by_name(tensors, "clip.transf.txt_mdl.");
 
             // diffusion_model(UNetModel)
             diffusion_model.alloc_params();
-            diffusion_model.map_by_name(tensors, "model.diffusion_model.");
+            diffusion_model.map_by_name(tensors, "unet.");
 
             // firest_stage_model(AutoEncoderKL)
             first_stage_model.alloc_params();
-            first_stage_model.map_by_name(tensors, "first_stage_model.");
+            first_stage_model.map_by_name(tensors, "vae.");
         }
 
         std::set<std::string> tensor_names_in_file;
         int64_t t0 = ggml_time_ms();
-
-//         if(custom_vae) {
-//             LOG_DEBUG("loading vae");
-//             std::vector<char> read_buf;
-//             while (true) {
-//                 int32_t n_dims;
-//                 int32_t length;
-//                 int32_t ttype;
-
-//                 file_vae.read(reinterpret_cast<char*>(&n_dims), sizeof(n_dims));
-//                 file_vae.read(reinterpret_cast<char*>(&length), sizeof(length));
-//                 file_vae.read(reinterpret_cast<char*>(&ttype), sizeof(ttype));
-
-//                 if (file_vae.eof()) {
-//                     break;
-//                 }
-
-//                 int32_t nelements = 1;
-//                 int32_t ne[4] = {1, 1, 1, 1};
-//                 for (int i = 0; i < n_dims; ++i) {
-//                     file_vae.read(reinterpret_cast<char*>(&ne[i]), sizeof(ne[i]));
-//                     nelements *= ne[i];
-//                 }
-
-//                 const size_t num_bytes = nelements / ggml_blck_size(ggml_type(ttype)) * ggml_type_size(ggml_type(ttype));
-
-//                 std::string name(length, 0);
-//                 file_vae.read(&name[0], length);
-
-//                 struct ggml_tensor* tensor;
-//                 if (tensors.find(name.data()) != tensors.end()) {
-//                     tensor = tensors[name.data()];
-//                 } else {
-//                     if (name.find("quant") == std::string::npos && name.find("first_stage_model.encoder.") == std::string::npos) {
-//                         LOG_WARN("unknown tensor '%s' in model file", name.data());
-//                     } else {
-//                         if (!vae_decode_only) {
-//                             LOG_WARN("unknown tensor '%s' in model file", name.data());
-//                             return false;
-//                         }
-//                     }
-//                     file_vae.ignore(num_bytes);
-//                     continue;
-//                 }
-
-//                 if (tensor->ne[0] != ne[0] || tensor->ne[1] != ne[1] || tensor->ne[2] != ne[2] || tensor->ne[3] != ne[3]) {
-//                     LOG_ERROR(
-//                         "tensor '%s' has wrong shape in model file: "
-//                         "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
-//                         name.data(),
-//                         ne[0], ne[1], ne[2], ne[3],
-//                         (int)tensor->ne[0], (int)tensor->ne[1], (int)tensor->ne[2], (int)tensor->ne[3]);
-//                     return false;
-//                 }
-
-//                 if (ggml_nelements(tensor) != nelements) {
-//                     LOG_ERROR(
-//                         "tensor '%s' has wrong number of elements in model file: "
-//                         "got %u, expert %zu",
-//                         name.data(), nelements, ggml_nelements(tensor));
-//                     return false;
-//                 }
-
-//                 if (tensor->type != ttype) {
-//                     LOG_ERROR("tensor '%s' has wrong type in model file: got %s, expect %s",
-//                               name.data(), ggml_type_name(ggml_type(ttype)), ggml_type_name(tensor->type));
-//                     return false;
-//                 }
-
-//                 if (ggml_backend_is_cpu  (backend)
-//                 ) {
-//                     // for the CPU and Metal backend, we can read directly into the tensor
-//                     file_vae.read(reinterpret_cast<char *>(tensor->data), num_bytes);
-//                 } else {
-//                     // read into a temporary buffer first, then copy to device memory
-//                     read_buf.resize(ggml_nbytes(tensor));
-//                     file_vae.read(read_buf.data(), num_bytes);
-//                     ggml_backend_tensor_set(tensor, read_buf.data(), 0, num_bytes);
-//                 }
-//             }
-//         }
-
         LOG_DEBUG("loading weights");
 
         // load weights
         float alphas_cumprod[TIMESTEPS];
-        {
-            int n_tensors     = 0;
-            size_t total_size = 0;
-            std::vector<char> read_buf;
-            while (true) {
-                int32_t n_dims;
-                int32_t length;
-                int32_t ttype;
 
-                file.read(reinterpret_cast<char*>(&n_dims), sizeof(n_dims));
-                file.read(reinterpret_cast<char*>(&length), sizeof(length));
-                file.read(reinterpret_cast<char*>(&ttype), sizeof(ttype));
+        std::vector<char> read_buf;
+        size_t total_size = 0;
+        size_t data_offset = gguf_get_data_offset(ctx_gguf);
+        for(int i = 0; i < n_tensors; i++) {
+            std::string name = gguf_get_tensor_name(ctx_gguf, i);
+            struct ggml_tensor * dummy = ggml_get_tensor(ctx_meta, name.c_str());
+            size_t offset = data_offset + gguf_get_tensor_offset(ctx_gguf, i);
+            tensor_names_in_file.insert(name);
 
-                if (file.eof()) {
-                    break;
-                }
-
-                int32_t nelements = 1;
-                int32_t ne[4]     = {1, 1, 1, 1};
-                for (int i = 0; i < n_dims; ++i) {
-                    file.read(reinterpret_cast<char*>(&ne[i]), sizeof(ne[i]));
-                    nelements *= ne[i];
-                }
-
-                const size_t num_bytes = nelements / ggml_blck_size(ggml_type(ttype)) * ggml_type_size(ggml_type(ttype));
-
-                std::string name(length, 0);
-                file.read(&name[0], length);
-
-                tensor_names_in_file.insert(std::string(name.data()));
-
-                if (std::string(name.data()) == "alphas_cumprod") {
-                    file.read(reinterpret_cast<char*>(alphas_cumprod), nelements * ggml_type_size((ggml_type)ttype));
-                    continue;
-                }
-
-                // if(custom_vae && name.find("first_stage_model.")) {
-                //     file.ignore(num_bytes);
-                //     continue;
-                // }
-
-                struct ggml_tensor* tensor;
-                if (tensors.find(name.data()) != tensors.end()) {
-                    tensor = tensors[name.data()];
-                } else {
-                    if (name.find("quant") == std::string::npos && name.find("first_stage_model.encoder.") == std::string::npos) {
-                        LOG_WARN("unknown tensor '%s' in model file", name.data());
-                    } else {
-                        if (!vae_decode_only) {
-                            LOG_WARN("unknown tensor '%s' in model file", name.data());
-                            return false;
-                        }
-                    }
-                    file.ignore(num_bytes);
-                    continue;
-                }
-
-                if (tensor->ne[0] != ne[0] || tensor->ne[1] != ne[1] || tensor->ne[2] != ne[2] || tensor->ne[3] != ne[3]) {
-                    LOG_ERROR(
-                        "tensor '%s' has wrong shape in model file: "
-                        "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
-                        name.data(),
-                        ne[0], ne[1], ne[2], ne[3],
-                        (int)tensor->ne[0], (int)tensor->ne[1], (int)tensor->ne[2], (int)tensor->ne[3]);
-                    return false;
-                }
-
-                if (ggml_nelements(tensor) != nelements) {
-                    LOG_ERROR(
-                        "tensor '%s' has wrong number of elements in model file: "
-                        "got %u, expert %zu",
-                        name.data(), nelements, ggml_nelements(tensor));
-                    return false;
-                }
-
-                if (tensor->type != ttype) {
-                    LOG_ERROR("tensor '%s' has wrong type in model file: got %s, expect %s",
-                              name.data(), ggml_type_name(ggml_type(ttype)), ggml_type_name(tensor->type));
-                    return false;
-                }
-
-                if (ggml_backend_is_cpu  (ggml_get_backend(tensor))
-                ) {
-                    // for the CPU and Metal backend, we can read directly into the tensor
-                    file.read(reinterpret_cast<char *>(tensor->data), num_bytes);
-                } else {
-                    // read into a temporary buffer first, then copy to device memory
-                    read_buf.resize(ggml_nbytes(tensor));
-                    file.read(read_buf.data(), num_bytes);
-                    ggml_backend_tensor_set(tensor, read_buf.data(), 0, num_bytes);
-                }
-                total_size += ggml_nbytes(tensor);
-            }
-            bool some_tensor_not_init = false;
-            for (auto pair : tensors) {
-                if (pair.first.find("cond_stage_model.transformer.text_model.encoder.layers.23") != std::string::npos) {
-                    continue;
-                }
-                if (tensor_names_in_file.find(pair.first) == tensor_names_in_file.end()) {
-                    LOG_ERROR("tensor '%s' not in model file", pair.first.c_str());
-                    some_tensor_not_init = true;
-                }
-            }
-            if (tensor_names_in_file.find("alphas_cumprod") == tensor_names_in_file.end()) {
-                LOG_ERROR("tensor alphas_cumprod not in model file");
-                some_tensor_not_init = true;
-            }
-            if (some_tensor_not_init) {
-                file.close();
+#ifdef _WIN32
+            int ret = _fseeki64(fp, (__int64) offset, SEEK_SET);
+#else
+            int ret = std::fseek(fp, (long) offset, SEEK_SET);
+#endif
+            if(ret == -1) {
                 return false;
             }
-            LOG_DEBUG("model size = %.2fMB", total_size / 1024.0 / 1024.0);
+
+            if(name == "alphas_cumprod") {
+                std::fread(alphas_cumprod, 1, ggml_nbytes(dummy), fp);
+                continue;
+            }
+
+            struct ggml_tensor* real;
+            if (tensors.find(name) != tensors.end()) {
+                real = tensors[name];
+            } else {
+                if (name.find("quant") == std::string::npos && name.find("vae.enc.") == std::string::npos) {
+                    LOG_WARN("unknown tensor '%s' in model file", name.data());
+                } else {
+                    if (!vae_decode_only) {
+                        LOG_WARN("unknown tensor '%s' in model file", name.data());
+                        return false;
+                    }
+                }
+                continue;
+            }
+
+            if (
+                real->ne[0] != dummy->ne[0] ||
+                real->ne[1] != dummy->ne[1] ||
+                real->ne[2] != dummy->ne[2] ||
+                real->ne[3] != dummy->ne[3]) {
+                LOG_ERROR(
+                    "tensor '%s' has wrong shape in model file: "
+                    "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
+                    name.c_str(),
+                    dummy->ne[0], dummy->ne[1], dummy->ne[2], dummy->ne[3],
+                    (int)real->ne[0], (int)real->ne[1], (int)real->ne[2], (int)real->ne[3]);
+                return false;
+            }
+
+            if (real->type != dummy->type) {
+                LOG_ERROR("tensor '%s' has wrong type in model file: got %s, expect %s",
+                            name.c_str(), ggml_type_name(dummy->type), ggml_type_name(real->type));
+                return false;
+            }
+
+            int num_bytes = ggml_nbytes(dummy);
+
+            if (ggml_backend_is_cpu(ggml_get_backend(real))) {
+                // for the CPU and Metal backend, we can read directly into the tensor
+                std::fread(real->data, 1, num_bytes, fp);
+            } else {
+                // read into a temporary buffer first, then copy to device memory
+                read_buf.resize(num_bytes);
+                std::fread(read_buf.data(), 1, num_bytes, fp);
+                ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
+            }
+
+            total_size += ggml_nbytes(dummy);
         }
+
+        gguf_free(ctx_gguf);
+        ggml_free(ctx_meta);
+
+        std::fclose(fp);
+
+        bool some_tensor_not_init = false;
+        for (auto pair : tensors) {
+            if (pair.first.find("clip.transf.txt_mdl.enc.layers.23") != std::string::npos) {
+                continue;
+            }
+
+            if (tensor_names_in_file.find(pair.first) == tensor_names_in_file.end()) {
+                LOG_ERROR("tensor '%s' not in model file", pair.first.c_str());
+                some_tensor_not_init = true;
+            }
+        }
+
+        if (tensor_names_in_file.find("alphas_cumprod") == tensor_names_in_file.end()) {
+            LOG_ERROR("tensor alphas_cumprod not in model file");
+            some_tensor_not_init = true;
+        }
+
+        if (some_tensor_not_init) {
+            return false;
+        }
+
+        LOG_DEBUG("model size = %.2fMB", total_size / 1024.0 / 1024.0);
 
         max_params_mem_size =
             cond_stage_model.text_model.memory_buffer_size +
@@ -3755,11 +3627,10 @@ class StableDiffusionGGML {
                 first_stage_model.memory_buffer_size / 1024.0 / 1024.0);
         int64_t t1 = ggml_time_ms();
         LOG_INFO("loading model from '%s' completed, taking %.2fs", file_path.c_str(), (t1 - t0) * 1.0f / 1000);
-        file.close();
 
         // check is_using_v_parameterization_for_sd2
         bool is_using_v_parameterization = false;
-        if (model_type == SD2) {
+        if (version == VERSION_2_x) {
             struct ggml_init_params params;
             params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10M
             params.mem_buffer = NULL;
@@ -4031,14 +3902,15 @@ class StableDiffusionGGML {
 
         LOG_DEBUG("loading hparams");
         // load hparams
+        int ftype;
         file.read(reinterpret_cast<char*>(&ftype), sizeof(ftype));
 
         int model_type = (ftype >> 16) & 0xFFFF;
-        if (model_type >= MODEL_TYPE_COUNT) {
+        if (model_type >= VERSION_COUNT) {
             LOG_ERROR("invalid model file '%s' (bad model type value %d)", file_path.c_str(), ftype);
             return false;
         }
-        LOG_INFO("lora model type: %s", model_type_to_str[model_type]);
+        LOG_INFO("lora model type: %s", model_version_to_str[model_type]);
 
         ggml_type wtype = ggml_ftype_to_ggml_type((ggml_ftype)(ftype & 0xFFFF));
         LOG_INFO("ftype: %s", ggml_type_name(wtype));
@@ -4166,7 +4038,7 @@ class StableDiffusionGGML {
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %i ms", t1 - t0);
         ggml_tensor* result = ggml_dup_tensor(draft_ctx, hidden_states);  // [N, n_token, hidden_size]
-        //print_ggml_tensor(hidden_states);
+        // print_ggml_tensor(hidden_states);
         {
             int64_t nelements   = ggml_nelements(hidden_states);
             float original_mean = 0.f;
