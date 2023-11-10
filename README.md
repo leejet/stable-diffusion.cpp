@@ -77,19 +77,15 @@ git submodule update
     # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-2-1/blob/main/v2-1_768-nonema-pruned.safetensors
     ```
 
-- convert weights to ggml model format
+- convert weights to gguf model format
 
     ```shell
-    cd models
-    pip install -r requirements.txt
-    # (optional) python convert_diffusers_to_original_stable_diffusion.py --model_path [path to diffusers weights] --checkpoint_path [path to weights]
-    python convert.py [path to weights] --out_type [output precision]
-    # For example, python convert.py sd-v1-4.ckpt --out_type f16
+    ./bin/convert sd-v1-4.ckpt -tp f16
     ```
 
 ### Quantization
 
-You can specify the output model format using the --out_type parameter
+You can specify the output model format using the `--type` or `-tp` parameter
 
 - `f16` for 16-bit floating-point
 - `f32` for 32-bit floating-point
@@ -148,7 +144,7 @@ arguments:
 #### txt2img example
 
 ```
-./bin/sd -m ../models/sd-v1-4-ggml-model-f16.bin -p "a lovely cat"
+./bin/sd -m ../sd-v1-4-f16.gguf -p "a lovely cat"
 ```
 
 Using formats of different precisions will yield results of varying quality.
@@ -163,7 +159,7 @@ Using formats of different precisions will yield results of varying quality.
 
 
 ```
-./bin/sd --mode img2img -m ../models/sd-v1-4-ggml-model-f16.bin -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
+./bin/sd --mode img2img -m ../models/sd-v1-4-f16.gguf -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
 ```
 
 <p align="center">
