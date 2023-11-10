@@ -35,6 +35,8 @@ static std::string cuda_func = "-nv-full";
 
 static sd_log_level log_level = sd_log_level::INFO;
 
+#define UNET_GRAPH_SIZE 4096
+
 #define __FILENAME__ "stable-diffusion.cpp"
 #define SD_LOG(level, format, ...)                                                                    \
     do {                                                                                              \
@@ -959,7 +961,7 @@ struct CLIPTextModel {
 
     struct ggml_cgraph * build_graph(struct ggml_allocr * allocr, std::vector<int> tokens) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
-        static size_t buf_size = ggml_tensor_overhead() * GGML_MAX_NODES + ggml_graph_overhead();
+        static size_t buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
 
         struct ggml_init_params params = {
@@ -2278,7 +2280,7 @@ struct UNetModel {
                                 struct ggml_tensor* context,
                                 struct ggml_tensor* t_emb = NULL) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
-        static size_t buf_size = ggml_tensor_overhead() * GGML_MAX_NODES + ggml_graph_overhead();
+        static size_t buf_size = ggml_tensor_overhead() * UNET_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
 
         struct ggml_init_params params = {
@@ -2289,7 +2291,7 @@ struct UNetModel {
 
         struct ggml_context * ctx0 = ggml_init(params);
 
-        struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
+        struct ggml_cgraph  * gf = ggml_new_graph_custom(ctx0, UNET_GRAPH_SIZE, false);
 
         // temporal tensors for transfer tensors from cpu to gpu if needed
         struct ggml_tensor* x_t = NULL;
@@ -3181,12 +3183,13 @@ struct AutoEncoderKL {
 
         // post_quant_conv
         auto h = ggml_conv_2d(ctx, post_quant_conv_w, z, 1, 1, 0, 0, 1, 1);
-        h      = ggml_add(ctx,
-                          h,
-                          ggml_repeat(ctx,
-                                      ggml_reshape_4d(ctx, post_quant_conv_b, 1, 1, post_quant_conv_b->ne[0], 1),
-                                      h));  // [N, z_channels, h, w]
-        h      = decoder.forward(ctx, h);
+        ggml_set_name(h, "dfallback");
+        h = ggml_add(ctx,
+                     h,
+                     ggml_repeat(ctx,
+                                 ggml_reshape_4d(ctx, post_quant_conv_b, 1, 1, post_quant_conv_b->ne[0], 1),
+                                 h));  // [N, z_channels, h, w]
+        h = decoder.forward(ctx, h);
         return h;
     }
 
@@ -3205,7 +3208,7 @@ struct AutoEncoderKL {
 
     struct ggml_cgraph * build_graph(struct ggml_allocr * allocr, struct ggml_tensor* z, bool decode_graph) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
-        static size_t buf_size = ggml_tensor_overhead() * GGML_MAX_NODES + ggml_graph_overhead();
+        static size_t buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
 
         struct ggml_init_params params = {
@@ -3839,7 +3842,9 @@ class StableDiffusionGGML {
                 final_weight = ggml_add_inplace(ctx, weight, updown);
                 final_weight = ggml_cpy_inplace(ctx, final_weight, weight);
 
-                struct ggml_cgraph* graph = ggml_build_forward_ctx(ctx, final_weight);
+                struct ggml_cgraph* graph = ggml_new_graph(ctx);
+
+                ggml_build_forward_expand(graph, final_weight);
 
                 ggml_graph_compute_with_ctx(ctx, graph, n_threads);
 
