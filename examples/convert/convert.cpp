@@ -711,6 +711,11 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
     size_t total_org_model = 0, total_conv_model = 0;
     for(const auto it : processed_tensors) {
         std::string name = reduce_name(it.second.name);
+        if(name.size() >= 64) {
+            printf("Error: tensor name very large '%s', might not be supported anyway by stable-diffusion.cpp\n", name.c_str());
+            exit(0);
+            return;
+        }
         if(name.find("clip.") == 0) {
              num_clip_tensors++;
         } else if(name.find("unet.") == 0) {
@@ -802,7 +807,6 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
     char* metadata_buffer = new char[metadata_size + 1];
     memset(metadata_buffer, 0, metadata_size + 1);
     std::fread(metadata_buffer, 1, metadata_size, f);
-
     json sf_mt = json::parse(metadata_buffer);
     std::unordered_map<std::string, Tensor> tensors;
 
@@ -853,7 +857,10 @@ void convert_model(convert_params & params) {
     std::fread(buffer_, 1, 9, fp);
     int64_t safe_tensor_metadata_size = read_long(buffer_);
     bool safe_tensor = false;
-    if(buffer_[8] == '{' && safe_tensor_metadata_size > 0 && safe_tensor_metadata_size < file_size) { // begin safetensor metadata
+    if(
+        buffer_[8] == '{' &&
+        safe_tensor_metadata_size > 0 &&
+        safe_tensor_metadata_size < file_size) { // begin safetensor metadata
         size_t offset = safe_tensor_metadata_size + /* long */ 8L - 1L;
 #ifdef _WIN32
         _fseeki64(fp, (__int64) offset, SEEK_SET);
@@ -861,7 +868,7 @@ void convert_model(convert_params & params) {
         std::fseek(fp, (long) offset, SEEK_SET);
 #endif
         std::fread(buffer_, 1, 1, fp);
-        safe_tensor = buffer_[0] == '}';
+        safe_tensor = buffer_[0] == '}' || buffer_[0] == ' ';
     } else {
         std::fclose(fp);
     }
@@ -871,6 +878,7 @@ void convert_model(convert_params & params) {
         last = params.model_name.find_last_of(".");
         params.output_path = params.model_name.substr(0, last) + "-" + ggml_type_name(params.out_type) + ".gguf";
     }
+    printf("model type: %s\n", safe_tensor ? "safetensors" : "checkpoint");
     if(safe_tensor) {
         convert_safetensor_file(fp, safe_tensor_metadata_size, params);
     } else {
