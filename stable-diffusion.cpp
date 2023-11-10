@@ -828,12 +828,9 @@ struct CLIPTextModel {
     }
 
     bool initialize(ggml_type wtype_) {
-        bool gpu = false;
 #ifdef SD_USE_CUBLAS
-        if(gpu) {
-            LOG_DEBUG("Using CUDA backend - clip");
-            backend_clip = ggml_backend_cuda_init();
-        }
+        LOG_DEBUG("Using CUDA backend - clip");
+        backend_clip = ggml_backend_cuda_init();
 #endif
         if(!backend_clip) {
              LOG_DEBUG("Using CPU backend - clip");
