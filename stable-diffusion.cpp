@@ -1001,7 +1001,7 @@ struct CLIPTextModel {
             // recreate the allocator with the required memory
             ggml_allocr_free(allocr_compute);
 
-            fprintf(stderr, "%s: learned condition compute buffer size: %.2f MB\n", __func__, compute_memory_buffer_size / 1024.0 / 1024.0);
+            LOG_DEBUG("learned condition compute buffer size: %.2f MB", compute_memory_buffer_size / 1024.0 / 1024.0);
         }
         buffer_compute_clip = ggml_backend_alloc_buffer(backend_clip, compute_memory_buffer_size);
         allocr_compute = ggml_allocr_new_from_buffer(buffer_compute_clip);
@@ -2352,7 +2352,7 @@ struct UNetModel {
             // recreate the allocator with the required memory
             ggml_allocr_free(allocr_compute);
 
-            fprintf(stderr, "%s: diffusion compute buffer size: %.2f MB\n", __func__, compute_memory_buffer_size / 1024.0 / 1024.0);
+           LOG_DEBUG("diffusion compute buffer size: %.2f MB", compute_memory_buffer_size / 1024.0 / 1024.0);
         }
         buffer_compute_unet = ggml_backend_alloc_buffer(backend_unet, compute_memory_buffer_size);
         allocr_compute = ggml_allocr_new_from_buffer(buffer_compute_unet);
@@ -3442,16 +3442,17 @@ class StableDiffusionGGML {
         for (int i = 0; i < n_kv; i++) {
             const char * name         = gguf_get_key(ctx_gguf, i);
             const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
-            printf("%s: - kv %3d: %42s %-8s\n", __func__, i, name, gguf_type_name(type));
+            LOG_DEBUG("%s: - kv %3d: %42s %-8s", __func__, i, name, gguf_type_name(type));
         }
 
         {
-            int idx = gguf_find_key(ctx_gguf, "sd.model.version");
-            if(idx >= 0) {
-                version = (sd_version)gguf_get_val_i8(ctx_gguf, idx);
+            int nidx = gguf_find_key(ctx_gguf, "sd.model.name");
+            int vidx = gguf_find_key(ctx_gguf, "sd.model.version");
+            if(vidx >= 0 && nidx >= 0) {
+                version = (sd_version)gguf_get_val_i8(ctx_gguf, vidx);
                 cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
                 diffusion_model = UNetModel(version);
-                LOG_DEBUG("Stable Diffusion %s", model_version_to_str[version]);
+                LOG_INFO("Stable Diffusion %s | %s", model_version_to_str[version], gguf_get_val_str(ctx_gguf, nidx));
             }
         }
 
@@ -3460,7 +3461,7 @@ class StableDiffusionGGML {
             int idx = gguf_find_key(ctx_gguf, "sd.model.dtype");
             if(idx >= 0) {
                 wtype = (ggml_type)gguf_get_val_i32(ctx_gguf, idx);
-                LOG_DEBUG("model data type: %s", ggml_type_name(wtype));
+                LOG_INFO("model data type: %s", ggml_type_name(wtype));
             }
         }
 
@@ -4655,7 +4656,7 @@ class StableDiffusionGGML {
             buf_compute = ggml_backend_alloc_buffer(backend, mem_size);
             allocr = ggml_allocr_new_from_buffer(buf_compute);
 
-            fprintf(stderr, "%s: vae compute buffer size: %.2f MB\n", __func__, mem_size / 1024.0 / 1024.0);
+            LOG_DEBUG("vae compute buffer size: %.2f MB", mem_size / 1024.0 / 1024.0);
         }
 
         int64_t t0 = ggml_time_ms();
