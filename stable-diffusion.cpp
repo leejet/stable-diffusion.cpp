@@ -1389,7 +1389,7 @@ struct SpatialTransformer {
 
         // transformer
         {
-            std::string transformer_prefix = prefix + "transf_blks.0.";
+            std::string transformer_prefix = prefix + "t_blks.0.";
             tensors[transformer_prefix + "attn1.to_q.weight"] = transformer.attn1_q_w;
             tensors[transformer_prefix + "attn1.to_k.weight"] = transformer.attn1_k_w;
             tensors[transformer_prefix + "attn1.to_v.weight"] = transformer.attn1_v_w;
@@ -3498,7 +3498,7 @@ class StableDiffusionGGML {
         {
             // cond_stage_model(FrozenCLIPEmbedder)
             cond_stage_model.text_model.alloc_params();
-            cond_stage_model.text_model.map_by_name(tensors, "clip.transf.txt_mdl.");
+            cond_stage_model.text_model.map_by_name(tensors, "clip.txt_mdl.");
 
             // diffusion_model(UNetModel)
             diffusion_model.alloc_params();
