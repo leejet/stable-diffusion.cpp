@@ -8,3 +8,4 @@ test/
 *.bin
 *.exe
 *.gguf
+output.png
