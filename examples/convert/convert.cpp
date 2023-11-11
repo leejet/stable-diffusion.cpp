@@ -956,7 +956,7 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
                         ggml_fp16_t val;
                         std::fread(&val, 1, sizeof(val), f);
                         params.lora_alphas[tensor_name] = ggml_fp16_to_fp32(val);
-                    } else {
+                    } else if(dtype == "F32") {
                         float val;
                         std::fread(&val, 1, sizeof(val), f);
                         params.lora_alphas[tensor_name] = val;
@@ -967,6 +967,9 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
             Tensor tensor = Tensor{tensor_name.c_str(), 0, GGML_TYPE_F32, 0, {1, 1, 1, 1}, n_dims, READ_NAME, 0};
             if(dtype == "F16") {
                 tensor.dtype = GGML_TYPE_F16;
+            } else if(dtype != "F32") {
+                printf("unsupported model data type: %s", dtype.c_str());
+                return;
             }
 
             for(uint8_t i = 0;i < n_dims; i++) {
