@@ -97,9 +97,9 @@ else()
 endif()
 # deps
 add_subdirectory(ggml)
+include_directories(ggml/include)
 
 set(SD_LIB stable-diffusion)
-
 if (SD_BUILD_SHARED_LIBS)
     set_target_properties(ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
     add_library(${SD_LIB} SHARED stable-diffusion.cpp stable-diffusion-c.cpp stable-diffusion.h stable-diffusion-c.h)
