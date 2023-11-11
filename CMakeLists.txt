@@ -24,7 +24,7 @@ endif()
 # general
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
-option(SD_BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
+option(SD_BUILD_SHARED_LIBS         "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
 # Instruction set specific
