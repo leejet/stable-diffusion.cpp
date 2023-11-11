@@ -1152,6 +1152,12 @@ bool parse_params(int argc, const char* argv[], convert_params & params) {
 int main(int argc, const char* argv[]) {
     convert_params params;
     if(argc > 2) {
+        // needed to initialize f16 tables
+        {
+            struct ggml_init_params params = { 0, NULL, false };
+            struct ggml_context * ctx = ggml_init(params);
+            ggml_free(ctx);
+        }
         // parse params
         if(parse_params(argc, argv, params)) {
             convert_model(params);
