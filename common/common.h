@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-
 #include "stable-diffusion.h"
 
 enum sd_mode {

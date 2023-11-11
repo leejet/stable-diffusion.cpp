@@ -1,10 +1,6 @@
 #include <stdio.h>
 #include <ctime>
-#include <fstream>
-#include <iostream>
 #include <random>
-#include <unordered_set>
-
 #include "stable-diffusion.h"
 #include "common.h"
 

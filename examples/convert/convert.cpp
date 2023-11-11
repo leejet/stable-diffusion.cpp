@@ -120,7 +120,7 @@ enum read_phase {
     READ_DIMENS
 };
 
-enum lora_type {
+enum sd_lora_type {
     LORA_NONE,
     LORA_REGULAR,
     LORA_DIFFUSERS,
@@ -140,7 +140,7 @@ struct convert_params {
     // LoRA
     bool lora = false;
     std::map<std::string, float> lora_alphas;
-    lora_type lora_type = LORA_NONE;
+    sd_lora_type lora_type = LORA_NONE;
 };
 
 struct Tensor {
@@ -160,9 +160,9 @@ struct Tensor {
     }
 
     int64_t* inverse_shape() {
-        int64_t v [4] = {1, 1, 1, 1};
-        for(int i = 0;i < n_dims;i++) {
-            v[i] = shape[n_dims - 1 - i];
+        int64_t* v = new int64_t[4];
+        for(int i = 0;i < 4; i++) {
+            v[i] = (i < n_dims) ? shape[n_dims - 1 - i] : 1;
         }
         return v;
     }
