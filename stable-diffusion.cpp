@@ -3423,6 +3423,22 @@ class StableDiffusionGGML {
         first_stage_model.destroy();
     }
 
+    /*
+        Apply LoRA
+        scale = (user lora strength)
+        k_tensor = "unet.out_blks.9.1.t_blks.0.attn2.to_k"
+        target_weights = model_tensors[k_tensor + ".weight"]
+
+        loraA = lora_tensors[k_tensor + ".lu.weight"]
+        loraB = lora_tensors[k_tensor + ".ld.weight"]
+        alpha = lora_alphas[k_tensor + ".alpha"]
+
+        scale *= (alpha / loraB.shape[0])
+
+        target_weights += (scale * mul_mat(loraA, transpose(loraB))) // ggml_mul_mat transpose
+
+     */
+
     bool load_from_file(const std::string& file_path, sd_sample_schedule schedule) {
         LOG_INFO("loading model from '%s'", file_path.c_str());
         ggml_context* ctx_meta = NULL;

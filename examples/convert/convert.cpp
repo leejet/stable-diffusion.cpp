@@ -120,6 +120,13 @@ enum read_phase {
     READ_DIMENS
 };
 
+enum lora_type {
+    LORA_NONE,
+    LORA_REGULAR,
+    LORA_DIFFUSERS,
+    LORA_TRANSFORMERS
+};
+
 struct convert_params {
     ggml_type out_type = GGML_TYPE_F32;
     sd_version version = VERSION_1_x;
@@ -127,11 +134,13 @@ struct convert_params {
     std::string model_path = "";
     std::string output_path = "";
     std::string vocab_path = "";
+    bool verbose = false;
     bool generate_alphas_cumprod = false;
 
-    // lora
+    // LoRA
     bool lora = false;
     std::map<std::string, float> lora_alphas;
+    lora_type lora_type = LORA_NONE;
 };
 
 struct Tensor {
@@ -423,6 +432,9 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,std::unordered
                     memcpy(string_buffer, buffer,len < MAX_STRING_BUFFER ? len : (MAX_STRING_BUFFER - 1));
                     buffer += len;
                     read_pkl_string(string_buffer, zip, dir, tensor);
+                    if(params.verbose) {
+                        printf("pickle str: %s\n", string_buffer);
+                    }
                 }
                 break;
             case 0x8C:
@@ -624,7 +636,9 @@ void preprocess_tensors(std::unordered_map<std::string, Tensor> & src, std::map<
                     tensor.name = t.to;
                     dst[tensor.name] = tensor;
                     found_equivalent = true;
-                    printf("rename %s => %s\n", name.c_str(), tensor.name.c_str());
+                    if(params.verbose) {
+                        printf("rename %s => %s\n", name.c_str(), tensor.name.c_str());
+                    }
                     break;
                 }
             }
@@ -640,7 +654,9 @@ void preprocess_tensors(std::unordered_map<std::string, Tensor> & src, std::map<
                         Tensor tsr = i == 0 ? q : (i == 1 ? k : v);
                         tsr.name = hf_clip_resblock_prefix + idx + "." + kqv_self[i];
                         dst[tsr.name] = tsr;
-                        printf("split %s => %s\n", it.first.c_str(), tsr.name.c_str());
+                        if(params.verbose) {
+                            printf("split %s => %s\n", it.first.c_str(), tsr.name.c_str());
+                        }
                     }
                     found_equivalent = true;
                 } else if(suffix == "attn.in_proj_bias") {
@@ -650,7 +666,9 @@ void preprocess_tensors(std::unordered_map<std::string, Tensor> & src, std::map<
                         Tensor tsr = i == 0 ? q : (i == 1 ? k : v);
                         tsr.name = hf_clip_resblock_prefix + idx + "." + kqv_self[i + 3];
                         dst[tsr.name] = tsr;
-                        printf("split %s => %s\n", it.first.c_str(), tsr.name.c_str());
+                        if(params.verbose) {
+                            printf("split %s => %s\n", it.first.c_str(), tsr.name.c_str());
+                        }
                     }
                     found_equivalent = true;
                 } else {
@@ -663,7 +681,9 @@ void preprocess_tensors(std::unordered_map<std::string, Tensor> & src, std::map<
                     }
                     tensor.name = hf_clip_resblock_prefix + idx + "." + new_suffix;
                     dst[tensor.name] = tensor;
-                    printf("rename %s => %s\n", name.c_str(), tensor.name.c_str());
+                    if(params.verbose) {
+                        printf("rename %s => %s\n", name.c_str(), tensor.name.c_str());
+                    }
                     found_equivalent = true;
                 }
             }
@@ -766,12 +786,15 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
     if(!params.lora && model_tensors.find("alphas_cumprod") == model_tensors.end()) {
         params.generate_alphas_cumprod = true;
     }
+
     std::map<std::string, Tensor> processed_tensors;
-    if(model_tensors.find("cond_stage_model.model.token_embedding.weight") != model_tensors.end()) {
-        params.version = VERSION_2_x;
-        printf("Stable Diffusion 2.x - %s\n", params.model_name.c_str());
-    } else {
-        printf("Stable Diffusion 1.x - %s\n", params.model_name.c_str());
+    if(!params.lora) {
+        if(model_tensors.find("cond_stage_model.model.token_embedding.weight") != model_tensors.end()) {
+            params.version = VERSION_2_x;
+            printf("Stable Diffusion 2.x - %s\n", params.model_name.c_str());
+        } else {
+            printf("Stable Diffusion 1.x - %s\n", params.model_name.c_str());
+        }
     }
 
     preprocess_tensors(model_tensors, processed_tensors, zip, fp, params);
@@ -781,6 +804,7 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
     if(params.lora) {
         gguf_set_val_str(g_ctx, "sd.lora.name", params.model_name.c_str());
         gguf_set_val_i32(g_ctx, "sd.lora.dtype", (int)params.out_type);
+        gguf_set_val_i32(g_ctx, "sd.lora.type", (int)params.lora_type);
 
         // process alphas
         std::vector<float> alpha_values;
@@ -791,7 +815,7 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
             alpha_values.push_back(k.second);
         }
 
-        printf("writing %zu alphas\n", alpha_key.size());
+        printf("writing %zu lora alphas\n", alpha_key.size());
         gguf_set_arr_str(g_ctx, "sd.lora.alphas_k", alpha_key.data(), alpha_key.size());
         gguf_set_arr_data(g_ctx, "sd.lora.alphas_v", GGUF_TYPE_FLOAT32, alpha_values.data(), alpha_values.size());
     } else {
@@ -809,7 +833,9 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
         gguf_set_val_i8(g_ctx, "sd.model.version", (int)params.version);
 
         // write vocab
-        printf("writing vocab: %zu tokens\n", vocab_data.size());
+        if(params.verbose) {
+            printf("writing vocab: %zu tokens\n", vocab_data.size());
+        }
         gguf_set_arr_str(g_ctx, "sd.vocab.tokens", vocab_data.data(), vocab_data.size());
     }
 
@@ -844,7 +870,9 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
         ggml_set_name(gg_tensor, name.c_str());
         void* source = fetch_data(tensor, zip, fp);
         void* dest = NULL;
-        printf("converting: %s | %s => %s\n", name.c_str(), ggml_type_name(tensor.dtype), ggml_type_name(dest_type));
+        if(params.verbose) {
+            printf("converting: %s | %s => %s\n", name.c_str(), ggml_type_name(tensor.dtype), ggml_type_name(dest_type));
+        }
         if(tensor.dtype == dest_type) {
             dest = source;
         } else {
@@ -943,6 +971,15 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
             size_t end_data = tensor_props["data_offsets"][1].get<size_t>();
 
             if(params.lora) {
+                if(params.lora_type == LORA_NONE) {
+                    if(tensor_name.find("lora_up.weight") != std::string::npos) {
+                        params.lora_type = LORA_REGULAR;
+                    } else if(tensor_name.find("lora.up.weight") != std::string::npos) {
+                        params.lora_type = LORA_DIFFUSERS;
+                    } else if(tensor_name.find("lora_linear_layer.up.weight") != std::string::npos) {
+                        params.lora_type = LORA_TRANSFORMERS;
+                    }
+                }
                 // replace all '_' to '.'
                 for (char &c : tensor_name) { if (c == '_') { c = '.'; } }
             }
@@ -1041,7 +1078,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
     printf("  -o, --out [FILENAME]               path or name to converted model\n");
-    printf("  -v, --vocab [FILENAME]             path to custom vocab.json (usually unnecessary)\n");
+    printf("  --vocab [FILENAME]                 path to custom vocab.json (usually unnecessary)\n");
+    printf("  -v, --verbose                      print processing info - dev info\n");
     printf("  -l, --lora                         force read the model as a LoRA\n");
     printf("  -tp, --type [OUT_TYPE]             output format (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
 }
@@ -1058,13 +1096,15 @@ bool parse_params(int argc, const char* argv[], convert_params & params) {
             if(params.output_path.find(".gguf") == std::string::npos) {
                 params.output_path = params.output_path + ".gguf";
             }
-        } else if(arg == "-v" || arg == "--vocab") {
+        } else if(arg == "--vocab") {
             if (++i >= argc) {
                 break;
             }
             params.vocab_path = argv[i];
         } else if(arg == "-l" || arg == "--lora") {
             params.lora = true;
+        } else if(arg == "-v" || arg == "--verbose") {
+            params.verbose = true;
         } else if(arg == "--type" || arg == "-tp") {
             if (++i >= argc) {
                 printf("specify the output format\n");
