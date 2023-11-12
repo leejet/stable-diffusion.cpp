@@ -68,13 +68,14 @@ static sd_log_level log_level = sd_log_level::INFO;
 enum sd_version {
     VERSION_1_x,
     VERSION_2_x,
-//  VERSION_XL
+    VERSION_XL,
     VERSION_COUNT,
 };
 
 const char* model_version_to_str[] = {
     "1.x",
-    "2.x"};
+    "2.x",
+    "XL"};
 
 /*================================================== Helper Functions ================================================*/
 
@@ -773,6 +774,9 @@ struct ResidualAttentionBlock {
 
 // VERSION_1_x.x: https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
 // VERSION_2_x.x: https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/blob/main/config.json
+// VERSION_XL: https://huggingface.co/laion/CLIP-ViT-bigG-14-laion2B-39B-b160k/blob/main/config.json (CLIPTextModelWithProjection)
+// SDXL CLIPModel
+// CLIPTextModelWithProjection seems optional
 struct CLIPTextModel {
     sd_version version = VERSION_1_x;
     // network hparams
@@ -805,20 +809,25 @@ struct CLIPTextModel {
     ggml_type wtype;
     ggml_backend_t backend_clip = NULL;
 
-    CLIPTextModel(sd_version version = VERSION_1_x)
+    CLIPTextModel(sd_version version = VERSION_1_x, bool has_pool)
         : version(version) {
         if (version == VERSION_2_x) {
             hidden_size = 1024;
             intermediate_size = 4096;
             n_head            = 16;
             num_hidden_layers = 24;
+        } else if (version == VERSION_XL && has_pool) { // CLIPTextModelWithProjection
+            hidden_size = 1280;
+            intermediate_size = 5120;
+            n_head = 20;
+            num_hidden_layers = 32;
         }
         resblocks.resize(num_hidden_layers);
         set_resblocks_hp_params();
     }
 
     void set_resblocks_hp_params() {
-        int d_model = hidden_size / n_head;  // 64
+        int d_model = hidden_size / n_head;  // 64 / SDXL is 40 for CLIPTextModelWithProjection
         for (int i = 0; i < num_hidden_layers; i++) {
             resblocks[i].d_model           = d_model;
             resblocks[i].n_head            = n_head;
@@ -1316,7 +1325,7 @@ struct SpatialTransformer {
 
         struct ggml_tensor* ff_2_w;  // [in_channels, in_channels * 4]
         struct ggml_tensor* ff_2_b;  // [in_channels,]
-    } transformer;
+    } transformer; // supposes depth = 1,  this need to be a list
 
     // proj_out
     struct ggml_tensor* proj_out_w;  // [in_channels, in_channels, 1, 1]
@@ -1389,7 +1398,7 @@ struct SpatialTransformer {
 
         // transformer
         {
-            std::string transformer_prefix = prefix + "t_blks.0.";
+            std::string transformer_prefix = prefix + "t_blks.0."; // to admit depth > 1 this must be "t_blks.%i" (SDXL)
             tensors[transformer_prefix + "attn1.to_q.weight"] = transformer.attn1_q_w;
             tensors[transformer_prefix + "attn1.to_k.weight"] = transformer.attn1_k_w;
             tensors[transformer_prefix + "attn1.to_v.weight"] = transformer.attn1_v_w;
@@ -1795,10 +1804,26 @@ struct UNetModel {
     bool use_gpu = false;
 
     UNetModel(sd_version version = VERSION_1_x) {
+        // transformer_depth size is the same of channel_mult size
+        // transformer_depth = {1, 1, 1, 0}
+        // transformer_depth[index of channel_mult] is applied to SpatialTransformer.depth var
+        // transformer_depth_middle = 1 default
+
+        // adm_in_channels = -1 (none)
         if (version == VERSION_2_x) {
             context_dim = 1024;
             num_head_channels = 64;
-            num_heads         = -1;
+            num_heads = -1;
+        } else if (version == VERSION_XL) {
+            context_dim = 2048;
+            // attention_resolutions = {4, 2}
+            // channel_mult = {1, 2, 4}
+            // transformer_depth = {0, 2, 10}
+            // transformer_depth_middle = 10
+            // adm_in_channels = 2816
+            // requieres a Sequential phase as "time_embed": label_emb
+            num_head_channels = 64;
+            num_heads = -1;
         }
         // set up hparams of blocks
 
@@ -2049,6 +2074,12 @@ struct UNetModel {
         time_embed_2_w = ggml_new_tensor_2d(ctx_unet, wtype, time_embed_dim, time_embed_dim);
         time_embed_2_b = ggml_new_tensor_1d(ctx_unet, GGML_TYPE_F32, time_embed_dim);
 
+        // SDXL
+        // label_embed_0_w = ggml_new_tensor_2d(ctx_unet, wtype, time_embed_dim, adm_in_channels);
+        // label_embed_0_b = ggml_new_tensor_1d(ctx_unet, GGML_TYPE_F32, time_embed_dim);
+        // label_embed_2_w = ggml_new_tensor_2d(ctx_unet, wtype, time_embed_dim, time_embed_dim);
+        // label_embed_2_b = ggml_new_tensor_1d(ctx_unet, GGML_TYPE_F32, time_embed_dim);
+
         // input_blocks
         input_block_0_w = ggml_new_tensor_4d(ctx_unet, GGML_TYPE_F16, 3, 3, in_channels, model_channels);
         input_block_0_b = ggml_new_tensor_1d(ctx_unet, GGML_TYPE_F32, model_channels);
@@ -2182,12 +2213,31 @@ struct UNetModel {
             t_emb = new_timestep_embedding(ctx, allocr_compute, timesteps, model_channels);  // [N, model_channels]
         }
 
-        // time_embed
+        // time_embed = nn.Sequential
+        // Linear
         auto emb = ggml_mul_mat(ctx, time_embed_0_w, t_emb);
-        emb      = ggml_add(ctx, ggml_repeat(ctx, time_embed_0_b, emb), emb);
-        emb      = ggml_silu_inplace(ctx, emb);
-        emb      = ggml_mul_mat(ctx, time_embed_2_w, emb);
-        emb      = ggml_add(ctx, ggml_repeat(ctx, time_embed_2_b, emb), emb);  // [N, time_embed_dim]
+        emb = ggml_add(ctx, ggml_repeat(ctx, time_embed_0_b, emb), emb);
+        // nn.SiLU()
+        emb = ggml_silu_inplace(ctx, emb);
+        // Linear
+        emb = ggml_mul_mat(ctx, time_embed_2_w, emb);
+        emb = ggml_add(ctx, ggml_repeat(ctx, time_embed_2_b, emb), emb);  // [N, time_embed_dim]
+
+        // SDXL
+        // label_emd = nn.Sequential
+        // Linear
+        // param y: an [N] Tensor of labels, if class-conditional. (clip g)
+
+        // if(y != NULL) {
+        //     auto y_emb = ggml_mul_mat(ctx, label_embed_0_w, y);
+        //     y_emb = ggml_add(ctx, ggml_repeat(ctx, label_embed_0_b, y_emb), y_emb);
+        //     // nn.SiLU()
+        //     y_emb = ggml_silu_inplace(ctx, y_emb);
+        //     // Linear
+        //     y_emb = ggml_mul_mat(ctx, label_embed_2_w, y_emb);
+        //     y_emb = ggml_add(ctx, ggml_repeat(ctx, label_embed_2_b, y_emb), y_emb);
+        //     emb = ggml_add(ctx, emb, y_emb);
+        // }
 
         // input_blocks
         std::vector<struct ggml_tensor*> hs;
@@ -4878,6 +4928,11 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     if (sd->free_params_immediately) {
         sd->cond_stage_model.text_model.destroy();
     }
+
+    // SDXL
+    // requires encode_adm
+    // apply set_timestep_embedding with dim 256
+    
 
     LOG_INFO("start sampling");
     struct ggml_tensor* x_0 = sd->sample(ctx, init_latent, c, uc, cfg_scale, sample_method, sigma_sched);

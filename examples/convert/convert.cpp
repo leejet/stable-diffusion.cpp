@@ -110,7 +110,7 @@ std::string kqv_self[6] = {
 enum sd_version {
     VERSION_1_x,
     VERSION_2_x,
-//  VERSION_XL
+    VERSION_XL
 };
 
 enum read_phase {
@@ -573,6 +573,13 @@ std::map<std::string, std::string> convert_pipeline(convert_params params) {
 
         hf_to_sd["te.text.model"] = "cond_stage_model.transformer.text_model";
     }
+
+    // SD XL to SD normal
+    if(params.version == VERSION_XL) {
+        hf_to_sd["conditioner.embedders.0.transformer.text_model"] = "cond_stage_model.transformer.text_model";
+        hf_to_sd["conditioner.embedders.1.model"] = "cond_stage_model.2.transformer.text_model";
+    }
+
     return hf_to_sd;
 }
 
@@ -722,7 +729,9 @@ void preprocess_tensors(std::unordered_map<std::string, Tensor> & src, std::map<
 
             if(found) {
                 tensor.name = t_name;
-                dst[t_name] = tensor;
+                if(!is_unused_tensor(t_name)) {
+                    dst[t_name] = tensor;
+                }
                 if(params.lora) {
                     int pos = name.find("lora.down");
                     if(pos != std::string::npos) {
@@ -792,6 +801,9 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
         if(model_tensors.find("cond_stage_model.model.token_embedding.weight") != model_tensors.end()) {
             params.version = VERSION_2_x;
             printf("Stable Diffusion 2.x - %s\n", params.model_name.c_str());
+        } else if(model_tensors.find("conditioner.embedders.0.transformer.text_model.embeddings.position_embedding.weight") != model_tensors.end()) {
+            params.version = VERSION_XL;
+            printf("Stable Diffusion XL - %s\n", params.model_name.c_str());
         } else {
             printf("Stable Diffusion 1.x - %s\n", params.model_name.c_str());
         }
@@ -947,6 +959,8 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
     std::fread(metadata_buffer, 1, metadata_size, f);
     json sf_mt = json::parse(metadata_buffer);
     std::unordered_map<std::string, Tensor> tensors;
+
+    printf("%s\n", metadata_buffer);
 
     printf("reading safetensors metadata\n");
     int data_begin = 8 + metadata_size;
