@@ -39,64 +39,6 @@ const char* unused_tensors[UNUSED_MODEL_TENSORS] = {
     "embedding_manager"
 };
 
-struct tkn /* tensor_key_name */ {
-    std::string from;
-    std::string to;
-};
-
-tkn full_short_name[14] = {
-    // general phases
-    {"model.diffusion_model.", "unet."},
-    {"first_stage_model.", "vae."},
-    {"cond_stage_model.", "clip."},
-
-    // transformer blocks
-    {"transformer_blocks.", "t_blks."},
-    {"output_blocks.", "out_blks."},
-    {"input_blocks.", "in_blks."},
-    {"middle_block.", "mddl_blk."},
-
-    // clip
-    {"transformer.text_model", "txt_mdl"},
-
-    // vae
-    {"encoder.", "enc."},
-    {"decoder.", "dec."},
-
-    // Lora
-    {"lora.", "lr."},
-    {"lora.up.", "lu."},
-    {"lora.down.", "ld."},
-};
-
-tkn open_clip_to_hf_clip_model [12] = {
-    {"cond_stage_model.model.ln_final.bias", "cond_stage_model.transformer.text_model.final_layer_norm.bias"},
-    {"cond_stage_model.model.ln_final.weight", "cond_stage_model.transformer.text_model.final_layer_norm.weight"},
-    {"cond_stage_model.model.positional_embedding", "cond_stage_model.transformer.text_model.embeddings.position_embedding.weight"},
-    {"cond_stage_model.model.token_embedding.weight", "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"},
-    {"first_stage_model.decoder.mid.attn_1.to_k.bias", "first_stage_model.decoder.mid.attn_1.k.bias"},
-    {"first_stage_model.decoder.mid.attn_1.to_k.weight", "first_stage_model.decoder.mid.attn_1.k.weight"},
-    {"first_stage_model.decoder.mid.attn_1.to_out.0.bias", "first_stage_model.decoder.mid.attn_1.proj_out.bias"},
-    {"first_stage_model.decoder.mid.attn_1.to_out.0.weight", "first_stage_model.decoder.mid.attn_1.proj_out.weight"},
-    {"first_stage_model.decoder.mid.attn_1.to_q.bias", "first_stage_model.decoder.mid.attn_1.q.bias"},
-    {"first_stage_model.decoder.mid.attn_1.to_q.weight", "first_stage_model.decoder.mid.attn_1.q.weight"},
-    {"first_stage_model.decoder.mid.attn_1.to_v.bias", "first_stage_model.decoder.mid.attn_1.v.bias"},
-    {"first_stage_model.decoder.mid.attn_1.to_v.weight", "first_stage_model.decoder.mid.attn_1.v.weight"}
-};
-
-tkn open_clip_to_hk_clip_resblock [10] = {
-    {"attn.out_proj.bias", "self_attn.out_proj.bias"},
-    {"attn.out_proj.weight", "self_attn.out_proj.weight"},
-    {"ln_1.bias", "layer_norm1.bias"},
-    {"ln_1.weight", "layer_norm1.weight"},
-    {"ln_2.bias", "layer_norm2.bias"},
-    {"ln_2.weight", "layer_norm2.weight"},
-    {"mlp.c_fc.bias", "mlp.fc1.bias"},
-    {"mlp.c_fc.weight", "mlp.fc1.weight"},
-    {"mlp.c_proj.bias", "mlp.fc2.bias"},
-    {"mlp.c_proj.weight", "mlp.fc2.weight"}
-};
-
 std::string kqv_self[6] = {
     "self_attn.q_proj.weight",
     "self_attn.k_proj.weight",
@@ -141,6 +83,9 @@ struct convert_params {
     bool lora = false;
     std::map<std::string, float> lora_alphas;
     sd_lora_type lora_type = LORA_NONE;
+
+    // VAE
+    bool vae = false;
 };
 
 struct Tensor {
@@ -167,10 +112,6 @@ struct Tensor {
         return v;
     }
 };
-
-static ggml_type global_type = GGML_TYPE_F32; // all tensors data type
-static bool read_global_type = false;
-
 
 /*
 
@@ -285,6 +226,9 @@ float* calculate_alpha_cumprod(float linear_start = 0.00085f, float linear_end =
     READ PYTORCH CHECKPOINT MODEL
 
 */
+
+static ggml_type global_type = GGML_TYPE_F32; // all tensors data type
+static bool read_global_type = false;
 
 void exist_in_zip(struct zip_t *zip, const char* f_test, Tensor & tensor) {
     size_t i, n = zip_entries_total(zip);
@@ -516,71 +460,224 @@ void read_vocab_json(std::map<int, std::string> & vocab_map, convert_params para
     }
 }
 
-std::string reduce_name(const std::string full_name) {
+/*
+
+    PREPROCESS TENSORS
+
+*/
+
+std::string replace_name_by_map(const std::string full_name, std::unordered_map<std::string,std::string> ft_map) {
     std::string result = full_name;
-    for(tkn t : full_short_name) {
-        size_t pos = result.find(t.from);
+    for(auto it : ft_map) {
+        size_t pos = result.find(it.first);
         if(pos != std::string::npos) {
-            result = result.replace(pos, t.from.size(), t.to);
+            result = result.replace(pos, it.first.size(), it.second);
         }
     }
     return result;
 }
 
-std::map<std::string, std::string> convert_pipeline(convert_params params) {
-    std::map<std::string, std::string> hf_to_sd; // hugging face pipeline to legacy stable diffusion
+ // hugging face pipeline to legacy stable diffusion
+std::unordered_map<std::string, std::string> unet_convert_map;
+std::unordered_map<std::string, std::string> unet_convert_map_resnet;
+std::unordered_map<std::string, std::string> unet_convert_map_layers;
+std::unordered_map<std::string, std::string> vae_convert_map;
+std::unordered_map<std::string, std::string> clip_convert_map;
+std::unordered_map<std::string, std::string> lora_fix_map;
+std::unordered_map<std::string, std::string> shorten_name_map;
+
+std::string convert_unet_to_original(std::string name, convert_params params) {
+    bool resnet_tensor = name.find("resnets") != std::string::npos;
     std::string separator = params.lora ? "." : "_";
-    for(int i = 0; i < 4;i ++) {
-        for(int j = 0; j < 2;j ++) {
-            hf_to_sd["down" + separator + "blocks." + std::to_string(i) + ".resnets." + std::to_string(j) + "."] = "input_blocks." + std::to_string(3 * i + j + 1) + ".0.";
+    if(unet_convert_map.empty()) {
+        unet_convert_map["time" + separator + "embedding.linear" + separator + "1.weight"] = "time_embed.0.weight";
+        unet_convert_map["time" + separator + "embedding.linear" + separator + "1.bias"] = "time_embed.0.bias";
+        unet_convert_map["time" + separator + "embedding.linear" + separator + "2.weight"] = "time_embed.2.weight";
+        unet_convert_map["time" + separator + "embedding.linear" + separator + "2.bias"] = "time_embed.2.bias";
+        unet_convert_map["conv" + separator + "in.weight"] = "input_blocks.0.0.weight";
+        unet_convert_map["conv" + separator + "in.bias"] = "input_blocks.0.0.bias";
+        unet_convert_map["conv" + separator + "norm" + separator + "out.weight"] ="out.0.weight";
+        unet_convert_map["conv" + separator + "norm" + separator + "out.bias"] = "out.0.bias";
+        unet_convert_map["conv" + separator + "out.weight"] = "out.2.weight";
+        unet_convert_map["conv" + separator + "out.bias"] = "out.2.bias";
+    }
+
+    // resnet
+    if(unet_convert_map_resnet.empty() && resnet_tensor) {
+        unet_convert_map_resnet["norm1"] = "in_layers.0";
+        unet_convert_map_resnet["conv1"] = "in_layers.2";
+        unet_convert_map_resnet["norm2"] = "out_layers.0";
+        unet_convert_map_resnet["conv2"] = "out_layers.2";
+        unet_convert_map_resnet["time" + separator + "emb" + separator + "proj"] = "emb_layers.1";
+        unet_convert_map_resnet["conv" + separator + "shortcut"] = "skip_connection";
+    }
+
+    if(unet_convert_map_layers.empty()) {
+        for (int i = 0; i < 4; i++)
+        {
+            for (int j = 0; j < 2; j++)
+            {
+                unet_convert_map_layers["down" + separator + "blocks." + std::to_string(i) + ".resnets." + std::to_string(j) + "."] = "input_blocks." + std::to_string(3 * i + j + 1) + ".0.";
+                if (i < 3)
+                {
+                    unet_convert_map_layers["down" + separator + "blocks." + std::to_string(i) + ".attentions." + std::to_string(j) + "."] = "input_blocks." + std::to_string(3 * i + j + 1) + ".1.";
+                }
+            }
+            for (int j = 0; j < 3; j++)
+            {
+                unet_convert_map_layers["up" + separator + "blocks." + std::to_string(i) + ".resnets." + std::to_string(j) + "."] = "output_blocks." + std::to_string(3 * i + j) + ".0.";
+                if (i > 0)
+                {
+                    unet_convert_map_layers["up" + separator + "blocks." + std::to_string(i) + ".attentions." + std::to_string(j) + "."] = "output_blocks." + std::to_string(3 * i + j) + ".1.";
+                }
+            }
+            if (i < 3)
+            {
+                unet_convert_map_layers["down" + separator + "blocks." + std::to_string(i) + ".downsamplers.0.conv."] = "input_blocks." + std::to_string(3 * (i + 1)) + ".0.op.";
+                unet_convert_map_layers["up" + separator + "blocks." + std::to_string(i) + ".upsamplers.0."] = "output_blocks." + std::to_string(3 * i + 2) + "." + std::to_string(i + 2) + ".";
+            }
+        }
+        unet_convert_map_layers["mid" + separator + "block.attentions.0."] = "middle_block.1.";
+        for (int j = 0; j < 2; j++)
+        {
+            unet_convert_map_layers["mid" + separator + "block.resnets." + std::to_string(j) + "."] = "middle_block." + std::to_string(2 * j) + ".";
+        }
+    }
+    
+    std::string result = replace_name_by_map(name, unet_convert_map);
+    result = replace_name_by_map(result, unet_convert_map_layers);
+    if(resnet_tensor) {
+        result = replace_name_by_map(result, unet_convert_map_resnet);
+    }
+    return result;
+}
+
+std::string convert_vae_to_original(std::string name, convert_params params) {
+    std::unordered_map<std::string, std::string> vae_map;
+    bool hf_attention = name.find("attentions") != std::string::npos;
+    if(vae_convert_map.empty()) {
+        vae_convert_map[ "conv_shortcut"] = "nin_shortcut";
+        vae_convert_map[ "conv_norm_out"] = "norm_out";
+        vae_convert_map[ "mid_block.attentions.0."] = "mid.attn_1.";
+        for(int i = 0; i < 4; i++) {
+            for(int j = 0; j < 2; j++) {
+                vae_convert_map["encoder.down_blocks."+std::to_string(i)+".resnets."+std::to_string(j)+"."] = "encoder.down."+std::to_string(i)+".block."+std::to_string(j)+".";
+            }
+            if(i < 2) {
+                vae_convert_map["mid_block.resnets."+std::to_string(i)+"."] = "mid.block_"+std::to_string(i + 1)+".";
+            }
             if(i < 3) {
-                hf_to_sd["down" + separator + "blocks." + std::to_string(i) + ".attentions." + std::to_string(j) + "."] = "input_blocks." + std::to_string(3 * i + j + 1) + ".1.";
+                vae_convert_map["down_blocks."+std::to_string(i)+".downsamplers.0."] = "down."+std::to_string(i)+".downsample.";
+                vae_convert_map["up_blocks."+std::to_string(i)+".upsamplers.0."] = "up."+std::to_string(3 - i)+".upsample.";
+            }
+            for(int j = 0; j < 3; j++) {
+                vae_convert_map["decoder.up_blocks."+std::to_string(i)+".resnets."+std::to_string(j)+"."] = "decoder.up."+std::to_string(3 - i)+".block."+std::to_string(j)+".";
             }
         }
+    }
 
-        for(int j = 0; j < 3;j ++) {
-            hf_to_sd["up" + separator + "blocks." + std::to_string(i) + ".resnets." + std::to_string(j) + "."] = "output_blocks." + std::to_string(3 * i + j) + ".0.";
-            if(i > 0) {
-                hf_to_sd["up" + separator + "blocks." + std::to_string(i) + ".attentions." + std::to_string(j) + "."] = "output_blocks." + std::to_string(3 * i + j) + ".1.";
+    if(hf_attention || params.version == VERSION_2_x) {
+        vae_convert_map["to_k."] = "k.";
+        vae_convert_map["to_q."] = "q.";
+        vae_convert_map["to_v."] = "v.";
+        vae_convert_map["to_out.0."] = "proj_out.";
+    }
+
+    if(hf_attention) {
+        vae_convert_map["key."] = "k.";
+        vae_convert_map["query."] = "q.";
+        vae_convert_map["value."] = "v.";
+        vae_convert_map["group_norm."] = "norm.";
+        vae_convert_map["proj_attn."] = "proj_out.";
+    }
+
+    return replace_name_by_map(name, vae_convert_map);
+}
+
+std::string convert_clip_to_hf_clip(std::string name, convert_params params) {
+    std::string separator = params.lora ? "." : "_";
+    if(clip_convert_map.empty()) {
+        if(params.version == VERSION_2_x) {
+            clip_convert_map[".model."] = ".transformer.text_model.";
+            clip_convert_map["transformer.resblocks."] = "encoder.layers.";
+            clip_convert_map["attn.out_proj"] = "self_attn.out_proj";
+            clip_convert_map["ln_final."] = "final_layer_norm.";
+            clip_convert_map["token_embedding.weight"] =
+                "embeddings.token_embedding.weight";
+            clip_convert_map["positional_embedding"] =
+                "embeddings.position_embedding.weight";
+        } else {
+            clip_convert_map["resblocks."] = "text_model.encoder.layers.";
+            clip_convert_map[".attn."] = ".self_attn.";
+            clip_convert_map["ln_final."] = "transformer.text_model.final_layer_norm.";
+            if(name == "token_embedding.weight") {
+                return "transformer.text_model.embeddings.token_embedding.weight";
+            } else if(name == "positional_embedding") {
+                return "transformer.text_model.embeddings.position_embedding.weight";
             }
         }
-
-        if(i < 3) {
-            hf_to_sd["down" + separator + "blocks." + std::to_string(i) + ".downsamplers.0.conv."] = "input_blocks." + std::to_string(3 * (i + 1)) + ".0.op.";
-            hf_to_sd["up" + separator + "blocks." + std::to_string(i) + ".upsamplers.0."] = "output_blocks." + std::to_string(3 * i + 2) + "." + std::to_string(i + 2) + ".";
-        }
+        clip_convert_map["ln_1."] = "layer_norm1.";
+        clip_convert_map["ln_2."] = "layer_norm2.";
+        clip_convert_map[".c_fc."] = ".fc1.";
+        clip_convert_map[".c_proj."] = ".fc2.";
     }
-    hf_to_sd["mid" + separator + "block.attentions.0."] = "middle_block.1.";
-    for(int j = 0; j < 2;j ++) {
-        hf_to_sd["mid" + separator + "block.resnets." + std::to_string(j) + "."] = "middle_block." + std::to_string(2 * j) + ".";
-    }
-
     if(params.lora) {
-        // lora fix names
-        hf_to_sd["self.attn"] = "self_attn";
-        hf_to_sd["proj.in"] = "proj_in";
-        hf_to_sd["out.proj"] = "out_proj";
-        hf_to_sd["transformer.blocks"] = "transformer_blocks";
-
-        hf_to_sd["q.proj"] = "q_proj";
-        hf_to_sd["k.proj"] = "k_proj";
-        hf_to_sd["v.proj"] = "v_proj";
-
-        hf_to_sd["to.q"] = "to_q";
-        hf_to_sd["to.k"] = "to_k";
-        hf_to_sd["to.v"] = "to_v";
-        hf_to_sd["to.out"] = "to_out";
-
-        hf_to_sd["te.text.model"] = "cond_stage_model.transformer.text_model";
+        clip_convert_map["te.text.model"] = "cond_stage_model.transformer.text_model";
     }
-
     // SD XL to SD normal
     if(params.version == VERSION_XL) {
-        hf_to_sd["conditioner.embedders.0.transformer.text_model"] = "cond_stage_model.transformer.text_model";
-        hf_to_sd["conditioner.embedders.1.model"] = "cond_stage_model.2.transformer.text_model";
+        clip_convert_map["conditioner.embedders.0.transformer.text_model"] = "cond_stage_model.transformer.text_model";
+        clip_convert_map["conditioner.embedders.1.model"] = "cond_stage_model.g.transformer.text_model";
     }
+    return replace_name_by_map(name, clip_convert_map);
+}
 
-    return hf_to_sd;
+std::string fix_lora_names(std::string name) {
+    // lora fix names
+    if(lora_fix_map.empty()) {
+        lora_fix_map["self.attn"] = "self_attn";
+        lora_fix_map["proj.in"] = "proj_in";
+        lora_fix_map["proj.out"] = "proj_out";
+        lora_fix_map["out.proj"] = "out_proj";
+        lora_fix_map["transformer.blocks"] = "transformer_blocks";
+        lora_fix_map["q.proj"] = "q_proj";
+        lora_fix_map["k.proj"] = "k_proj";
+        lora_fix_map["v.proj"] = "v_proj";
+        lora_fix_map["to.q"] = "to_q";
+        lora_fix_map["to.k"] = "to_k";
+        lora_fix_map["to.v"] = "to_v";
+        lora_fix_map[".to.out"] = ".to_out";
+    }
+    return replace_name_by_map(name, lora_fix_map);
+}
+
+std::string shorten_name(std::string name, convert_params params) {
+    if(shorten_name_map.empty()) {
+        shorten_name_map["model.diffusion_model"] = "unet";
+        shorten_name_map["first_stage_model"] = "vae";
+        shorten_name_map["cond_stage_model"] = "clip";
+
+        // transformer blocks
+        shorten_name_map["transformer_blocks"] = "t_blks";
+        shorten_name_map["output_blocks"] = "out_blks";
+        shorten_name_map["input_blocks"] = "in_blks";
+        shorten_name_map["middle_block"] = "mddl_blk";
+
+        // clip
+        shorten_name_map["transformer.text_model"] = "txt_mdl";
+
+        // vae
+        shorten_name_map["encoder"] = "enc";
+        shorten_name_map["decoder"] = "dec";
+
+        if(params.lora) {
+            // Lora
+            shorten_name_map["lora"] = "lr";
+            shorten_name_map["lora.up"] = "lu";
+            shorten_name_map["lora.down"] = "ld";
+        }
+    }
+    return replace_name_by_map(name, shorten_name_map);
 }
 
 void* fetch_data(Tensor tensor, zip_t* zip, FILE* fp) {
@@ -625,131 +722,105 @@ std::tuple<Tensor, Tensor, Tensor> split_qkv_tensor(Tensor qkv_tensor, zip_t* zi
     return {q, k, v};
 }
 
-void preprocess_tensors(std::unordered_map<std::string, Tensor> & src, std::map<std::string, Tensor> & dst, zip_t * zip, FILE * fp, convert_params & params) {
-    const std::string open_clip_resblock_prefix = "cond_stage_model.model.transformer.resblocks.";
-    const std::string hf_clip_resblock_prefix = "cond_stage_model.transformer.text_model.encoder.layers.";
+void preprocess_tensors(
+    std::unordered_map<std::string, Tensor> & src,
+    std::vector<Tensor> & dst,
+    zip_t * zip, FILE * fp, convert_params & params) {
     printf("preprocessing %zu tensors\n", src.size());
-
-    std::map<std::string, std::string> hf_to_sd = convert_pipeline(params);
 
     for(auto & it : src) {
         std::string name = it.first;
         Tensor tensor = it.second;
 
-        if(params.version == VERSION_2_x) {
-            bool found_equivalent = false;
-            for(const auto t : open_clip_to_hf_clip_model) {
-                if(name == t.from) {
-                    tensor.name = t.to;
-                    dst[tensor.name] = tensor;
-                    found_equivalent = true;
+        if(name.find("first_stage_model.") == 0 || params.vae) {
+            tensor.name = convert_vae_to_original(name, params);
+
+            // convert vae attn block linear to conv2d 1x1
+            if(params.vae && name.find("first_stage_model.") == std::string::npos) {
+                tensor.name = "first_stage_model." + name;
+            }
+
+            if(tensor.name.find("attn_1") != std::string::npos) {
+                if(tensor.n_dims == 2) {
+                    tensor.n_dims += 2;
                     if(params.verbose) {
-                        printf("rename %s => %s\n", name.c_str(), tensor.name.c_str());
+                        printf("linear to conv2d %s\n", tensor.name.c_str());
                     }
-                    break;
                 }
             }
-            if(name.find(open_clip_resblock_prefix) == 0) { // startsWith
-                std::string remain = it.first.substr(open_clip_resblock_prefix.size());
-                int pos = remain.find(".");
-                std::string idx = remain.substr(0, pos);
-                std::string suffix = remain.substr(pos + 1);
-                if(suffix == "attn.in_proj_weight") {
+        }
+
+        if(name.find("cond_stage_model.") == 0 ||
+            name.find("conditioner.") == 0  ||
+            params.lora && name.find("text.model.") != std::string::npos) {
+            tensor.name = convert_clip_to_hf_clip(name, params);
+            if(params.version == VERSION_2_x) {
+                std::string preffix = shorten_name(tensor.name, params);
+                size_t fw = preffix.find("attn.in_proj_weight");
+                size_t fb = preffix.find("attn.in_proj_bias");
+                if(fw != std::string::npos) {
                     Tensor q, k, v;
                     std::tie(q, k, v) = split_qkv_tensor(tensor, zip, fp);
                     for(int i = 0; i< 3;i++) {
-                        Tensor tsr = i == 0 ? q : (i == 1 ? k : v);
-                        tsr.name = hf_clip_resblock_prefix + idx + "." + kqv_self[i];
-                        dst[tsr.name] = tsr;
+                        Tensor attn_t = i == 0 ? q : (i == 1 ? k : v);
+                        attn_t.name = preffix.substr(0, fw) + kqv_self[i];
+                        dst.push_back(attn_t);
                         if(params.verbose) {
-                            printf("split %s => %s\n", it.first.c_str(), tsr.name.c_str());
+                            printf("split %s => %s\n", it.first.c_str(), attn_t.name.c_str());
                         }
                     }
-                    found_equivalent = true;
-                } else if(suffix == "attn.in_proj_bias") {
+                    continue;
+                } else if(fb != std::string::npos) {
                     Tensor q, k, v;
                     std::tie(q, k, v) = split_qkv_tensor(tensor, zip, fp);
                     for(int i = 0; i< 3;i++) {
-                        Tensor tsr = i == 0 ? q : (i == 1 ? k : v);
-                        tsr.name = hf_clip_resblock_prefix + idx + "." + kqv_self[i + 3];
-                        dst[tsr.name] = tsr;
+                        Tensor attn_t = i == 0 ? q : (i == 1 ? k : v);
+                        attn_t.name = preffix.substr(0, fb) + kqv_self[i + 3];
+                        dst.push_back(attn_t);
                         if(params.verbose) {
-                            printf("split %s => %s\n", it.first.c_str(), tsr.name.c_str());
+                            printf("split %s => %s\n", it.first.c_str(), attn_t.name.c_str());
                         }
                     }
-                    found_equivalent = true;
+                    continue;
+                }
+            }
+        } else if(name.find("model.diffusion_model.") == 0 || params.lora) {
+            tensor.name = convert_unet_to_original(name, params);
+            if(tensor.name.find("proj_in.weight") != std::string::npos ||
+                tensor.name.find("proj_out.weight") != std::string::npos) {
+                if(tensor.n_dims == 2) {
+                    tensor.n_dims += 2;
+                    if(params.verbose) {
+                        printf("linear to conv2d %s\n", tensor.name.c_str());
+                    }
+                }
+            }
+        }
+
+        if(params.lora) {
+            tensor.name = fix_lora_names(tensor.name);
+        }
+
+        if(is_unused_tensor(tensor.name)) { // discard tensors
+            continue;
+        }
+
+        tensor.name = shorten_name(tensor.name, params);
+        if(params.lora) {
+            int pos = name.find("lora.down");
+            if(pos != std::string::npos) {
+                std::string key = name.substr(0, pos) + "alpha";
+                if(params.lora_alphas.find(key) != params.lora_alphas.end()) {
+                    int kpos = tensor.name.find("ld.");
+                    std::string target = tensor.name.substr(0, kpos) + "alpha";
+                    params.lora_alphas[target] = params.lora_alphas[key];
+                    params.lora_alphas.erase(key);
                 } else {
-                    std::string new_suffix = "";
-                    for(const auto t : open_clip_to_hk_clip_resblock) {
-                        if(suffix == t.from) {
-                            new_suffix = t.to;
-                            break;
-                        }
-                    }
-                    tensor.name = hf_clip_resblock_prefix + idx + "." + new_suffix;
-                    dst[tensor.name] = tensor;
-                    if(params.verbose) {
-                        printf("rename %s => %s\n", name.c_str(), tensor.name.c_str());
-                    }
-                    found_equivalent = true;
+                    printf("WARNING: missing alpha '%s'\n", key.c_str());
                 }
             }
-
-            if(found_equivalent) {
-                continue;
-            }
         }
-        // convert unet transformer linear to conv2d 1x1
-        if(
-            name.find("model.diffusion_model.") == 0 && (name.find("proj_in.weight") != std::string::npos ||
-            name.find("proj_out.weight") != std::string::npos)) {
-            if(tensor.n_dims == 2) {
-                tensor.n_dims += 2;
-            }
-        }
-        // convert vae attn block linear to conv2d 1x1
-        if(name.find("first_stage_model.") == 0 && name.find("attn_1") != std::string::npos) {
-            if(tensor.n_dims == 2) {
-                tensor.n_dims += 2;
-            }
-        }
-
-        // convert from hugging face pipeline to legacy stable diffusion pipeline for expand support
-        {
-            bool found = false;
-            std::string t_name = name;
-
-            for(auto h_s : hf_to_sd) {
-                size_t pos = t_name.find(h_s.first);
-                if(pos != std::string::npos) {
-                    t_name = t_name.replace(pos, h_s.first.size(), h_s.second);
-                    found = true;
-                }
-            }
-
-            if(found) {
-                tensor.name = t_name;
-                if(!is_unused_tensor(t_name)) {
-                    dst[t_name] = tensor;
-                }
-                if(params.lora) {
-                    int pos = name.find("lora.down");
-                    if(pos != std::string::npos) {
-                        std::string key = name.substr(0, pos) + "alpha";
-                        if(params.lora_alphas.find(key) != params.lora_alphas.end()) {
-                            int kpos = t_name.find("lora.down");
-                            std::string target = reduce_name(t_name.substr(0, kpos) + "alpha");
-                            params.lora_alphas[target] = params.lora_alphas[key];
-                            params.lora_alphas.erase(key);
-                        } else {
-                            printf("WARNING: missing alpha '%s'\n", key.c_str());
-                        }
-                    }
-                }
-                continue;
-            }
-        }
-        dst[name] = tensor;
+        dst.push_back(tensor);
     }
 }
 
@@ -792,11 +863,19 @@ void *convert_tensor(void * source, Tensor tensor, ggml_type dst_type) {
 }
 
 void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zip_t * zip, FILE * fp, convert_params & params) {
+    if(!params.vae &&
+        model_tensors.find("first_stage_model.post_quant_conv.bias") == model_tensors.end() && // is not a stable diffusion model
+        model_tensors.find("post_quant_conv.bias") != model_tensors.end()) { // has a tensor of VAE
+        params.vae = true;
+        printf("VAE detected\n");
+    }
+
     if(!params.lora && model_tensors.find("alphas_cumprod") == model_tensors.end()) {
         params.generate_alphas_cumprod = true;
     }
 
-    std::map<std::string, Tensor> processed_tensors;
+    std::vector<Tensor> processed_tensors;
+
     if(!params.lora) {
         if(model_tensors.find("cond_stage_model.model.token_embedding.weight") != model_tensors.end()) {
             params.version = VERSION_2_x;
@@ -830,6 +909,10 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
         printf("writing %zu lora alphas\n", alpha_key.size());
         gguf_set_arr_str(g_ctx, "sd.lora.alphas_k", alpha_key.data(), alpha_key.size());
         gguf_set_arr_data(g_ctx, "sd.lora.alphas_v", GGUF_TYPE_FLOAT32, alpha_values.data(), alpha_values.size());
+    } else if(params.vae) {
+        gguf_set_val_str(g_ctx, "sd.vae.name", params.model_name.c_str());
+        gguf_set_val_i32(g_ctx, "sd.vae.dtype", (int)params.out_type);
+        gguf_set_val_i32(g_ctx, "sd.vae.type", (int)params.lora_type);
     } else {
         // process vocab
         std::map<int, std::string> vocab_map;
@@ -850,40 +933,36 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
         }
         gguf_set_arr_str(g_ctx, "sd.vocab.tokens", vocab_data.data(), vocab_data.size());
     }
-
     printf("converting %zu tensors\n", processed_tensors.size());
-
     // write tensors
     ggml_context* ctx = ggml_init({ (processed_tensors.size() + (params.generate_alphas_cumprod ? 1 : 0)) * ggml_tensor_overhead(), NULL, true }); // no alloc data
     int num_clip_tensors = 0, num_unet_tensors = 0, num_vae_tensors = 0;
     size_t total_org_model = 0, total_conv_model = 0;
-    for(const auto it : processed_tensors) {
-        std::string name = reduce_name(it.second.name);
-        if(name.size() >= 64) {
-            printf("Error: tensor name very large '%s', might not be supported anyway by stable-diffusion.cpp\n", name.c_str());
+    for(Tensor & tensor : processed_tensors) {
+        if(tensor.name.size() >= 64) {
+            printf("Error: tensor name very large '%s', might not be supported anyway by stable-diffusion.cpp\n", tensor.name.c_str());
             exit(0);
             return;
         }
-        if(name.find("clip.") != std::string::npos) {
+        if(tensor.name.find("clip.") != std::string::npos) {
              num_clip_tensors++;
-        } else if(name.find("unet.") != std::string::npos) {
+        } else if(tensor.name.find("unet.") != std::string::npos) {
             num_unet_tensors++;
-        } else if(name.find("vae.") != std::string::npos) {
+        } else if(tensor.name.find("vae.") != std::string::npos) {
             num_vae_tensors++;
         }
-        Tensor tensor = it.second;
         ggml_type dest_type = GGML_TYPE_F32;
-        if(name.find(".weight") && tensor.n_dims == 2) { // allow quantize only weights
+        if(tensor.name.find(".weight") && tensor.n_dims == 2) { // allow quantize only weights
             dest_type = params.out_type;
         } else if(tensor.n_dims == 4) {
             dest_type = GGML_TYPE_F16;
         }
         ggml_tensor* gg_tensor = ggml_new_tensor(ctx, dest_type, tensor.n_dims, tensor.inverse_shape());
-        ggml_set_name(gg_tensor, name.c_str());
+        ggml_set_name(gg_tensor, tensor.name.c_str());
         void* source = fetch_data(tensor, zip, fp);
         void* dest = NULL;
         if(params.verbose) {
-            printf("converting: %s | %s => %s\n", name.c_str(), ggml_type_name(tensor.dtype), ggml_type_name(dest_type));
+            printf("converting: %s | %s => %s\n", tensor.name.c_str(), ggml_type_name(tensor.dtype), ggml_type_name(dest_type));
         }
         if(tensor.dtype == dest_type) {
             dest = source;
@@ -895,7 +974,7 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
             }
         }
         gguf_add_tensor(g_ctx, gg_tensor);
-        gguf_set_tensor_data(g_ctx, name.c_str(), dest, ggml_nbytes(gg_tensor));
+        gguf_set_tensor_data(g_ctx, tensor.name.c_str(), dest, ggml_nbytes(gg_tensor));
         total_org_model += tensor.data_size;
         total_conv_model += ggml_nbytes(gg_tensor);
     }
@@ -959,8 +1038,6 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
     std::fread(metadata_buffer, 1, metadata_size, f);
     json sf_mt = json::parse(metadata_buffer);
     std::unordered_map<std::string, Tensor> tensors;
-
-    printf("%s\n", metadata_buffer);
 
     printf("reading safetensors metadata\n");
     int data_begin = 8 + metadata_size;
@@ -1033,6 +1110,7 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
             tensors[tensor_name] = tensor;
         }
     }
+
     if(tensors.size() > 0) {
         convert_to_gguf(tensors, NULL, f, params);
     } else {

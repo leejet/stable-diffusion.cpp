@@ -809,7 +809,7 @@ struct CLIPTextModel {
     ggml_type wtype;
     ggml_backend_t backend_clip = NULL;
 
-    CLIPTextModel(sd_version version = VERSION_1_x, bool has_pool)
+    CLIPTextModel(sd_version version = VERSION_1_x, bool has_pool = false)
         : version(version) {
         if (version == VERSION_2_x) {
             hidden_size = 1024;
@@ -4699,6 +4699,7 @@ class StableDiffusionGGML {
         struct ggml_tensor* result = NULL;
 
         if(decode) {
+            // process latent out
             float* vec = (float*)x->data;
             for (int i = 0; i < ggml_nelements(x); i++) {
                 vec[i] = 1.0f / scale_factor * vec[i];
