@@ -1093,8 +1093,20 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
             }
 
             Tensor tensor = Tensor{tensor_name.c_str(), 0, GGML_TYPE_F32, 0, {1, 1, 1, 1}, n_dims, READ_NAME, 0};
+            tensor.data_size = end_data - start_data;
             if(dtype == "F16") {
                 tensor.dtype = GGML_TYPE_F16;
+            } else if(dtype == "F64") { // force float 32 bits
+                void* data = (void*)malloc(tensor.data_size);
+                std::fseek(f, data_begin + start_data, SEEK_SET);
+                std::fread(data, 1, tensor.data_size, f);
+                tensor.data_size /= 2;
+                tensor.data = malloc(tensor.data_size);
+                int ne = tensor.data_size / ggml_type_size(tensor.dtype);
+                for(int i = 0;i < ne; i++) {
+                    ((float*)tensor.data)[i] = ((double*)data)[i];
+                }
+                free(data);
             } else if(dtype != "F32") {
                 printf("unsupported model data type: %s", dtype.c_str());
                 return;
@@ -1103,8 +1115,6 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
             for(uint8_t i = 0;i < n_dims; i++) {
                 tensor.shape[i] = tensor_props["shape"][i];
             }
-
-            tensor.data_size = end_data - start_data;
             tensor.num_elements = tensor.data_size / ggml_type_size(tensor.dtype);
             tensor.data_offset = data_begin + start_data;
             tensors[tensor_name] = tensor;
