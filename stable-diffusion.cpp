@@ -35,7 +35,7 @@ static std::string cuda_func = "-nv-full";
 
 static sd_log_level log_level = sd_log_level::INFO;
 
-#define UNET_GRAPH_SIZE 4096
+#define UNET_GRAPH_SIZE 3328
 
 #define __FILENAME__ "stable-diffusion.cpp"
 #define SD_LOG(level, format, ...)                                                                    \
@@ -998,9 +998,7 @@ struct CLIPTextModel {
     void begin(int max_tokens) {
         // calculate the amount of memory required
         if(compute_memory_buffer_size == -1) {
-             // alignment required by the backend
-            size_t align = ggml_backend_get_alignment(backend_clip);
-            allocr_compute = ggml_allocr_new_measure(align);
+            allocr_compute = ggml_allocr_new_measure_from_backend(backend_clip);
 
             struct ggml_cgraph * gf = build_graph(allocr_compute, std::vector<int>(max_tokens));
             // compute the required memory
@@ -1215,15 +1213,16 @@ struct ResBlock {
         // in_layers
         // group norm 32
         auto h = ggml_group_norm_32(ctx, x);
-        h      = ggml_add(ctx,
-                          ggml_mul(ctx,
-                                   ggml_repeat(ctx,
-                                               ggml_reshape_4d(ctx, in_layer_0_w, 1, 1, in_layer_0_w->ne[0], 1),
-                                               h),
-                                   h),
-                          ggml_repeat(ctx,
-                                      ggml_reshape_4d(ctx, in_layer_0_b, 1, 1, in_layer_0_b->ne[0], 1),
-                                      h));
+        ggml_set_name(h, "RBBegin");
+        h = ggml_add(ctx,
+                     ggml_mul(ctx,
+                              ggml_repeat(ctx,
+                                          ggml_reshape_4d(ctx, in_layer_0_w, 1, 1, in_layer_0_w->ne[0], 1),
+                                          h),
+                              h),
+                     ggml_repeat(ctx,
+                                 ggml_reshape_4d(ctx, in_layer_0_b, 1, 1, in_layer_0_b->ne[0], 1),
+                                 h));
         // silu
         h = ggml_silu_inplace(ctx, h);
         // conv2d
@@ -1268,6 +1267,7 @@ struct ResBlock {
                                      ggml_reshape_4d(ctx, skip_b, 1, 1, skip_b->ne[0], 1),
                                      x));  // [N, out_channels, h, w]
         }
+        ggml_set_name(h, "RBEnd");
         h = ggml_add(ctx, h, x);
         return h;  // [N, out_channels, h, w]
     }
@@ -1433,10 +1433,10 @@ struct SpatialTransformer {
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
         // x: [N, in_channels, h, w]
         // context: [N, max_position, hidden_size(aka context_dim)]
-
         auto x_in = x;
         // group norm 32
         x = ggml_group_norm_32(ctx, x);
+        ggml_set_name(x, "STBegin");
         x = ggml_add(ctx,
                      ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_w, 1, 1, norm_w->ne[0], 1), x), x),
                      ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_b, 1, 1, norm_b->ne[0], 1), x));
@@ -1619,6 +1619,7 @@ struct SpatialTransformer {
                      ggml_repeat(ctx,
                                  ggml_reshape_4d(ctx, proj_out_b, 1, 1, proj_out_b->ne[0], 1),
                                  x));  // [N, in_channels, h, w]
+        ggml_set_name(x, "STEnd");
         x = ggml_add(ctx, x, x_in);
         return x;
     }
@@ -1634,6 +1635,7 @@ struct DownSample {
     struct ggml_tensor* op_b;  // [out_channels,]
 
     bool vae_downsample = false;
+    int index = 0;
 
     size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
@@ -1688,20 +1690,24 @@ struct DownSample {
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [N, channels, h, w]
+        struct ggml_tensor* c = nullptr;
         if (vae_downsample) {
             auto pad_x = ggml_new_tensor_4d(ctx, x->type, x->ne[0] + 1, x->ne[1] + 1, x->ne[2], x->ne[3]);
 
-            x = ggml_map_custom2_inplace(ctx, pad_x, x, asymmetric_pad, 1, NULL);
-            x = ggml_conv_2d(ctx, op_w, x, 2, 2, 0, 0, 1, 1);
+            c = ggml_map_custom2_inplace(ctx, pad_x, x, asymmetric_pad, 1, NULL);
+            c = ggml_conv_2d(ctx, op_w, c, 2, 2, 0, 0, 1, 1);
         } else {
-            x = ggml_conv_2d(ctx, op_w, x, 2, 2, 1, 1, 1, 1);
+            ggml_format_name(x, "down_sample.%i", index);
+            c = ggml_conv_2d(ctx, op_w, x, 2, 2, 1, 1, 1, 1);
         }
-        x = ggml_add(ctx,
-                     x,
-                     ggml_repeat(ctx,
+        auto r = ggml_repeat(ctx,
                                  ggml_reshape_4d(ctx, op_b, 1, 1, op_b->ne[0], 1),
-                                 x));  // [N, out_channels, h/2, w/2]
-        return x;
+                                 c);
+        ggml_format_name(r, "down_sample_end.%i", index);
+        c = ggml_add(ctx,
+                     c,
+                     r);  // [N, out_channels, h/2, w/2]
+        return c;
     }
 };
 
@@ -1735,12 +1741,12 @@ struct UpSample {
         // x: [N, channels, h, w]
         x = ggml_upscale(ctx, x, 2);  // [N, channels, h*2, w*2]
         x = ggml_conv_2d(ctx, conv_w, x, 1, 1, 1, 1, 1, 1);
-
+        auto r = ggml_repeat(ctx,
+                                 ggml_reshape_4d(ctx, conv_b, 1, 1, conv_b->ne[0], 1),
+                                 x);
         x = ggml_add(ctx,
                      x,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, conv_b, 1, 1, conv_b->ne[0], 1),
-                                 x));  // [N, out_channels, h*2, w*2]
+                     r);  // [N, out_channels, h*2, w*2]
         return x;
     }
 };
@@ -2161,6 +2167,7 @@ struct UNetModel {
                 }
             }
             if (i != len_mults - 1) {
+                input_down_samples[i].index = input_block_idx;
                 input_block_idx += 1;
                 input_down_samples[i].map_by_name(tensors, prefix + "in_blks." + std::to_string(input_block_idx) + ".0.");
                 ds *= 2;
@@ -2216,11 +2223,13 @@ struct UNetModel {
         // time_embed = nn.Sequential
         // Linear
         auto emb = ggml_mul_mat(ctx, time_embed_0_w, t_emb);
+        ggml_set_name(emb, "time_embed0w mul t_emb");
         emb = ggml_add(ctx, ggml_repeat(ctx, time_embed_0_b, emb), emb);
         // nn.SiLU()
         emb = ggml_silu_inplace(ctx, emb);
         // Linear
         emb = ggml_mul_mat(ctx, time_embed_2_w, emb);
+        ggml_set_name(emb, "time_embed2w mul t_emb");
         emb = ggml_add(ctx, ggml_repeat(ctx, time_embed_2_b, emb), emb);  // [N, time_embed_dim]
 
         // SDXL
@@ -2244,16 +2253,19 @@ struct UNetModel {
 
         // input block 0
         struct ggml_tensor* h = ggml_conv_2d(ctx, input_block_0_w, x, 1, 1, 1, 1, 1, 1);  // [N, model_channels, h, w]
-        
+        auto r = ggml_repeat(ctx,
+                                 ggml_reshape_4d(ctx, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1),
+                                 h);
+        ggml_set_name(r, "IBConv2D");
         h = ggml_add(ctx,
                      h,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1),
-                                 h));  // [N, model_channels, h, w]
+                     r);  // [N, model_channels, h, w]
         hs.push_back(h);
+
         // input block 1-11
         int len_mults = sizeof(channel_mult) / sizeof(int);
-        int ds        = 1;
+        int ds = 1;
+        ggml_set_name(h, "IBlocks");
         for (int i = 0; i < len_mults; i++) {
             int mult = channel_mult[i];
             for (int j = 0; j < num_res_blocks; j++) {
@@ -2270,11 +2282,14 @@ struct UNetModel {
             }
         }
         // [N, 4*model_channels, h/8, w/8]
+        ggml_set_name(h, "MBlocks");
 
         // middle_block
         h = middle_block_0.forward(ctx, h, emb);      // [N, 4*model_channels, h/8, w/8]
         h = middle_block_1.forward(ctx, h, context);  // [N, 4*model_channels, h/8, w/8]
         h = middle_block_2.forward(ctx, h, emb);      // [N, 4*model_channels, h/8, w/8]
+
+        ggml_set_name(h, "OBlocks");
 
         // output_blocks
         for (int i = len_mults - 1; i >= 0; i--) {
@@ -2296,7 +2311,7 @@ struct UNetModel {
                 }
             }
         }
-
+        ggml_set_name(h, "OLayer");
         // out
         // group norm 32
         h = ggml_group_norm_32(ctx, h);
@@ -2319,6 +2334,7 @@ struct UNetModel {
                      ggml_repeat(ctx,
                                  ggml_reshape_4d(ctx, out_2_b, 1, 1, out_2_b->ne[0], 1),
                                  h));  // [N, out_channels, h, w]
+        ggml_set_name(h, "UNET Finish");
         return h;
     }
 
@@ -2350,12 +2366,12 @@ struct UNetModel {
         if(!ggml_backend_is_cpu(backend_unet)) {
             // pass input tensors to gpu memory
             x_t = ggml_dup_tensor(ctx0, x);
+            context_t = ggml_dup_tensor(ctx0, context);
             ggml_allocr_alloc(allocr_compute, x_t);
             if(timesteps != NULL) {
                 timesteps_t = ggml_dup_tensor(ctx0, timesteps);
                 ggml_allocr_alloc(allocr_compute, timesteps_t);
             }
-            context_t = ggml_dup_tensor(ctx0, context);
             ggml_allocr_alloc(allocr_compute, context_t);
             if(t_emb != NULL) {
                 t_emb_t = ggml_dup_tensor(ctx0, t_emb);
@@ -2366,14 +2382,17 @@ struct UNetModel {
                 ggml_backend_tensor_set(x_t, x->data, 0, ggml_nbytes(x));
                 ggml_backend_tensor_set(context_t, context->data, 0, ggml_nbytes(context));
                 if(timesteps_t != NULL) { ggml_backend_tensor_set(timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps)); }
-                if(t_emb_t != NULL) { ggml_backend_tensor_set(t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb)); }
+                if(t_emb_t != NULL) {
+                    ggml_backend_tensor_set(t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
+                    t_emb_t = ggml_cont(ctx0, t_emb_t);
+                }
             }
         } else {
             // if it's cpu backend just pass the same tensors
             x_t = x;
             timesteps_t = timesteps;
             context_t = context;
-            t_emb_t = t_emb;
+            t_emb_t = ggml_cont(ctx0, t_emb);
         }
 
         struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, t_emb_t);
@@ -2390,8 +2409,7 @@ struct UNetModel {
         // calculate the amount of memory required
         if(compute_memory_buffer_size == -1) {
              // alignment required by the backend
-            size_t align = ggml_backend_get_alignment(backend_unet);
-            allocr_compute = ggml_allocr_new_measure(align);
+            allocr_compute = ggml_allocr_new_measure_from_backend(backend_unet);
 
             struct ggml_cgraph * gf = build_graph(x, NULL, context, t_emb);
 
@@ -2403,6 +2421,7 @@ struct UNetModel {
 
            LOG_DEBUG("diffusion compute buffer size: %.2f MB", compute_memory_buffer_size / 1024.0 / 1024.0);
         }
+
         buffer_compute_unet = ggml_backend_alloc_buffer(backend_unet, compute_memory_buffer_size);
         allocr_compute = ggml_allocr_new_from_buffer(buffer_compute_unet);
     }
@@ -4713,8 +4732,7 @@ class StableDiffusionGGML {
         // calculate the amount of memory required
         {
              // alignment required by the backend
-            size_t align = ggml_backend_get_alignment(backend);
-            allocr = ggml_allocr_new_measure(align);
+            allocr = ggml_allocr_new_measure_from_backend(backend);
 
             struct ggml_cgraph * gf = first_stage_model.build_graph(allocr, x, decode);
             // compute the required memory
