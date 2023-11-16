@@ -27,12 +27,6 @@
 
 #define EPS 1e-05f
 
-#ifdef SD_DUMP_TENSORS
-static std::string tensors_path = "C:/proyects/output-tensors/";
-
-static std::string cuda_func = "-nv-full";
-#endif
-
 static sd_log_level log_level = sd_log_level::INFO;
 
 #define UNET_GRAPH_SIZE 3328
@@ -209,20 +203,10 @@ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_pa
     return tensor;
 }
 
-#ifdef SD_DUMP_TENSORS
 void save_tensor_to_file(const std::string& file_name, ggml_tensor* tensor, const std::string & name) {
-    std::string file_name_ = file_name;
+    std::string file_name_ = file_name + ".tensor";
     std::string name_ = name;
-#ifdef SD_USE_CUBLAS
-
-    file_name_ += cuda_func + "-cuda.tensor";
-    name_ += cuda_func + " CUDA";
-#else
-    file_name_ += "-cpu.tensor";
-    name_ += " CPU";
-#endif
-    std::ofstream file(tensors_path + file_name_, std::ios::binary);
-    printf("saved file: %s\n", (tensors_path + file_name_).c_str());
+    std::ofstream file("C:/proyects/output-tensors/" + file_name_, std::ios::binary);
     file.write(reinterpret_cast<char*>(&tensor->n_dims), sizeof(tensor->n_dims));
     int len = (int)name_.size();
     file.write(reinterpret_cast<char*>(&len), sizeof(len));
@@ -237,7 +221,6 @@ void save_tensor_to_file(const std::string& file_name, ggml_tensor* tensor, cons
     file.write((char*)tensor->data, ggml_nbytes(tensor));
     file.close();
 }
-#endif
 
 void copy_ggml_tensor(
     struct ggml_tensor* dst,
@@ -629,6 +612,8 @@ struct ResidualAttentionBlock {
     struct ggml_tensor* ln2_w;  // [hidden_size, ]
     struct ggml_tensor* ln2_b;  // [hidden_size, ]
 
+    struct ggml_tensor* attn_scale;  // [hidden_size, ]
+
     size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += 4 * hidden_size * hidden_size * ggml_type_sizef(wtype);        // q_w/k_w/v_w/out_w
@@ -636,10 +621,11 @@ struct ResidualAttentionBlock {
         mem_size += 2 * hidden_size * intermediate_size * ggml_type_sizef(wtype);  // fc1_w/fc2_w
         mem_size += intermediate_size * ggml_type_sizef(GGML_TYPE_F32);            // fc1_b
         mem_size += hidden_size * ggml_type_sizef(GGML_TYPE_F32);                  // fc2_b
+        mem_size += ggml_type_sizef(GGML_TYPE_F32);  // attn_scale
         return static_cast<size_t>(mem_size);
     }
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+    void init_params(struct ggml_context* ctx, ggml_allocr* alloc, ggml_type wtype) {
         ln1_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
         ln1_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
 
@@ -661,6 +647,11 @@ struct ResidualAttentionBlock {
 
         ln2_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
         ln2_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
+
+        attn_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        ggml_allocr_alloc(alloc, attn_scale);
+        float scale = 1.0f / sqrt((float) d_model);
+        ggml_backend_tensor_set(attn_scale, &scale, 0, sizeof(scale));
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -706,10 +697,10 @@ struct ResidualAttentionBlock {
             struct ggml_tensor* q = ggml_add(ctx,
                                              ggml_repeat(ctx, q_b, x),
                                              ggml_mul_mat(ctx, q_w, x));
-            q                     = ggml_scale_inplace(ctx, q, ggml_new_f32(ctx, 1.0f / sqrt((float)d_model)));
-            q                     = ggml_reshape_4d(ctx, q, d_model, n_head, n_token, N);   // [N, n_token, n_head, d_model]
-            q                     = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));       // [N, n_head, n_token, d_model]
-            q                     = ggml_reshape_3d(ctx, q, d_model, n_token, n_head * N);  // [N * n_head, n_token, d_model]
+            q = ggml_scale_inplace(ctx, q, attn_scale);
+            q = ggml_reshape_4d(ctx, q, d_model, n_head, n_token, N);   // [N, n_token, n_head, d_model]
+            q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));       // [N, n_head, n_token, d_model]
+            q = ggml_reshape_3d(ctx, q, d_model, n_token, n_head * N);  // [N * n_head, n_token, d_model]
 
             struct ggml_tensor* k = ggml_add(ctx,
                                              ggml_repeat(ctx, k_b, x),
@@ -850,7 +841,7 @@ struct CLIPTextModel {
         memory_buffer_size += calculate_mem_size();
 
         LOG_DEBUG("clip params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
-        int num_tensors = (3 + 2 + 36 * num_hidden_layers);
+        int num_tensors = (3 + 2 + 37 * num_hidden_layers);
 
         LOG_DEBUG("clip tensor count = %i", num_tensors);
 
@@ -896,7 +887,7 @@ struct CLIPTextModel {
         position_embed_weight = ggml_new_tensor_2d(ctx_clip, wtype, hidden_size, max_position_embeddings);
 
         for (int i = 0; i < num_hidden_layers; i++) {
-            resblocks[i].init_params(ctx_clip, wtype);
+            resblocks[i].init_params(ctx_clip, alloc, wtype);
         }
 
         final_ln_w = ggml_new_tensor_1d(ctx_clip, GGML_TYPE_F32, hidden_size);
@@ -905,7 +896,9 @@ struct CLIPTextModel {
 
         // alloc all tensors linked to this context
         for (struct ggml_tensor * t = ggml_get_first_tensor(ctx_clip); t != NULL; t = ggml_get_next_tensor(ctx_clip, t)) {
-            ggml_allocr_alloc(alloc, t);
+           if(t->data == NULL) {
+             ggml_allocr_alloc(alloc, t);
+           }
         }
 
         if(ggml_backend_is_cpu(backend_clip)) {
@@ -1213,7 +1206,6 @@ struct ResBlock {
         // in_layers
         // group norm 32
         auto h = ggml_group_norm_32(ctx, x);
-        ggml_set_name(h, "RBBegin");
         h = ggml_add(ctx,
                      ggml_mul(ctx,
                               ggml_repeat(ctx,
@@ -1267,7 +1259,6 @@ struct ResBlock {
                                      ggml_reshape_4d(ctx, skip_b, 1, 1, skip_b->ne[0], 1),
                                      x));  // [N, out_channels, h, w]
         }
-        ggml_set_name(h, "RBEnd");
         h = ggml_add(ctx, h, x);
         return h;  // [N, out_channels, h, w]
     }
@@ -1327,6 +1318,8 @@ struct SpatialTransformer {
         struct ggml_tensor* ff_2_b;  // [in_channels,]
     } transformer; // supposes depth = 1,  this need to be a list
 
+    struct ggml_tensor* attn_scale;
+
     // proj_out
     struct ggml_tensor* proj_out_w;  // [in_channels, in_channels, 1, 1]
     struct ggml_tensor* proj_out_b;  // [in_channels,]
@@ -1336,6 +1329,7 @@ struct SpatialTransformer {
         mem_size += 2 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // norm_w/norm_b
         mem_size += 2 * in_channels * in_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // proj_in_w/proj_out_w
         mem_size += 2 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // proj_in_b/proj_out_b
+        mem_size += 1 * ggml_type_sizef(GGML_TYPE_F32);                        // attn_scale
 
         // transformer
         {
@@ -1350,7 +1344,7 @@ struct SpatialTransformer {
         return static_cast<size_t>(mem_size);
     }
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+    void init_params(struct ggml_context* ctx, ggml_allocr* alloc, ggml_type wtype) {
         norm_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
         norm_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
         proj_in_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
@@ -1358,6 +1352,11 @@ struct SpatialTransformer {
 
         proj_out_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
         proj_out_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
+
+        attn_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        ggml_allocr_alloc(alloc, attn_scale);
+        float scale = 1.0f / sqrt((float) d_head);
+        ggml_backend_tensor_set(attn_scale, &scale, 0, sizeof(scale));
 
         // transformer
         transformer.norm1_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
@@ -1372,7 +1371,7 @@ struct SpatialTransformer {
 
         transformer.norm2_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
         transformer.norm2_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
-    
+
         transformer.attn2_q_w = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
         transformer.attn2_k_w = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
         transformer.attn2_v_w = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
@@ -1436,7 +1435,6 @@ struct SpatialTransformer {
         auto x_in = x;
         // group norm 32
         x = ggml_group_norm_32(ctx, x);
-        ggml_set_name(x, "STBegin");
         x = ggml_add(ctx,
                      ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_w, 1, 1, norm_w->ne[0], 1), x), x),
                      ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_b, 1, 1, norm_b->ne[0], 1), x));
@@ -1473,10 +1471,10 @@ struct SpatialTransformer {
             {
                 x                     = ggml_reshape_2d(ctx, x, c, h * w * n);        // [N * h * w, in_channels]
                 struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn1_q_w, x);  // [N * h * w, in_channels]
-                q                     = ggml_scale_inplace(ctx, q, ggml_new_f32(ctx, 1.0f / sqrt((float)d_head)));
-                q                     = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
-                q                     = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
-                q                     = ggml_reshape_3d(ctx, q, d_head, h * w, n_head * n);  // [N * n_head, h * w, d_head]
+                q = ggml_scale_inplace(ctx, q, attn_scale);
+                q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
+                q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
+                q = ggml_reshape_3d(ctx, q, d_head, h * w, n_head * n);  // [N * n_head, h * w, d_head]
 
                 struct ggml_tensor* k = ggml_mul_mat(ctx, transformer.attn1_k_w, x);         // [N * h * w, in_channels]
                 k                     = ggml_reshape_4d(ctx, k, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
@@ -1522,7 +1520,7 @@ struct SpatialTransformer {
                 context               = ggml_reshape_2d(ctx, context, context->ne[0], context->ne[1] * context->ne[2]);  // [N * max_position, hidden_size]
                 struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn2_q_w, x);                                     // [N * h * w, in_channels]
 
-                q = ggml_scale_inplace(ctx, q, ggml_new_f32(ctx, 1.0f / sqrt((float)d_head)));
+                q = ggml_scale_inplace(ctx, q, attn_scale);
                 q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
                 q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
                 q = ggml_reshape_3d(ctx, q, d_head, h * w, n_head * n);  // [N * n_head, h * w, d_head]
@@ -1619,7 +1617,6 @@ struct SpatialTransformer {
                      ggml_repeat(ctx,
                                  ggml_reshape_4d(ctx, proj_out_b, 1, 1, proj_out_b->ne[0], 1),
                                  x));  // [N, in_channels, h, w]
-        ggml_set_name(x, "STEnd");
         x = ggml_add(ctx, x, x_in);
         return x;
     }
@@ -1807,7 +1804,7 @@ struct UNetModel {
     size_t memory_buffer_size = 0;
     ggml_type wtype;
     ggml_backend_t backend_unet = NULL;
-    bool use_gpu = false;
+    bool use_gpu = true;
 
     UNetModel(sd_version version = VERSION_1_x) {
         // transformer_depth size is the same of channel_mult size
@@ -1995,7 +1992,7 @@ struct UNetModel {
             for (int j = 0; j < num_res_blocks; j++) {
                 num_tensors += 12;
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    num_tensors += 26;
+                    num_tensors += 27;
                 }
             }
             if (i != len_mults - 1) {
@@ -2005,7 +2002,7 @@ struct UNetModel {
         }
 
         // middle blocks
-        num_tensors += 12 * 3;
+        num_tensors += 13 * 3;
 
         // output blocks
         for (int i = len_mults - 1; i >= 0; i--) {
@@ -2013,7 +2010,7 @@ struct UNetModel {
                 num_tensors += 12;
 
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    num_tensors += 26;
+                    num_tensors += 27;
                 }
 
                 if (i > 0 && j == num_res_blocks) {
@@ -2096,7 +2093,7 @@ struct UNetModel {
             for (int j = 0; j < num_res_blocks; j++) {
                 input_res_blocks[i][j].init_params(ctx_unet, wtype);
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    input_transformers[i][j].init_params(ctx_unet, wtype);
+                    input_transformers[i][j].init_params(ctx_unet, alloc, wtype);
                 }
             }
             if (i != len_mults - 1) {
@@ -2107,7 +2104,7 @@ struct UNetModel {
 
         // middle_blocks
         middle_block_0.init_params(ctx_unet, wtype);
-        middle_block_1.init_params(ctx_unet, wtype);
+        middle_block_1.init_params(ctx_unet, alloc, wtype);
         middle_block_2.init_params(ctx_unet, wtype);
 
         // output_blocks
@@ -2116,7 +2113,7 @@ struct UNetModel {
                 output_res_blocks[i][j].init_params(ctx_unet, wtype);
 
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    output_transformers[i][j].init_params(ctx_unet, wtype);
+                    output_transformers[i][j].init_params(ctx_unet, alloc, wtype);
                 }
 
                 if (i > 0 && j == num_res_blocks) {
@@ -2136,7 +2133,9 @@ struct UNetModel {
 
         // alloc all tensors linked to this context
         for (struct ggml_tensor * t = ggml_get_first_tensor(ctx_unet); t != NULL; t = ggml_get_next_tensor(ctx_unet, t)) {
-            ggml_allocr_alloc(alloc, t);
+           if(t->data == NULL) {
+             ggml_allocr_alloc(alloc, t);
+           }
         }
 
         ggml_allocr_free(alloc);
@@ -2223,13 +2222,11 @@ struct UNetModel {
         // time_embed = nn.Sequential
         // Linear
         auto emb = ggml_mul_mat(ctx, time_embed_0_w, t_emb);
-        ggml_set_name(emb, "time_embed0w mul t_emb");
         emb = ggml_add(ctx, ggml_repeat(ctx, time_embed_0_b, emb), emb);
         // nn.SiLU()
         emb = ggml_silu_inplace(ctx, emb);
         // Linear
         emb = ggml_mul_mat(ctx, time_embed_2_w, emb);
-        ggml_set_name(emb, "time_embed2w mul t_emb");
         emb = ggml_add(ctx, ggml_repeat(ctx, time_embed_2_b, emb), emb);  // [N, time_embed_dim]
 
         // SDXL
@@ -2256,7 +2253,6 @@ struct UNetModel {
         auto r = ggml_repeat(ctx,
                                  ggml_reshape_4d(ctx, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1),
                                  h);
-        ggml_set_name(r, "IBConv2D");
         h = ggml_add(ctx,
                      h,
                      r);  // [N, model_channels, h, w]
@@ -2265,7 +2261,6 @@ struct UNetModel {
         // input block 1-11
         int len_mults = sizeof(channel_mult) / sizeof(int);
         int ds = 1;
-        ggml_set_name(h, "IBlocks");
         for (int i = 0; i < len_mults; i++) {
             int mult = channel_mult[i];
             for (int j = 0; j < num_res_blocks; j++) {
@@ -2282,14 +2277,11 @@ struct UNetModel {
             }
         }
         // [N, 4*model_channels, h/8, w/8]
-        ggml_set_name(h, "MBlocks");
 
         // middle_block
         h = middle_block_0.forward(ctx, h, emb);      // [N, 4*model_channels, h/8, w/8]
         h = middle_block_1.forward(ctx, h, context);  // [N, 4*model_channels, h/8, w/8]
         h = middle_block_2.forward(ctx, h, emb);      // [N, 4*model_channels, h/8, w/8]
-
-        ggml_set_name(h, "OBlocks");
 
         // output_blocks
         for (int i = len_mults - 1; i >= 0; i--) {
@@ -2311,7 +2303,6 @@ struct UNetModel {
                 }
             }
         }
-        ggml_set_name(h, "OLayer");
         // out
         // group norm 32
         h = ggml_group_norm_32(ctx, h);
@@ -2334,7 +2325,6 @@ struct UNetModel {
                      ggml_repeat(ctx,
                                  ggml_reshape_4d(ctx, out_2_b, 1, 1, out_2_b->ne[0], 1),
                                  h));  // [N, out_channels, h, w]
-        ggml_set_name(h, "UNET Finish");
         return h;
     }
 
@@ -4232,9 +4222,6 @@ class StableDiffusionGGML {
                 copy_ggml_tensor(context, uc);
                 out = diffusion_model.compute(n_threads, noised_input, NULL, context, t_emb);
                 out = ggml_fallback_tensor(draft_ctx, out, diffusion_model.backend_unet);
-#ifdef SD_DUMP_TENSORS
-                save_tensor_to_file("output-unet-uc", out, "UNET negative prompt output");
-#endif
                 copy_ggml_tensor(out_uncond, out);
 
                 // cond
