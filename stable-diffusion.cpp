@@ -3933,6 +3933,44 @@ class StableDiffusionGGML {
                     }
                 }
             } break;
+            case LCM:  // Latent Consistency Models
+            {
+                LOG_INFO("sampling using LCM method");
+                ggml_set_dynamic(ctx, false);
+                struct ggml_tensor* noise = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
+                ggml_set_dynamic(ctx, params.dynamic);
+
+                for (int i = 0; i < steps; i++) {
+                    float sigma = sigmas[i];
+
+                    // denoise
+                    denoise(x, sigma, i + 1);
+
+                    // x = denoised
+                    {
+                        float* vec_x = (float*)x->data;
+                        float* vec_denoised = (float*)denoised->data;
+                        for (int j = 0; j < ggml_nelements(x); j++) {
+                            vec_x[j] = vec_denoised[j];
+                        }
+                    }
+
+                    if (sigmas[i + 1] > 0) {
+                        // x += sigmas[i + 1] * noise_sampler(sigmas[i], sigmas[i + 1])
+                        ggml_tensor_set_f32_randn(noise, rng);
+                        // noise = load_tensor_from_file(res_ctx, "./rand" + std::to_string(i+1) + ".bin");
+                        {
+                            float* vec_x = (float*)x->data;
+                            float* vec_noise = (float*)noise->data;
+
+                            for (int j = 0; j < ggml_nelements(x); j++) {
+                                vec_x[j] = vec_x[j] + sigmas[i + 1] * vec_noise[j];
+                            }
+                        }
+                    }
+                }
+            } break;
 
             default:
                 LOG_ERROR("Attempting to sample with nonexisting sample method %i", method);

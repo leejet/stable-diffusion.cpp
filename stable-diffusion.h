@@ -24,6 +24,7 @@ enum SampleMethod {
     DPMPP2S_A,
     DPMPP2M,
     DPMPP2Mv2,
+    LCM,
     N_SAMPLE_METHODS
 };
 

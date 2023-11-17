@@ -80,13 +80,16 @@ const char* sample_method_str[] = {
     "dpm2",
     "dpm++2s_a",
     "dpm++2m",
-    "dpm++2mv2"};
+    "dpm++2mv2",
+    "lcm",
+};
 
 // Names of the sigma schedule overrides, same order as Schedule in stable-diffusion.h
 const char* schedule_str[] = {
     "default",
     "discrete",
-    "karras"};
+    "karras"
+};
 
 struct Option {
     int n_threads = -1;
@@ -146,7 +149,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2}\n");
+    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}\n");
     printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");

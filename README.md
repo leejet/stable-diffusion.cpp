@@ -26,6 +26,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - `DPM++ 2M`
     - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
     - `DPM++ 2S a`
+    - [`LCM`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13952)
 - Cross-platform reproducibility (`--rng cuda`, consistent with the `stable-diffusion-webui GPU RNG`)
 - Embedds generation parameters into png output as webui-compatible text string
 - Supported platforms
@@ -80,6 +81,7 @@ git submodule update
     ```shell
     cd models
     pip install -r requirements.txt
+    # (optional) python convert_diffusers_to_original_stable_diffusion.py --model_path [path to diffusers weights] --checkpoint_path [path to weights]
     python convert.py [path to weights] --out_type [output precision]
     # For example, python convert.py sd-v1-4.ckpt --out_type f16
     ```
@@ -132,7 +134,7 @@ arguments:
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
-  --sampling-method {euler, euler_a, heun, dpm++2m, dpm++2mv2}
+  --sampling-method {euler, euler_a, heun, dpm++2m, dpm++2mv2, lcm}
                                      sampling method (default: "euler_a")
   --steps  STEPS                     number of sample steps (default: 20)
   --rng {std_default, cuda}          RNG (default: cuda)
@@ -196,3 +198,4 @@ docker run -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
 - [stable-diffusion-stability-ai](https://github.com/Stability-AI/stablediffusion)
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
 - [k-diffusion](https://github.com/crowsonkb/k-diffusion)
+- [latent-consistency-model](https://github.com/luosiallen/latent-consistency-model)
