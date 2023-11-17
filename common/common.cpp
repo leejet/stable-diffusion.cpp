@@ -77,7 +77,8 @@ const char* sample_method_str[] = {
 const char* schedule_str[] = {
     "default",
     "discrete",
-    "karras"};
+    "karras"
+};
 
 const char* modes_str[] = {
     "txt2img",
@@ -114,7 +115,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -m, --model [MODEL]                path to model\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
-    printf("  -o, --output OUTPUT                path to write result image to (default: .\\output.png)\n");
+    printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");

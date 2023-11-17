@@ -2253,11 +2253,11 @@ struct UNetModel {
         auto r = ggml_repeat(ctx,
                                  ggml_reshape_4d(ctx, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1),
                                  h);
+        
         h = ggml_add(ctx,
                      h,
                      r);  // [N, model_channels, h, w]
         hs.push_back(h);
-
         // input block 1-11
         int len_mults = sizeof(channel_mult) / sizeof(int);
         int ds = 1;
@@ -2284,6 +2284,7 @@ struct UNetModel {
         h = middle_block_2.forward(ctx, h, emb);      // [N, 4*model_channels, h/8, w/8]
 
         // output_blocks
+        ggml_set_name(h, "b-start");
         for (int i = len_mults - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
                 auto h_skip = hs.back();
@@ -2303,6 +2304,8 @@ struct UNetModel {
                 }
             }
         }
+        
+        ggml_set_name(h, "b-end");
         // out
         // group norm 32
         h = ggml_group_norm_32(ctx, h);
@@ -2325,6 +2328,7 @@ struct UNetModel {
                      ggml_repeat(ctx,
                                  ggml_reshape_4d(ctx, out_2_b, 1, 1, out_2_b->ne[0], 1),
                                  h));  // [N, out_channels, h, w]
+        
         return h;
     }
 
@@ -3239,7 +3243,6 @@ struct AutoEncoderKL {
 
         // post_quant_conv
         auto h = ggml_conv_2d(ctx, post_quant_conv_w, z, 1, 1, 0, 0, 1, 1);
-        ggml_set_name(h, "dfallback");
         h = ggml_add(ctx,
                      h,
                      ggml_repeat(ctx,
@@ -4186,7 +4189,7 @@ class StableDiffusionGGML {
         struct ggml_tensor* denoised = ggml_dup_tensor(draft_ctx, x);
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) {
-            int64_t t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_us();
 
             float c_skip               = 1.0f;
             float c_out                = 1.0f;
@@ -4221,16 +4224,11 @@ class StableDiffusionGGML {
                 // uncond
                 copy_ggml_tensor(context, uc);
                 out = diffusion_model.compute(n_threads, noised_input, NULL, context, t_emb);
-                out = ggml_fallback_tensor(draft_ctx, out, diffusion_model.backend_unet);
-                copy_ggml_tensor(out_uncond, out);
-
+                out_uncond = ggml_fallback_tensor(draft_ctx, out, diffusion_model.backend_unet);
                 // cond
                 copy_ggml_tensor(context, c);
                 out = diffusion_model.compute(n_threads, noised_input, NULL, context, t_emb);
                 out = ggml_fallback_tensor(draft_ctx, out, diffusion_model.backend_unet);
-#ifdef SD_DUMP_TENSORS
-                save_tensor_to_file("output-unet-c", out, "UNET prompt output");
-#endif
                 out_cond = out;
 
                 // out_uncond + cfg_scale * (out_cond - out_uncond)
@@ -4261,10 +4259,9 @@ class StableDiffusionGGML {
                     vec_denoised[i] = vec_out[i] * c_out + vec_input[i] * c_skip;
                 }
             }
-
-            int64_t t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_us();
             if (step > 0) {
-                LOG_INFO("step %d sampling completed, taking %.2fs", step, (t1 - t0) * 1.0f / 1000);
+                LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
         };
 

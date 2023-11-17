@@ -8,13 +8,23 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <stdarg.h>
+
+std::string format(const char *fmt, ...) {
+    char result[100];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(result, 100, fmt, args);
+    va_end(args);
+    return  std::string(result);
+}
 
 #include "vocab.hpp"
 
 using json = nlohmann::json;
 
 #define MAX_STRING_BUFFER 90
-#define UNUSED_MODEL_TENSORS 19
+#define UNUSED_MODEL_TENSORS 20
 #define TIMESTEPS 1000
 
 const char* unused_tensors[UNUSED_MODEL_TENSORS] = {
@@ -32,6 +42,7 @@ const char* unused_tensors[UNUSED_MODEL_TENSORS] = {
     "cond_stage_model.transformer.text_model.embeddings.position_ids",
     "cond_stage_model.model.logit_scale",
     "cond_stage_model.model.text_projection",
+    "model.diffusion_model.time_embedding.cond_proj.weight",
     "model_ema.decay",
     "model_ema.num_updates",
     "model_ema.diffusion_model",
@@ -48,6 +59,35 @@ std::string kqv_self[6] = {
     "self_attn.k_proj.bias",
     "self_attn.v_proj.bias"
 };
+
+#ifdef _WIN32  // code for windows
+#include <windows.h>
+
+bool fileExists(const std::string& filename) {
+    DWORD attributes = GetFileAttributesA(filename.c_str());
+    return (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+bool isDirectory(const std::string& path) {
+    DWORD attributes = GetFileAttributesA(path.c_str());
+    return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+#else  // code for linux
+#include <dirent.h>
+#include <sys/stat.h>
+
+bool fileExists(const std::string& filename) {
+    struct stat buffer;
+    return (stat(filename.c_str(), &buffer) == 0 && S_ISREG(buffer.st_mode));
+}
+
+bool isDirectory(const std::string& path) {
+    struct stat buffer;
+    return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
+}
+
+#endif
 
 enum sd_version {
     VERSION_1_x,
@@ -69,13 +109,32 @@ enum sd_lora_type {
     LORA_TRANSFORMERS
 };
 
+enum data_pointer_type {
+    CHECKPOINT,
+    SAFETENSOR
+};
+
+enum tensor_target {
+    NONE,
+    CLIP,
+    UNET,
+    VAE,
+};
+
 struct convert_params {
     ggml_type out_type = GGML_TYPE_F32;
     sd_version version = VERSION_1_x;
     std::string model_name = "";
     std::string model_path = "";
+
     std::string output_path = "";
     std::string vocab_path = "";
+
+    // file pointers
+    std::vector<zip_t *> pkl_fp;
+    std::vector<FILE *> sf_fp;
+
+    bool from_folder = false;
     bool verbose = false;
     bool generate_alphas_cumprod = false;
 
@@ -99,6 +158,25 @@ struct Tensor {
     int32_t num_elements = 0;
     bool is_view = false;
     void* data = NULL;
+    int32_t ptr_idx = -1;
+    data_pointer_type ptr_type = CHECKPOINT;
+    tensor_target target = NONE;
+
+    bool detect_target(convert_params params) {
+        if(target != NONE) {
+            return false;
+        }
+        if(name.find("first_stage_model.") == 0 || params.vae) {
+            target = VAE;
+        } else if(name.find("model.diffusion_model.") == 0) {
+            target = UNET;
+        } else if(name.find("cond_stage_model.") == 0 ||
+            name.find("conditioner.") == 0 ||
+            params.lora && name.find("text.model.") != std::string::npos) {
+            target = CLIP;
+        }
+        return true;
+    }
 
     void dump() {
         printf("Tensor: %30s | n_dim: %i | [%i, %i, %i, %i] | %s \n", name.c_str(), n_dims, shape[0], shape[1], shape[2], shape[3], ggml_type_name(dtype));
@@ -112,6 +190,8 @@ struct Tensor {
         return v;
     }
 };
+
+typedef std::unordered_map<std::string, Tensor> tensor_umap_t;
 
 /*
 
@@ -302,7 +382,7 @@ void read_pkl_string(char* text_str,struct zip_t *zip, std::string dir, struct T
     }
 }
 
-void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,std::unordered_map<std::string, Tensor> & tensors, convert_params & params) {
+void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t & tensors, convert_params & params, tensor_target target = NONE) {
     if(buffer[0] == 0x80) { // proto
         if(buffer[1] != 2) {
             printf("Unsupported protocol\n");
@@ -401,7 +481,6 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,std::unordered
                     buffer += len + 1;
                     read_pkl_data_type(string_buffer, tensor);
                     //printf("Global: %s\n", string_buffer);
-
                 }
                 break;
             case 0x86: // tuple 2
@@ -409,6 +488,10 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,std::unordered
             case 't':
                 if(tensor.t_phase == READ_DIMENS) {
                     if(!is_unused_tensor(tensor.name)) { // ignore unused tensors
+                        tensor.ptr_idx = params.pkl_fp.size();
+                        if(target != NONE) {
+                            tensor.target = target;
+                        }
                         tensors[tensor.name] = tensor;
                     }
                     // reset
@@ -422,7 +505,6 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,std::unordered
                 break;
             }
         }
-        printf("Num Tensors readed: %i\n", tensors.size());
     }
 }
 
@@ -488,18 +570,18 @@ std::unordered_map<std::string, std::string> shorten_name_map;
 
 std::string convert_unet_to_original(std::string name, convert_params params) {
     bool resnet_tensor = name.find("resnets") != std::string::npos;
-    std::string separator = params.lora ? "." : "_";
+    const char* separator = params.lora ? "." : "_";
     if(unet_convert_map.empty()) {
-        unet_convert_map["time" + separator + "embedding.linear" + separator + "1.weight"] = "time_embed.0.weight";
-        unet_convert_map["time" + separator + "embedding.linear" + separator + "1.bias"] = "time_embed.0.bias";
-        unet_convert_map["time" + separator + "embedding.linear" + separator + "2.weight"] = "time_embed.2.weight";
-        unet_convert_map["time" + separator + "embedding.linear" + separator + "2.bias"] = "time_embed.2.bias";
-        unet_convert_map["conv" + separator + "in.weight"] = "input_blocks.0.0.weight";
-        unet_convert_map["conv" + separator + "in.bias"] = "input_blocks.0.0.bias";
-        unet_convert_map["conv" + separator + "norm" + separator + "out.weight"] ="out.0.weight";
-        unet_convert_map["conv" + separator + "norm" + separator + "out.bias"] = "out.0.bias";
-        unet_convert_map["conv" + separator + "out.weight"] = "out.2.weight";
-        unet_convert_map["conv" + separator + "out.bias"] = "out.2.bias";
+        unet_convert_map[format("time%sembedding.linear%s1.weight", separator, separator)] = "time_embed.0.weight";
+        unet_convert_map[format("time%sembedding.linear%s1.bias", separator, separator)] = "time_embed.0.bias";
+        unet_convert_map[format("time%sembedding.linear%s2.weight", separator, separator)] = "time_embed.2.weight";
+        unet_convert_map[format("time%sembedding.linear%s2.bias", separator, separator)] = "time_embed.2.bias";
+        unet_convert_map[format("conv%sin.weight", separator)] = "input_blocks.0.0.weight";
+        unet_convert_map[format("conv%sin.bias", separator)] = "input_blocks.0.0.bias";
+        unet_convert_map[format("conv%snorm%sout.weight", separator, separator)] ="out.0.weight";
+        unet_convert_map[format("conv%snorm%sout.bias", separator, separator)] = "out.0.bias";
+        unet_convert_map[format("conv%sout.weight", separator)] = "out.2.weight";
+        unet_convert_map[format("conv%sout.bias", separator)] = "out.2.bias";
     }
 
     // resnet
@@ -507,9 +589,9 @@ std::string convert_unet_to_original(std::string name, convert_params params) {
         unet_convert_map_resnet["norm1"] = "in_layers.0";
         unet_convert_map_resnet["conv1"] = "in_layers.2";
         unet_convert_map_resnet["norm2"] = "out_layers.0";
-        unet_convert_map_resnet["conv2"] = "out_layers.2";
-        unet_convert_map_resnet["time" + separator + "emb" + separator + "proj"] = "emb_layers.1";
-        unet_convert_map_resnet["conv" + separator + "shortcut"] = "skip_connection";
+        unet_convert_map_resnet["conv2"] = "out_layers.3";
+        unet_convert_map_resnet[format("time%semb%sproj", separator, separator)] = "emb_layers.1";
+        unet_convert_map_resnet[format("conv%sshortcut", separator)] = "skip_connection";
     }
 
     if(unet_convert_map_layers.empty()) {
@@ -517,30 +599,30 @@ std::string convert_unet_to_original(std::string name, convert_params params) {
         {
             for (int j = 0; j < 2; j++)
             {
-                unet_convert_map_layers["down" + separator + "blocks." + std::to_string(i) + ".resnets." + std::to_string(j) + "."] = "input_blocks." + std::to_string(3 * i + j + 1) + ".0.";
+                unet_convert_map_layers[format("down%sblocks.%i.resnets.%i.", separator, i, j)] = format("input_blocks.%i.0.", 3 * i + j + 1);
                 if (i < 3)
                 {
-                    unet_convert_map_layers["down" + separator + "blocks." + std::to_string(i) + ".attentions." + std::to_string(j) + "."] = "input_blocks." + std::to_string(3 * i + j + 1) + ".1.";
+                    unet_convert_map_layers[format("down%sblocks.%i.attentions.%i.", separator, i, j)] = format("input_blocks.%i.1.", 3 * i + j + 1);
                 }
             }
             for (int j = 0; j < 3; j++)
             {
-                unet_convert_map_layers["up" + separator + "blocks." + std::to_string(i) + ".resnets." + std::to_string(j) + "."] = "output_blocks." + std::to_string(3 * i + j) + ".0.";
+                unet_convert_map_layers[format("up%sblocks.%i.resnets.%i.", separator, i, j)] = format("output_blocks.%i.0.", 3 * i + j);
                 if (i > 0)
                 {
-                    unet_convert_map_layers["up" + separator + "blocks." + std::to_string(i) + ".attentions." + std::to_string(j) + "."] = "output_blocks." + std::to_string(3 * i + j) + ".1.";
+                    unet_convert_map_layers[format("up%sblocks.%i.attentions.%i.", separator, i, j)] = format("output_blocks.%i.1.", 3 * i + j);
                 }
             }
             if (i < 3)
             {
-                unet_convert_map_layers["down" + separator + "blocks." + std::to_string(i) + ".downsamplers.0.conv."] = "input_blocks." + std::to_string(3 * (i + 1)) + ".0.op.";
-                unet_convert_map_layers["up" + separator + "blocks." + std::to_string(i) + ".upsamplers.0."] = "output_blocks." + std::to_string(3 * i + 2) + "." + std::to_string(i + 2) + ".";
+                unet_convert_map_layers[format("down%sblocks.%i.downsamplers.0.conv.", separator, i)] = format("input_blocks.%i.0.op.", 3 * (i + 1));
+                unet_convert_map_layers[format("up%sblocks.%i.upsamplers.0.", separator, i)] = format("output_blocks.%i.%i.", 3 * i + 2, i == 0 ? 1 : 2);
             }
         }
-        unet_convert_map_layers["mid" + separator + "block.attentions.0."] = "middle_block.1.";
+        unet_convert_map_layers[format("mid%sblock.attentions.0.", separator)] = "middle_block.1.";
         for (int j = 0; j < 2; j++)
         {
-            unet_convert_map_layers["mid" + separator + "block.resnets." + std::to_string(j) + "."] = "middle_block." + std::to_string(2 * j) + ".";
+            unet_convert_map_layers[format("mid%sblock.resnets.%i.", separator, j)] = format("middle_block.%i.", 2 * j);
         }
     }
     
@@ -680,28 +762,28 @@ std::string shorten_name(std::string name, convert_params params) {
     return replace_name_by_map(name, shorten_name_map);
 }
 
-void* fetch_data(Tensor tensor, zip_t* zip, FILE* fp) {
+void* fetch_data(Tensor tensor, convert_params params) {
     if(!tensor.data) { // fetch tensor data from zip (.ckpt) or file stream (.safetensors)
-        if(zip) {
-            zip_entry_openbyindex(zip, tensor.data_offset);
+        if(tensor.ptr_type == CHECKPOINT) {
+            zip_entry_openbyindex(params.pkl_fp[tensor.ptr_idx], tensor.data_offset);
             size_t buf_sz;
-            if(zip_entry_read(zip, &tensor.data, &buf_sz) < 0) {
+            if(zip_entry_read(params.pkl_fp[tensor.ptr_idx], &tensor.data, &buf_sz) < 0) {
                 return NULL;
             }
         } else {
 #ifdef _WIN32
-            _fseeki64(fp, (__int64) tensor.data_offset, SEEK_SET);
+            _fseeki64(params.sf_fp[tensor.ptr_idx], (__int64) tensor.data_offset, SEEK_SET);
 #else
-            std::fseek(fp, (long) tensor.data_offset, SEEK_SET);
+            std::fseek(params.sf_fp[tensor.ptr_idx], (long) tensor.data_offset, SEEK_SET);
 #endif
             tensor.data = malloc(tensor.data_size);
-            std::fread(tensor.data, 1, tensor.data_size, fp);
+            std::fread(tensor.data, 1, tensor.data_size, params.sf_fp[tensor.ptr_idx]);
         }
     }
     return tensor.data;
 }
 
-std::tuple<Tensor, Tensor, Tensor> split_qkv_tensor(Tensor qkv_tensor, zip_t* zip, FILE* fp) {
+std::tuple<Tensor, Tensor, Tensor> split_qkv_tensor(Tensor qkv_tensor, void* qkv_data) {
     const int ne0 = qkv_tensor.shape[0] / 3; // split in 3 tensors: query, key, value
     const int ne1 = qkv_tensor.shape[1];
     const int32_t num_elements = ne0 * ne1;
@@ -709,7 +791,6 @@ std::tuple<Tensor, Tensor, Tensor> split_qkv_tensor(Tensor qkv_tensor, zip_t* zi
     const int n_dims = qkv_tensor.n_dims;
 
     size_t chunk_size = (size_t)num_elements * ggml_type_size(qkv_tensor.dtype);
-    void* qkv_data = fetch_data(qkv_tensor, zip, fp);
 
     Tensor q = Tensor{"", 0, dtype, chunk_size, {ne0, ne1, 1, 1}, n_dims, READ_NAME, num_elements, true}; // query
     Tensor k = Tensor{"", 0, dtype, chunk_size, {ne0, ne1, 1, 1}, n_dims, READ_NAME, num_elements, true}; // key
@@ -723,21 +804,32 @@ std::tuple<Tensor, Tensor, Tensor> split_qkv_tensor(Tensor qkv_tensor, zip_t* zi
 }
 
 void preprocess_tensors(
-    std::unordered_map<std::string, Tensor> & src,
-    std::vector<Tensor> & dst,
-    zip_t * zip, FILE * fp, convert_params & params) {
+    tensor_umap_t & src,
+    std::vector<Tensor> & dst, convert_params & params) {
     printf("preprocessing %zu tensors\n", src.size());
-
     for(auto & it : src) {
         std::string name = it.first;
         Tensor tensor = it.second;
+        if(!tensor.detect_target(params)) {
+            if(tensor.target == CLIP && name.find("cond_stage_model.transformer.text_model") == std::string::npos) {
+            if(name.find("text_model.") == 0) {
+                tensor.name = "cond_stage_model.transformer." + name;
+            } else {
+                tensor.name = "cond_stage_model.transformer.text_model" + name;
+            }
+            } else if(tensor.target == UNET) {
+                tensor.name = "model.diffusion_model." + name;
+            } else if(tensor.target == VAE) {
+                tensor.name = "first_stage_model." + name;
+            }
+        }
 
-        if(name.find("first_stage_model.") == 0 || params.vae) {
-            tensor.name = convert_vae_to_original(name, params);
+        if(tensor.target == VAE) {
+            tensor.name = convert_vae_to_original(tensor.name, params);
 
             // convert vae attn block linear to conv2d 1x1
             if(params.vae && name.find("first_stage_model.") == std::string::npos) {
-                tensor.name = "first_stage_model." + name;
+                tensor.name = "first_stage_model." + tensor.name;
             }
 
             if(tensor.name.find("attn_1") != std::string::npos) {
@@ -749,18 +841,15 @@ void preprocess_tensors(
                 }
             }
         }
-
-        if(name.find("cond_stage_model.") == 0 ||
-            name.find("conditioner.") == 0  ||
-            params.lora && name.find("text.model.") != std::string::npos) {
-            tensor.name = convert_clip_to_hf_clip(name, params);
+        if(tensor.target == CLIP) {
+            tensor.name = convert_clip_to_hf_clip(tensor.name, params);
             if(params.version == VERSION_2_x) {
                 std::string preffix = shorten_name(tensor.name, params);
                 size_t fw = preffix.find("attn.in_proj_weight");
                 size_t fb = preffix.find("attn.in_proj_bias");
                 if(fw != std::string::npos) {
                     Tensor q, k, v;
-                    std::tie(q, k, v) = split_qkv_tensor(tensor, zip, fp);
+                    std::tie(q, k, v) = split_qkv_tensor(tensor, fetch_data(tensor, params));
                     for(int i = 0; i< 3;i++) {
                         Tensor attn_t = i == 0 ? q : (i == 1 ? k : v);
                         attn_t.name = preffix.substr(0, fw) + kqv_self[i];
@@ -772,7 +861,7 @@ void preprocess_tensors(
                     continue;
                 } else if(fb != std::string::npos) {
                     Tensor q, k, v;
-                    std::tie(q, k, v) = split_qkv_tensor(tensor, zip, fp);
+                    std::tie(q, k, v) = split_qkv_tensor(tensor, fetch_data(tensor, params));
                     for(int i = 0; i< 3;i++) {
                         Tensor attn_t = i == 0 ? q : (i == 1 ? k : v);
                         attn_t.name = preffix.substr(0, fb) + kqv_self[i + 3];
@@ -784,8 +873,8 @@ void preprocess_tensors(
                     continue;
                 }
             }
-        } else if(name.find("model.diffusion_model.") == 0 || params.lora) {
-            tensor.name = convert_unet_to_original(name, params);
+        } else if(tensor.target == UNET) {
+            tensor.name = convert_unet_to_original(tensor.name, params);
             if(tensor.name.find("proj_in.weight") != std::string::npos ||
                 tensor.name.find("proj_out.weight") != std::string::npos) {
                 if(tensor.n_dims == 2) {
@@ -862,25 +951,25 @@ void *convert_tensor(void * source, Tensor tensor, ggml_type dst_type) {
     return NULL;
 }
 
-void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zip_t * zip, FILE * fp, convert_params & params) {
+void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
     if(!params.vae &&
-        model_tensors.find("first_stage_model.post_quant_conv.bias") == model_tensors.end() && // is not a stable diffusion model
-        model_tensors.find("post_quant_conv.bias") != model_tensors.end()) { // has a tensor of VAE
+        tensors.find("first_stage_model.post_quant_conv.bias") == tensors.end() && // is not a stable diffusion model
+        tensors.find("post_quant_conv.bias") != tensors.end() && !params.from_folder) { // has a tensor of VAE
         params.vae = true;
         printf("VAE detected\n");
     }
 
-    if(!params.lora && model_tensors.find("alphas_cumprod") == model_tensors.end()) {
+    if(!params.lora && tensors.find("alphas_cumprod") == tensors.end()) {
         params.generate_alphas_cumprod = true;
     }
 
     std::vector<Tensor> processed_tensors;
 
     if(!params.lora) {
-        if(model_tensors.find("cond_stage_model.model.token_embedding.weight") != model_tensors.end()) {
+        if(tensors.find("cond_stage_model.model.token_embedding.weight") != tensors.end()) {
             params.version = VERSION_2_x;
             printf("Stable Diffusion 2.x - %s\n", params.model_name.c_str());
-        } else if(model_tensors.find("conditioner.embedders.0.transformer.text_model.embeddings.position_embedding.weight") != model_tensors.end()) {
+        } else if(tensors.find("conditioner.embedders.0.transformer.text_model.embeddings.position_embedding.weight") != tensors.end()) {
             params.version = VERSION_XL;
             printf("Stable Diffusion XL - %s\n", params.model_name.c_str());
         } else {
@@ -888,7 +977,7 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
         }
     }
 
-    preprocess_tensors(model_tensors, processed_tensors, zip, fp, params);
+    preprocess_tensors(tensors, processed_tensors, params);
 
     gguf_context* g_ctx = gguf_init_empty();
 
@@ -933,11 +1022,14 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
         }
         gguf_set_arr_str(g_ctx, "sd.vocab.tokens", vocab_data.data(), vocab_data.size());
     }
+
     printf("converting %zu tensors\n", processed_tensors.size());
+
     // write tensors
     ggml_context* ctx = ggml_init({ (processed_tensors.size() + (params.generate_alphas_cumprod ? 1 : 0)) * ggml_tensor_overhead(), NULL, true }); // no alloc data
     int num_clip_tensors = 0, num_unet_tensors = 0, num_vae_tensors = 0;
     size_t total_org_model = 0, total_conv_model = 0;
+
     for(Tensor & tensor : processed_tensors) {
         if(tensor.name.size() >= 64) {
             printf("Error: tensor name very large '%s', might not be supported anyway by stable-diffusion.cpp\n", tensor.name.c_str());
@@ -959,7 +1051,7 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
         }
         ggml_tensor* gg_tensor = ggml_new_tensor(ctx, dest_type, tensor.n_dims, tensor.inverse_shape());
         ggml_set_name(gg_tensor, tensor.name.c_str());
-        void* source = fetch_data(tensor, zip, fp);
+        void* source = fetch_data(tensor, params);
         void* dest = NULL;
         if(params.verbose) {
             printf("converting: %s | %s => %s\n", tensor.name.c_str(), ggml_type_name(tensor.dtype), ggml_type_name(dest_type));
@@ -996,9 +1088,8 @@ void convert_to_gguf(std::unordered_map<std::string, Tensor> & model_tensors, zi
     gguf_free(g_ctx);
 }
 
-void convert_checkpoint_file(const char * file_name, convert_params params) {
+void load_checkpoint(const char * file_name, tensor_umap_t & tensors, convert_params & params, tensor_target target = NONE) {
     struct zip_t *zip = zip_open(file_name, 0, 'r');
-    std::unordered_map<std::string, Tensor> tensors;
     {
         int i, n = zip_entries_total(zip);
         for (i = 0; i < n; ++i) {
@@ -1020,26 +1111,18 @@ void convert_checkpoint_file(const char * file_name, convert_params params) {
             }
             zip_entry_close(zip);
         }
-        // convert tensors
-        if(tensors.size() > 0) {
-            convert_to_gguf(tensors, zip, NULL, params);
-        } else {
-            printf("Error: failed to load tensors\n");
-        }
     }
-    zip_close(zip);
+    params.pkl_fp.push_back(zip);
 }
 
-void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params params) {
-    std::fseek(f, 8, SEEK_SET); // from begin
+void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors, convert_params & params, tensor_target target = NONE) {
+    std::fseek(fp, 8, SEEK_SET); // from begin
 
     char* metadata_buffer = new char[metadata_size + 1];
     memset(metadata_buffer, 0, metadata_size + 1);
-    std::fread(metadata_buffer, 1, metadata_size, f);
+    std::fread(metadata_buffer, 1, metadata_size, fp);
     json sf_mt = json::parse(metadata_buffer);
-    std::unordered_map<std::string, Tensor> tensors;
 
-    printf("reading safetensors metadata\n");
     int data_begin = 8 + metadata_size;
     for (json::iterator it = sf_mt.begin(); it != sf_mt.end(); ++it) {
         std::string tensor_name = it.key();
@@ -1079,27 +1162,32 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
             if(params.lora &&
                 n_dims == 0 &&
                 tensor_name.find(".alpha") != std::string::npos) {
-                    std::fseek(f, data_begin + start_data, SEEK_SET);
+                    std::fseek(fp, data_begin + start_data, SEEK_SET);
                     if(dtype == "F16") {
                         ggml_fp16_t val;
-                        std::fread(&val, 1, sizeof(val), f);
+                        std::fread(&val, 1, sizeof(val), fp);
                         params.lora_alphas[tensor_name] = ggml_fp16_to_fp32(val);
                     } else if(dtype == "F32") {
                         float val;
-                        std::fread(&val, 1, sizeof(val), f);
+                        std::fread(&val, 1, sizeof(val), fp);
                         params.lora_alphas[tensor_name] = val;
                     }
                     continue;
             }
 
             Tensor tensor = Tensor{tensor_name.c_str(), 0, GGML_TYPE_F32, 0, {1, 1, 1, 1}, n_dims, READ_NAME, 0};
+            tensor.ptr_idx = params.sf_fp.size();
+            if(target != NONE) {
+                tensor.target = target;
+            }
+            tensor.ptr_type = SAFETENSOR;
             tensor.data_size = end_data - start_data;
             if(dtype == "F16") {
                 tensor.dtype = GGML_TYPE_F16;
             } else if(dtype == "F64") { // force float 32 bits
                 void* data = (void*)malloc(tensor.data_size);
-                std::fseek(f, data_begin + start_data, SEEK_SET);
-                std::fread(data, 1, tensor.data_size, f);
+                std::fseek(fp, data_begin + start_data, SEEK_SET);
+                std::fread(data, 1, tensor.data_size, fp);
                 tensor.data_size /= 2;
                 tensor.data = malloc(tensor.data_size);
                 int ne = tensor.data_size / ggml_type_size(tensor.dtype);
@@ -1115,22 +1203,21 @@ void convert_safetensor_file(FILE * f, int64_t metadata_size, convert_params par
             for(uint8_t i = 0;i < n_dims; i++) {
                 tensor.shape[i] = tensor_props["shape"][i];
             }
+
             tensor.num_elements = tensor.data_size / ggml_type_size(tensor.dtype);
             tensor.data_offset = data_begin + start_data;
             tensors[tensor_name] = tensor;
         }
     }
 
-    if(tensors.size() > 0) {
-        convert_to_gguf(tensors, NULL, f, params);
-    } else {
-        printf("Error: failed to load tensors\n");
-    }
+    // finished read metadata
+    params.sf_fp.push_back(fp);
 }
 
-void convert_model(convert_params & params) {
+void load_tensors_from_model(std::string path, tensor_umap_t &tensors, convert_params &params, tensor_target target = NONE)
+{
     // check if the model is safetensor or pytorch checkpoint
-    FILE* fp = std::fopen(params.model_path.c_str(), "rb");
+    FILE* fp = std::fopen(path.c_str(), "rb");
     if(!fp) {
         printf("Fail to open file: %s", params.model_path.c_str());
         return;
@@ -1159,18 +1246,50 @@ void convert_model(convert_params & params) {
     } else {
         std::fclose(fp);
     }
+    printf("loading model '%s'\n", path.c_str());
+    printf("model type: %s\n", safe_tensor ? "safetensors" : "checkpoint");
+    
+    if(safe_tensor) {
+        load_safetensors(fp, safe_tensor_metadata_size, tensors, params, target);
+    } else {
+        load_checkpoint(params.model_path.c_str(), tensors, params, target);
+    }
+}
+
+void convert_model(convert_params & params) {
+    tensor_umap_t loaded_tensors;
     size_t last = params.model_path.find_last_of("/\\");
     params.model_name = params.model_path.substr(last + 1);
     if(params.output_path.empty()) {
-        last = params.model_name.find_last_of(".");
+        last = params.from_folder ? params.model_name.length() : params.model_name.find_last_of(".");
         params.output_path = params.model_name.substr(0, last) + "-" + ggml_type_name(params.out_type) + ".gguf";
     }
-    printf("model type: %s\n", safe_tensor ? "safetensors" : "checkpoint");
-    if(safe_tensor) {
-        convert_safetensor_file(fp, safe_tensor_metadata_size, params);
+    if(params.from_folder) {
+        std::string clip_path = params.model_path + "/text_encoder/model.safetensors";
+        std::string unet_path = params.model_path + "/unet/diffusion_pytorch_model.safetensors";
+        std::string vae_path = params.model_path + "/vae/diffusion_pytorch_model.safetensors";
+        if(fileExists(clip_path)) {
+            load_tensors_from_model(clip_path, loaded_tensors, params, CLIP);
+        } else {
+            printf("ERROR: missing clip model: %s\n", clip_path.c_str());
+            exit(0);
+        }
+        if(fileExists(unet_path)) {
+            load_tensors_from_model(unet_path, loaded_tensors, params, UNET);
+        } else {
+            printf("ERROR: missing unet model: %s\n", clip_path.c_str());
+            exit(0);
+        }
+        if(fileExists(vae_path)) {
+            load_tensors_from_model(vae_path, loaded_tensors, params, VAE);
+        } else {
+            printf("ERROR: missing vae model: %s\n", clip_path.c_str());
+            exit(0);
+        }
     } else {
-        convert_checkpoint_file(params.model_path.c_str(), params);
+        load_tensors_from_model(params.model_path.c_str(), loaded_tensors, params);
     }
+    convert_to_gguf(loaded_tensors, params);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -1188,6 +1307,10 @@ void print_usage(int argc, const char* argv[]) {
 
 bool parse_params(int argc, const char* argv[], convert_params & params) {
     params.model_path = argv[1];
+    if(isDirectory(params.model_path)) {
+        params.from_folder = true;
+        printf("Checking model folder\n");
+    }
     for(int i = 2; i < argc; i++) {
         std::string arg = argv[i];
         if(arg == "-o" || arg == "--out") {
