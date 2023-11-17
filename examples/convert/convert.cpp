@@ -1248,7 +1248,6 @@ void load_tensors_from_model(std::string path, tensor_umap_t &tensors, convert_p
     }
     printf("loading model '%s'\n", path.c_str());
     printf("model type: %s\n", safe_tensor ? "safetensors" : "checkpoint");
-    
     if(safe_tensor) {
         load_safetensors(fp, safe_tensor_metadata_size, tensors, params, target);
     } else {
@@ -1265,25 +1264,26 @@ void convert_model(convert_params & params) {
         params.output_path = params.model_name.substr(0, last) + "-" + ggml_type_name(params.out_type) + ".gguf";
     }
     if(params.from_folder) {
-        std::string clip_path = params.model_path + "/text_encoder/model.safetensors";
-        std::string unet_path = params.model_path + "/unet/diffusion_pytorch_model.safetensors";
-        std::string vae_path = params.model_path + "/vae/diffusion_pytorch_model.safetensors";
-        if(fileExists(clip_path)) {
-            load_tensors_from_model(clip_path, loaded_tensors, params, CLIP);
+        // Hardcoded in https://github.com/huggingface/diffusers/blob/main/scripts/convert_diffusers_to_original_stable_diffusion.py
+        std::string diff_clip_path = params.model_path + "/text_encoder/model.safetensors";
+        std::string diff_unet_path = params.model_path + "/unet/diffusion_pytorch_model.safetensors";
+        std::string diff_vae_path = params.model_path + "/vae/diffusion_pytorch_model.safetensors";
+        if(fileExists(diff_clip_path)) {
+            load_tensors_from_model(diff_clip_path, loaded_tensors, params, CLIP);
         } else {
-            printf("ERROR: missing clip model: %s\n", clip_path.c_str());
+            printf("ERROR: missing CLIP model: %s\n", diff_clip_path.c_str());
             exit(0);
         }
-        if(fileExists(unet_path)) {
-            load_tensors_from_model(unet_path, loaded_tensors, params, UNET);
+        if(fileExists(diff_unet_path)) {
+            load_tensors_from_model(diff_unet_path, loaded_tensors, params, UNET);
         } else {
-            printf("ERROR: missing unet model: %s\n", clip_path.c_str());
+            printf("ERROR: missing UNET model: %s\n", diff_unet_path.c_str());
             exit(0);
         }
-        if(fileExists(vae_path)) {
-            load_tensors_from_model(vae_path, loaded_tensors, params, VAE);
+        if(fileExists(diff_vae_path)) {
+            load_tensors_from_model(diff_vae_path, loaded_tensors, params, VAE);
         } else {
-            printf("ERROR: missing vae model: %s\n", clip_path.c_str());
+            printf("ERROR: missing VAE model: %s\n", diff_vae_path.c_str());
             exit(0);
         }
     } else {
@@ -1309,8 +1309,9 @@ bool parse_params(int argc, const char* argv[], convert_params & params) {
     params.model_path = argv[1];
     if(isDirectory(params.model_path)) {
         params.from_folder = true;
-        printf("Checking model folder\n");
+        printf("loading diffusers model\n");
     }
+
     for(int i = 2; i < argc; i++) {
         std::string arg = argv[i];
         if(arg == "-o" || arg == "--out") {
