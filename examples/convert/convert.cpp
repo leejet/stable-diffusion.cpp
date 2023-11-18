@@ -1309,6 +1309,10 @@ bool parse_params(int argc, const char* argv[], convert_params & params) {
     params.model_path = argv[1];
     if(isDirectory(params.model_path)) {
         params.from_folder = true;
+        // if the model path ends with '/' ignore it
+        if(params.model_path.size() > 0 && params.model_path.back() == '/') {
+            params.model_path.pop_back();
+        }
         printf("loading diffusers model\n");
     }
     for(int i = 2; i < argc; i++) {
