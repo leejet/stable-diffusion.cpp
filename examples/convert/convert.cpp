@@ -126,6 +126,7 @@ struct convert_params {
     sd_version version = VERSION_1_x;
     std::string model_name = "";
     std::string model_path = "";
+    std::string custom_vae_path = "";
 
     std::string output_path = "";
     std::string vocab_path = "";
@@ -135,6 +136,7 @@ struct convert_params {
     std::vector<FILE *> sf_fp;
 
     bool from_folder = false;
+    bool merge_custom_vae = false;
     bool verbose = false;
     bool generate_alphas_cumprod = false;
 
@@ -383,7 +385,7 @@ void read_pkl_string(char* text_str,struct zip_t *zip, std::string dir, struct T
     }
 }
 
-void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t & tensors, convert_params & params, tensor_target target = NONE) {
+void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t & tensors, convert_params & params, bool root_model, tensor_target target = NONE) {
     if(buffer[0] == 0x80) { // proto
         if(buffer[1] != 2) {
             printf("Unsupported protocol\n");
@@ -492,6 +494,17 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
                         tensor.ptr_idx = params.pkl_fp.size();
                         if(target != NONE) {
                             tensor.target = target;
+                        } else if(params.merge_custom_vae) {
+                            if(root_model) {
+                                tensor.detect_target(params);
+                                if(tensor.target == VAE) {
+                                    tensor = Tensor{"", 0, GGML_TYPE_F32, 0, {1, 1, 1, 1}, 0, READ_NAME, 0};
+                                    continue; // ignore original vae tensors
+                                }
+                            } else {
+                                tensor.target = VAE;
+                                tensor.detect_target(params);
+                            }
                         }
                         tensors[tensor.name] = tensor;
                     }
@@ -788,14 +801,14 @@ void preprocess_tensors(
         Tensor tensor = it.second;
         if(!tensor.detect_target(params)) {
             if(tensor.target == CLIP && name.find("cond_stage_model.transformer.text_model") == std::string::npos) {
-            if(name.find("text_model.") == 0) {
-                tensor.name = "cond_stage_model.transformer." + name;
-            } else {
-                tensor.name = "cond_stage_model.transformer.text_model" + name;
-            }
-            } else if(tensor.target == UNET) {
+                if(name.find("text_model.") == 0) {
+                    tensor.name = "cond_stage_model.transformer." + name;
+                } else {
+                    tensor.name = "cond_stage_model.transformer.text_model" + name;
+                }
+            } else if(name.find("model.diffusion_model.") == std::string::npos && tensor.target == UNET) {
                 tensor.name = "model.diffusion_model." + name;
-            } else if(tensor.target == VAE) {
+            } else if(name.find("first_stage_model.") == std::string::npos && tensor.target == VAE) {
                 tensor.name = "first_stage_model." + name;
             }
         }
@@ -927,7 +940,8 @@ void *convert_tensor(void * source, Tensor tensor, ggml_type dst_type) {
 void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
     if(!params.vae &&
         tensors.find("first_stage_model.post_quant_conv.bias") == tensors.end() && // is not a stable diffusion model
-        tensors.find("post_quant_conv.bias") != tensors.end() && !params.from_folder) { // has a tensor of VAE
+        tensors.find("post_quant_conv.bias") != tensors.end() && !params.from_folder &&
+        params.custom_vae_path.empty()) { // has a tensor of VAE
         params.vae = true;
         printf("VAE detected\n");
     }
@@ -1061,7 +1075,7 @@ void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
     gguf_free(g_ctx);
 }
 
-void load_checkpoint(const char * file_name, tensor_umap_t & tensors, convert_params & params, tensor_target target = NONE) {
+void load_checkpoint(const char * file_name, tensor_umap_t & tensors, convert_params & params, bool root_model, tensor_target target = NONE) {
     struct zip_t *zip = zip_open(file_name, 0, 'r');
     {
         int i, n = zip_entries_total(zip);
@@ -1078,8 +1092,7 @@ void load_checkpoint(const char * file_name, tensor_umap_t & tensors, convert_pa
                     void* pkl_data = NULL;
                     size_t pkl_size;
                     zip_entry_read(zip, &pkl_data, &pkl_size);
-                    printf("reading tensors metadata\n");
-                    read_pkl_props((uint8_t*)pkl_data, zip, dir_, tensors, params);
+                    read_pkl_props((uint8_t*)pkl_data, zip, dir_, tensors, params, root_model, target);
                 }
             }
             zip_entry_close(zip);
@@ -1088,7 +1101,7 @@ void load_checkpoint(const char * file_name, tensor_umap_t & tensors, convert_pa
     params.pkl_fp.push_back(zip);
 }
 
-void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors, convert_params & params, tensor_target target = NONE) {
+void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors, convert_params & params, bool root_model, tensor_target target = NONE) {
     std::fseek(fp, 8, SEEK_SET); // from begin
 
     char* metadata_buffer = new char[metadata_size + 1];
@@ -1152,6 +1165,16 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
             tensor.ptr_idx = params.sf_fp.size();
             if(target != NONE) {
                 tensor.target = target;
+            } else if(params.merge_custom_vae) {
+                if(root_model) {
+                    tensor.detect_target(params);
+                    if(tensor.target == VAE) {
+                        continue; // ignore original vae tensors
+                    }
+                } else {
+                    tensor.target = VAE;
+                    tensor.detect_target(params);
+                }
             }
             tensor.ptr_type = SAFETENSOR;
             tensor.data_size = end_data - start_data;
@@ -1187,7 +1210,7 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
     params.sf_fp.push_back(fp);
 }
 
-void load_tensors_from_model(std::string path, tensor_umap_t &tensors, convert_params &params, tensor_target target = NONE)
+void load_tensors_from_model(std::string path, tensor_umap_t &tensors, convert_params &params, bool root_model, tensor_target target = NONE)
 {
     // check if the model is safetensor or pytorch checkpoint
     FILE* fp = std::fopen(path.c_str(), "rb");
@@ -1222,9 +1245,9 @@ void load_tensors_from_model(std::string path, tensor_umap_t &tensors, convert_p
     printf("loading model '%s'\n", path.c_str());
     printf("model type: %s\n", safe_tensor ? "safetensors" : "checkpoint");
     if(safe_tensor) {
-        load_safetensors(fp, safe_tensor_metadata_size, tensors, params, target);
+        load_safetensors(fp, safe_tensor_metadata_size, tensors, params, root_model, target);
     } else {
-        load_checkpoint(params.model_path.c_str(), tensors, params, target);
+        load_checkpoint(params.model_path.c_str(), tensors, params, root_model, target);
     }
 }
 
@@ -1242,25 +1265,28 @@ void convert_model(convert_params & params) {
         std::string diff_unet_path = params.model_path + "/unet/diffusion_pytorch_model.safetensors";
         std::string diff_vae_path = params.model_path + "/vae/diffusion_pytorch_model.safetensors";
         if(fileExists(diff_clip_path)) {
-            load_tensors_from_model(diff_clip_path, loaded_tensors, params, CLIP);
+            load_tensors_from_model(diff_clip_path, loaded_tensors, params, true, CLIP);
         } else {
             printf("ERROR: missing CLIP model: %s\n", diff_clip_path.c_str());
             exit(0);
         }
         if(fileExists(diff_unet_path)) {
-            load_tensors_from_model(diff_unet_path, loaded_tensors, params, UNET);
+            load_tensors_from_model(diff_unet_path, loaded_tensors, params, true, UNET);
         } else {
             printf("ERROR: missing UNET model: %s\n", diff_unet_path.c_str());
             exit(0);
         }
         if(fileExists(diff_vae_path)) {
-            load_tensors_from_model(diff_vae_path, loaded_tensors, params, VAE);
+            load_tensors_from_model(diff_vae_path, loaded_tensors, params, true, VAE);
         } else {
             printf("ERROR: missing VAE model: %s\n", diff_vae_path.c_str());
             exit(0);
         }
     } else {
-        load_tensors_from_model(params.model_path.c_str(), loaded_tensors, params);
+        load_tensors_from_model(params.model_path.c_str(), loaded_tensors, params, true);
+        if(params.merge_custom_vae) {
+            load_tensors_from_model(params.custom_vae_path.c_str(), loaded_tensors, params, false);
+        }
     }
     convert_to_gguf(loaded_tensors, params);
 }
@@ -1275,6 +1301,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --vocab [FILENAME]                 path to custom vocab.json (usually unnecessary)\n");
     printf("  -v, --verbose                      print processing info - dev info\n");
     printf("  -l, --lora                         force read the model as a LoRA\n");
+    printf("  --vae [FILENAME]                   merge a custom VAE\n");
     printf("  -tp, --type [OUT_TYPE]             output format (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
 }
 
@@ -1284,7 +1311,6 @@ bool parse_params(int argc, const char* argv[], convert_params & params) {
         params.from_folder = true;
         printf("loading diffusers model\n");
     }
-
     for(int i = 2; i < argc; i++) {
         std::string arg = argv[i];
         if(arg == "-o" || arg == "--out") {
@@ -1304,6 +1330,15 @@ bool parse_params(int argc, const char* argv[], convert_params & params) {
             params.lora = true;
         } else if(arg == "-v" || arg == "--verbose") {
             params.verbose = true;
+        }else if(arg == "--vae") {
+            if (++i >= argc) {
+                break;
+            }
+            params.custom_vae_path = argv[i];
+            if(fileExists(params.custom_vae_path)) {
+                params.merge_custom_vae = true;
+                printf("merge custom vae '%s'\n", params.custom_vae_path.c_str());
+            }
         } else if(arg == "--type" || arg == "-tp") {
             if (++i >= argc) {
                 printf("specify the output format\n");
