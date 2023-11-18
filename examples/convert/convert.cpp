@@ -168,7 +168,8 @@ struct Tensor {
         }
         if(name.find("first_stage_model.") == 0 || params.vae) {
             target = VAE;
-        } else if(name.find("model.diffusion_model.") == 0) {
+        } else if(name.find("model.diffusion_model.") == 0 ||
+            params.lora && name.find(".unet.") != std::string::npos) {
             target = UNET;
         } else if(name.find("cond_stage_model.") == 0 ||
             name.find("conditioner.") == 0 ||
