@@ -933,7 +933,7 @@ struct CLIPTextModel {
         tensors[prefix + "final_layer_norm.weight"]              = final_ln_w;
         tensors[prefix + "final_layer_norm.bias"]                = final_ln_b;
         for (int i = 0; i < num_hidden_layers; i++) {
-            resblocks[i].map_by_name(tensors, prefix + "enc.layers." + std::to_string(i) + ".");
+            resblocks[i].map_by_name(tensors, prefix + "encoder.layers." + std::to_string(i) + ".");
         }
     }
 
@@ -1407,7 +1407,7 @@ struct SpatialTransformer {
 
         // transformer
         {
-            std::string transformer_prefix = prefix + "t_blks.0."; // to admit depth > 1 this must be "t_blks.%i" (SDXL)
+            std::string transformer_prefix = prefix + "transformer_blocks.0."; // to admit depth > 1 this must be "transformer_blocks.%i" (SDXL)
             tensors[transformer_prefix + "attn1.to_q.weight"] = transformer.attn1_q_w;
             tensors[transformer_prefix + "attn1.to_k.weight"] = transformer.attn1_k_w;
             tensors[transformer_prefix + "attn1.to_v.weight"] = transformer.attn1_v_w;
@@ -2170,8 +2170,8 @@ struct UNetModel {
         tensors[prefix + "time_embed.2.bias"]   = time_embed_2_b;
 
         // input_blocks
-        tensors[prefix + "in_blks.0.0.weight"] = input_block_0_w;
-        tensors[prefix + "in_blks.0.0.bias"] = input_block_0_b;
+        tensors[prefix + "input_blocks.0.0.weight"] = input_block_0_w;
+        tensors[prefix + "input_blocks.0.0.bias"] = input_block_0_b;
 
         int len_mults       = sizeof(channel_mult) / sizeof(int);
         int input_block_idx = 0;
@@ -2180,38 +2180,38 @@ struct UNetModel {
             for (int j = 0; j < num_res_blocks; j++) {
                 input_block_idx += 1;
 
-                input_res_blocks[i][j].map_by_name(tensors, prefix + "in_blks." + std::to_string(input_block_idx) + ".0.");
+                input_res_blocks[i][j].map_by_name(tensors, prefix + "input_blocks." + std::to_string(input_block_idx) + ".0.");
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    input_transformers[i][j].map_by_name(tensors, prefix + "in_blks." + std::to_string(input_block_idx) + ".1.");
+                    input_transformers[i][j].map_by_name(tensors, prefix + "input_blocks." + std::to_string(input_block_idx) + ".1.");
                 }
             }
             if (i != len_mults - 1) {
                 input_down_samples[i].index = input_block_idx;
                 input_block_idx += 1;
-                input_down_samples[i].map_by_name(tensors, prefix + "in_blks." + std::to_string(input_block_idx) + ".0.");
+                input_down_samples[i].map_by_name(tensors, prefix + "input_blocks." + std::to_string(input_block_idx) + ".0.");
                 ds *= 2;
             }
         }
 
         // middle_blocks
-        middle_block_0.map_by_name(tensors, prefix + "mddl_blk.0.");
-        middle_block_1.map_by_name(tensors, prefix + "mddl_blk.1.");
-        middle_block_2.map_by_name(tensors, prefix + "mddl_blk.2.");
+        middle_block_0.map_by_name(tensors, prefix + "middle_block.0.");
+        middle_block_1.map_by_name(tensors, prefix + "middle_block.1.");
+        middle_block_2.map_by_name(tensors, prefix + "middle_block.2.");
 
         // output_blocks
         int output_block_idx = 0;
         for (int i = len_mults - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
-                output_res_blocks[i][j].map_by_name(tensors, prefix + "out_blks." + std::to_string(output_block_idx) + ".0.");
+                output_res_blocks[i][j].map_by_name(tensors, prefix + "output_blocks." + std::to_string(output_block_idx) + ".0.");
 
                 int up_sample_idx = 1;
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    output_transformers[i][j].map_by_name(tensors, prefix + "out_blks." + std::to_string(output_block_idx) + ".1.");
+                    output_transformers[i][j].map_by_name(tensors, prefix + "output_blocks." + std::to_string(output_block_idx) + ".1.");
                     up_sample_idx++;
                 }
 
                 if (i > 0 && j == num_res_blocks) {
-                    output_up_samples[i - 1].map_by_name(tensors, prefix + "out_blks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx) + ".");
+                    output_up_samples[i - 1].map_by_name(tensors, prefix + "output_blocks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx) + ".");
 
                     ds /= 2;
                 }
@@ -3076,15 +3076,14 @@ struct Decoder {
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
-
         // conv_in
         auto h = ggml_conv_2d(ctx, conv_in_w, z, 1, 1, 1, 1, 1, 1);
-        h      = ggml_add(ctx,
-                          h,
-                          ggml_repeat(ctx,
-                                      ggml_reshape_4d(ctx, conv_in_b, 1, 1, conv_in_b->ne[0], 1),
-                                      h));  // [N, block_in, h, w]
-
+        h = ggml_add(ctx,
+                     h,
+                     ggml_repeat(ctx,
+                                 ggml_reshape_4d(ctx, conv_in_b, 1, 1, conv_in_b->ne[0], 1),
+                                 h));  // [N, block_in, h, w]
+        
         h = mid.block_1.forward(ctx, h);
         h = mid.attn_1.forward(ctx, h);
         h = mid.block_2.forward(ctx, h);  // [N, block_in, h, w]
@@ -3252,12 +3251,12 @@ struct AutoEncoderKL {
         if (!decode_only) {
             tensors[prefix + "quant_conv.weight"] = quant_conv_w;
             tensors[prefix + "quant_conv.bias"] = quant_conv_b;
-            encoder.map_by_name(tensors, prefix + "enc.");
+            encoder.map_by_name(tensors, prefix + "encoder.");
         }
 
         tensors[prefix + "post_quant_conv.weight"] = post_quant_conv_w;
         tensors[prefix + "post_quant_conv.bias"] = post_quant_conv_b;
-        decoder.map_by_name(tensors, prefix + "dec.");
+        decoder.map_by_name(tensors, prefix + "decoder.");
     }
 
     struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
@@ -3601,15 +3600,15 @@ class StableDiffusionGGML {
         {
             // cond_stage_model(FrozenCLIPEmbedder)
             cond_stage_model.text_model.alloc_params();
-            cond_stage_model.text_model.map_by_name(tensors, "clip.txt_mdl.");
+            cond_stage_model.text_model.map_by_name(tensors, "cond_stage_model.transformer.text_model.");
 
             // diffusion_model(UNetModel)
             diffusion_model.alloc_params();
-            diffusion_model.map_by_name(tensors, "unet.");
+            diffusion_model.map_by_name(tensors, "model.diffusion_model.");
 
             // firest_stage_model(AutoEncoderKL)
             first_stage_model.alloc_params(free_params_immediately);
-            first_stage_model.map_by_name(tensors, "vae.");
+            first_stage_model.map_by_name(tensors, "first_stage_model.");
         }
 
         std::set<std::string> tensor_names_in_file;
@@ -3646,7 +3645,7 @@ class StableDiffusionGGML {
             if (tensors.find(name) != tensors.end()) {
                 real = tensors[name];
             } else {
-                if (name.find("quant") == std::string::npos && name.find("vae.enc.") == std::string::npos) {
+                if (name.find("quant") == std::string::npos && name.find("first_stage_model.encoder.") == std::string::npos) {
                     LOG_WARN("unknown tensor '%s' in model file", name.data());
                 } else {
                     if (!vae_decode_only) {
@@ -3699,7 +3698,7 @@ class StableDiffusionGGML {
 
         bool some_tensor_not_init = false;
         for (auto pair : tensors) {
-            if (pair.first.find("clip.transf.txt_mdl.enc.layers.23") != std::string::npos) {
+            if (pair.first.find("cond_stage_model.transformer.text_model.encoder.layers.23") != std::string::npos) {
                 continue;
             }
 

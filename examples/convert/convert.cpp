@@ -23,7 +23,7 @@ std::string format(const char *fmt, ...) {
 
 using json = nlohmann::json;
 
-#define MAX_STRING_BUFFER 90
+#define MAX_STRING_BUFFER 95
 #define UNUSED_MODEL_TENSORS 20
 #define TIMESTEPS 1000
 
@@ -567,7 +567,6 @@ std::unordered_map<std::string, std::string> unet_convert_map_layers;
 std::unordered_map<std::string, std::string> vae_convert_map;
 std::unordered_map<std::string, std::string> clip_convert_map;
 std::unordered_map<std::string, std::string> lora_fix_map;
-std::unordered_map<std::string, std::string> shorten_name_map;
 
 std::string convert_unet_to_original(std::string name, convert_params params) {
     bool resnet_tensor = name.find("resnets") != std::string::npos;
@@ -625,6 +624,9 @@ std::string convert_unet_to_original(std::string name, convert_params params) {
         {
             unet_convert_map_layers[format("mid%sblock.resnets.%i.", separator, j)] = format("middle_block.%i.", 2 * j);
         }
+    }
+    if(params.lora) {
+        unet_convert_map[".unet."] = ".model.diffusion_model.";
     }
     
     std::string result = replace_name_by_map(name, unet_convert_map);
@@ -730,37 +732,10 @@ std::string fix_lora_names(std::string name) {
         lora_fix_map["to.k"] = "to_k";
         lora_fix_map["to.v"] = "to_v";
         lora_fix_map[".to.out"] = ".to_out";
+        lora_fix_map[".lora.down."] = ".lora_down.";
+        lora_fix_map[".lora.up."] = ".lora_up.";
     }
     return replace_name_by_map(name, lora_fix_map);
-}
-
-std::string shorten_name(std::string name, convert_params params) {
-    if(shorten_name_map.empty()) {
-        shorten_name_map["model.diffusion_model"] = "unet";
-        shorten_name_map["first_stage_model"] = "vae";
-        shorten_name_map["cond_stage_model"] = "clip";
-
-        // transformer blocks
-        shorten_name_map["transformer_blocks"] = "t_blks";
-        shorten_name_map["output_blocks"] = "out_blks";
-        shorten_name_map["input_blocks"] = "in_blks";
-        shorten_name_map["middle_block"] = "mddl_blk";
-
-        // clip
-        shorten_name_map["transformer.text_model"] = "txt_mdl";
-
-        // vae
-        shorten_name_map["encoder"] = "enc";
-        shorten_name_map["decoder"] = "dec";
-
-        if(params.lora) {
-            // Lora
-            shorten_name_map["lora"] = "lr";
-            shorten_name_map["lora.up"] = "lu";
-            shorten_name_map["lora.down"] = "ld";
-        }
-    }
-    return replace_name_by_map(name, shorten_name_map);
 }
 
 void* fetch_data(Tensor tensor, convert_params params) {
@@ -845,15 +820,14 @@ void preprocess_tensors(
         if(tensor.target == CLIP) {
             tensor.name = convert_clip_to_hf_clip(tensor.name, params);
             if(params.version == VERSION_2_x) {
-                std::string preffix = shorten_name(tensor.name, params);
-                size_t fw = preffix.find("attn.in_proj_weight");
-                size_t fb = preffix.find("attn.in_proj_bias");
+                size_t fw = tensor.name.find("attn.in_proj_weight");
+                size_t fb = tensor.name.find("attn.in_proj_bias");
                 if(fw != std::string::npos) {
                     Tensor q, k, v;
                     std::tie(q, k, v) = split_qkv_tensor(tensor, fetch_data(tensor, params));
                     for(int i = 0; i< 3;i++) {
                         Tensor attn_t = i == 0 ? q : (i == 1 ? k : v);
-                        attn_t.name = preffix.substr(0, fw) + kqv_self[i];
+                        attn_t.name = tensor.name.substr(0, fw) + kqv_self[i];
                         dst.push_back(attn_t);
                         if(params.verbose) {
                             printf("split %s => %s\n", it.first.c_str(), attn_t.name.c_str());
@@ -865,7 +839,7 @@ void preprocess_tensors(
                     std::tie(q, k, v) = split_qkv_tensor(tensor, fetch_data(tensor, params));
                     for(int i = 0; i< 3;i++) {
                         Tensor attn_t = i == 0 ? q : (i == 1 ? k : v);
-                        attn_t.name = preffix.substr(0, fb) + kqv_self[i + 3];
+                        attn_t.name = tensor.name.substr(0, fb) + kqv_self[i + 3];
                         dst.push_back(attn_t);
                         if(params.verbose) {
                             printf("split %s => %s\n", it.first.c_str(), attn_t.name.c_str());
@@ -894,14 +868,12 @@ void preprocess_tensors(
         if(is_unused_tensor(tensor.name)) { // discard tensors
             continue;
         }
-
-        tensor.name = shorten_name(tensor.name, params);
         if(params.lora) {
             int pos = name.find("lora.down");
             if(pos != std::string::npos) {
                 std::string key = name.substr(0, pos) + "alpha";
                 if(params.lora_alphas.find(key) != params.lora_alphas.end()) {
-                    int kpos = tensor.name.find("ld.");
+                    int kpos = tensor.name.find("lora.down.");
                     std::string target = tensor.name.substr(0, kpos) + "alpha";
                     params.lora_alphas[target] = params.lora_alphas[key];
                     params.lora_alphas.erase(key);
@@ -1032,16 +1004,16 @@ void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
     size_t total_org_model = 0, total_conv_model = 0;
 
     for(Tensor & tensor : processed_tensors) {
-        if(tensor.name.size() >= 64) {
+        if(tensor.name.size() >= GGML_MAX_NAME) {
             printf("Error: tensor name very large '%s', might not be supported anyway by stable-diffusion.cpp\n", tensor.name.c_str());
             exit(0);
             return;
         }
-        if(tensor.name.find("clip.") != std::string::npos) {
+        if(tensor.target == CLIP) {
              num_clip_tensors++;
-        } else if(tensor.name.find("unet.") != std::string::npos) {
+        } else if(tensor.target == UNET) {
             num_unet_tensors++;
-        } else if(tensor.name.find("vae.") != std::string::npos) {
+        } else if(tensor.target == VAE) {
             num_vae_tensors++;
         }
         ggml_type dest_type = GGML_TYPE_F32;
