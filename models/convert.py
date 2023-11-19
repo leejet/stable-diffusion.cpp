@@ -101,7 +101,7 @@ QK8_0 = 32
 def quantize_q8_0(x):
     assert x.shape[-1] % QK8_0 == 0 and x.shape[-1] > QK8_0
     x = x.reshape(-1, QK8_0)
-    amax = np.max(np.abs(x), axis=-1, keepdims=True) 
+    amax = np.max(np.abs(x), axis=-1, keepdims=True)
     d = amax / ((1 << 7) - 1)
     qs = (x / d).round().clip(min=-128, max=127).astype(np.int8)
     d = d.astype(np.float16).view(np.int8)
@@ -178,7 +178,7 @@ def preprocess(state_dict):
         print("no alphas_cumprod in file, generate new one")
         alphas_cumprod = get_alpha_comprod()
         state_dict["alphas_cumprod"] = alphas_cumprod
-    
+
     new_state_dict = {}
     for name, w in state_dict.items():
         # ignore unused tensors
@@ -251,7 +251,7 @@ def preprocess(state_dict):
                 new_state_dict[new_name] = w
                 print(f"preprocess {name} => {new_name}")
             continue
-        
+
         # convert unet transformer linear to conv2d 1x1
         if name.startswith("model.diffusion_model.") and (name.endswith("proj_in.weight") or name.endswith("proj_out.weight")):
             if len(w.shape) == 2:
@@ -421,7 +421,13 @@ def convert(model_path, out_type = None, out_file=None, lora=False):
                 continue
             if name in unused_tensors:
                 continue
-            data = state_dict[name].numpy()
+
+            data_tmp = state_dict[name]
+            if data_tmp.dtype == torch.bfloat16:
+                # numpy does not support bf16, so we conservatively upcast to f32
+                data = data_tmp.float().numpy()
+            else:
+                data = data_tmp.numpy()
 
             n_dims = len(data.shape)
             shape = data.shape
@@ -452,7 +458,7 @@ def convert(model_path, out_type = None, out_file=None, lora=False):
             else:
                 data = data.astype(np.float32)
                 ttype = "f32"
-            
+
             print("Processing tensor: {} with shape {}, {} -> {}".format(name, data.shape, old_type, ttype))
 
             # header
