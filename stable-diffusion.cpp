@@ -1651,6 +1651,8 @@ struct DownSample {
         assert(sizeof(b->nb[0]) == sizeof(float));
         float value = 0;
 
+        printf("asymetric_pad [%i, %i, %i, %i]\n", dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+
         for (int i = 0; i < dst->ne[3]; i++) {
             for (int j = 0; j < dst->ne[2]; j++) {
                 for (int k = 0; k < dst->ne[1]; k++) {
@@ -1779,7 +1781,6 @@ struct UNetModel {
     size_t memory_buffer_size = 0;
     ggml_type wtype;
     ggml_backend_t backend_unet = NULL;
-    bool use_gpu = true;
 
     UNetModel(sd_version version = VERSION_1_x) {
         // transformer_depth size is the same of channel_mult size
@@ -2003,10 +2004,8 @@ struct UNetModel {
 
     bool initialize(ggml_type wtype_) {
 #ifdef SD_USE_CUBLAS
-        if(use_gpu) {
-            LOG_DEBUG("Using CUDA backend - unet");
-            backend_unet = ggml_backend_cuda_init();
-        }
+        LOG_DEBUG("Using CUDA backend - unet");
+        backend_unet = ggml_backend_cuda_init();
 #endif
         if(!backend_unet) {
             LOG_DEBUG("Using CPU backend - unet");
@@ -3061,10 +3060,13 @@ struct AutoEncoderKL {
     Decoder decoder;
 
     struct ggml_context* ctx_vae;
-    ggml_backend_buffer_t buffer_vae;
+    ggml_backend_buffer_t buffer_params_vae;
+    ggml_backend_buffer_t buffer_compute_vae; // for compute
+    struct ggml_allocr * allocr_compute = NULL;
+
     int memory_buffer_size = 0;
     ggml_type wtype;
-    bool speed_up;
+    ggml_backend_t backend_vae = NULL;
 
     AutoEncoderKL(bool decode_only = false)
         : decode_only(decode_only) {
@@ -3104,7 +3106,15 @@ struct AutoEncoderKL {
         return static_cast<size_t>(mem_size);
     }
 
-    bool initialize(ggml_backend_t backend, ggml_type wtype_) {
+    bool initialize(ggml_type wtype_) {
+#ifdef SD_USE_CUBLAS
+        LOG_DEBUG("Using CUDA backend - vae");
+        backend_vae = ggml_backend_cuda_init();
+#endif
+        if(!backend_vae) {
+            LOG_DEBUG("Using CPU backend - vae");
+            backend_vae = ggml_backend_cpu_init();
+        }
         wtype = wtype_;
         memory_buffer_size = 1 * 1024 * 1024;  // 1 MB, for padding
         memory_buffer_size += calculate_mem_size();
@@ -3125,7 +3135,7 @@ struct AutoEncoderKL {
         params.mem_buffer = NULL;
         params.no_alloc = true;
 
-        buffer_vae = ggml_backend_alloc_buffer(backend, memory_buffer_size);
+        buffer_params_vae = ggml_backend_alloc_buffer(backend_vae, memory_buffer_size);
 
         ctx_vae = ggml_init(params);
         if (!ctx_vae) {
@@ -3142,9 +3152,8 @@ struct AutoEncoderKL {
         }
     }
 
-    void alloc_params(bool speed_up_) {
-        speed_up = speed_up_;
-        ggml_allocr * alloc = ggml_allocr_new_from_buffer(buffer_vae);
+    void alloc_params() {
+        ggml_allocr * alloc = ggml_allocr_new_from_buffer(buffer_params_vae);
 
         if (!decode_only) {
             quant_conv_w = ggml_new_tensor_4d(ctx_vae, GGML_TYPE_F16, 1, 1, 2 * dd_config.z_channels, 2 * embed_dim);
@@ -3183,9 +3192,6 @@ struct AutoEncoderKL {
 
         // post_quant_conv
         auto h = ggml_conv_2d(ctx, post_quant_conv_w, z, 1, 1, 0, 0, 1, 1);
-        if(speed_up) {
-            ggml_set_name(h, "fallback");
-        }
         h = ggml_add(ctx,
                      h, ggml_reshape_4d(ctx, post_quant_conv_b, 1, 1, post_quant_conv_b->ne[0], 1));  // [N, z_channels, h, w]
         h = decoder.forward(ctx, h);
@@ -3203,7 +3209,7 @@ struct AutoEncoderKL {
         return h;
     }
 
-    struct ggml_cgraph * build_graph(struct ggml_allocr * allocr, struct ggml_tensor* z, bool decode_graph) {
+    struct ggml_cgraph * build_graph(struct ggml_tensor* z, bool decode_graph) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
         static size_t buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
@@ -3218,7 +3224,23 @@ struct AutoEncoderKL {
 
         struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
 
-        struct ggml_tensor* out = decode_graph ? decode(ctx0, z) : encode(ctx0, z);
+        struct ggml_tensor* z_ = NULL;
+
+         // it's performing a compute, check if backend isn't cpu
+        if(!ggml_backend_is_cpu(backend_vae)) {
+            // pass input tensors to gpu memory
+            z_ = ggml_dup_tensor(ctx0, z);
+            ggml_allocr_alloc(allocr_compute, z_);
+
+            // pass data to device backend
+            if(!ggml_allocr_is_measure(allocr_compute)) {
+                ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
+            }
+        } else {
+            z_ = z;
+        }
+
+        struct ggml_tensor* out = decode_graph ? decode(ctx0, z_) : encode(ctx0, z_);
 
         ggml_build_forward_expand(gf, out);
         ggml_free(ctx0);
@@ -3226,23 +3248,50 @@ struct AutoEncoderKL {
         return gf;
     }
 
-    struct ggml_tensor* compute(struct ggml_allocr * allocr, ggml_backend_t backend,
+    void begin(struct ggml_tensor* x, bool decode) {
+        // calculate the amount of memory required
+        // alignment required by the backend
+        allocr_compute = ggml_allocr_new_measure_from_backend(backend_vae);
+
+        struct ggml_cgraph * gf = build_graph(x, decode);
+
+        // compute the required memory
+        size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(allocr_compute, gf);
+
+        // recreate the allocator with the required memory
+        ggml_allocr_free(allocr_compute);
+
+        LOG_DEBUG("vae compute buffer size: %.2f MB", compute_memory_buffer_size / 1024.0 / 1024.0);
+
+        buffer_compute_vae = ggml_backend_alloc_buffer(backend_vae, compute_memory_buffer_size);
+        allocr_compute = ggml_allocr_new_from_buffer(buffer_compute_vae);
+    }
+
+    struct ggml_tensor* compute(
         const int n_threads, struct ggml_tensor* z, bool decode_graph) {
 
-        struct ggml_cgraph * gf = build_graph(allocr, z, decode_graph);
-        ggml_allocr_alloc_graph(allocr, gf);
+        ggml_allocr_reset(allocr_compute);
 
-        if (ggml_backend_is_cpu(backend)) {
-            ggml_backend_cpu_set_n_threads(backend, n_threads);
+        struct ggml_cgraph * gf = build_graph(z, decode_graph);
+        ggml_allocr_alloc_graph(allocr_compute, gf);
+
+        if (ggml_backend_is_cpu(backend_vae)) {
+            ggml_backend_cpu_set_n_threads(backend_vae, n_threads);
         }
 
-        ggml_backend_graph_compute(backend, gf);
+        ggml_backend_graph_compute(backend_vae, gf);
 
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
 
         return gf->nodes[gf->n_nodes - 1];
+    }
+
+    void end() {
+        ggml_allocr_free(allocr_compute);
+        ggml_backend_buffer_free(buffer_compute_vae);
+        allocr_compute = NULL;
     }
 };
 
@@ -3367,8 +3416,6 @@ struct CompVisVDenoiser : public Denoiser {
 
 class StableDiffusionGGML {
    public:
-
-    ggml_backend_t backend = NULL;
     bool vae_decode_only = false;
     bool free_params_immediately = true; // speed up VAE Decoder
 
@@ -3496,16 +3543,13 @@ class StableDiffusionGGML {
             }
         }
 
-        // CPU Backend
-        backend = ggml_backend_cpu_init();
-
         // create the ggml context for network params
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
         
         if(
             !cond_stage_model.text_model.initialize(wtype) ||
             !diffusion_model.initialize(wtype) ||
-            !first_stage_model.initialize(backend, wtype)) {
+            !first_stage_model.initialize(wtype)) {
             return false;
         }
 
@@ -3521,7 +3565,7 @@ class StableDiffusionGGML {
             diffusion_model.map_by_name(tensors, "model.diffusion_model.");
 
             // firest_stage_model(AutoEncoderKL)
-            first_stage_model.alloc_params(free_params_immediately);
+            first_stage_model.alloc_params();
             first_stage_model.map_by_name(tensors, "first_stage_model.");
         }
 
@@ -4648,37 +4692,16 @@ class StableDiffusionGGML {
             }
         }
 
-        // calculate memory for computation
-        ggml_backend_buffer_t buf_compute; // for compute
-        struct ggml_allocr * allocr = NULL;
-
-        // calculate the amount of memory required
-        {
-             // alignment required by the backend
-            allocr = ggml_allocr_new_measure_from_backend(backend);
-
-            struct ggml_cgraph * gf = first_stage_model.build_graph(allocr, x, decode);
-            // compute the required memory
-            size_t mem_size = ggml_allocr_alloc_graph(allocr, gf);
-
-            // recreate the allocator with the required memory
-            ggml_allocr_free(allocr);
-            buf_compute = ggml_backend_alloc_buffer(backend, mem_size);
-            allocr = ggml_allocr_new_from_buffer(buf_compute);
-
-            LOG_DEBUG("vae compute buffer size: %.2f MB", mem_size / 1024.0 / 1024.0);
-        }
+        first_stage_model.begin(x, decode);
 
         int64_t t0 = ggml_time_ms();
-        struct ggml_tensor* res = first_stage_model.compute(allocr, backend, n_threads, x, decode);
-#ifdef SD_DUMP_TENSORS
-        save_tensor_to_file("output-autoencoder", res, "AutoEncoder output");
-#endif
-        ggml_allocr_free(allocr);
+        struct ggml_tensor* res = first_stage_model.compute(n_threads, x, decode);
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing vae [mode: %s] graph completed, taking %.2fs", decode ? "DECODE" : "ENCODE", (t1 - t0) * 1.0f / 1000);
+        res = ggml_fallback_tensor(draft_ctx, res, first_stage_model.backend_vae);
         result = ggml_dup_tensor(draft_ctx, res);
         copy_ggml_tensor(result, res);
+        first_stage_model.end();
         return result;
     }
 };
