@@ -95,6 +95,7 @@ struct Option {
     int n_threads = -1;
     std::string mode = TXT2IMG;
     std::string model_path;
+    std::string lora_model_dir;
     std::string output_path = "output.png";
     std::string init_img;
     std::string prompt;
@@ -115,6 +116,7 @@ struct Option {
         printf("    n_threads:       %d\n", n_threads);
         printf("    mode:            %s\n", mode.c_str());
         printf("    model_path:      %s\n", model_path.c_str());
+        printf("    lora_model_dir:  %s\n", lora_model_dir.c_str());
         printf("    output_path:     %s\n", output_path.c_str());
         printf("    init_img:        %s\n", init_img.c_str());
         printf("    prompt:          %s\n", prompt.c_str());
@@ -127,7 +129,7 @@ struct Option {
         printf("    sample_steps:    %d\n", sample_steps);
         printf("    strength:        %.2f\n", strength);
         printf("    rng:             %s\n", rng_type_to_str[rng_type]);
-        printf("    seed:            %ld\n", seed);
+        printf("    seed:            %lld\n", seed);
     }
 };
 
@@ -140,6 +142,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -t, --threads N                    number of threads to use during computation (default: -1).\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to model\n");
+    printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: .\\output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
@@ -183,6 +186,12 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 break;
             }
             opt->model_path = argv[i];
+        } else if (arg == "--lora-model-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            opt->lora_model_dir = argv[i];
         } else if (arg == "-i" || arg == "--init-img") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -419,7 +428,7 @@ int main(int argc, const char* argv[]) {
         init_img.assign(img_data, img_data + (opt.w * opt.h * c));
     }
 
-    StableDiffusion sd(opt.n_threads, vae_decode_only, true, opt.rng_type);
+    StableDiffusion sd(opt.n_threads, vae_decode_only, true, opt.lora_model_dir, opt.rng_type);
     if (!sd.load_from_file(opt.model_path, opt.schedule)) {
         return 1;
     }

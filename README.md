@@ -18,6 +18,8 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Original `txt2img` and `img2img` mode
 - Negative prompt
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
+- LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
+- Latent Consistency Models support(LCM/LCM-LoRA)
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -42,7 +44,6 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] Make inference faster
     - The current implementation of ggml_conv_2d is slow and has high memory usage
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
-- [ ] LoRA support
 - [ ] k-quants support
 
 ## Usage
@@ -125,6 +126,7 @@ arguments:
   -t, --threads N                    number of threads to use during computation (default: -1).
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
   -m, --model [MODEL]                path to model
+  --lora-model-dir [DIR]             lora model directory
   -i, --init-img [IMAGE]             path to the input image, required by img2img
   -o, --output OUTPUT                path to write result image to (default: .\output.png)
   -p, --prompt [PROMPT]              the prompt to render
@@ -134,11 +136,12 @@ arguments:
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
-  --sampling-method {euler, euler_a, heun, dpm++2m, dpm++2mv2, lcm}
+  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}
                                      sampling method (default: "euler_a")
   --steps  STEPS                     number of sample steps (default: 20)
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
+  --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)
   -v, --verbose                      print extra info
 ```
 
@@ -166,6 +169,45 @@ Using formats of different precisions will yield results of varying quality.
 <p align="center">
   <img src="./assets/img2img_output.png" width="256x">
 </p>
+
+#### with LoRA
+
+- convert lora weights to ggml model format
+
+    ```shell
+    cd models
+    python convert.py [path to weights] --lora
+    # For example, python convert.py marblesh.safetensors
+    ```
+
+- You can specify the directory where the lora weights are stored via `--lora-model-dir`. If not specified, the default is the current working directory.
+
+- LoRA is specified via prompt, just like [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora).
+
+Here's a simple example:
+
+```
+./bin/sd -m ../models/v1-5-pruned-emaonly-ggml-model-f16.bin -p "a lovely cat<lora:marblesh:1>" --lora-model-dir ../models
+```
+
+`../models/marblesh-ggml-lora.bin` will be applied to the model
+
+#### LCM/LCM-LoRA
+
+- Download LCM-LoRA form https://huggingface.co/latent-consistency/lcm-lora-sdv1-5
+- Specify LCM-LoRA by adding `<lora:lcm-lora-sdv1-5:1>` to prompt
+- It's advisable to set `--cfg-scale` to `1.0` instead of the default `7.0`. For `--steps`, a range of `2-8` steps is recommended. For `--sampling-method`, `lcm`/`euler_a` is recommended.
+
+Here's a simple example:
+
+```
+./bin/sd -m ../models/v1-5-pruned-emaonly-ggml-model-f16.bin -p "a lovely cat<lora:lcm-lora-sdv1-5:1>" --steps 4 --lora-model-dir ../models -v --cfg-scale 1
+```
+
+| without LCM-LoRA (--cfg-scale 7)  | with LCM-LoRA (--cfg-scale 1)  |
+| ----  |----    |
+| ![](./assets/without_lcm.png) |![](./assets/with_lcm.png)  |
+
 
 ### Docker
 
