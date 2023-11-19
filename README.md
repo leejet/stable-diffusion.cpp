@@ -232,6 +232,11 @@ docker run -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
 |  **Disk**        | 2.7G | 2.0G | 1.7G | 1.6G | 1.6G | 1.5G | 1.5G |
 |  **Memory**(txt2img - 512 x 512) | ~2.8G | ~2.3G | ~2.1G | ~2.0G | ~2.0G | ~2.0G | ~2.0G |
 
+## Contributors
+
+Thank you to all the people who have already contributed to stable-diffusion.cpp!
+
+[![Contributors](https://contrib.rocks/image?repo=leejet/stable-diffusion.cpp)](https://github.com/leejet/stable-diffusion.cpp/graphs/contributors)
 
 ## References
 
