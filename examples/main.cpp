@@ -88,11 +88,10 @@ const char* sample_method_str[] = {
 const char* schedule_str[] = {
     "default",
     "discrete",
-    "karras"
-};
+    "karras"};
 
 struct Option {
-    int n_threads = -1;
+    int n_threads    = -1;
     std::string mode = TXT2IMG;
     std::string model_path;
     std::string lora_model_dir;
@@ -100,16 +99,16 @@ struct Option {
     std::string init_img;
     std::string prompt;
     std::string negative_prompt;
-    float cfg_scale = 7.0f;
-    int w = 512;
-    int h = 512;
+    float cfg_scale            = 7.0f;
+    int w                      = 512;
+    int h                      = 512;
     SampleMethod sample_method = EULER_A;
-    Schedule schedule = DEFAULT;
-    int sample_steps = 20;
-    float strength = 0.75f;
-    RNGType rng_type = CUDA_RNG;
-    int64_t seed = 42;
-    bool verbose = false;
+    Schedule schedule          = DEFAULT;
+    int sample_steps           = 20;
+    float strength             = 0.75f;
+    RNGType rng_type           = CUDA_RNG;
+    int64_t seed               = 42;
+    bool verbose               = false;
 
     void print() {
         printf("Option: \n");
@@ -129,7 +128,7 @@ struct Option {
         printf("    sample_steps:    %d\n", sample_steps);
         printf("    strength:        %.2f\n", strength);
         printf("    rng:             %s\n", rng_type_to_str[rng_type]);
-        printf("    seed:            %lld\n", seed);
+        printf("    seed:            %ld\n", seed);
     }
 };
 
@@ -266,7 +265,7 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 break;
             }
             const char* schedule_selected = argv[i];
-            int schedule_found = -1;
+            int schedule_found            = -1;
             for (int d = 0; d < N_SCHEDULES; d++) {
                 if (!strcmp(schedule_selected, schedule_str[d])) {
                     schedule_found = d;
@@ -289,7 +288,7 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 break;
             }
             const char* sample_method_selected = argv[i];
-            int sample_method_found = -1;
+            int sample_method_found            = -1;
             for (int m = 0; m < N_SAMPLE_METHODS; m++) {
                 if (!strcmp(sample_method_selected, sample_method_str[m])) {
                     sample_method_found = m;
@@ -405,6 +404,7 @@ int main(int argc, const char* argv[]) {
         vae_decode_only = false;
 
         int c = 0;
+
         unsigned char* img_data = stbi_load(opt.init_img.c_str(), &opt.w, &opt.h, &c, 3);
         if (img_data == NULL) {
             fprintf(stderr, "load image from '%s' failed\n", opt.init_img.c_str());

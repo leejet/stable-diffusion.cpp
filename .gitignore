@@ -3,3 +3,4 @@ test/
 
 .cache/
 *.swp
+.vscode/

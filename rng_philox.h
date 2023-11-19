@@ -9,15 +9,15 @@
 // RNG imitiating torch cuda randn on CPU.
 // Port from: https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/5ef669de080814067961f28357256e8fe27544f4/modules/rng_philox.py
 class PhiloxRNG : public RNG {
-   private:
+private:
     uint64_t seed;
     uint32_t offset;
 
-   private:
+private:
     std::vector<uint32_t> philox_m = {0xD2511F53, 0xCD9E8D57};
     std::vector<uint32_t> philox_w = {0x9E3779B9, 0xBB67AE85};
-    float two_pow32_inv = 2.3283064e-10f;
-    float two_pow32_inv_2pi = 2.3283064e-10f * 6.2831855f;
+    float two_pow32_inv            = 2.3283064e-10f;
+    float two_pow32_inv_2pi        = 2.3283064e-10f * 6.2831855f;
 
     std::vector<uint32_t> uint32(uint64_t x) {
         std::vector<uint32_t> result(2);
@@ -87,14 +87,14 @@ class PhiloxRNG : public RNG {
         return r1;
     }
 
-   public:
+public:
     PhiloxRNG(uint64_t seed = 0) {
-        this->seed = seed;
+        this->seed   = seed;
         this->offset = 0;
     }
 
     void manual_seed(uint64_t seed) {
-        this->seed = seed;
+        this->seed   = seed;
         this->offset = 0;
     }
 
