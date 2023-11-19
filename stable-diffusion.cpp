@@ -4635,14 +4635,14 @@ std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
     }
     sd->rng->manual_seed(seed);
 
-    // extract and remote lora
+    // extract and remove lora
     auto result_pair                                = extract_and_remove_lora(prompt);
     std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
     for (auto& kv : lora_f2m) {
         LOG_DEBUG("lora %s:%.2f", kv.first.c_str(), kv.second);
     }
     prompt = result_pair.second;
-    LOG_DEBUG("prompt after extract and remote lora: \"%s\"", prompt.c_str());
+    LOG_DEBUG("prompt after extract and remove lora: \"%s\"", prompt.c_str());
 
     // load lora from file
     int64_t t0 = ggml_time_ms();
@@ -4750,14 +4750,14 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     }
     sd->rng->manual_seed(seed);
 
-    // extract and remote lora
+    // extract and remove lora
     auto result_pair                                = extract_and_remove_lora(prompt);
     std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
     for (auto& kv : lora_f2m) {
         LOG_DEBUG("lora %s:%.2f", kv.first.c_str(), kv.second);
     }
     prompt = result_pair.second;
-    LOG_DEBUG("prompt after extract and remote lora: \"%s\"", prompt.c_str());
+    LOG_DEBUG("prompt after extract and remove lora: \"%s\"", prompt.c_str());
 
     // load lora from file
     int64_t t0 = ggml_time_ms();
