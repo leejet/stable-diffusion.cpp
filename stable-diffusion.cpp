@@ -276,9 +276,6 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
     while (std::regex_search(text, matches, re)) {
         std::string filename = matches[1].str();
         float multiplier     = std::stof(matches[2].str());
-        if (multiplier < 0.f) {
-            continue;
-        }
         if (filename2multiplier.find(filename) == filename2multiplier.end()) {
             filename2multiplier[filename] = multiplier;
         } else {
