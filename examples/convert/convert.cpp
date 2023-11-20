@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <cstdlib>
 #include <string>
+#include <set>
 #include <vector>
 #include <stdarg.h>
 
@@ -143,6 +144,8 @@ struct convert_params {
     // LoRA
     bool lora = false;
     std::map<std::string, float> lora_alphas;
+    std::set<std::string> alpha_keys;
+    std::vector<float> alpha_values;
     sd_lora_type lora_type = LORA_NONE;
 
     // VAE
@@ -706,7 +709,9 @@ std::string convert_clip_to_hf_clip(std::string name, convert_params params) {
                 "embeddings.position_embedding.weight";
         } else {
             clip_convert_map["resblocks."] = "text_model.encoder.layers.";
-            clip_convert_map[".attn."] = ".self_attn.";
+            if(!params.lora) {
+                clip_convert_map[".attn."] = ".self_attn.";
+            }
             clip_convert_map["ln_final."] = "transformer.text_model.final_layer_norm.";
             if(name == "token_embedding.weight") {
                 return "transformer.text_model.embeddings.token_embedding.weight";
@@ -794,7 +799,8 @@ std::tuple<Tensor, Tensor, Tensor> split_qkv_tensor(Tensor qkv_tensor, void* qkv
 
 void preprocess_tensors(
     tensor_umap_t & src,
-    std::vector<Tensor> & dst, convert_params & params) {
+    std::vector<Tensor> & dst,
+    convert_params & params) {
     printf("preprocessing %zu tensors\n", src.size());
     for(auto & it : src) {
         std::string name = it.first;
@@ -881,21 +887,25 @@ void preprocess_tensors(
         if(is_unused_tensor(tensor.name)) { // discard tensors
             continue;
         }
+
         if(params.lora) {
-            int pos = name.find("lora.down");
+            int pos = name.find("lora.up.weight");
             if(pos != std::string::npos) {
                 std::string key = name.substr(0, pos) + "alpha";
                 if(params.lora_alphas.find(key) != params.lora_alphas.end()) {
-                    int kpos = tensor.name.find("lora.down.");
+                    int kpos = tensor.name.find("lora_up");
                     std::string target = tensor.name.substr(0, kpos) + "alpha";
-                    params.lora_alphas[target] = params.lora_alphas[key];
-                    params.lora_alphas.erase(key);
+                    params.alpha_keys.emplace(target);
+                    params.alpha_values.push_back(params.lora_alphas[key]);
                 } else {
                     printf("WARNING: missing alpha '%s'\n", key.c_str());
                 }
             }
         }
         dst.push_back(tensor);
+    }
+    if(params.lora) {
+        params.lora_alphas.clear();
     }
 }
 
@@ -972,19 +982,14 @@ void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
         gguf_set_val_str(g_ctx, "sd.lora.name", params.model_name.c_str());
         gguf_set_val_i32(g_ctx, "sd.lora.dtype", (int)params.out_type);
         gguf_set_val_i32(g_ctx, "sd.lora.type", (int)params.lora_type);
-
-        // process alphas
-        std::vector<float> alpha_values;
-        std::vector<const char*> alpha_key;
-
-        for(auto k : params.lora_alphas) {
-            alpha_key.push_back(k.first.c_str());
-            alpha_values.push_back(k.second);
+        
+        printf("writing %zu lora alphas\n", params.alpha_keys.size());
+        std::vector<const char*> dest;
+        for (const auto& src : params.alpha_keys) {
+            dest.push_back(src.c_str());
         }
-
-        printf("writing %zu lora alphas\n", alpha_key.size());
-        gguf_set_arr_str(g_ctx, "sd.lora.alphas_k", alpha_key.data(), alpha_key.size());
-        gguf_set_arr_data(g_ctx, "sd.lora.alphas_v", GGUF_TYPE_FLOAT32, alpha_values.data(), alpha_values.size());
+        gguf_set_arr_str(g_ctx, "sd.lora.alphas_k", dest.data(), dest.size());
+        gguf_set_arr_data(g_ctx, "sd.lora.alphas_v", GGUF_TYPE_FLOAT32, params.alpha_values.data(), params.alpha_values.size());
     } else if(params.vae) {
         gguf_set_val_str(g_ctx, "sd.vae.name", params.model_name.c_str());
         gguf_set_val_i32(g_ctx, "sd.vae.dtype", (int)params.out_type);

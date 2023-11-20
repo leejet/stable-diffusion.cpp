@@ -3267,6 +3267,263 @@ struct AutoEncoderKL {
     }
 };
 
+struct LoraModel {
+    float strength = 1.0f;
+    std::map<std::string, float> lora_alphas;
+    std::map<std::string, struct ggml_tensor*> lora_tensors;
+
+    struct ggml_context* ctx_lora;
+    ggml_backend_buffer_t buffer_params_lora;
+    ggml_backend_t backend_lora = NULL;
+
+    bool load(std::string file_path) {
+        LOG_INFO("loading LoRA from '%s'", file_path.c_str());
+        ggml_context* ctx_meta = NULL;
+        gguf_context* ctx_gguf = gguf_init_from_file(file_path.c_str(), {true, &ctx_meta});
+
+        if (!ctx_gguf) {
+            LOG_ERROR("failed to open '%s'", file_path.c_str());
+            return false;
+        }
+
+        FILE* fp = std::fopen(file_path.c_str(), "rb");
+
+        sd_version version = VERSION_COUNT;
+
+        int n_kv      = gguf_get_n_kv(ctx_gguf);
+        int n_tensors = gguf_get_n_tensors(ctx_gguf);
+
+        for (int i = 0; i < n_kv; i++) {
+            const char * name         = gguf_get_key(ctx_gguf, i);
+            const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
+            LOG_DEBUG("%s: - kv %3d: %42s %-8s", __func__, i, name, gguf_type_name(type));
+        }
+
+        {
+            int nidx = gguf_find_key(ctx_gguf, "sd.lora.name");
+            int tidx = gguf_find_key(ctx_gguf, "sd.lora.type");
+            if(tidx >= 0 && nidx >= 0) {
+                LOG_INFO("LoRA Type: %i | %s", tidx, gguf_get_val_str(ctx_gguf, nidx));
+            }
+        }
+
+#ifdef SD_USE_CUBLAS
+        LOG_DEBUG("Using CUDA backend - lora");
+        backend_lora = ggml_backend_cuda_init();
+#endif
+        if(!backend_lora) {
+            LOG_DEBUG("Using CPU backend - lora");
+            backend_lora = ggml_backend_cpu_init();
+        }
+
+        struct ggml_init_params params;
+        params.mem_size = static_cast<size_t>(n_tensors * ggml_tensor_overhead());
+        params.mem_buffer = NULL;
+        params.no_alloc = true;
+
+        ctx_lora = ggml_init(params);
+        if (!ctx_lora) {
+            LOG_ERROR("ggml_init() failed");
+            return false;
+        }
+
+        ggml_type wtype = GGML_TYPE_COUNT;
+        {
+            int idx = gguf_find_key(ctx_gguf, "sd.lora.dtype");
+            if(idx >= 0) {
+                wtype = (ggml_type)gguf_get_val_i32(ctx_gguf, idx);
+                LOG_INFO("LoRA data type: %s", ggml_type_name(wtype));
+            }
+        }
+
+        LOG_DEBUG("calculating buffer size");
+        int memory_buffer_size = 0;
+
+        for(int i = 0; i < n_tensors; i++) {
+            std::string name = gguf_get_tensor_name(ctx_gguf, i);
+            struct ggml_tensor * dummy = ggml_get_tensor(ctx_meta, name.c_str());
+            memory_buffer_size += ggml_nbytes(dummy);
+        }
+        LOG_DEBUG("lora params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
+
+        buffer_params_lora = ggml_backend_alloc_buffer(backend_lora, memory_buffer_size);
+
+        LOG_DEBUG("loading alphas");
+        {
+            int kidx = gguf_find_key(ctx_gguf, "sd.lora.alphas_k");
+            int vidx = gguf_find_key(ctx_gguf, "sd.lora.alphas_v");
+            int n_alphas = gguf_get_arr_n(ctx_gguf, kidx);
+            if(n_alphas*2 != n_tensors) {
+                LOG_ERROR("lora alphas expected: %i, got %i", n_tensors, n_alphas*2);
+                return false;
+            }
+            float* alphas_values = (float*)gguf_get_arr_data(ctx_gguf, vidx);
+            for(int i = 0; i < n_alphas; i++) {
+                std::string alpha_name = gguf_get_arr_str(ctx_gguf, kidx, i);
+                lora_alphas[alpha_name] = alphas_values[i];
+            }
+        }
+
+        ggml_allocr * alloc = ggml_allocr_new_from_buffer(buffer_params_lora);
+
+        size_t data_offset = gguf_get_data_offset(ctx_gguf);
+        std::vector<char> read_buf;
+        for(int i = 0; i < n_tensors; i++) {
+            std::string name = gguf_get_tensor_name(ctx_gguf, i);
+            struct ggml_tensor * dummy = ggml_get_tensor(ctx_meta, name.c_str());
+            size_t offset = data_offset + gguf_get_tensor_offset(ctx_gguf, i);
+
+#ifdef _WIN32
+            int ret = _fseeki64(fp, (__int64) offset, SEEK_SET);
+#else
+            int ret = std::fseek(fp, (long) offset, SEEK_SET);
+#endif
+            if(ret == -1) {
+                return false;
+            }
+
+            struct ggml_tensor * real = ggml_dup_tensor(ctx_lora, dummy);
+            ggml_allocr_alloc(alloc, real);
+
+            int num_bytes = ggml_nbytes(dummy);
+
+            if (ggml_backend_is_cpu(backend_lora)) {
+                // for the CPU and Metal backend, we can read directly into the tensor
+                std::fread(real->data, 1, num_bytes, fp);
+            } else {
+                // read into a temporary buffer first, then copy to device memory
+                read_buf.resize(num_bytes);
+                std::fread(read_buf.data(), 1, num_bytes, fp);
+                ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
+            }
+
+            lora_tensors[name] = real;
+        }
+        read_buf.clear();
+        std::fclose(fp);
+        gguf_free(ctx_gguf);
+        ggml_free(ctx_meta);
+        LOG_DEBUG("finished loaded lora");
+        return true;
+    }
+
+    struct ggml_cgraph * build_graph(struct ggml_allocr * allocr_compute, std::map<std::string, struct ggml_tensor*> model_tensors) {
+        // make a graph to compute all lora, expected lora and models tensors are in the same backend
+        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
+        static size_t buf_size = ggml_tensor_overhead() * UNET_GRAPH_SIZE + ggml_graph_overhead();
+        static std::vector<uint8_t> buf(buf_size);
+
+        struct ggml_init_params params = {
+            /*.mem_size   =*/ buf_size,
+            /*.mem_buffer =*/ buf.data(),
+            /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_allocr_alloc_graph()
+        };
+
+        struct ggml_context * ctx0 = ggml_init(params);
+
+        struct ggml_cgraph  * gf = ggml_new_graph_custom(ctx0, UNET_GRAPH_SIZE, false);
+        for(auto it : model_tensors) {
+            std::string k_tensor = it.first;
+
+            size_t k_pos = k_tensor.find(".weight");
+            if(k_pos == std::string::npos) {
+                continue;
+            }
+            k_tensor = k_tensor.substr(0, k_pos);
+            std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
+            std::string lora_down_name = "lora." + k_tensor + ".lora_down.weight";
+            std::string lora_alpha_name = "lora." + k_tensor + ".alpha";
+            if(
+                lora_tensors.find(lora_up_name) != lora_tensors.end() &&
+                lora_tensors.find(lora_down_name) != lora_tensors.end() &&
+                lora_alphas.find(lora_alpha_name) != lora_alphas.end()) {
+                struct ggml_tensor* loraA = lora_tensors[lora_up_name];
+                struct ggml_tensor* loraB = lora_tensors[lora_down_name];
+                struct ggml_tensor* weight = model_tensors[it.first];
+
+                float scale = strength;
+                scale *= (lora_alphas[lora_alpha_name] / loraB->ne[loraB->n_dims - 1]);
+                ggml_tensor* lora_scale = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+
+                ggml_allocr_alloc(allocr_compute, lora_scale);
+                if(!ggml_allocr_is_measure(allocr_compute)) {
+                    ggml_backend_tensor_set(lora_scale, &scale, 0, ggml_nbytes(lora_scale));
+                }
+
+                // flat lora tensors to multiply it
+                int loraA_rows = loraA->ne[loraA->n_dims - 1];
+                loraA = ggml_reshape_2d(ctx0, loraA, ggml_nelements(loraA) / loraA_rows, loraA_rows);
+                int loraB_rows = loraB->ne[loraB->n_dims - 1];
+                loraB = ggml_reshape_2d(ctx0, loraB, ggml_nelements(loraB) / loraB_rows, loraB_rows);
+
+                // ggml_mul_mat requires tensor b transposed
+                loraB = ggml_cont(ctx0, ggml_transpose(ctx0, loraB));
+                struct ggml_tensor* loraBA = ggml_mul_mat(ctx0, loraA, loraB);
+                loraBA              = ggml_cont(ctx0, ggml_transpose(ctx0, loraBA));
+                loraBA              = ggml_reshape(ctx0, loraBA, weight);
+                GGML_ASSERT(ggml_nelements(loraBA) == ggml_nelements(weight));
+                loraBA = ggml_scale_inplace(ctx0, loraBA, lora_scale);
+                ggml_tensor* final_weight;
+                final_weight = ggml_add_inplace(ctx0, weight, loraBA); // apply directly
+                ggml_build_forward_expand(gf, final_weight);
+            }
+        }
+        return gf;
+    }
+
+    void apply(std::map<std::string, struct ggml_tensor*> model_tensors, int n_threads) {
+        struct ggml_allocr * allocr_compute = NULL;
+        ggml_backend_buffer_t buffer_compute_lora = NULL;
+
+        // compute the required memory
+        {
+            allocr_compute = ggml_allocr_new_measure_from_backend(backend_lora);
+            struct ggml_cgraph * gf = build_graph(allocr_compute, model_tensors);
+            size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(allocr_compute, gf);
+
+            // recreate the allocator with the required memory
+            ggml_allocr_free(allocr_compute);
+            LOG_DEBUG("apply lora buffer size: %.2f MB", compute_memory_buffer_size / 1024.0 / 1024.0);
+            buffer_compute_lora = ggml_backend_alloc_buffer(backend_lora, compute_memory_buffer_size);
+            allocr_compute = ggml_allocr_new_from_buffer(buffer_compute_lora);
+        }
+
+        ggml_allocr_reset(allocr_compute);
+
+        struct ggml_cgraph * gf = build_graph(allocr_compute, model_tensors);
+        ggml_allocr_alloc_graph(allocr_compute, gf);
+
+        if (ggml_backend_is_cpu(backend_lora)) {
+            ggml_backend_cpu_set_n_threads(backend_lora, n_threads);
+        }
+
+        LOG_DEBUG("computing lora");
+        ggml_backend_graph_compute(backend_lora, gf);
+
+        LOG_DEBUG("free lora");
+        ggml_allocr_free(allocr_compute);
+        ggml_backend_buffer_free(buffer_compute_lora);
+        allocr_compute = NULL;
+    }
+
+    void release() {
+        if (ctx_lora != NULL) {
+            ggml_free(ctx_lora);
+            ctx_lora = NULL;
+        }
+
+        if (buffer_params_lora != NULL) {
+            ggml_backend_buffer_free(buffer_params_lora);
+            buffer_params_lora = NULL;
+        }
+
+        if(backend_lora != NULL) {
+            ggml_backend_free(backend_lora);
+            backend_lora = NULL;
+        }
+    }
+};
+
 /*================================================= CompVisDenoiser ==================================================*/
 
 // Ref: https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/external.py
@@ -3403,12 +3660,9 @@ class StableDiffusionGGML {
     std::map<std::string, struct ggml_tensor*> tensors;
 
     std::string lora_model_dir;
-    // lora_name => lora_tensor_name => tensor
-    std::map<std::string, std::map<std::string, struct ggml_tensor*>> lora_tensors;
-    // lora_name => lora_params_ctx
-    std::map<std::string, ggml_context*> lora_params_ctxs;
     // lora_name => multiplier
     std::unordered_map<std::string, float> curr_lora_state;
+    std::map<std::string, LoraModel> loras;
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
 
@@ -3441,22 +3695,6 @@ class StableDiffusionGGML {
         diffusion_model.destroy();
         first_stage_model.destroy();
     }
-
-    /*
-        Apply LoRA
-        scale = (user lora strength)
-        k_tensor = "unet.out_blks.9.1.t_blks.0.attn2.to_k"
-        target_weights = model_tensors[k_tensor + ".weight"]
-
-        loraA = lora_tensors[k_tensor + ".lu.weight"]
-        loraB = lora_tensors[k_tensor + ".ld.weight"]
-        alpha = lora_alphas[k_tensor + ".alpha"]
-
-        scale *= (alpha / loraB.shape[0])
-
-        target_weights += (scale * mul_mat(loraA, transpose(loraB))) // ggml_mul_mat transpose
-
-     */
 
     bool load_from_file(const std::string& file_path, sd_sample_schedule schedule) {
         LOG_INFO("loading model from '%s'", file_path.c_str());
@@ -3757,143 +3995,13 @@ class StableDiffusionGGML {
 
     void apply_lora(const std::string& lora_name, float multiplier) {
         int64_t t0 = ggml_time_ms();
-        if (!load_lora_from_file(lora_name)) {
-            std::string file_path = lora_model_dir + lora_name + "-ggml-lora.bin";
-            LOG_WARN("apply lora '%s' failed", lora_name.c_str());
-            return;
-        }
-
-        size_t ctx_size  = 500 * 1024 * 1024;  // 500MB
-        void* mem_buffer = malloc(ctx_size);
-        if (!mem_buffer) {
-            if (free_params_immediately) {
-                remove_lora_params(lora_name);
-            }
-            LOG_ERROR("malloc() failed");
-            return;
-        }
-
-        std::map<std::string, struct ggml_tensor*>& lora_tensor_map = lora_tensors[lora_name];
-        std::set<std::string> applied_lora_tensors;
-        for (auto& kv : tensors) {
-            const std::string name = kv.first;
-            ggml_tensor* weight    = kv.second;
-            std::string ending     = ".weight";
-            if (!ends_with(name, ending)) {
-                continue;
-            }
-
-            // find corresponding lora tensors
-            std::string network_name = name.substr(0, name.size() - ending.size());  // remove .weight
-            replace_all_chars(network_name, '.', '_');
-            std::string lora_up_name   = network_name + ".lora_up.weight";
-            std::string lora_down_name = network_name + ".lora_down.weight";
-            std::string alpha_name     = network_name + ".alpha";
-            std::string scale_name     = network_name + ".scale";
-
-            ggml_tensor* lora_up   = NULL;
-            ggml_tensor* lora_down = NULL;
-
-            float scale = 1.0f;
-
-            if (lora_tensor_map.find(lora_up_name) != lora_tensor_map.end()) {
-                lora_up = lora_tensor_map[lora_up_name];
-            }
-
-            if (lora_tensor_map.find(lora_down_name) != lora_tensor_map.end()) {
-                lora_down = lora_tensor_map[lora_down_name];
-            }
-
-            if (lora_up == NULL || lora_down == NULL) {
-                continue;
-            }
-
-            // LOG_DEBUG("apply lora tensor %s [%ld %ld %ld %ld]", network_name.c_str(), weight->ne[0], weight->ne[1], weight->ne[2], weight->ne[3]);
-
-            applied_lora_tensors.insert(lora_up_name);
-            applied_lora_tensors.insert(lora_down_name);
-            applied_lora_tensors.insert(alpha_name);
-            applied_lora_tensors.insert(scale_name);
-
-            // calc_scale
-            int64_t dim = lora_down->ne[lora_down->n_dims - 1];
-            if (lora_tensor_map.find(scale_name) != lora_tensor_map.end()) {
-                ggml_tensor* t = lora_tensor_map[scale_name];
-                scale          = ggml_get_f32_1d(t, 0);
-            } else if (lora_tensor_map.find(alpha_name) != lora_tensor_map.end()) {
-                ggml_tensor* t = lora_tensor_map[alpha_name];
-                scale          = ggml_get_f32_1d(t, 0) / dim;
-            }
-
-            // LOG_DEBUG("scale: %f %ld", scale, dim);
-
-            scale = scale * multiplier;
-
-            // apply
-            {
-                struct ggml_init_params params;
-                params.mem_size   = ctx_size;
-                params.mem_buffer = mem_buffer;
-                params.no_alloc   = false;
-
-                struct ggml_context* ctx = ggml_init(params);
-                if (!ctx) {
-                    LOG_ERROR("ggml_init() failed");
-                    free(mem_buffer);
-                    if (free_params_immediately) {
-                        remove_lora_params(lora_name);
-                    }
-                    return;
-                }
-
-                ggml_tensor* scale_factor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-                ggml_set_f32_1d(scale_factor, 0, scale);
-                int64_t lora_up_size_0   = lora_up->ne[lora_up->n_dims - 1];
-                lora_up                  = ggml_reshape_2d(ctx, lora_up, ggml_nelements(lora_up) / lora_up_size_0, lora_up_size_0);
-                int64_t lora_down_size_0 = lora_down->ne[lora_down->n_dims - 1];
-                lora_down                = ggml_reshape_2d(ctx, lora_down, ggml_nelements(lora_down) / lora_down_size_0, lora_down_size_0);
-
-                lora_down = ggml_cont(ctx, ggml_transpose(ctx, lora_down));
-
-                if (lora_down->type != GGML_TYPE_F32) {
-                    ggml_tensor* lora_down_f32 = ggml_new_tensor(ctx, GGML_TYPE_F32, lora_down->n_dims, lora_down->ne);
-                    lora_down                  = ggml_cpy_inplace(ctx, lora_down, lora_down_f32);
-                }
-
-                ggml_tensor* updown = ggml_mul_mat(ctx, lora_up, lora_down);
-                updown              = ggml_cont(ctx, ggml_transpose(ctx, updown));
-                updown              = ggml_reshape(ctx, updown, weight);
-
-                GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
-
-                updown = ggml_scale_inplace(ctx, updown, scale_factor);
-                ggml_tensor* final_weight;
-                final_weight = ggml_add_inplace(ctx, weight, updown);
-                final_weight = ggml_cpy_inplace(ctx, final_weight, weight);
-
-                struct ggml_cgraph* graph = ggml_new_graph(ctx);
-
-                ggml_build_forward_expand(graph, final_weight);
-
-                ggml_graph_compute_with_ctx(ctx, graph, n_threads);
-
-                // LOG_INFO("network_name '%s' ggml_used_mem size = %.2fMB",
-                //           network_name.c_str(),
-                //           ggml_used_mem(ctx) / 1024.0 / 1024.0);
-
-                ggml_free(ctx);
-            }
-        }
-        free(mem_buffer);
-
-        for (auto& kv : lora_tensor_map) {
-            if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
-                LOG_WARN("unused lora tensor %s", kv.first.c_str());
-            }
-        }
-
-        if (free_params_immediately) {
-            remove_lora_params(lora_name);
+        LoraModel lora;
+        std::string file_path = lora_model_dir + lora_name + ".gguf";
+        if(lora.load(file_path)) {
+            lora.strength = multiplier;
+            lora.apply(tensors, n_threads);
+            loras[lora_name] = lora;
+            lora.release();
         }
 
         int64_t t1 = ggml_time_ms();
@@ -3902,134 +4010,6 @@ class StableDiffusionGGML {
                  lora_name.c_str(),
                  multiplier,
                  (t1 - t0) * 1.0f / 1000);
-    }
-
-     bool load_lora_from_file(const std::string& lora_name) {
-        if (lora_tensors.find(lora_name) != lora_tensors.end()) {
-            return true;
-        }
-        std::string file_path = lora_model_dir + lora_name + "-ggml-lora.bin";
-        LOG_INFO("loading lora '%s' from '%s'", lora_name.c_str(), file_path.c_str());
-
-        std::ifstream file(file_path, std::ios::binary);
-        if (!file.is_open()) {
-            LOG_ERROR("failed to open '%s'", file_path.c_str());
-            return false;
-        }
-
-        // get file size
-        file.seekg(0, file.end);
-        int file_size = (int)file.tellg();
-        file.seekg(0, file.beg);
-
-        LOG_DEBUG("'%s': %.2fMB", file_path.c_str(), file_size * 1.f / 1024 / 1024);
-
-        LOG_DEBUG("verifying magic");
-        // verify magic
-        {
-            uint32_t magic;
-            file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-            if (magic != GGML_FILE_MAGIC) {
-                LOG_ERROR("invalid model file '%s' (bad magic)", file_path.c_str());
-                return false;
-            }
-        }
-
-        LOG_DEBUG("loading hparams");
-        // load hparams
-        int ftype;
-        file.read(reinterpret_cast<char*>(&ftype), sizeof(ftype));
-
-        int model_type = (ftype >> 16) & 0xFFFF;
-        if (model_type >= VERSION_COUNT) {
-            LOG_ERROR("invalid model file '%s' (bad model type value %d)", file_path.c_str(), ftype);
-            return false;
-        }
-        LOG_INFO("lora model type: %s", model_version_to_str[model_type]);
-
-        ggml_type wtype = ggml_ftype_to_ggml_type((ggml_ftype)(ftype & 0xFFFF));
-        LOG_INFO("ftype: %s", ggml_type_name(wtype));
-        if (wtype == GGML_TYPE_COUNT) {
-            LOG_ERROR("invalid model file '%s' (bad ftype value %d)", file_path.c_str(), ftype);
-            return false;
-        }
-
-        // create the ggml context for network params
-        struct ggml_init_params params;
-        size_t ctx_size = 10 * 1024 * 1024;  // 10 MB, for padding
-        ctx_size += file_size;
-        params.mem_size   = ctx_size;
-        params.mem_buffer = NULL;
-        params.no_alloc   = false;
-        LOG_DEBUG("lora '%s' params ctx size = % 6.2f MB", lora_name.c_str(), ctx_size / (1024.0 * 1024.0));
-        ggml_context* lora_params_ctx = ggml_init(params);
-        if (!lora_params_ctx) {
-            LOG_ERROR("ggml_init() failed");
-            return false;
-        }
-        lora_params_ctxs[lora_name] = lora_params_ctx;
-
-        std::map<std::string, struct ggml_tensor*> lora_tensor_map;
-        int64_t t0 = ggml_time_ms();
-        // load weights
-        {
-            int n_tensors     = 0;
-            size_t total_size = 0;
-
-            while (true) {
-                int32_t n_dims;
-                int32_t length;
-                int32_t ttype;
-
-                file.read(reinterpret_cast<char*>(&n_dims), sizeof(n_dims));
-                file.read(reinterpret_cast<char*>(&length), sizeof(length));
-                file.read(reinterpret_cast<char*>(&ttype), sizeof(ttype));
-
-                if (file.eof()) {
-                    break;
-                }
-
-                int32_t nelements = 1;
-                int32_t ne[4]     = {1, 1, 1, 1};
-                for (int i = 0; i < n_dims; ++i) {
-                    file.read(reinterpret_cast<char*>(&ne[i]), sizeof(ne[i]));
-                    nelements *= ne[i];
-                }
-
-                const size_t num_bytes = nelements / ggml_blck_size(ggml_type(ttype)) * ggml_type_size(ggml_type(ttype));
-
-                std::string name_buf(length, 0);
-                file.read(&name_buf[0], length);
-                std::string name = std::string(name_buf.data());
-
-                // LOG_DEBUG("load lora tensor %s", name.c_str());
-
-                int64_t ne64[4]            = {ne[0], ne[1], ne[2], ne[3]};
-                struct ggml_tensor* tensor = ggml_new_tensor(lora_params_ctx, (ggml_type)ttype, n_dims, ne64);
-                file.read(reinterpret_cast<char*>(tensor->data), num_bytes);
-
-                lora_tensor_map[name] = tensor;
-
-                total_size += ggml_nbytes(tensor);
-            }
-        }
-        lora_tensors[lora_name] = lora_tensor_map;
-        int64_t t1              = ggml_time_ms();
-        LOG_INFO("lora '%s' params size = %.2fMB",
-                 lora_name.c_str(),
-                 ggml_used_mem(lora_params_ctx) / 1024.0 / 1024.0);
-        LOG_INFO("loading lora from '%s' completed, taking %.2fs", file_path.c_str(), (t1 - t0) * 1.0f / 1000);
-        file.close();
-        return true;
-    }
-
-    void remove_lora_params(const std::string& lora_name) {
-        if (lora_params_ctxs.find(lora_name) == lora_params_ctxs.end()) {
-            return;
-        }
-        ggml_free(lora_params_ctxs[lora_name]);
-        lora_params_ctxs.erase(lora_name);
-        lora_tensors.erase(lora_name);
     }
 
     void apply_loras(const std::unordered_map<std::string, float>& lora_state) {
@@ -4067,9 +4047,6 @@ class StableDiffusionGGML {
         struct ggml_tensor* hidden_states = cond_stage_model.text_model.compute(n_threads, tokens);
         std::string type = uc ? "uncond": "cond";
         hidden_states = ggml_fallback_tensor(draft_ctx, hidden_states, cond_stage_model.text_model.backend_clip);
-#ifdef SD_DUMP_TENSORS
-        save_tensor_to_file("output-clip-" + type, hidden_states, "CLIP Model output");
-#endif
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %i ms", t1 - t0);
         ggml_tensor* result = ggml_dup_tensor(draft_ctx, hidden_states);  // [N, n_token, hidden_size]
@@ -4733,7 +4710,6 @@ std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
     prompt = result_pair.second;
     LOG_DEBUG("prompt after extract and remove lora: \"%s\"", prompt.c_str());
 
-    // load lora from file
     int64_t t0 = ggml_time_ms();
     sd->apply_loras(lora_f2m);
     int64_t t1 = ggml_time_ms();
