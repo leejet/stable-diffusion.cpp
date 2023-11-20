@@ -192,7 +192,7 @@ def preprocess(state_dict):
         if skip:
             continue
 
-        # # convert BF16 to FP16
+        # convert BF16 to FP16
         if w.dtype == torch.bfloat16:
             w = w.to(torch.float16)
 
@@ -342,6 +342,11 @@ def preprocess_lora(state_dict):
     for name, w in state_dict.items():
         if not isinstance(w, torch.Tensor):
             continue
+
+        # convert BF16 to FP16
+        if w.dtype == torch.bfloat16:
+            w = w.to(torch.float16)
+
         name_without_network_parts, network_part = name.split(".", 1)
         new_name_without_network_parts = convert_diffusers_name_to_compvis(name_without_network_parts)
         if new_name_without_network_parts == None:
@@ -422,12 +427,7 @@ def convert(model_path, out_type = None, out_file=None, lora=False):
             if name in unused_tensors:
                 continue
 
-            data_tmp = state_dict[name]
-            if data_tmp.dtype == torch.bfloat16:
-                # numpy does not support bf16, so we conservatively upcast to f32
-                data = data_tmp.float().numpy()
-            else:
-                data = data_tmp.numpy()
+            data = state_dict[name].numpy()
 
             n_dims = len(data.shape)
             shape = data.shape
