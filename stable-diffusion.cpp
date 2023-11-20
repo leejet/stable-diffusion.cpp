@@ -1639,44 +1639,11 @@ struct DownSample {
         }
     }
 
-    // TODO: making it parallel
-    static void asymmetric_pad(struct ggml_tensor* dst,
-                               const struct ggml_tensor* a,
-                               const struct ggml_tensor* b,
-                               int ith,
-                               int nth,
-                               void* userdata) {
-        assert(sizeof(dst->nb[0]) == sizeof(float));
-        assert(sizeof(a->nb[0]) == sizeof(float));
-        assert(sizeof(b->nb[0]) == sizeof(float));
-        float value = 0;
-
-        printf("asymetric_pad [%i, %i, %i, %i]\n", dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
-
-        for (int i = 0; i < dst->ne[3]; i++) {
-            for (int j = 0; j < dst->ne[2]; j++) {
-                for (int k = 0; k < dst->ne[1]; k++) {
-                    for (int l = 0; l < dst->ne[0]; l++) {
-                        if (k == dst->ne[1] - 1 || l == dst->ne[0] - 1) {
-                            value = 0;
-                        } else {
-                            value = ggml_tensor_get_f32(b, l, k, j, i);
-                        }
-                        // printf("%d %d %d %d -> %f\n", i, j, k, l, value);
-                        ggml_tensor_set_f32(dst, value, l, k, j, i);
-                    }
-                }
-            }
-        }
-    }
-
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [N, channels, h, w]
         struct ggml_tensor* c = nullptr;
         if (vae_downsample) {
-            auto pad_x = ggml_new_tensor_4d(ctx, x->type, x->ne[0] + 1, x->ne[1] + 1, x->ne[2], x->ne[3]);
-
-            c = ggml_map_custom2_inplace(ctx, pad_x, x, asymmetric_pad, 1, NULL);
+            c = ggml_pad(ctx, x, 1, 1, 0, 0);
             c = ggml_conv_2d(ctx, op_w, c, 2, 2, 0, 0, 1, 1);
         } else {
             c = ggml_conv_2d(ctx, op_w, x, 2, 2, 1, 1, 1, 1);
@@ -2236,6 +2203,7 @@ struct UNetModel {
         h = ggml_add(ctx,
                      h,
                      ggml_reshape_4d(ctx, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1));  // [N, model_channels, h, w]
+        ggml_set_name(h, "b-start");
         hs.push_back(h);
         // input block 1-11
         int len_mults = sizeof(channel_mult) / sizeof(int);
@@ -2296,6 +2264,7 @@ struct UNetModel {
         h = ggml_conv_2d(ctx, out_2_w, h, 1, 1, 1, 1, 1, 1);
         h = ggml_add(ctx,
                      h, ggml_reshape_4d(ctx, out_2_b, 1, 1, out_2_b->ne[0], 1));  // [N, out_channels, h, w]
+        ggml_set_name(h, "b-end");
         return h;
     }
 
@@ -2810,6 +2779,7 @@ struct Encoder {
         auto h = ggml_conv_2d(ctx, conv_in_w, x, 1, 1, 1, 1, 1, 1);
         h = ggml_add(ctx,
                      h, ggml_reshape_4d(ctx, conv_in_b, 1, 1, conv_in_b->ne[0], 1));  // [N, ch, h, w]
+        ggml_set_name(h, "b-start");
         int len_mults = sizeof(ch_mult) / sizeof(int);
         for (int i = 0; i < len_mults; i++) {
             for (int j = 0; j < num_res_blocks; j++) {
@@ -3189,12 +3159,13 @@ struct AutoEncoderKL {
 
     struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
-
         // post_quant_conv
         auto h = ggml_conv_2d(ctx, post_quant_conv_w, z, 1, 1, 0, 0, 1, 1);
         h = ggml_add(ctx,
                      h, ggml_reshape_4d(ctx, post_quant_conv_b, 1, 1, post_quant_conv_b->ne[0], 1));  // [N, z_channels, h, w]
+        ggml_set_name(h, "b-start");
         h = decoder.forward(ctx, h);
+        ggml_set_name(h, "b-end");
         return h;
     }
 
@@ -3206,6 +3177,7 @@ struct AutoEncoderKL {
         h = ggml_add(ctx,
                      h,
                      ggml_reshape_4d(ctx, quant_conv_b, 1, 1, quant_conv_b->ne[0], 1));  // [N, 2*embed_dim, h/8, w/8]
+        ggml_set_name(h, "b-end");
         return h;
     }
 
@@ -4682,8 +4654,7 @@ class StableDiffusionGGML {
         int64_t W = x->ne[0];
         int64_t H = x->ne[1];
 
-        struct ggml_tensor* result = NULL;
-
+        ggml_tensor* result = NULL;
         if(decode) {
             // process latent out
             float* vec = (float*)x->data;
@@ -4691,6 +4662,8 @@ class StableDiffusionGGML {
                 vec[i] = 1.0f / scale_factor * vec[i];
             }
         }
+
+        
 
         first_stage_model.begin(x, decode);
 
@@ -4804,7 +4777,6 @@ std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
     }
     int64_t t3 = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t3 - t2) * 1.0f / 1000);
-
     if (sd->free_params_immediately) {
         sd->first_stage_model.destroy();
     }
@@ -4914,7 +4886,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
         result = ggml_to_image_vec(img);
     }
     int64_t t4 = ggml_time_ms();
-    LOG_INFO("decode_first_stage completed, taking %.2fs", (t3 - t4) * 1.0f / 1000);
+    LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
 
     if (sd->free_params_immediately) {
         sd->first_stage_model.destroy();
