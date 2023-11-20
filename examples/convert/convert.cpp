@@ -1074,7 +1074,17 @@ void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
         num_clip_tensors,
         num_unet_tensors,
         num_vae_tensors);
-    gguf_write_to_file(g_ctx, params.output_path.c_str(), false);
+    if(params.output_path.empty()) {
+        size_t last = params.model_path.find_last_of("/\\");
+        params.model_name = params.model_path.substr(last + 1);
+        last = params.from_folder ? params.model_name.length() : params.model_name.find_last_of(".");
+        if(!params.lora) {
+            params.output_path = params.model_name.substr(0, last) + "-" + ggml_type_name(params.out_type) + ".gguf";
+        } else {
+            params.output_path = params.model_name.substr(0, last) + ".gguf";
+        }
+    }
+    gguf_write_to_file(g_ctx, params.output_path.c_str(), false, true);
     printf("model saved '%s' correctly.", params.output_path.c_str());
     ggml_free(ctx);
     gguf_free(g_ctx);
@@ -1121,7 +1131,7 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
 
         // auto detect lora
         if(!params.lora) {
-            if(tensor_name == "__metadata__" && tensor_props.contains("ss_network_module")) {
+            if((tensor_name == "__metadata__" && tensor_props.contains("ss_network_module")) || tensor_name.find("lora_") == 0) {
                 params.lora = tensor_props["ss_network_module"] == "networks.lora";
                 if(params.lora) {
                     printf("LoRA detected\n");
@@ -1260,10 +1270,6 @@ void convert_model(convert_params & params) {
     tensor_umap_t loaded_tensors;
     size_t last = params.model_path.find_last_of("/\\");
     params.model_name = params.model_path.substr(last + 1);
-    if(params.output_path.empty()) {
-        last = params.from_folder ? params.model_name.length() : params.model_name.find_last_of(".");
-        params.output_path = params.model_name.substr(0, last) + "-" + ggml_type_name(params.out_type) + ".gguf";
-    }
     if(params.from_folder) {
         // Hardcoded in https://github.com/huggingface/diffusers/blob/main/scripts/convert_diffusers_to_original_stable_diffusion.py
         std::string diff_clip_path = params.model_path + "/text_encoder/model.safetensors";

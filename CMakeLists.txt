@@ -25,7 +25,7 @@ endif()
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_CUBLAS                     "sd: cuda backend" OFF)
-option(SD_DUMP_OUT_TENSORS           "sd: dump output tensors (DEBUG)" OFF)
+option(SD_FLASH_ATTN            "sd: use flash attention for x4 less memory usage" OFF)
 option(BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
@@ -35,8 +35,9 @@ if(SD_CUBLAS)
     add_definitions(-DSD_USE_CUBLAS)
 endif()
 
-if(SD_DUMP_OUT_TENSORS)
-    add_definitions(-DSD_DUMP_TENSORS)
+if(SD_FLASH_ATTN)
+    message("Use Flash Attention for memory optimization")
+    add_definitions(-DSD_USE_FLASH_ATTENTION)
 endif()
 
 

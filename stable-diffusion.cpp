@@ -30,6 +30,7 @@
 static sd_log_level log_level = sd_log_level::INFO;
 
 #define UNET_GRAPH_SIZE 3328
+#define LORA_GRAPH_SIZE 4096
 
 #define __FILENAME__ "stable-diffusion.cpp"
 #define SD_LOG(level, format, ...)                                                                    \
@@ -203,24 +204,24 @@ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_pa
     return tensor;
 }
 
-void save_tensor_to_file(const std::string& file_name, ggml_tensor* tensor, const std::string & name) {
-    std::string file_name_ = file_name + ".tensor";
-    std::string name_ = name;
-    std::ofstream file("C:/proyects/output-tensors/" + file_name_, std::ios::binary);
-    file.write(reinterpret_cast<char*>(&tensor->n_dims), sizeof(tensor->n_dims));
-    int len = (int)name_.size();
-    file.write(reinterpret_cast<char*>(&len), sizeof(len));
-    int ttype = (int)tensor->type;
-    file.write(reinterpret_cast<char*>(&ttype), sizeof(ttype));
-    for (int i = 0; i < tensor->n_dims; ++i) {
-        int ne_ = (int) tensor->ne[i];
-        file.write(reinterpret_cast<char*>(&ne_), sizeof(ne_));
-    }
-    file.write(&name_[0], len);
-    char* data = nullptr;
-    file.write((char*)tensor->data, ggml_nbytes(tensor));
-    file.close();
-}
+// void save_tensor_to_file(const std::string& file_name, ggml_tensor* tensor, const std::string & name) {
+//     std::string file_name_ = file_name + ".tensor";
+//     std::string name_ = name;
+//     std::ofstream file("C:/proyects/output-tensors/" + file_name_, std::ios::binary);
+//     file.write(reinterpret_cast<char*>(&tensor->n_dims), sizeof(tensor->n_dims));
+//     int len = (int)name_.size();
+//     file.write(reinterpret_cast<char*>(&len), sizeof(len));
+//     int ttype = (int)tensor->type;
+//     file.write(reinterpret_cast<char*>(&ttype), sizeof(ttype));
+//     for (int i = 0; i < tensor->n_dims; ++i) {
+//         int ne_ = (int) tensor->ne[i];
+//         file.write(reinterpret_cast<char*>(&ne_), sizeof(ne_));
+//     }
+//     file.write(&name_[0], len);
+//     char* data = nullptr;
+//     file.write((char*)tensor->data, ggml_nbytes(tensor));
+//     file.close();
+// }
 
 void copy_ggml_tensor(
     struct ggml_tensor* dst,
@@ -1461,7 +1462,9 @@ struct SpatialTransformer {
             {
                 x                     = ggml_reshape_2d(ctx, x, c, h * w * n);        // [N * h * w, in_channels]
                 struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn1_q_w, x);  // [N * h * w, in_channels]
+#if !defined(SD_USE_FLASH_ATTENTION) || defined(SD_USE_CUBLAS)
                 q = ggml_scale_inplace(ctx, q, attn_scale);
+#endif
                 q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
                 q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
                 q = ggml_reshape_3d(ctx, q, d_head, h * w, n_head * n);  // [N * n_head, h * w, d_head]
@@ -1476,11 +1479,15 @@ struct SpatialTransformer {
                 v                     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));    // [N, n_head, d_head, h * w]
                 v                     = ggml_reshape_3d(ctx, v, h * w, d_head, n_head * n);  // [N * n_head, d_head, h * w]
 
+#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS)
+                struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, h * w, d_head]
+#else
                 struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, h * w, h * w]
                 // kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
                 kq = ggml_soft_max_inplace(ctx, kq);
 
                 struct ggml_tensor* kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, h * w, d_head]
+#endif
                 kqv                     = ggml_reshape_4d(ctx, kqv, d_head, h * w, n_head, n);
                 kqv                     = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, h * w, n_head, d_head]
 
@@ -1507,8 +1514,9 @@ struct SpatialTransformer {
                 x                     = ggml_reshape_2d(ctx, x, c, h * w * n);                                           // [N * h * w, in_channels]
                 context               = ggml_reshape_2d(ctx, context, context->ne[0], context->ne[1] * context->ne[2]);  // [N * max_position, hidden_size]
                 struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn2_q_w, x);                                     // [N * h * w, in_channels]
-
+#if !defined(SD_USE_FLASH_ATTENTION) || defined(SD_USE_CUBLAS)
                 q = ggml_scale_inplace(ctx, q, attn_scale);
+#endif
                 q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
                 q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
                 q = ggml_reshape_3d(ctx, q, d_head, h * w, n_head * n);  // [N * n_head, h * w, d_head]
@@ -1522,13 +1530,15 @@ struct SpatialTransformer {
                 v                     = ggml_reshape_4d(ctx, v, d_head, n_head, max_position, n);   // [N, max_position, n_head, d_head]
                 v                     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));           // [N, n_head, d_head, max_position]
                 v                     = ggml_reshape_3d(ctx, v, max_position, d_head, n_head * n);  // [N * n_head, d_head, max_position]
-
+#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS)
+                struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, h * w, d_head]
+#else
                 struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, h * w, max_position]
                 // kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
                 kq = ggml_soft_max_inplace(ctx, kq);
 
                 struct ggml_tensor* kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, h * w, d_head]
-
+#endif
                 kqv = ggml_reshape_4d(ctx, kqv, d_head, h * w, n_head, n);
                 kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));
 
@@ -1970,6 +1980,14 @@ struct UNetModel {
     }
 
     bool initialize(ggml_type wtype_) {
+#ifdef SD_USE_FLASH_ATTENTION
+    #ifdef SD_USE_CUBLAS
+        LOG_WARN("Flash Attention not supported with CUDA");
+    #else
+        LOG_INFO("Flash Attention enabled");
+    #endif
+#endif
+
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend - unet");
         backend_unet = ggml_backend_cuda_init();
@@ -3410,7 +3428,7 @@ struct LoraModel {
     struct ggml_cgraph * build_graph(struct ggml_allocr * allocr_compute, std::map<std::string, struct ggml_tensor*> model_tensors) {
         // make a graph to compute all lora, expected lora and models tensors are in the same backend
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
-        static size_t buf_size = ggml_tensor_overhead() * UNET_GRAPH_SIZE + ggml_graph_overhead();
+        static size_t buf_size = ggml_tensor_overhead() * LORA_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
 
         struct ggml_init_params params = {
@@ -3421,7 +3439,7 @@ struct LoraModel {
 
         struct ggml_context * ctx0 = ggml_init(params);
 
-        struct ggml_cgraph  * gf = ggml_new_graph_custom(ctx0, UNET_GRAPH_SIZE, false);
+        struct ggml_cgraph  * gf = ggml_new_graph_custom(ctx0, LORA_GRAPH_SIZE, false);
         for(auto it : model_tensors) {
             std::string k_tensor = it.first;
 
@@ -4006,9 +4024,8 @@ class StableDiffusionGGML {
 
         int64_t t1 = ggml_time_ms();
 
-        LOG_INFO("apply lora '%s:%f' completed, taking %.2fs",
+        LOG_INFO("lora '%s' applied, taking %.2fs",
                  lora_name.c_str(),
-                 multiplier,
                  (t1 - t0) * 1.0f / 1000);
     }
 
@@ -4045,7 +4062,6 @@ class StableDiffusionGGML {
         cond_stage_model.text_model.begin(tokens.size());
         int64_t t0 = ggml_time_ms();
         struct ggml_tensor* hidden_states = cond_stage_model.text_model.compute(n_threads, tokens);
-        std::string type = uc ? "uncond": "cond";
         hidden_states = ggml_fallback_tensor(draft_ctx, hidden_states, cond_stage_model.text_model.backend_clip);
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %i ms", t1 - t0);
@@ -4640,15 +4656,13 @@ class StableDiffusionGGML {
             }
         }
 
-        
-
         first_stage_model.begin(x, decode);
 
         int64_t t0 = ggml_time_ms();
         struct ggml_tensor* res = first_stage_model.compute(n_threads, x, decode);
+        res = ggml_fallback_tensor(draft_ctx, res, first_stage_model.backend_vae);
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing vae [mode: %s] graph completed, taking %.2fs", decode ? "DECODE" : "ENCODE", (t1 - t0) * 1.0f / 1000);
-        res = ggml_fallback_tensor(draft_ctx, res, first_stage_model.backend_vae);
         result = ggml_dup_tensor(draft_ctx, res);
         copy_ggml_tensor(result, res);
         first_stage_model.end();
