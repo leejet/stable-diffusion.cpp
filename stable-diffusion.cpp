@@ -329,6 +329,8 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
         std::string filename = matches[1].str();
         float multiplier     = std::stof(matches[2].str());
 
+        text = std::regex_replace(text, re, "", std::regex_constants::format_first_only);
+
         if (multiplier == 0.f) {
             continue;
         }
@@ -339,7 +341,6 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
             filename2multiplier[filename] += multiplier;
         }
 
-        text = std::regex_replace(text, re, "", std::regex_constants::format_first_only);
     }
 
     return std::make_pair(filename2multiplier, text);
