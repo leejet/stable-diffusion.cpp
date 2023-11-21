@@ -3664,7 +3664,7 @@ struct CompVisVDenoiser : public Denoiser {
 class StableDiffusionGGML {
    public:
     bool vae_decode_only = false;
-    bool free_params_immediately = true; // speed up VAE Decoder
+    bool free_params_immediately = false;
 
     std::shared_ptr<RNG> rng = std::make_shared<STDDefaultRNG>();
     int n_threads = -1;
