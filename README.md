@@ -9,6 +9,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 ## Features
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
+- Super lightweight and without external dependencies.
 - 16-bit, 32-bit float support
 - 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
