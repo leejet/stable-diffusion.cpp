@@ -3484,11 +3484,7 @@ struct LoraModel {
         if (ggml_backend_is_cpu(backend)) {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
-
-        LOG_DEBUG("computing lora");
         ggml_backend_graph_compute(backend, gf);
-
-        LOG_DEBUG("free lora");
         ggml_allocr_free(compute_alloc);
         ggml_backend_buffer_free(buffer_compute_lora);
         compute_alloc = NULL;
@@ -3648,6 +3644,7 @@ class StableDiffusionGGML {
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
     ggml_backend_t backend; // general backend
+    ggml_type model_data_type = GGML_TYPE_COUNT;
 
     StableDiffusionGGML() = default;
 
@@ -3727,12 +3724,11 @@ class StableDiffusionGGML {
             }
         }
 
-        ggml_type wtype = GGML_TYPE_COUNT;
         {
             int idx = gguf_find_key(ctx_gguf, "sd.model.dtype");
             if(idx >= 0) {
-                wtype = (ggml_type)gguf_get_val_i32(ctx_gguf, idx);
-                LOG_INFO("model data type: %s", ggml_type_name(wtype));
+                model_data_type = (ggml_type)gguf_get_val_i32(ctx_gguf, idx);
+                LOG_INFO("model data type: %s", ggml_type_name(model_data_type));
             }
         }
 
@@ -3755,9 +3751,9 @@ class StableDiffusionGGML {
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
         
         if(
-            !cond_stage_model.text_model.initialize(backend, wtype) ||
-            !diffusion_model.initialize(backend, wtype) ||
-            !first_stage_model.initialize(backend, wtype)) {
+            !cond_stage_model.text_model.initialize(backend, model_data_type) ||
+            !diffusion_model.initialize(backend, model_data_type) ||
+            !first_stage_model.initialize(backend, model_data_type)) {
             return false;
         }
 
@@ -4004,6 +4000,9 @@ class StableDiffusionGGML {
     }
 
     void apply_loras(const std::unordered_map<std::string, float>& lora_state) {
+        if(lora_state.size() > 0 && model_data_type != GGML_TYPE_F16 && model_data_type != GGML_TYPE_F32) {
+            LOG_WARN("In quantized models when applying LoRA, the images have poor quality.");
+        }
         std::unordered_map<std::string, float> lora_state_diff;
         for (auto& kv : lora_state) {
             const std::string& lora_name = kv.first;

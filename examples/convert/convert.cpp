@@ -953,6 +953,10 @@ void *convert_tensor(void * source, Tensor tensor, ggml_type dst_type) {
 }
 
 void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
+    if(params.lora && params.out_type != GGML_TYPE_F32 && params.out_type != GGML_TYPE_F16) {
+        printf("Error: The LoRa conversion only supports f32 and f16.\n");
+        return;
+    }
     if(!params.vae &&
         tensors.find("first_stage_model.post_quant_conv.bias") == tensors.end() && // is not a stable diffusion model
         tensors.find("post_quant_conv.bias") != tensors.end() && !params.from_folder &&
