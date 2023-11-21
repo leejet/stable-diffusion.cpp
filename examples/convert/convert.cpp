@@ -20,6 +20,11 @@ std::string format(const char *fmt, ...) {
     return  std::string(result);
 }
 
+float bfloat16_to_fp32(uint16_t bfloat16) {
+    uint32_t val_bits = (static_cast<uint32_t>(bfloat16) << 16);
+    return *reinterpret_cast<float*>(&val_bits);
+}
+
 #include "vocab.hpp"
 
 using json = nlohmann::json;
@@ -1172,6 +1177,10 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
                         float val;
                         std::fread(&val, 1, sizeof(val), fp);
                         params.lora_alphas[tensor_name] = val;
+                    } else if(dtype == "BF16") { // force float 32 bits
+                        uint16_t val;
+                        std::fread(&val, 1, sizeof(val), fp);
+                        params.lora_alphas[tensor_name] = bfloat16_to_fp32(val);
                     }
                     continue;
             }
@@ -1204,6 +1213,17 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
                 int ne = tensor.data_size / ggml_type_size(tensor.dtype);
                 for(int i = 0;i < ne; i++) {
                     ((float*)tensor.data)[i] = ((double*)data)[i];
+                }
+                free(data);
+            } else if(dtype == "BF16") { // force float 32 bits
+                void* data = (void*)malloc(tensor.data_size);
+                std::fseek(fp, data_begin + start_data, SEEK_SET);
+                std::fread(data, 1, tensor.data_size, fp);
+                tensor.data_size *= 2;
+                tensor.data = malloc(tensor.data_size);
+                int ne = tensor.data_size / ggml_type_size(tensor.dtype);
+                for(int i = 0;i < ne; i++) {
+                    ((float*)tensor.data)[i] = bfloat16_to_fp32(((uint16_t*)data)[i]);
                 }
                 free(data);
             } else if(dtype != "F32") {
