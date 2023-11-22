@@ -1151,11 +1151,13 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
 
         // auto detect lora
         if(!params.lora) {
-            if((tensor_name == "__metadata__" && tensor_props.contains("ss_network_module")) || tensor_name.find("lora_") == 0) {
-                params.lora = tensor_props["ss_network_module"] == "networks.lora";
-                if(params.lora) {
-                    printf("LoRA detected\n");
-                }
+            if((tensor_name == "__metadata__" && tensor_props.contains("ss_network_module")) || 
+                tensor_name.find("lora_") == 0 &&
+                (tensor_name.find("lora_up.weight") != std::string::npos ||
+                tensor_name.find("lora_down.weight") != std::string::npos ||
+                tensor_name.find(".alpha") != std::string::npos)) {
+                params.lora = true;
+                printf("LoRA detected\n");
             }
         }
 
@@ -1169,10 +1171,13 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
                 if(params.lora_type == LORA_NONE) {
                     if(tensor_name.find("lora_up.weight") != std::string::npos) {
                         params.lora_type = LORA_REGULAR;
+                        printf("Lora type Regular\n");
                     } else if(tensor_name.find("lora.up.weight") != std::string::npos) {
                         params.lora_type = LORA_DIFFUSERS;
+                        printf("Lora type Diffusers\n");
                     } else if(tensor_name.find("lora_linear_layer.up.weight") != std::string::npos) {
                         params.lora_type = LORA_TRANSFORMERS;
+                        printf("Lora type Transformers\n");
                     }
                 }
                 // replace all '_' to '.'

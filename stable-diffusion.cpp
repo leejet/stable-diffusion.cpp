@@ -72,6 +72,11 @@ const char* model_version_to_str[] = {
     "2.x",
     "XL"};
 
+const char* lora_type_to_str[] = {
+    "regular",
+    "diffusers",
+    "transformers"};
+
 /*================================================== Helper Functions ================================================*/
 
 void set_sd_log_level(sd_log_level level) {
@@ -3301,7 +3306,7 @@ struct LoraModel {
             int nidx = gguf_find_key(ctx_gguf, "sd.lora.name");
             int tidx = gguf_find_key(ctx_gguf, "sd.lora.type");
             if(tidx >= 0 && nidx >= 0) {
-                LOG_INFO("LoRA Type: %i | %s", tidx, gguf_get_val_str(ctx_gguf, nidx));
+                LOG_INFO("LoRA Type: %s | %s", lora_type_to_str[gguf_get_val_i32(ctx_gguf, tidx) - 1], gguf_get_val_str(ctx_gguf, nidx));
             }
         }
 
