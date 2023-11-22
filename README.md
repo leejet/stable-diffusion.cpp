@@ -159,6 +159,7 @@ arguments:
   --steps  STEPS                     number of sample steps (default: 20)
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
+  -bc, --batch-count COUNT           number of images to generate.
   --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)
   -v, --verbose                      print extra info
 ```

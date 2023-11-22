@@ -23,32 +23,31 @@ int main(int argc, const char* argv[]) {
     }
 
     bool vae_decode_only = true;
-    std::vector<uint8_t> input_image_buffer;
+    uint8_t* input_image_buffer = NULL;
     if (params.mode == IMG2IMG) {
         vae_decode_only = false;
 
         int c = 0;
-        unsigned char* img_data = stbi_load(params.input_path.c_str(), &params.width, &params.height, &c, 3);
-        if (img_data == NULL) {
+        input_image_buffer = stbi_load(params.input_path.c_str(), &params.width, &params.height, &c, 3);
+        if (input_image_buffer == NULL) {
             fprintf(stderr, "load image from '%s' failed\n", params.input_path.c_str());
             return 1;
         }
         if (c != 3) {
             fprintf(stderr, "input image must be a 3 channels RGB image, but got %d channels\n", c);
-            free(img_data);
+            free(input_image_buffer);
             return 1;
         }
         if (params.width <= 0 || params.width % 64 != 0) {
             fprintf(stderr, "error: the width of image must be a multiple of 64\n");
-            free(img_data);
+            free(input_image_buffer);
             return 1;
         }
         if (params.height <= 0 || params.height % 64 != 0) {
             fprintf(stderr, "error: the height of image must be a multiple of 64\n");
-            free(img_data);
+            free(input_image_buffer);
             return 1;
         }
-        input_image_buffer.assign(img_data, img_data + (params.width * params.height * c));
     }
 
     StableDiffusion sd(params.n_threads, vae_decode_only, true, params.lora_model_dir, params.rng_type);
@@ -56,18 +55,19 @@ int main(int argc, const char* argv[]) {
         return 1;
     }
 
-    std::vector<uint8_t> img;
+    std::vector<uint8_t*> results;
     if (params.mode == TXT2IMG) {
-        img = sd.txt2img(params.prompt,
+        results = sd.txt2img(params.prompt,
                          params.negative_prompt,
                          params.cfg_scale,
                          params.width,
                          params.height,
                          params.sample_method,
                          params.sample_steps,
-                         params.seed);
+                         params.seed,
+                         params.batch_count);
     } else {
-        img = sd.img2img(input_image_buffer,
+        results = sd.img2img(input_image_buffer,
                          params.prompt,
                          params.negative_prompt,
                          params.cfg_scale,
@@ -79,13 +79,23 @@ int main(int argc, const char* argv[]) {
                          params.seed);
     }
 
-    if (img.size() == 0) {
+    if (results.size() == 0 || results.size() != params.batch_count) {
         fprintf(stderr, "generate failed\n");
         return 1;
     }
 
-    stbi_write_png(params.output_path.c_str(), params.width, params.height, 3, img.data(), 0, get_image_params(params));
-    printf("save result image to '%s'\n", params.output_path.c_str());
+    if(results.size() == 1) {
+        stbi_write_png(params.output_path.c_str(), params.width, params.height, 3, results[0], 0, get_image_params(params, params.seed));
+        printf("save result image to '%s'\n", params.output_path.c_str());
+    } else {
+        size_t last = params.output_path.find_last_of(".");
+        std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
+        for(int i = 0;i < params.batch_count; i++) {
+            std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
+            stbi_write_png(final_image_path.c_str(), params.width, params.height, 3, results[i], 0, get_image_params(params, params.seed + i));
+            printf("save result image to '%s'\n", final_image_path.c_str());
+        }
+    }
 
     return 0;
 }

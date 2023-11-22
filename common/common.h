@@ -23,6 +23,7 @@ struct sd_params {
     float cfg_scale = 7.0f;
     int width = 512;
     int height = 512;
+    int batch_count = 1;
 
     sd_sample_method sample_method = EULER_A;
     sd_sample_schedule schedule = DEFAULT;
@@ -39,4 +40,4 @@ void print_usage(int argc, const char* argv[]);
 
 void parse_args(int argc, const char** argv, sd_params & params);
 
-const char* get_image_params(sd_params params);
+const char* get_image_params(sd_params params, int seed);

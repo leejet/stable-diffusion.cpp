@@ -300,13 +300,11 @@ struct ggml_tensor* new_timestep_embedding(struct ggml_context* ctx, struct ggml
     return embedding;
 }
 
-std::vector<uint8_t> ggml_to_image_vec(struct ggml_tensor* t) {
+uint8_t* ggml_to_image_vec(struct ggml_tensor* t) {
     int64_t w = t->ne[0];
     int64_t h = t->ne[1];
     int64_t c = t->ne[2];
-    std::vector<uint8_t> vec;
-    vec.resize(w * h * c);
-    uint8_t* data = (uint8_t*)vec.data();
+    uint8_t* img_data = (uint8_t*)malloc(w * h * c);
     for (int i = 0; i < h; i++) {
         for (int j = 0; j < w; j++) {
             for (int k = 0; k < c; k++) {
@@ -318,23 +316,22 @@ std::vector<uint8_t> ggml_to_image_vec(struct ggml_tensor* t) {
                     value = 1;
                 }
                 value *= 255.f;
-                *(data + i * w * c + j * c + k) = (uint8_t)value;
+                *(img_data + i * w * c + j * c + k) = (uint8_t)value;
             }
         }
     }
-    return vec;
+    return img_data;
 }
 
-void image_vec_to_ggml(const std::vector<uint8_t>& vec,
+void image_vec_to_ggml(const uint8_t* image_data,
                        struct ggml_tensor* t) {
     int64_t w     = t->ne[0];
     int64_t h     = t->ne[1];
     int64_t c     = t->ne[2];
-    uint8_t* data = (uint8_t*)vec.data();
     for (int i = 0; i < h; i++) {
         for (int j = 0; j < w; j++) {
             for (int k = 0; k < c; k++) {
-                float value = *(data + i * w * c + j * c + k);
+                float value = *(image_data + i * w * c + j * c + k);
                 value       = value / 255.f;
                 value       = 2 * value - 1;
                 ggml_tensor_set_f32(t, value, j, i, k);
@@ -950,31 +947,31 @@ struct CLIPTextModel {
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* input_ids) {
+    struct ggml_tensor* forward(struct ggml_context* ctx0, struct ggml_tensor* input_ids) {
         // input_ids: [N, n_token]
         GGML_ASSERT(input_ids->ne[0] <= position_ids->ne[0]);
 
         // token_embedding + position_embedding
         struct ggml_tensor* x;
-        x = ggml_add(ctx,
-                     ggml_get_rows(ctx, token_embed_weight, input_ids),
-                     ggml_get_rows(ctx,
+        x = ggml_add(ctx0,
+                     ggml_get_rows(ctx0, token_embed_weight, input_ids),
+                     ggml_get_rows(ctx0,
                                    position_embed_weight,
-                                   ggml_view_1d(ctx, position_ids, input_ids->ne[0], 0)));  // [N, n_token, hidden_size]
+                                   ggml_view_1d(ctx0, position_ids, input_ids->ne[0], 0)));  // [N, n_token, hidden_size]
 
         // transformer
         for (int i = 0; i < num_hidden_layers; i++) {
             if (version == VERSION_2_x && i == num_hidden_layers - 1) {  // layer: "penultimate"
                 break;
             }
-            x = resblocks[i].forward(ctx, x);  // [N, n_token, hidden_size]
+            x = resblocks[i].forward(ctx0, x);  // [N, n_token, hidden_size]
         }
 
         // final layer norm
         {
-            x = ggml_norm(ctx, x, EPS);
+            x = ggml_norm(ctx0, x, EPS);
 
-            x = ggml_add(ctx, ggml_mul(ctx, x, final_ln_w),
+            x = ggml_add(ctx0, ggml_mul(ctx0, x, final_ln_w),
                          final_ln_b);
         }
 
@@ -1034,18 +1031,22 @@ struct CLIPTextModel {
 
     struct ggml_tensor* compute(const int n_threads, std::vector<int> tokens) {
         struct ggml_cgraph * gf = build_graph(compute_alloc, tokens);
+        
+        LOG_DEBUG("generating embeddings");
         ggml_allocr_alloc_graph(compute_alloc, gf);
 
         if (ggml_backend_is_cpu(backend)) {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
-
+        
+        LOG_DEBUG("compute embeddings");
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
         ggml_backend_tensor_get(gf->nodes[gf->n_nodes - 1], work_output->data, 0, ggml_nbytes(work_output));
+        LOG_DEBUG("compute embeddings");
         return work_output;
     }
 
@@ -2165,7 +2166,7 @@ struct UNetModel {
         tensors[prefix + "out.2.bias"]   = out_2_b;
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
+    struct ggml_tensor* forward(struct ggml_context* ctx0,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* timesteps,
                                 struct ggml_tensor* context,
@@ -2175,18 +2176,18 @@ struct UNetModel {
         // t_emb: [N, model_channels]
         // context: [N, max_position, hidden_size]([N, 77, 768])
         if (t_emb == NULL && timesteps != NULL) {
-            t_emb = new_timestep_embedding(ctx, compute_alloc, timesteps, model_channels);  // [N, model_channels]
+            t_emb = new_timestep_embedding(ctx0, compute_alloc, timesteps, model_channels);  // [N, model_channels]
         }
 
         // time_embed = nn.Sequential
         // Linear
-        auto emb = ggml_mul_mat(ctx, time_embed_0_w, t_emb);
-        emb = ggml_add(ctx, emb, time_embed_0_b);
+        auto emb = ggml_mul_mat(ctx0, time_embed_0_w, t_emb);
+        emb = ggml_add(ctx0, emb, time_embed_0_b);
         // nn.SiLU()
-        emb = ggml_silu_inplace(ctx, emb);
+        emb = ggml_silu_inplace(ctx0, emb);
         // Linear
-        emb = ggml_mul_mat(ctx, time_embed_2_w, emb);
-        emb = ggml_add(ctx, emb, time_embed_2_b);  // [N, time_embed_dim]
+        emb = ggml_mul_mat(ctx0, time_embed_2_w, emb);
+        emb = ggml_add(ctx0, emb, time_embed_2_b);  // [N, time_embed_dim]
 
         // SDXL
         // label_emd = nn.Sequential
@@ -2208,11 +2209,11 @@ struct UNetModel {
         std::vector<struct ggml_tensor*> hs;
 
         // input block 0
-        struct ggml_tensor* h = ggml_conv_2d(ctx, input_block_0_w, x, 1, 1, 1, 1, 1, 1);  // [N, model_channels, h, w]
+        struct ggml_tensor* h = ggml_conv_2d(ctx0, input_block_0_w, x, 1, 1, 1, 1, 1, 1);  // [N, model_channels, h, w]
 
-        h = ggml_add(ctx,
+        h = ggml_add(ctx0,
                      h,
-                     ggml_reshape_4d(ctx, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1));  // [N, model_channels, h, w]
+                     ggml_reshape_4d(ctx0, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1));  // [N, model_channels, h, w]
         ggml_set_name(h, "b-start");
         hs.push_back(h);
         // input block 1-11
@@ -2221,24 +2222,24 @@ struct UNetModel {
         for (int i = 0; i < len_mults; i++) {
             int mult = channel_mult[i];
             for (int j = 0; j < num_res_blocks; j++) {
-                h = input_res_blocks[i][j].forward(ctx, h, emb);  // [N, mult*model_channels, h, w]
+                h = input_res_blocks[i][j].forward(ctx0, h, emb);  // [N, mult*model_channels, h, w]
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    h = input_transformers[i][j].forward(ctx, h, context);  // [N, mult*model_channels, h, w]
+                    h = input_transformers[i][j].forward(ctx0, h, context);  // [N, mult*model_channels, h, w]
                 }
                 hs.push_back(h);
             }
             if (i != len_mults - 1) {
                 ds *= 2;
-                h = input_down_samples[i].forward(ctx, h);  // [N, mult*model_channels, h/(2^(i+1)), w/(2^(i+1))]
+                h = input_down_samples[i].forward(ctx0, h);  // [N, mult*model_channels, h/(2^(i+1)), w/(2^(i+1))]
                 hs.push_back(h);
             }
         }
         // [N, 4*model_channels, h/8, w/8]
 
         // middle_block
-        h = middle_block_0.forward(ctx, h, emb);      // [N, 4*model_channels, h/8, w/8]
-        h = middle_block_1.forward(ctx, h, context);  // [N, 4*model_channels, h/8, w/8]
-        h = middle_block_2.forward(ctx, h, emb);      // [N, 4*model_channels, h/8, w/8]
+        h = middle_block_0.forward(ctx0, h, emb);      // [N, 4*model_channels, h/8, w/8]
+        h = middle_block_1.forward(ctx0, h, context);  // [N, 4*model_channels, h/8, w/8]
+        h = middle_block_2.forward(ctx0, h, emb);      // [N, 4*model_channels, h/8, w/8]
 
         // output_blocks
         for (int i = len_mults - 1; i >= 0; i--) {
@@ -2246,15 +2247,15 @@ struct UNetModel {
                 auto h_skip = hs.back();
                 hs.pop_back();
 
-                h = ggml_concat(ctx, h, h_skip);
-                h = output_res_blocks[i][j].forward(ctx, h, emb);
+                h = ggml_concat(ctx0, h, h_skip);
+                h = output_res_blocks[i][j].forward(ctx0, h, emb);
 
                 if (ds == attention_resolutions[0] || ds == attention_resolutions[1] || ds == attention_resolutions[2]) {
-                    h = output_transformers[i][j].forward(ctx, h, context);
+                    h = output_transformers[i][j].forward(ctx0, h, context);
                 }
 
                 if (i > 0 && j == num_res_blocks) {
-                    h = output_up_samples[i - 1].forward(ctx, h);
+                    h = output_up_samples[i - 1].forward(ctx0, h);
 
                     ds /= 2;
                 }
@@ -2263,17 +2264,17 @@ struct UNetModel {
         
         // out
         // group norm 32
-        h = ggml_group_norm_32(ctx, h);
-        h = ggml_add(ctx,
-                     ggml_mul(ctx, h, ggml_reshape_4d(ctx, out_0_w, 1, 1, out_0_w->ne[0], 1)),
-                     ggml_reshape_4d(ctx, out_0_b, 1, 1, out_0_b->ne[0], 1));
+        h = ggml_group_norm_32(ctx0, h);
+        h = ggml_add(ctx0,
+                     ggml_mul(ctx0, h, ggml_reshape_4d(ctx0, out_0_w, 1, 1, out_0_w->ne[0], 1)),
+                     ggml_reshape_4d(ctx0, out_0_b, 1, 1, out_0_b->ne[0], 1));
         // silu
-        h = ggml_silu_inplace(ctx, h);
+        h = ggml_silu_inplace(ctx0, h);
 
         // conv2d
-        h = ggml_conv_2d(ctx, out_2_w, h, 1, 1, 1, 1, 1, 1);
-        h = ggml_add(ctx,
-                     h, ggml_reshape_4d(ctx, out_2_b, 1, 1, out_2_b->ne[0], 1));  // [N, out_channels, h, w]
+        h = ggml_conv_2d(ctx0, out_2_w, h, 1, 1, 1, 1, 1, 1);
+        h = ggml_add(ctx0,
+                     h, ggml_reshape_4d(ctx0, out_2_b, 1, 1, out_2_b->ne[0], 1));  // [N, out_channels, h, w]
         ggml_set_name(h, "b-end");
         return h;
     }
@@ -2324,7 +2325,6 @@ struct UNetModel {
                 if(timesteps_t != NULL) { ggml_backend_tensor_set(timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps)); }
                 if(t_emb_t != NULL) {
                     ggml_backend_tensor_set(t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
-                    t_emb_t = ggml_cont(ctx0, t_emb_t);
                 }
             }
         } else {
@@ -2332,7 +2332,7 @@ struct UNetModel {
             x_t = x;
             timesteps_t = timesteps;
             context_t = context;
-            t_emb_t = ggml_cont(ctx0, t_emb);
+            t_emb_t = t_emb;
         }
 
         struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, t_emb_t);
@@ -3156,26 +3156,26 @@ struct AutoEncoderKL {
         decoder.map_by_name(tensors, prefix + "decoder.");
     }
 
-    struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
+    struct ggml_tensor* decode(struct ggml_context* ctx0, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
         // post_quant_conv
-        auto h = ggml_conv_2d(ctx, post_quant_conv_w, z, 1, 1, 0, 0, 1, 1);
-        h = ggml_add(ctx,
-                     h, ggml_reshape_4d(ctx, post_quant_conv_b, 1, 1, post_quant_conv_b->ne[0], 1));  // [N, z_channels, h, w]
+        auto h = ggml_conv_2d(ctx0, post_quant_conv_w, z, 1, 1, 0, 0, 1, 1);
+        h = ggml_add(ctx0,
+                     h, ggml_reshape_4d(ctx0, post_quant_conv_b, 1, 1, post_quant_conv_b->ne[0], 1));  // [N, z_channels, h, w]
         ggml_set_name(h, "b-start");
-        h = decoder.forward(ctx, h);
+        h = decoder.forward(ctx0, h);
         ggml_set_name(h, "b-end");
         return h;
     }
 
-    struct ggml_tensor* encode(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* encode(struct ggml_context* ctx0, struct ggml_tensor* x) {
         // x: [N, in_channels, h, w]
-        auto h = encoder.forward(ctx, x);  // [N, 2*z_channels, h/8, w/8]
+        auto h = encoder.forward(ctx0, x);  // [N, 2*z_channels, h/8, w/8]
         // quant_conv
-        h = ggml_conv_2d(ctx, quant_conv_w, h, 1, 1, 0, 0, 1, 1);
-        h = ggml_add(ctx,
+        h = ggml_conv_2d(ctx0, quant_conv_w, h, 1, 1, 0, 0, 1, 1);
+        h = ggml_add(ctx0,
                      h,
-                     ggml_reshape_4d(ctx, quant_conv_b, 1, 1, quant_conv_b->ne[0], 1));  // [N, 2*embed_dim, h/8, w/8]
+                     ggml_reshape_4d(ctx0, quant_conv_b, 1, 1, quant_conv_b->ne[0], 1));  // [N, 2*embed_dim, h/8, w/8]
         ggml_set_name(h, "b-end");
         return h;
     }
@@ -4027,7 +4027,7 @@ class StableDiffusionGGML {
         curr_lora_state = lora_state;
     }
 
-    ggml_tensor* get_learned_condition(ggml_context* work_ctx, const std::string& text, bool uc) {
+    ggml_tensor* get_learned_condition(ggml_context* work_ctx, const std::string& text) {
         auto tokens_and_weights = cond_stage_model.tokenize(text,
                                                             cond_stage_model.text_model.max_position_embeddings,
                                                             true);
@@ -4065,7 +4065,6 @@ class StableDiffusionGGML {
                         float cfg_scale,
                         sd_sample_method method,
                         const std::vector<float>& sigmas) {
-        
         size_t steps = sigmas.size() - 1;
         // x_t = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(x_t);
@@ -4615,39 +4614,24 @@ bool StableDiffusion::load_from_file(const std::string& file_path, sd_sample_sch
     return sd->load_from_file(file_path, s);
 }
 
-std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
+std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
                                               std::string negative_prompt,
                                               float cfg_scale,
                                               int width,
                                               int height,
                                               sd_sample_method sample_method,
                                               int sample_steps,
-                                              int64_t seed) {
-    std::vector<uint8_t> result;
-    struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10 MB
-    params.mem_size += width * height * 3 * sizeof(float) * 2;
-    params.mem_buffer = NULL;
-    params.no_alloc = false;
-
-    // draft context
-    struct ggml_context* work_ctx = ggml_init(params);
-    if (!work_ctx) {
-        LOG_ERROR("ggml_init() failed");
-        return result;
-    }
-    if (seed < 0) {
-        seed = (int)time(NULL);
-    }
-
-    sd->rng->manual_seed(seed);
-
+                                              int64_t seed,
+                                              int batch_count) {
+    std::vector<uint8_t*> results;
     // extract and remove lora
     auto result_pair                                = extract_and_remove_lora(prompt);
     std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
+
     for (auto& kv : lora_f2m) {
         LOG_DEBUG("lora %s:%.2f", kv.first.c_str(), kv.second);
     }
+
     prompt = result_pair.second;
     LOG_DEBUG("prompt after extract and remove lora: \"%s\"", prompt.c_str());
 
@@ -4655,12 +4639,28 @@ std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
     sd->apply_loras(lora_f2m);
     int64_t t1 = ggml_time_ms();
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+    struct ggml_init_params params;
+    params.mem_size = static_cast<size_t>(2 * 1024 * 1024); // 2 MB
+    params.mem_size += width * height * 3 * sizeof(float);
+    params.mem_size *= batch_count;
+    params.mem_buffer = NULL;
+    params.no_alloc = false;
+
+    struct ggml_context* work_ctx = ggml_init(params);
+    if (!work_ctx) {
+        LOG_ERROR("ggml_init() failed");
+        return results;
+    }
+
+    if (seed < 0) {
+        seed = (int)time(NULL);
+    }
 
     t0                     = ggml_time_ms();
-    ggml_tensor* c = sd->get_learned_condition(work_ctx, prompt, false);
-    struct ggml_tensor* uc = NULL;
+    ggml_tensor* postive = sd->get_learned_condition(work_ctx, prompt);
+    struct ggml_tensor* negative = NULL;
     if (cfg_scale != 1.0) {
-        uc = sd->get_learned_condition(work_ctx, negative_prompt, true);
+        negative = sd->get_learned_condition(work_ctx, negative_prompt);
     }
     t1 = ggml_time_ms();
     LOG_INFO("get_learned_condition completed, taking %i ms", t1 - t0);
@@ -4669,44 +4669,55 @@ std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
         sd->cond_stage_model.text_model.destroy();
     }
 
+    std::vector<struct ggml_tensor*> final_latents;
     int C                   = 4;
     int W                   = width / 8;
     int H                   = height / 8;
-    struct ggml_tensor* x_t = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
-    ggml_tensor_set_f32_randn(x_t, sd->rng);
+    for(int b = 0; b < batch_count; b++) {
+        LOG_INFO("generating image: %i/%i", b + 1, batch_count);
 
-    std::vector<float> sigmas = sd->denoiser->schedule->get_sigmas(sample_steps);
+        sd->rng->manual_seed(seed + b);
+        struct ggml_tensor* x_t = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
+        ggml_tensor_set_f32_randn(x_t, sd->rng);
 
-    LOG_INFO("start sampling");
-    struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, c, uc, cfg_scale, sample_method, sigmas);
-    // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
-    // print_ggml_tensor(x_0);
-    int64_t t2 = ggml_time_ms();
-    LOG_INFO("sampling completed, taking %.2fs", (t2 - t1) * 1.0f / 1000);
+        std::vector<float> sigmas = sd->denoiser->schedule->get_sigmas(sample_steps);
+
+        LOG_INFO("start sampling");
+        struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, postive, negative, cfg_scale, sample_method, sigmas);
+        // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
+        // print_ggml_tensor(x_0);
+        int64_t t2 = ggml_time_ms();
+        LOG_INFO("sampling completed, taking %.2fs", (t2 - t1) * 1.0f / 1000);
+        final_latents.push_back(x_0);
+    }
 
     if (sd->free_params_immediately) {
         sd->diffusion_model.destroy();
     }
 
-    struct ggml_tensor* img = sd->compute_first_stage(work_ctx, x_0, true);
-    if (img != NULL) {
-        result = ggml_to_image_vec(img);
-    }
+    LOG_INFO("decoding %zu latents", final_latents.size());
     int64_t t3 = ggml_time_ms();
-    LOG_INFO("decode_first_stage completed, taking %.2fs", (t3 - t2) * 1.0f / 1000);
+    for(ggml_tensor* x_0 : final_latents) {
+        struct ggml_tensor* img = sd->compute_first_stage(work_ctx, x_0, true);
+        if (img != NULL) {
+            results.push_back(ggml_to_image_vec(img));
+        }
+    }
+
+    int64_t t4 = ggml_time_ms();
+    LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
     if (sd->free_params_immediately) {
         sd->first_stage_model.destroy();
     }
-
+    ggml_free(work_ctx);
     LOG_INFO(
         "txt2img completed in %.2fs",
-        (t3 - t0) * 1.0f / 1000);
+        (t4 - t0) * 1.0f / 1000);
 
-    ggml_free(work_ctx);
-    return result;
+    return results;
 }
 
-std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_img_vec,
+std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
                                               std::string prompt,
                                               std::string negative_prompt,
                                               float cfg_scale,
@@ -4716,10 +4727,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
                                               int sample_steps,
                                               float strength,
                                               int64_t seed) {
-    std::vector<uint8_t> result;
-    if (init_img_vec.size() != width * height * 3) {
-        return result;
-    }
+    std::vector<uint8_t*> result;
     LOG_INFO("img2img %dx%d", width, height);
 
     std::vector<float> sigmas = sd->denoiser->schedule->get_sigmas(sample_steps);
@@ -4763,7 +4771,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-    image_vec_to_ggml(init_img_vec, init_img);
+    image_vec_to_ggml(init_img_data, init_img);
 
     t0 = ggml_time_ms();
     ggml_tensor* moments = sd->compute_first_stage(work_ctx, init_img, false);
@@ -4772,10 +4780,10 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     t1 = ggml_time_ms();
     LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
-    ggml_tensor* c = sd->get_learned_condition(work_ctx, prompt, false);
+    ggml_tensor* c = sd->get_learned_condition(work_ctx, prompt);
     struct ggml_tensor* uc = NULL;
     if (cfg_scale != 1.0) {
-        uc = sd->get_learned_condition(work_ctx, negative_prompt, true);
+        uc = sd->get_learned_condition(work_ctx, negative_prompt);
     }
     int64_t t2 = ggml_time_ms();
     LOG_INFO("get_learned_condition completed, taking %i ms", t2 - t1);
@@ -4800,7 +4808,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
 
     struct ggml_tensor* img = sd->compute_first_stage(work_ctx, x_0, true);
     if (img != NULL) {
-        result = ggml_to_image_vec(img);
+        result.push_back(ggml_to_image_vec(img));
     }
     int64_t t4 = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);

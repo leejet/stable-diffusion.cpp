@@ -128,6 +128,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
+    printf("  -bc, --batch-count COUNT           number of images to generate.\n");
     printf("  --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
@@ -228,6 +229,12 @@ void parse_args(int argc, const char** argv,sd_params & params) {
                 break;
             }
             params.sample_steps = std::stoi(argv[i]);
+        } else if (arg == "-bc" || arg == "--batch-count") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.batch_count = std::stoi(argv[i]);
         } else if (arg == "--rng") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -364,14 +371,14 @@ std::string basename(const std::string& path) {
     return path;
 }
 
-const char* get_image_params(sd_params params) {
+const char* get_image_params(sd_params params, int seed) {
     std::string parameter_string = params.prompt + "\n";
     if (params.negative_prompt.size() != 0) {
         parameter_string += "Negative prompt: " + params.negative_prompt + "\n";
     }
     parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
-    parameter_string += "Seed: " + std::to_string(params.seed) + ", ";
+    parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
     parameter_string += "Model: " + basename(params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(rng_type_to_str[params.rng_type]) + ", ";
