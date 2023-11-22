@@ -120,7 +120,8 @@ void pretty_progress(int step, int steps, float time) {
     progress += "|";
     printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it" : "\r%s %i/%i - %.2fit/s",
         progress.c_str(), step, steps,
-        time > 1.0f ? time : (1.0f / time));
+        time > 1.0f || time == 0 ? time : (1.0f / time));
+    fflush(stdout); // for linux
     if(step == steps) {
         printf("\n");
     }
@@ -4064,7 +4065,7 @@ class StableDiffusionGGML {
                         float cfg_scale,
                         sd_sample_method method,
                         const std::vector<float>& sigmas) {
-
+        
         size_t steps = sigmas.size() - 1;
         // x_t = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(x_t);
@@ -4090,6 +4091,9 @@ class StableDiffusionGGML {
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) {
+            if(step == 1) {
+                pretty_progress(0, steps, 0);
+            }
             int64_t t0 = ggml_time_us();
 
             float c_skip               = 1.0f;
