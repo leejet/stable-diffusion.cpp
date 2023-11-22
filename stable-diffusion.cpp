@@ -113,11 +113,14 @@ void ggml_tensor_set_f32_randn(struct ggml_tensor* tensor, std::shared_ptr<RNG> 
 }
 
 void pretty_progress(int step, int steps, float time) {
-    std::string progress = "|";
-    int32_t current = (int32_t)(step * 50.0f / steps);
+    std::string progress = "  |";
+    int max_progress = 50;
+    int32_t current = (int32_t)(step * 1.f * max_progress / steps);
     for(int i = 0; i < 50;i++) {
         if(i > current) {
             progress += " ";
+        } else if(i == current && i != max_progress - 1) {
+            progress += ">";
         } else {
             progress += "=";
         }
@@ -1036,22 +1039,19 @@ struct CLIPTextModel {
 
     struct ggml_tensor* compute(const int n_threads, std::vector<int> tokens) {
         struct ggml_cgraph * gf = build_graph(compute_alloc, tokens);
-        
-        LOG_DEBUG("generating embeddings");
+
         ggml_allocr_alloc_graph(compute_alloc, gf);
 
         if (ggml_backend_is_cpu(backend)) {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
-        
-        LOG_DEBUG("compute embeddings");
+
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
         ggml_backend_tensor_get(gf->nodes[gf->n_nodes - 1], work_output->data, 0, ggml_nbytes(work_output));
-        LOG_DEBUG("compute embeddings");
         return work_output;
     }
 
@@ -4047,7 +4047,6 @@ class StableDiffusionGGML {
         cond_stage_model.text_model.end();
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %i ms", t1 - t0);
-        //print_ggml_tensor(hidden_states);
         ggml_tensor* result = ggml_dup_tensor(work_ctx, hidden_states);
         {
             float original_mean = ggml_mean(hidden_states);
