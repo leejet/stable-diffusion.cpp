@@ -1,5 +1,3 @@
-# TODO: move into its own subdirectoy
-# TODO: make stb libs a target (maybe common)
 set(TARGET sd)
 
 add_executable(${TARGET} main.cpp)

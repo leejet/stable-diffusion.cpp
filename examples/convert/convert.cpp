@@ -11,6 +11,17 @@
 #include <vector>
 #include <stdarg.h>
 
+/*
+    References:
+
+    Pickle Format: https://github.com/python/cpython/blob/main/Lib/pickle.py
+    Safetensors: https://huggingface.co/docs/safetensors/index
+    bfloat16 conversion: https://en.wikipedia.org/wiki/Bfloat16_floating-point_format
+    Vocab source: https://huggingface.co/openai/clip-vit-large-patch14/blob/main/vocab.json
+    diffusers to original conversion: https://github.com/comfyanonymous/ComfyUI/blob/master/comfy/diffusers_convert.py
+
+*/
+
 std::string format(const char *fmt, ...) {
     char result[100];
     va_list args;

@@ -3270,7 +3270,7 @@ struct LoraModel {
     std::map<std::string, struct ggml_tensor*> lora_tensors;
 
     struct ggml_context* ctx;
-    ggml_backend_buffer_t buffer_params_lora;
+    ggml_backend_buffer_t params_buffer_lora;
     ggml_backend_t backend = NULL;
 
     bool load(ggml_backend_t backend_, std::string file_path) {
@@ -3335,7 +3335,7 @@ struct LoraModel {
         }
         LOG_DEBUG("lora params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
 
-        buffer_params_lora = ggml_backend_alloc_buffer(backend, memory_buffer_size);
+        params_buffer_lora = ggml_backend_alloc_buffer(backend, memory_buffer_size);
 
         LOG_DEBUG("loading alphas");
         {
@@ -3353,7 +3353,7 @@ struct LoraModel {
             }
         }
 
-        ggml_allocr * alloc = ggml_allocr_new_from_buffer(buffer_params_lora);
+        ggml_allocr * alloc = ggml_allocr_new_from_buffer(params_buffer_lora);
 
         size_t data_offset = gguf_get_data_offset(ctx_gguf);
         std::vector<char> read_buf;
@@ -3392,7 +3392,9 @@ struct LoraModel {
         std::fclose(fp);
         gguf_free(ctx_gguf);
         ggml_free(ctx_meta);
+
         LOG_DEBUG("finished loaded lora");
+        ggml_allocr_free(alloc);
         return true;
     }
 
@@ -3497,9 +3499,9 @@ struct LoraModel {
             ctx = NULL;
         }
 
-        if (buffer_params_lora != NULL) {
-            ggml_backend_buffer_free(buffer_params_lora);
-            buffer_params_lora = NULL;
+        if (params_buffer_lora != NULL) {
+            ggml_backend_buffer_free(params_buffer_lora);
+            params_buffer_lora = NULL;
         }
     }
 };
@@ -3858,6 +3860,7 @@ class StableDiffusionGGML {
         ggml_free(ctx_meta);
 
         std::fclose(fp);
+        read_buf.clear();
 
         bool some_tensor_not_init = false;
         for (auto pair : tensors) {
@@ -4669,10 +4672,11 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
         sd->cond_stage_model.text_model.destroy();
     }
 
-    std::vector<struct ggml_tensor*> final_latents;
+    std::vector<struct ggml_tensor*> final_latents; // collect latents to decode
     int C                   = 4;
     int W                   = width / 8;
     int H                   = height / 8;
+
     for(int b = 0; b < batch_count; b++) {
         LOG_INFO("generating image: %i/%i", b + 1, batch_count);
 
