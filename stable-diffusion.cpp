@@ -3662,7 +3662,7 @@ class StableDiffusionGGML {
     std::map<std::string, LoraModel> loras;
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
-    ggml_backend_t backend; // general backend
+    ggml_backend_t backend = NULL; // general backend
     ggml_type model_data_type = GGML_TYPE_COUNT;
 
     StableDiffusionGGML() = default;
@@ -4595,7 +4595,7 @@ class StableDiffusionGGML {
         ggml_tensor* result = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32,
             decode ? (W * 8) : (W / 8), // width
             decode ? (H * 8) : (H / 8), // hegiht
-            decode ? 3 : 4); // channels
+            decode ? 3 : 8); // channels
         int64_t t0 = ggml_time_ms();
         first_stage_model.begin(x, decode);
         first_stage_model.compute(result, n_threads, x, decode);
