@@ -108,7 +108,7 @@ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_pa
     }
 
     int32_t nelements = 1;
-    int32_t ne[4] = {1, 1, 1, 1};
+    int32_t ne[4]     = {1, 1, 1, 1};
     for (int i = 0; i < n_dims; ++i) {
         file.read(reinterpret_cast<char*>(&ne[i]), sizeof(ne[i]));
         nelements *= ne[i];
@@ -116,13 +116,13 @@ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_pa
     std::string name(length, 0);
     file.read(&name[0], length);
     ggml_tensor* tensor = ggml_new_tensor_4d(ctx, (ggml_type)ttype, ne[0], ne[1], ne[2], ne[3]);
-    const size_t bpe = ggml_type_size(ggml_type(ttype));
+    const size_t bpe    = ggml_type_size(ggml_type(ttype));
     file.read(reinterpret_cast<char*>(tensor->data), ggml_nbytes(tensor));
     return tensor;
 }
 
 void ggml_tensor_set_f32_randn(struct ggml_tensor* tensor, std::shared_ptr<RNG> rng) {
-    uint32_t n = (uint32_t)ggml_nelements(tensor);
+    uint32_t n                        = (uint32_t)ggml_nelements(tensor);
     std::vector<float> random_numbers = rng->randn(n);
     for (uint32_t i = 0; i < n; i++) {
         ggml_set_f32_1d(tensor, i, random_numbers[i]);
@@ -231,7 +231,7 @@ std::vector<uint8_t> ggml_to_image_vec(struct ggml_tensor* t) {
         for (int j = 0; j < w; j++) {
             for (int k = 0; k < c; k++) {
                 float value = ggml_tensor_get_f32(t, j, i, k);
-                value = (value + 1.0f) * 0.5f;
+                value       = (value + 1.0f) * 0.5f;
                 if (value < 0) {
                     value = 0;
                 } else if (value > 1) {
@@ -247,16 +247,16 @@ std::vector<uint8_t> ggml_to_image_vec(struct ggml_tensor* t) {
 
 void image_vec_to_ggml(const std::vector<uint8_t>& vec,
                        struct ggml_tensor* t) {
-    int64_t w = t->ne[0];
-    int64_t h = t->ne[1];
-    int64_t c = t->ne[2];
+    int64_t w     = t->ne[0];
+    int64_t h     = t->ne[1];
+    int64_t c     = t->ne[2];
     uint8_t* data = (uint8_t*)vec.data();
     for (int i = 0; i < h; i++) {
         for (int j = 0; j < w; j++) {
             for (int k = 0; k < c; k++) {
                 float value = *(data + i * w * c + j * c + k);
-                value = value / 255.f;
-                value = 2 * value - 1;
+                value       = value / 255.f;
+                value       = 2 * value - 1;
                 ggml_tensor_set_f32(t, value, j, i, k);
             }
         }
@@ -266,6 +266,47 @@ void image_vec_to_ggml(const std::vector<uint8_t>& vec,
 struct ggml_tensor* ggml_group_norm_32(struct ggml_context* ctx,
                                        struct ggml_tensor* a) {
     return ggml_group_norm(ctx, a, 32);
+}
+
+std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remove_lora(std::string text) {
+    std::regex re("<lora:([^:]+):([^>]+)>");
+    std::smatch matches;
+    std::unordered_map<std::string, float> filename2multiplier;
+
+    while (std::regex_search(text, matches, re)) {
+        std::string filename = matches[1].str();
+        float multiplier     = std::stof(matches[2].str());
+
+        if (multiplier == 0.f) {
+            continue;
+        }
+
+        if (filename2multiplier.find(filename) == filename2multiplier.end()) {
+            filename2multiplier[filename] = multiplier;
+        } else {
+            filename2multiplier[filename] += multiplier;
+        }
+
+        text = std::regex_replace(text, re, "", std::regex_constants::format_first_only);
+    }
+
+    return std::make_pair(filename2multiplier, text);
+}
+
+bool ends_with(const std::string& str, const std::string& ending) {
+    if (str.length() >= ending.length()) {
+        return (str.compare(str.length() - ending.length(), ending.length(), ending) == 0);
+    } else {
+        return false;
+    }
+}
+
+void replace_all_chars(std::string& str, char target, char replacement) {
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == target) {
+            str[i] = replacement;
+        }
+    }
 }
 
 /*================================================== CLIPTokenizer ===================================================*/
@@ -283,14 +324,14 @@ const int PAD_TOKEN_ID = 49407;
 // Ref: https://github.com/openai/CLIP/blob/main/clip/simple_tokenizer.py
 // TODO: implement bpe
 class CLIPTokenizer {
-   private:
+private:
     ModelType model_type = SD1;
     std::map<std::string, int32_t> encoder;
     std::regex pat;
 
     static std::string strip(const std::string& str) {
         std::string::size_type start = str.find_first_not_of(" \t\n\r\v\f");
-        std::string::size_type end = str.find_last_not_of(" \t\n\r\v\f");
+        std::string::size_type end   = str.find_last_not_of(" \t\n\r\v\f");
 
         if (start == std::string::npos) {
             // String contains only whitespace characters
@@ -306,7 +347,7 @@ class CLIPTokenizer {
         return text;
     }
 
-   public:
+public:
     CLIPTokenizer(ModelType model_type = SD1)
         : model_type(model_type){};
     std::string bpe(std::string token) {
@@ -418,7 +459,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     std::vector<int> round_brackets;
     std::vector<int> square_brackets;
 
-    float round_bracket_multiplier = 1.1f;
+    float round_bracket_multiplier  = 1.1f;
     float square_bracket_multiplier = 1 / 1.1f;
 
     std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|[^\\()\[\]:]+|:)");
@@ -434,7 +475,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     std::string remaining_text = text;
 
     while (std::regex_search(remaining_text, m, re_attention)) {
-        std::string text = m[0];
+        std::string text   = m[0];
         std::string weight = m[1];
 
         if (text == "(") {
@@ -556,32 +597,32 @@ struct ResidualAttentionBlock {
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        tensors[prefix + "self_attn.q_proj.weight"] = q_w;
-        tensors[prefix + "self_attn.q_proj.bias"] = q_b;
-        tensors[prefix + "self_attn.k_proj.weight"] = k_w;
-        tensors[prefix + "self_attn.k_proj.bias"] = k_b;
-        tensors[prefix + "self_attn.v_proj.weight"] = v_w;
-        tensors[prefix + "self_attn.v_proj.bias"] = v_b;
+        tensors[prefix + "self_attn.q_proj.weight"]   = q_w;
+        tensors[prefix + "self_attn.q_proj.bias"]     = q_b;
+        tensors[prefix + "self_attn.k_proj.weight"]   = k_w;
+        tensors[prefix + "self_attn.k_proj.bias"]     = k_b;
+        tensors[prefix + "self_attn.v_proj.weight"]   = v_w;
+        tensors[prefix + "self_attn.v_proj.bias"]     = v_b;
         tensors[prefix + "self_attn.out_proj.weight"] = out_w;
-        tensors[prefix + "self_attn.out_proj.bias"] = out_b;
+        tensors[prefix + "self_attn.out_proj.bias"]   = out_b;
 
         tensors[prefix + "layer_norm1.weight"] = ln1_w;
-        tensors[prefix + "layer_norm1.bias"] = ln1_b;
+        tensors[prefix + "layer_norm1.bias"]   = ln1_b;
 
         tensors[prefix + "layer_norm2.weight"] = ln2_w;
-        tensors[prefix + "layer_norm2.bias"] = ln2_b;
+        tensors[prefix + "layer_norm2.bias"]   = ln2_b;
 
         tensors[prefix + "mlp.fc1.weight"] = fc1_w;
-        tensors[prefix + "mlp.fc1.bias"] = fc1_b;
+        tensors[prefix + "mlp.fc1.bias"]   = fc1_b;
 
         tensors[prefix + "mlp.fc2.weight"] = fc2_w;
-        tensors[prefix + "mlp.fc2.bias"] = fc2_b;
+        tensors[prefix + "mlp.fc2.bias"]   = fc2_b;
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [N, n_token, hidden_size]
-        int64_t N = x->ne[2];
-        int64_t n_token = x->ne[1];
+        int64_t N           = x->ne[2];
+        int64_t n_token     = x->ne[1];
         int64_t hidden_size = n_head * d_model;
 
         struct ggml_tensor* r = x;
@@ -598,24 +639,24 @@ struct ResidualAttentionBlock {
             struct ggml_tensor* q = ggml_add(ctx,
                                              ggml_repeat(ctx, q_b, x),
                                              ggml_mul_mat(ctx, q_w, x));
-            q = ggml_scale_inplace(ctx, q, ggml_new_f32(ctx, 1.0f / sqrt((float)d_model)));
-            q = ggml_reshape_4d(ctx, q, d_model, n_head, n_token, N);   // [N, n_token, n_head, d_model]
-            q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));       // [N, n_head, n_token, d_model]
-            q = ggml_reshape_3d(ctx, q, d_model, n_token, n_head * N);  // [N * n_head, n_token, d_model]
+            q                     = ggml_scale_inplace(ctx, q, ggml_new_f32(ctx, 1.0f / sqrt((float)d_model)));
+            q                     = ggml_reshape_4d(ctx, q, d_model, n_head, n_token, N);   // [N, n_token, n_head, d_model]
+            q                     = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));       // [N, n_head, n_token, d_model]
+            q                     = ggml_reshape_3d(ctx, q, d_model, n_token, n_head * N);  // [N * n_head, n_token, d_model]
 
             struct ggml_tensor* k = ggml_add(ctx,
                                              ggml_repeat(ctx, k_b, x),
                                              ggml_mul_mat(ctx, k_w, x));
-            k = ggml_reshape_4d(ctx, k, d_model, n_head, n_token, N);  // [N, n_token, n_head, d_model]
-            k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));      // [N, n_head, n_token, d_model]
-            k = ggml_reshape_3d(ctx, k, d_model, n_token, n_head);     // [N * n_head, n_token, d_model]
+            k                     = ggml_reshape_4d(ctx, k, d_model, n_head, n_token, N);  // [N, n_token, n_head, d_model]
+            k                     = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));      // [N, n_head, n_token, d_model]
+            k                     = ggml_reshape_3d(ctx, k, d_model, n_token, n_head);     // [N * n_head, n_token, d_model]
 
             struct ggml_tensor* v = ggml_add(ctx,
                                              ggml_repeat(ctx, v_b, x),
                                              ggml_mul_mat(ctx, v_w, x));
-            v = ggml_reshape_4d(ctx, v, d_model, n_head, n_token, N);   // [N, n_token, n_head, d_model]
-            v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));       // [N, n_head, d_model, n_token]
-            v = ggml_reshape_3d(ctx, v, n_token, d_model, n_head * N);  // [N * n_head, d_model, n_token]
+            v                     = ggml_reshape_4d(ctx, v, d_model, n_head, n_token, N);   // [N, n_token, n_head, d_model]
+            v                     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));       // [N, n_head, d_model, n_token]
+            v                     = ggml_reshape_3d(ctx, v, n_token, d_model, n_head * N);  // [N * n_head, d_model, n_token]
 
             struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, n_token, n_token]
 
@@ -623,8 +664,8 @@ struct ResidualAttentionBlock {
             kq = ggml_soft_max_inplace(ctx, kq);
 
             struct ggml_tensor* kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, n_token, d_model]
-            kqv = ggml_reshape_4d(ctx, kqv, d_model, n_token, n_head, N);
-            kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, n_token, n_head, d_model]
+            kqv                     = ggml_reshape_4d(ctx, kqv, d_model, n_token, n_head, N);
+            kqv                     = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, n_token, n_head, d_model]
 
             x = ggml_reshape_2d(ctx, kqv, d_model * n_head, n_token * N);  // // [N * n_token, d_model * n_head]
         }
@@ -669,12 +710,12 @@ struct ResidualAttentionBlock {
 struct CLIPTextModel {
     ModelType model_type = SD1;
     // network hparams
-    int32_t vocab_size = 49408;
+    int32_t vocab_size              = 49408;
     int32_t max_position_embeddings = 77;
-    int32_t hidden_size = 768;         // 1024 for SD 2.x
-    int32_t intermediate_size = 3072;  // 4096 for SD 2.x
-    int32_t n_head = 12;               // num_attention_heads, 16 for SD 2.x
-    int32_t num_hidden_layers = 12;    // 24 for SD 2.x
+    int32_t hidden_size             = 768;   // 1024 for SD 2.x
+    int32_t intermediate_size       = 3072;  // 4096 for SD 2.x
+    int32_t n_head                  = 12;    // num_attention_heads, 16 for SD 2.x
+    int32_t num_hidden_layers       = 12;    // 24 for SD 2.x
 
     // embeddings
     struct ggml_tensor* position_ids;
@@ -688,9 +729,9 @@ struct CLIPTextModel {
     CLIPTextModel(ModelType model_type = SD1)
         : model_type(model_type) {
         if (model_type == SD2) {
-            hidden_size = 1024;
+            hidden_size       = 1024;
             intermediate_size = 4096;
-            n_head = 16;
+            n_head            = 16;
             num_hidden_layers = 24;
         }
         resblocks.resize(num_hidden_layers);
@@ -700,9 +741,9 @@ struct CLIPTextModel {
     void set_resblocks_hp_params() {
         int d_model = hidden_size / n_head;  // 64
         for (int i = 0; i < num_hidden_layers; i++) {
-            resblocks[i].d_model = d_model;
-            resblocks[i].n_head = n_head;
-            resblocks[i].hidden_size = hidden_size;
+            resblocks[i].d_model           = d_model;
+            resblocks[i].n_head            = n_head;
+            resblocks[i].hidden_size       = hidden_size;
             resblocks[i].intermediate_size = intermediate_size;
         }
     }
@@ -725,7 +766,7 @@ struct CLIPTextModel {
         for (int i = 0; i < max_position_embeddings; i++) {
             ggml_set_i32_1d(position_ids, i, i);
         }
-        token_embed_weight = ggml_new_tensor_2d(ctx, wtype, hidden_size, vocab_size);
+        token_embed_weight    = ggml_new_tensor_2d(ctx, wtype, hidden_size, vocab_size);
         position_embed_weight = ggml_new_tensor_2d(ctx, wtype, hidden_size, max_position_embeddings);
 
         for (int i = 0; i < num_hidden_layers; i++) {
@@ -737,10 +778,10 @@ struct CLIPTextModel {
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        tensors[prefix + "embeddings.token_embedding.weight"] = token_embed_weight;
+        tensors[prefix + "embeddings.token_embedding.weight"]    = token_embed_weight;
         tensors[prefix + "embeddings.position_embedding.weight"] = position_embed_weight;
-        tensors[prefix + "final_layer_norm.weight"] = final_ln_w;
-        tensors[prefix + "final_layer_norm.bias"] = final_ln_b;
+        tensors[prefix + "final_layer_norm.weight"]              = final_ln_w;
+        tensors[prefix + "final_layer_norm.bias"]                = final_ln_b;
         for (int i = 0; i < num_hidden_layers; i++) {
             resblocks[i].map_by_name(tensors, prefix + "encoder.layers." + std::to_string(i) + ".");
         }
@@ -783,7 +824,7 @@ struct FrozenCLIPEmbedder {
     CLIPTokenizer tokenizer;
     CLIPTextModel text_model;
     struct ggml_tensor* forward(struct ggml_context* ctx, const std::string& prompt) {
-        std::vector<int32_t> tokens = tokenizer.tokenize(prompt, text_model.max_position_embeddings, true);
+        std::vector<int32_t> tokens   = tokenizer.tokenize(prompt, text_model.max_position_embeddings, true);
         struct ggml_tensor* input_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, tokens.size());
         memcpy(input_ids->data, tokens.data(), tokens.size() * ggml_element_size(input_ids));
         struct ggml_tensor* hidden_states = text_model.forward(ctx, input_ids);
@@ -802,7 +843,7 @@ struct FrozenCLIPEmbedderWithCustomWords {
 
     std::pair<std::vector<int>, std::vector<float>> tokenize(std::string text,
                                                              size_t max_length = 0,
-                                                             bool padding = false) {
+                                                             bool padding      = false) {
         auto parsed_attention = parse_prompt_attention(text);
 
         {
@@ -819,7 +860,7 @@ struct FrozenCLIPEmbedderWithCustomWords {
         std::vector<float> weights;
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
-            float curr_weight = item.second;
+            float curr_weight            = item.second;
             std::vector<int> curr_tokens = tokenizer.encode(curr_text);
             tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);
@@ -930,21 +971,21 @@ struct ResBlock {
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         tensors[prefix + "in_layers.0.weight"] = in_layer_0_w;
-        tensors[prefix + "in_layers.0.bias"] = in_layer_0_b;
+        tensors[prefix + "in_layers.0.bias"]   = in_layer_0_b;
         tensors[prefix + "in_layers.2.weight"] = in_layer_2_w;
-        tensors[prefix + "in_layers.2.bias"] = in_layer_2_b;
+        tensors[prefix + "in_layers.2.bias"]   = in_layer_2_b;
 
         tensors[prefix + "emb_layers.1.weight"] = emb_layer_1_w;
-        tensors[prefix + "emb_layers.1.bias"] = emb_layer_1_b;
+        tensors[prefix + "emb_layers.1.bias"]   = emb_layer_1_b;
 
         tensors[prefix + "out_layers.0.weight"] = out_layer_0_w;
-        tensors[prefix + "out_layers.0.bias"] = out_layer_0_b;
+        tensors[prefix + "out_layers.0.bias"]   = out_layer_0_b;
         tensors[prefix + "out_layers.3.weight"] = out_layer_3_w;
-        tensors[prefix + "out_layers.3.bias"] = out_layer_3_b;
+        tensors[prefix + "out_layers.3.bias"]   = out_layer_3_b;
 
         if (out_channels != channels) {
             tensors[prefix + "skip_connection.weight"] = skip_w;
-            tensors[prefix + "skip_connection.bias"] = skip_b;
+            tensors[prefix + "skip_connection.bias"]   = skip_b;
         }
     }
 
@@ -955,15 +996,15 @@ struct ResBlock {
         // in_layers
         // group norm 32
         auto h = ggml_group_norm_32(ctx, x);
-        h = ggml_add(ctx,
-                     ggml_mul(ctx,
-                              ggml_repeat(ctx,
-                                          ggml_reshape_4d(ctx, in_layer_0_w, 1, 1, in_layer_0_w->ne[0], 1),
-                                          h),
-                              h),
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, in_layer_0_b, 1, 1, in_layer_0_b->ne[0], 1),
-                                 h));
+        h      = ggml_add(ctx,
+                          ggml_mul(ctx,
+                                   ggml_repeat(ctx,
+                                               ggml_reshape_4d(ctx, in_layer_0_w, 1, 1, in_layer_0_w->ne[0], 1),
+                                               h),
+                                   h),
+                          ggml_repeat(ctx,
+                                      ggml_reshape_4d(ctx, in_layer_0_b, 1, 1, in_layer_0_b->ne[0], 1),
+                                      h));
         // silu
         h = ggml_silu_inplace(ctx, h);
         // conv2d
@@ -976,10 +1017,10 @@ struct ResBlock {
 
         // emb_layers
         auto emb_out = ggml_silu(ctx, emb);
-        emb_out = ggml_mul_mat(ctx, emb_layer_1_w, emb_out);
-        emb_out = ggml_add(ctx, ggml_repeat(ctx, emb_layer_1_b, emb_out), emb_out);     // [N, out_channels]
-        emb_out = ggml_reshape_4d(ctx, emb_out, 1, 1, emb_out->ne[0], emb_out->ne[1]);  // [N, out_channels, 1, 1]
-        emb_out = ggml_repeat(ctx, emb_out, h);                                         // [N, out_channels, h, w]
+        emb_out      = ggml_mul_mat(ctx, emb_layer_1_w, emb_out);
+        emb_out      = ggml_add(ctx, ggml_repeat(ctx, emb_layer_1_b, emb_out), emb_out);     // [N, out_channels]
+        emb_out      = ggml_reshape_4d(ctx, emb_out, 1, 1, emb_out->ne[0], emb_out->ne[1]);  // [N, out_channels, 1, 1]
+        emb_out      = ggml_repeat(ctx, emb_out, h);                                         // [N, out_channels, h, w]
 
         // out_layers
         h = ggml_add(ctx, h, emb_out);
@@ -1017,7 +1058,7 @@ struct SpatialTransformer {
     int in_channels;        // mult * model_channels
     int n_head;             // num_heads
     int d_head;             // in_channels // n_heads
-    int depth = 1;          // 1
+    int depth       = 1;    // 1
     int context_dim = 768;  // hidden_size, 1024 for SD2.x
 
     // group norm
@@ -1092,8 +1133,8 @@ struct SpatialTransformer {
     }
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        norm_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
-        norm_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
+        norm_w    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
+        norm_b    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
         proj_in_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
         proj_in_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
 
@@ -1132,43 +1173,43 @@ struct SpatialTransformer {
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        tensors[prefix + "norm.weight"] = norm_w;
-        tensors[prefix + "norm.bias"] = norm_b;
+        tensors[prefix + "norm.weight"]    = norm_w;
+        tensors[prefix + "norm.bias"]      = norm_b;
         tensors[prefix + "proj_in.weight"] = proj_in_w;
-        tensors[prefix + "proj_in.bias"] = proj_in_b;
+        tensors[prefix + "proj_in.bias"]   = proj_in_b;
 
         // transformer
         {
-            std::string transformer_prefix = prefix + "transformer_blocks.0.";
+            std::string transformer_prefix                    = prefix + "transformer_blocks.0.";
             tensors[transformer_prefix + "attn1.to_q.weight"] = transformer.attn1_q_w;
             tensors[transformer_prefix + "attn1.to_k.weight"] = transformer.attn1_k_w;
             tensors[transformer_prefix + "attn1.to_v.weight"] = transformer.attn1_v_w;
 
             tensors[transformer_prefix + "attn1.to_out.0.weight"] = transformer.attn1_out_w;
-            tensors[transformer_prefix + "attn1.to_out.0.bias"] = transformer.attn1_out_b;
+            tensors[transformer_prefix + "attn1.to_out.0.bias"]   = transformer.attn1_out_b;
 
             tensors[transformer_prefix + "ff.net.0.proj.weight"] = transformer.ff_0_proj_w;
-            tensors[transformer_prefix + "ff.net.0.proj.bias"] = transformer.ff_0_proj_b;
-            tensors[transformer_prefix + "ff.net.2.weight"] = transformer.ff_2_w;
-            tensors[transformer_prefix + "ff.net.2.bias"] = transformer.ff_2_b;
+            tensors[transformer_prefix + "ff.net.0.proj.bias"]   = transformer.ff_0_proj_b;
+            tensors[transformer_prefix + "ff.net.2.weight"]      = transformer.ff_2_w;
+            tensors[transformer_prefix + "ff.net.2.bias"]        = transformer.ff_2_b;
 
             tensors[transformer_prefix + "attn2.to_q.weight"] = transformer.attn2_q_w;
             tensors[transformer_prefix + "attn2.to_k.weight"] = transformer.attn2_k_w;
             tensors[transformer_prefix + "attn2.to_v.weight"] = transformer.attn2_v_w;
 
             tensors[transformer_prefix + "attn2.to_out.0.weight"] = transformer.attn2_out_w;
-            tensors[transformer_prefix + "attn2.to_out.0.bias"] = transformer.attn2_out_b;
+            tensors[transformer_prefix + "attn2.to_out.0.bias"]   = transformer.attn2_out_b;
 
             tensors[transformer_prefix + "norm1.weight"] = transformer.norm1_w;
-            tensors[transformer_prefix + "norm1.bias"] = transformer.norm1_b;
+            tensors[transformer_prefix + "norm1.bias"]   = transformer.norm1_b;
             tensors[transformer_prefix + "norm2.weight"] = transformer.norm2_w;
-            tensors[transformer_prefix + "norm2.bias"] = transformer.norm2_b;
+            tensors[transformer_prefix + "norm2.bias"]   = transformer.norm2_b;
             tensors[transformer_prefix + "norm3.weight"] = transformer.norm3_w;
-            tensors[transformer_prefix + "norm3.bias"] = transformer.norm3_b;
+            tensors[transformer_prefix + "norm3.bias"]   = transformer.norm3_b;
         }
 
         tensors[prefix + "proj_out.weight"] = proj_out_w;
-        tensors[prefix + "proj_out.bias"] = proj_out_b;
+        tensors[prefix + "proj_out.bias"]   = proj_out_b;
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
@@ -1190,12 +1231,12 @@ struct SpatialTransformer {
                                  x));  // [N, in_channels, h, w]
 
         // transformer
-        const int64_t n = x->ne[3];
-        const int64_t c = x->ne[2];
-        const int64_t h = x->ne[1];
-        const int64_t w = x->ne[0];
+        const int64_t n            = x->ne[3];
+        const int64_t c            = x->ne[2];
+        const int64_t h            = x->ne[1];
+        const int64_t w            = x->ne[0];
         const int64_t max_position = context->ne[1];
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 2, 0, 3));  // [N, h, w, in_channels]
+        x                          = ggml_cont(ctx, ggml_permute(ctx, x, 1, 2, 0, 3));  // [N, h, w, in_channels]
 
         {
             auto r = x;
@@ -1212,30 +1253,30 @@ struct SpatialTransformer {
 
             // self-attention
             {
-                x = ggml_reshape_2d(ctx, x, c, h * w * n);                            // [N * h * w, in_channels]
+                x                     = ggml_reshape_2d(ctx, x, c, h * w * n);        // [N * h * w, in_channels]
                 struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn1_q_w, x);  // [N * h * w, in_channels]
-                q = ggml_scale_inplace(ctx, q, ggml_new_f32(ctx, 1.0f / sqrt((float)d_head)));
-                q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
-                q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
-                q = ggml_reshape_3d(ctx, q, d_head, h * w, n_head * n);  // [N * n_head, h * w, d_head]
+                q                     = ggml_scale_inplace(ctx, q, ggml_new_f32(ctx, 1.0f / sqrt((float)d_head)));
+                q                     = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
+                q                     = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
+                q                     = ggml_reshape_3d(ctx, q, d_head, h * w, n_head * n);  // [N * n_head, h * w, d_head]
 
-                struct ggml_tensor* k = ggml_mul_mat(ctx, transformer.attn1_k_w, x);  // [N * h * w, in_channels]
-                k = ggml_reshape_4d(ctx, k, d_head, n_head, h * w, n);                // [N, h * w, n_head, d_head]
-                k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));                 // [N, n_head, h * w, d_head]
-                k = ggml_reshape_3d(ctx, k, d_head, h * w, n_head * n);               // [N * n_head, h * w, d_head]
+                struct ggml_tensor* k = ggml_mul_mat(ctx, transformer.attn1_k_w, x);         // [N * h * w, in_channels]
+                k                     = ggml_reshape_4d(ctx, k, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
+                k                     = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
+                k                     = ggml_reshape_3d(ctx, k, d_head, h * w, n_head * n);  // [N * n_head, h * w, d_head]
 
-                struct ggml_tensor* v = ggml_mul_mat(ctx, transformer.attn1_v_w, x);  // [N * h * w, in_channels]
-                v = ggml_reshape_4d(ctx, v, d_head, n_head, h * w, n);                // [N, h * w, n_head, d_head]
-                v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));                 // [N, n_head, d_head, h * w]
-                v = ggml_reshape_3d(ctx, v, h * w, d_head, n_head * n);               // [N * n_head, d_head, h * w]
+                struct ggml_tensor* v = ggml_mul_mat(ctx, transformer.attn1_v_w, x);         // [N * h * w, in_channels]
+                v                     = ggml_reshape_4d(ctx, v, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
+                v                     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));    // [N, n_head, d_head, h * w]
+                v                     = ggml_reshape_3d(ctx, v, h * w, d_head, n_head * n);  // [N * n_head, d_head, h * w]
 
                 struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, h * w, h * w]
                 // kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
                 kq = ggml_soft_max_inplace(ctx, kq);
 
                 struct ggml_tensor* kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, h * w, d_head]
-                kqv = ggml_reshape_4d(ctx, kqv, d_head, h * w, n_head, n);
-                kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, h * w, n_head, d_head]
+                kqv                     = ggml_reshape_4d(ctx, kqv, d_head, h * w, n_head, n);
+                kqv                     = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, h * w, n_head, d_head]
 
                 // x = ggml_cpy(ctx, kqv, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_head * n_head, h * w * n));
                 x = ggml_reshape_2d(ctx, kqv, d_head * n_head, h * w * n);
@@ -1259,24 +1300,24 @@ struct SpatialTransformer {
 
             // cross-attention
             {
-                x = ggml_reshape_2d(ctx, x, c, h * w * n);                                                 // [N * h * w, in_channels]
-                context = ggml_reshape_2d(ctx, context, context->ne[0], context->ne[1] * context->ne[2]);  // [N * max_position, hidden_size]
-                struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn2_q_w, x);                       // [N * h * w, in_channels]
+                x                     = ggml_reshape_2d(ctx, x, c, h * w * n);                                           // [N * h * w, in_channels]
+                context               = ggml_reshape_2d(ctx, context, context->ne[0], context->ne[1] * context->ne[2]);  // [N * max_position, hidden_size]
+                struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn2_q_w, x);                                     // [N * h * w, in_channels]
 
                 q = ggml_scale_inplace(ctx, q, ggml_new_f32(ctx, 1.0f / sqrt((float)d_head)));
                 q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
                 q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
                 q = ggml_reshape_3d(ctx, q, d_head, h * w, n_head * n);  // [N * n_head, h * w, d_head]
 
-                struct ggml_tensor* k = ggml_mul_mat(ctx, transformer.attn2_k_w, context);  // [N * max_position, in_channels]
-                k = ggml_reshape_4d(ctx, k, d_head, n_head, max_position, n);               // [N, max_position, n_head, d_head]
-                k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));                       // [N, n_head, max_position, d_head]
-                k = ggml_reshape_3d(ctx, k, d_head, max_position, n_head * n);              // [N * n_head, max_position, d_head]
+                struct ggml_tensor* k = ggml_mul_mat(ctx, transformer.attn2_k_w, context);          // [N * max_position, in_channels]
+                k                     = ggml_reshape_4d(ctx, k, d_head, n_head, max_position, n);   // [N, max_position, n_head, d_head]
+                k                     = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));           // [N, n_head, max_position, d_head]
+                k                     = ggml_reshape_3d(ctx, k, d_head, max_position, n_head * n);  // [N * n_head, max_position, d_head]
 
-                struct ggml_tensor* v = ggml_mul_mat(ctx, transformer.attn2_v_w, context);  // [N * max_position, in_channels]
-                v = ggml_reshape_4d(ctx, v, d_head, n_head, max_position, n);               // [N, max_position, n_head, d_head]
-                v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));                       // [N, n_head, d_head, max_position]
-                v = ggml_reshape_3d(ctx, v, max_position, d_head, n_head * n);              // [N * n_head, d_head, max_position]
+                struct ggml_tensor* v = ggml_mul_mat(ctx, transformer.attn2_v_w, context);          // [N * max_position, in_channels]
+                v                     = ggml_reshape_4d(ctx, v, d_head, n_head, max_position, n);   // [N, max_position, n_head, d_head]
+                v                     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));           // [N, n_head, d_head, max_position]
+                v                     = ggml_reshape_3d(ctx, v, max_position, d_head, n_head * n);  // [N * n_head, d_head, max_position]
 
                 struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, h * w, max_position]
                 // kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
@@ -1311,16 +1352,16 @@ struct SpatialTransformer {
             // ff
             {
                 // GEGLU
-                auto x_w = ggml_view_2d(ctx,
-                                        transformer.ff_0_proj_w,
-                                        transformer.ff_0_proj_w->ne[0],
-                                        transformer.ff_0_proj_w->ne[1] / 2,
-                                        transformer.ff_0_proj_w->nb[1],
-                                        0);  // [in_channels * 4, in_channels]
-                auto x_b = ggml_view_1d(ctx,
-                                        transformer.ff_0_proj_b,
-                                        transformer.ff_0_proj_b->ne[0] / 2,
-                                        0);  // [in_channels * 4, in_channels]
+                auto x_w    = ggml_view_2d(ctx,
+                                           transformer.ff_0_proj_w,
+                                           transformer.ff_0_proj_w->ne[0],
+                                           transformer.ff_0_proj_w->ne[1] / 2,
+                                           transformer.ff_0_proj_w->nb[1],
+                                           0);  // [in_channels * 4, in_channels]
+                auto x_b    = ggml_view_1d(ctx,
+                                           transformer.ff_0_proj_b,
+                                           transformer.ff_0_proj_b->ne[0] / 2,
+                                           0);  // [in_channels * 4, in_channels]
                 auto gate_w = ggml_view_2d(ctx,
                                            transformer.ff_0_proj_w,
                                            transformer.ff_0_proj_w->ne[0],
@@ -1331,12 +1372,12 @@ struct SpatialTransformer {
                                            transformer.ff_0_proj_b,
                                            transformer.ff_0_proj_b->ne[0] / 2,
                                            transformer.ff_0_proj_b->nb[0] * transformer.ff_0_proj_b->ne[0] / 2);  // [in_channels * 4, ]
-                x = ggml_reshape_2d(ctx, x, c, w * h * n);
-                auto x_in = x;
-                x = ggml_mul_mat(ctx, x_w, x_in);  // [N * h * w, in_channels * 4]
-                x = ggml_add(ctx, ggml_repeat(ctx, x_b, x), x);
-                auto gate = ggml_mul_mat(ctx, gate_w, x_in);  // [N * h * w, in_channels * 4]
-                gate = ggml_add(ctx, ggml_repeat(ctx, gate_b, gate), gate);
+                x           = ggml_reshape_2d(ctx, x, c, w * h * n);
+                auto x_in   = x;
+                x           = ggml_mul_mat(ctx, x_w, x_in);  // [N * h * w, in_channels * 4]
+                x           = ggml_add(ctx, ggml_repeat(ctx, x_b, x), x);
+                auto gate   = ggml_mul_mat(ctx, gate_w, x_in);  // [N * h * w, in_channels * 4]
+                gate        = ggml_add(ctx, ggml_repeat(ctx, gate_b, gate), gate);
 
                 gate = ggml_gelu_inplace(ctx, gate);
 
@@ -1392,10 +1433,10 @@ struct DownSample {
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         if (vae_downsample) {
             tensors[prefix + "conv.weight"] = op_w;
-            tensors[prefix + "conv.bias"] = op_b;
+            tensors[prefix + "conv.bias"]   = op_b;
         } else {
             tensors[prefix + "op.weight"] = op_w;
-            tensors[prefix + "op.bias"] = op_b;
+            tensors[prefix + "op.bias"]   = op_b;
         }
     }
 
@@ -1474,7 +1515,7 @@ struct UpSample {
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         tensors[prefix + "conv.weight"] = conv_w;
-        tensors[prefix + "conv.bias"] = conv_b;
+        tensors[prefix + "conv.bias"]   = conv_b;
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -1494,16 +1535,16 @@ struct UpSample {
 // ldm.modules.diffusionmodules.openaimodel.UNetModel
 struct UNetModel {
     // network hparams
-    int in_channels = 4;
-    int model_channels = 320;
-    int out_channels = 4;
-    int num_res_blocks = 2;
+    int in_channels              = 4;
+    int model_channels           = 320;
+    int out_channels             = 4;
+    int num_res_blocks           = 2;
     int attention_resolutions[3] = {4, 2, 1};
-    int channel_mult[4] = {1, 2, 4, 4};
-    int time_embed_dim = 1280;  // model_channels*4
-    int num_heads = 8;
-    int num_head_channels = -1;  // channels // num_heads
-    int context_dim = 768;       // 1024 for SD2.x
+    int channel_mult[4]          = {1, 2, 4, 4};
+    int time_embed_dim           = 1280;  // model_channels*4
+    int num_heads                = 8;
+    int num_head_channels        = -1;   // channels // num_heads
+    int context_dim              = 768;  // 1024 for SD2.x
 
     // network params
     struct ggml_tensor* time_embed_0_w;  // [time_embed_dim, model_channels]
@@ -1540,9 +1581,9 @@ struct UNetModel {
 
     UNetModel(ModelType model_type = SD1) {
         if (model_type == SD2) {
-            context_dim = 1024;
+            context_dim       = 1024;
             num_head_channels = 64;
-            num_heads = -1;
+            num_heads         = -1;
         }
         // set up hparams of blocks
 
@@ -1556,7 +1597,7 @@ struct UNetModel {
         for (int i = 0; i < len_mults; i++) {
             int mult = channel_mult[i];
             for (int j = 0; j < num_res_blocks; j++) {
-                input_res_blocks[i][j].channels = ch;
+                input_res_blocks[i][j].channels     = ch;
                 input_res_blocks[i][j].emb_channels = time_embed_dim;
                 input_res_blocks[i][j].out_channels = mult * model_channels;
 
@@ -1570,14 +1611,14 @@ struct UNetModel {
                         n_head = ch / d_head;
                     }
                     input_transformers[i][j].in_channels = ch;
-                    input_transformers[i][j].n_head = n_head;
-                    input_transformers[i][j].d_head = d_head;
+                    input_transformers[i][j].n_head      = n_head;
+                    input_transformers[i][j].d_head      = d_head;
                     input_transformers[i][j].context_dim = context_dim;
                 }
                 input_block_chans.push_back(ch);
             }
             if (i != len_mults - 1) {
-                input_down_samples[i].channels = ch;
+                input_down_samples[i].channels     = ch;
                 input_down_samples[i].out_channels = ch;
                 input_block_chans.push_back(ch);
 
@@ -1586,7 +1627,7 @@ struct UNetModel {
         }
 
         // middle blocks
-        middle_block_0.channels = ch;
+        middle_block_0.channels     = ch;
         middle_block_0.emb_channels = time_embed_dim;
         middle_block_0.out_channels = ch;
 
@@ -1597,11 +1638,11 @@ struct UNetModel {
             n_head = ch / d_head;
         }
         middle_block_1.in_channels = ch;
-        middle_block_1.n_head = n_head;
-        middle_block_1.d_head = d_head;
+        middle_block_1.n_head      = n_head;
+        middle_block_1.d_head      = d_head;
         middle_block_1.context_dim = context_dim;
 
-        middle_block_2.channels = ch;
+        middle_block_2.channels     = ch;
         middle_block_2.emb_channels = time_embed_dim;
         middle_block_2.out_channels = ch;
 
@@ -1612,7 +1653,7 @@ struct UNetModel {
                 int ich = input_block_chans.back();
                 input_block_chans.pop_back();
 
-                output_res_blocks[i][j].channels = ch + ich;
+                output_res_blocks[i][j].channels     = ch + ich;
                 output_res_blocks[i][j].emb_channels = time_embed_dim;
                 output_res_blocks[i][j].out_channels = mult * model_channels;
 
@@ -1626,13 +1667,13 @@ struct UNetModel {
                         n_head = ch / d_head;
                     }
                     output_transformers[i][j].in_channels = ch;
-                    output_transformers[i][j].n_head = n_head;
-                    output_transformers[i][j].d_head = d_head;
+                    output_transformers[i][j].n_head      = n_head;
+                    output_transformers[i][j].d_head      = d_head;
                     output_transformers[i][j].context_dim = context_dim;
                 }
 
                 if (i > 0 && j == num_res_blocks) {
-                    output_up_samples[i - 1].channels = ch;
+                    output_up_samples[i - 1].channels     = ch;
                     output_up_samples[i - 1].out_channels = ch;
 
                     ds /= 2;
@@ -1654,7 +1695,7 @@ struct UNetModel {
         mem_size += 6 * ggml_tensor_overhead();  // object overhead
 
         // input_blocks
-        int ds = 1;
+        int ds        = 1;
         int len_mults = sizeof(channel_mult) / sizeof(int);
         for (int i = 0; i < len_mults; i++) {
             for (int j = 0; j < num_res_blocks; j++) {
@@ -1711,8 +1752,8 @@ struct UNetModel {
         // input_blocks
         input_block_0_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, in_channels, model_channels);
         input_block_0_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, model_channels);
-        int ds = 1;
-        int len_mults = sizeof(channel_mult) / sizeof(int);
+        int ds          = 1;
+        int len_mults   = sizeof(channel_mult) / sizeof(int);
         for (int i = 0; i < len_mults; i++) {
             for (int j = 0; j < num_res_blocks; j++) {
                 input_res_blocks[i][j].init_params(ctx, wtype);
@@ -1758,18 +1799,18 @@ struct UNetModel {
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         tensors[prefix + "time_embed.0.weight"] = time_embed_0_w;
-        tensors[prefix + "time_embed.0.bias"] = time_embed_0_b;
+        tensors[prefix + "time_embed.0.bias"]   = time_embed_0_b;
 
         tensors[prefix + "time_embed.2.weight"] = time_embed_2_w;
-        tensors[prefix + "time_embed.2.bias"] = time_embed_2_b;
+        tensors[prefix + "time_embed.2.bias"]   = time_embed_2_b;
 
         // input_blocks
         tensors[prefix + "input_blocks.0.0.weight"] = input_block_0_w;
-        tensors[prefix + "input_blocks.0.0.bias"] = input_block_0_b;
+        tensors[prefix + "input_blocks.0.0.bias"]   = input_block_0_b;
 
-        int len_mults = sizeof(channel_mult) / sizeof(int);
+        int len_mults       = sizeof(channel_mult) / sizeof(int);
         int input_block_idx = 0;
-        int ds = 1;
+        int ds              = 1;
         for (int i = 0; i < len_mults; i++) {
             for (int j = 0; j < num_res_blocks; j++) {
                 input_block_idx += 1;
@@ -1814,9 +1855,9 @@ struct UNetModel {
 
         // out
         tensors[prefix + "out.0.weight"] = out_0_w;
-        tensors[prefix + "out.0.bias"] = out_0_b;
+        tensors[prefix + "out.0.bias"]   = out_0_b;
         tensors[prefix + "out.2.weight"] = out_2_w;
-        tensors[prefix + "out.2.bias"] = out_2_b;
+        tensors[prefix + "out.2.bias"]   = out_2_b;
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
@@ -1834,24 +1875,24 @@ struct UNetModel {
 
         // time_embed
         auto emb = ggml_mul_mat(ctx, time_embed_0_w, t_emb);
-        emb = ggml_add(ctx, ggml_repeat(ctx, time_embed_0_b, emb), emb);
-        emb = ggml_silu_inplace(ctx, emb);
-        emb = ggml_mul_mat(ctx, time_embed_2_w, emb);
-        emb = ggml_add(ctx, ggml_repeat(ctx, time_embed_2_b, emb), emb);  // [N, time_embed_dim]
+        emb      = ggml_add(ctx, ggml_repeat(ctx, time_embed_0_b, emb), emb);
+        emb      = ggml_silu_inplace(ctx, emb);
+        emb      = ggml_mul_mat(ctx, time_embed_2_w, emb);
+        emb      = ggml_add(ctx, ggml_repeat(ctx, time_embed_2_b, emb), emb);  // [N, time_embed_dim]
 
         // input_blocks
         std::vector<struct ggml_tensor*> hs;
         // input block 0
         auto h = ggml_conv_2d(ctx, input_block_0_w, x, 1, 1, 1, 1, 1, 1);  // [N, model_channels, h, w]
-        h = ggml_add(ctx,
-                     h,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1),
-                                 h));  // [N, model_channels, h, w]
+        h      = ggml_add(ctx,
+                          h,
+                          ggml_repeat(ctx,
+                                      ggml_reshape_4d(ctx, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1),
+                                      h));  // [N, model_channels, h, w]
         hs.push_back(h);
         // input block 1-11
         int len_mults = sizeof(channel_mult) / sizeof(int);
-        int ds = 1;
+        int ds        = 1;
         for (int i = 0; i < len_mults; i++) {
             int mult = channel_mult[i];
             for (int j = 0; j < num_res_blocks; j++) {
@@ -1982,18 +2023,18 @@ struct ResnetBlock {
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         tensors[prefix + "norm1.weight"] = norm1_w;
-        tensors[prefix + "norm1.bias"] = norm1_b;
+        tensors[prefix + "norm1.bias"]   = norm1_b;
         tensors[prefix + "conv1.weight"] = conv1_w;
-        tensors[prefix + "conv1.bias"] = conv1_b;
+        tensors[prefix + "conv1.bias"]   = conv1_b;
 
         tensors[prefix + "norm2.weight"] = norm2_w;
-        tensors[prefix + "norm2.bias"] = norm2_b;
+        tensors[prefix + "norm2.bias"]   = norm2_b;
         tensors[prefix + "conv2.weight"] = conv2_w;
-        tensors[prefix + "conv2.bias"] = conv2_b;
+        tensors[prefix + "conv2.bias"]   = conv2_b;
 
         if (out_channels != in_channels) {
             tensors[prefix + "nin_shortcut.weight"] = nin_shortcut_w;
-            tensors[prefix + "nin_shortcut.bias"] = nin_shortcut_b;
+            tensors[prefix + "nin_shortcut.bias"]   = nin_shortcut_b;
         }
     }
 
@@ -2002,16 +2043,16 @@ struct ResnetBlock {
 
         // group norm 32
         auto h = ggml_group_norm_32(ctx, z);
-        h = ggml_mul(ctx,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, norm1_w, 1, 1, norm1_w->ne[0], 1),
-                                 h),
-                     h);
-        h = ggml_add(ctx,
-                     h,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, norm1_b, 1, 1, norm1_b->ne[0], 1),
-                                 h));
+        h      = ggml_mul(ctx,
+                          ggml_repeat(ctx,
+                                      ggml_reshape_4d(ctx, norm1_w, 1, 1, norm1_w->ne[0], 1),
+                                      h),
+                          h);
+        h      = ggml_add(ctx,
+                          h,
+                          ggml_repeat(ctx,
+                                      ggml_reshape_4d(ctx, norm1_b, 1, 1, norm1_b->ne[0], 1),
+                                      h));
         // silu
         h = ggml_silu_inplace(ctx, h);
         // conv2d
@@ -2082,28 +2123,28 @@ struct AttnBlock {
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
         norm_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
         norm_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
-        q_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
-        q_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
-        k_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
-        k_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
-        v_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
-        v_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
+        q_w    = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
+        q_b    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
+        k_w    = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
+        k_b    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
+        v_w    = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
+        v_b    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
 
         proj_out_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
         proj_out_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        tensors[prefix + "norm.weight"] = norm_w;
-        tensors[prefix + "norm.bias"] = norm_b;
-        tensors[prefix + "q.weight"] = q_w;
-        tensors[prefix + "q.bias"] = q_b;
-        tensors[prefix + "k.weight"] = k_w;
-        tensors[prefix + "k.bias"] = k_b;
-        tensors[prefix + "v.weight"] = v_w;
-        tensors[prefix + "v.bias"] = v_b;
+        tensors[prefix + "norm.weight"]     = norm_w;
+        tensors[prefix + "norm.bias"]       = norm_b;
+        tensors[prefix + "q.weight"]        = q_w;
+        tensors[prefix + "q.bias"]          = q_b;
+        tensors[prefix + "k.weight"]        = k_w;
+        tensors[prefix + "k.bias"]          = k_b;
+        tensors[prefix + "v.weight"]        = v_w;
+        tensors[prefix + "v.bias"]          = v_b;
         tensors[prefix + "proj_out.weight"] = proj_out_w;
-        tensors[prefix + "proj_out.bias"] = proj_out_b;
+        tensors[prefix + "proj_out.bias"]   = proj_out_b;
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -2111,9 +2152,9 @@ struct AttnBlock {
 
         // group norm 32
         auto h_ = ggml_group_norm_32(ctx, x);
-        h_ = ggml_add(ctx,
-                      ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_w, 1, 1, norm_w->ne[0], 1), h_), h_),
-                      ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_b, 1, 1, norm_b->ne[0], 1), h_));
+        h_      = ggml_add(ctx,
+                           ggml_mul(ctx, ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_w, 1, 1, norm_w->ne[0], 1), h_), h_),
+                           ggml_repeat(ctx, ggml_reshape_4d(ctx, norm_b, 1, 1, norm_b->ne[0], 1), h_));
 
         const int64_t n = h_->ne[3];
         const int64_t c = h_->ne[2];
@@ -2121,27 +2162,27 @@ struct AttnBlock {
         const int64_t w = h_->ne[0];
         // q
         auto q = ggml_conv_2d(ctx, q_w, h_, 1, 1, 0, 0, 1, 1);
-        q = ggml_add(ctx,
-                     q,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, q_b, 1, 1, q_b->ne[0], 1),
-                                 q));  // [N, in_channels, h, w]
+        q      = ggml_add(ctx,
+                          q,
+                          ggml_repeat(ctx,
+                                      ggml_reshape_4d(ctx, q_b, 1, 1, q_b->ne[0], 1),
+                                      q));  // [N, in_channels, h, w]
 
         // k
         auto k = ggml_conv_2d(ctx, k_w, h_, 1, 1, 0, 0, 1, 1);
-        k = ggml_add(ctx,
-                     k,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, k_b, 1, 1, k_b->ne[0], 1),
-                                 k));  // [N, in_channels, h, w]
+        k      = ggml_add(ctx,
+                          k,
+                          ggml_repeat(ctx,
+                                      ggml_reshape_4d(ctx, k_b, 1, 1, k_b->ne[0], 1),
+                                      k));  // [N, in_channels, h, w]
 
         // v
         auto v = ggml_conv_2d(ctx, v_w, h_, 1, 1, 0, 0, 1, 1);
-        v = ggml_add(ctx,
-                     v,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, v_b, 1, 1, v_b->ne[0], 1),
-                                 v));  // [N, in_channels, h, w]
+        v      = ggml_add(ctx,
+                          v,
+                          ggml_repeat(ctx,
+                                      ggml_reshape_4d(ctx, v_b, 1, 1, v_b->ne[0], 1),
+                                      v));  // [N, in_channels, h, w]
 
         q = ggml_cont(ctx, ggml_permute(ctx, q, 1, 2, 0, 3));  // [N, h, w, in_channels]
         q = ggml_reshape_3d(ctx, q, c, h * w, n);              // [N, h * w, in_channels]
@@ -2150,10 +2191,10 @@ struct AttnBlock {
         k = ggml_reshape_3d(ctx, k, c, h * w, n);              // [N, h * w, in_channels]
 
         auto w_ = ggml_mul_mat(ctx, k, q);  // [N, h * w, h * w]
-        w_ = ggml_scale_inplace(ctx, w_, ggml_new_f32(ctx, 1.0f / sqrt((float)c)));
-        w_ = ggml_soft_max_inplace(ctx, w_);
+        w_      = ggml_scale_inplace(ctx, w_, ggml_new_f32(ctx, 1.0f / sqrt((float)c)));
+        w_      = ggml_soft_max_inplace(ctx, w_);
 
-        v = ggml_reshape_3d(ctx, v, h * w, c, n);                // [N, in_channels, h * w]
+        v  = ggml_reshape_3d(ctx, v, h * w, c, n);               // [N, in_channels, h * w]
         h_ = ggml_mul_mat(ctx, v, w_);                           // [N, h * w, in_channels]
         h_ = ggml_cont(ctx, ggml_permute(ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
         h_ = ggml_reshape_4d(ctx, h_, w, h, c, n);               // [N, in_channels, h, w]
@@ -2172,12 +2213,12 @@ struct AttnBlock {
 
 // ldm.modules.diffusionmodules.model.Encoder
 struct Encoder {
-    int embed_dim = 4;
-    int ch = 128;
-    int z_channels = 4;
-    int in_channels = 3;
+    int embed_dim      = 4;
+    int ch             = 128;
+    int z_channels     = 4;
+    int in_channels    = 3;
     int num_res_blocks = 2;
-    int ch_mult[4] = {1, 2, 4, 4};
+    int ch_mult[4]     = {1, 2, 4, 4};
 
     struct ggml_tensor* conv_in_w;  // [ch, in_channels, 3, 3]
     struct ggml_tensor* conv_in_b;  // [ch, ]
@@ -2211,28 +2252,28 @@ struct Encoder {
             }
             int block_out = ch * ch_mult[i];
             for (int j = 0; j < num_res_blocks; j++) {
-                down_blocks[i][j].in_channels = block_in;
+                down_blocks[i][j].in_channels  = block_in;
                 down_blocks[i][j].out_channels = block_out;
-                block_in = block_out;
+                block_in                       = block_out;
             }
             if (i != len_mults - 1) {
-                down_samples[i].channels = block_in;
-                down_samples[i].out_channels = block_in;
+                down_samples[i].channels       = block_in;
+                down_samples[i].out_channels   = block_in;
                 down_samples[i].vae_downsample = true;
             }
         }
 
-        mid.block_1.in_channels = block_in;
+        mid.block_1.in_channels  = block_in;
         mid.block_1.out_channels = block_in;
-        mid.attn_1.in_channels = block_in;
-        mid.block_2.in_channels = block_in;
+        mid.attn_1.in_channels   = block_in;
+        mid.block_2.in_channels  = block_in;
         mid.block_2.out_channels = block_in;
     }
 
     size_t compute_params_mem_size(ggml_type wtype) {
         double mem_size = 0;
-        int len_mults = sizeof(ch_mult) / sizeof(int);
-        int block_in = ch * ch_mult[len_mults - 1];
+        int len_mults   = sizeof(ch_mult) / sizeof(int);
+        int block_in    = ch * ch_mult[len_mults - 1];
 
         mem_size += ch * in_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv_in_w
         mem_size += ch * ggml_type_sizef(GGML_TYPE_F32);                        // conv_in_b
@@ -2262,7 +2303,7 @@ struct Encoder {
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
         int len_mults = sizeof(ch_mult) / sizeof(int);
-        int block_in = ch * ch_mult[len_mults - 1];
+        int block_in  = ch * ch_mult[len_mults - 1];
 
         conv_in_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, in_channels, ch);
         conv_in_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ch);
@@ -2289,11 +2330,11 @@ struct Encoder {
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         tensors[prefix + "norm_out.weight"] = norm_out_w;
-        tensors[prefix + "norm_out.bias"] = norm_out_b;
-        tensors[prefix + "conv_in.weight"] = conv_in_w;
-        tensors[prefix + "conv_in.bias"] = conv_in_b;
+        tensors[prefix + "norm_out.bias"]   = norm_out_b;
+        tensors[prefix + "conv_in.weight"]  = conv_in_w;
+        tensors[prefix + "conv_in.bias"]    = conv_in_b;
         tensors[prefix + "conv_out.weight"] = conv_out_w;
-        tensors[prefix + "conv_out.bias"] = conv_out_b;
+        tensors[prefix + "conv_out.bias"]   = conv_out_b;
 
         mid.block_1.map_by_name(tensors, prefix + "mid.block_1.");
         mid.attn_1.map_by_name(tensors, prefix + "mid.attn_1.");
@@ -2314,12 +2355,12 @@ struct Encoder {
         // x: [N, in_channels, h, w]
 
         // conv_in
-        auto h = ggml_conv_2d(ctx, conv_in_w, x, 1, 1, 1, 1, 1, 1);
-        h = ggml_add(ctx,
-                     h,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, conv_in_b, 1, 1, conv_in_b->ne[0], 1),
-                                 h));  // [N, ch, h, w]
+        auto h        = ggml_conv_2d(ctx, conv_in_w, x, 1, 1, 1, 1, 1, 1);
+        h             = ggml_add(ctx,
+                                 h,
+                                 ggml_repeat(ctx,
+                                             ggml_reshape_4d(ctx, conv_in_b, 1, 1, conv_in_b->ne[0], 1),
+                                             h));  // [N, ch, h, w]
         int len_mults = sizeof(ch_mult) / sizeof(int);
         for (int i = 0; i < len_mults; i++) {
             for (int j = 0; j < num_res_blocks; j++) {
@@ -2358,12 +2399,12 @@ struct Encoder {
 
 // ldm.modules.diffusionmodules.model.Decoder
 struct Decoder {
-    int embed_dim = 4;
-    int ch = 128;
-    int z_channels = 4;
-    int out_ch = 3;
+    int embed_dim      = 4;
+    int ch             = 128;
+    int z_channels     = 4;
+    int out_ch         = 3;
     int num_res_blocks = 2;
-    int ch_mult[4] = {1, 2, 4, 4};
+    int ch_mult[4]     = {1, 2, 4, 4};
 
     // block_in = ch *  ch_mult[-1], 512
     struct ggml_tensor* conv_in_w;  // [block_in, z_channels, 3, 3]
@@ -2387,24 +2428,24 @@ struct Decoder {
 
     Decoder() {
         int len_mults = sizeof(ch_mult) / sizeof(int);
-        int block_in = ch * ch_mult[len_mults - 1];
+        int block_in  = ch * ch_mult[len_mults - 1];
 
-        mid.block_1.in_channels = block_in;
+        mid.block_1.in_channels  = block_in;
         mid.block_1.out_channels = block_in;
-        mid.attn_1.in_channels = block_in;
-        mid.block_2.in_channels = block_in;
+        mid.attn_1.in_channels   = block_in;
+        mid.block_2.in_channels  = block_in;
         mid.block_2.out_channels = block_in;
 
         for (int i = len_mults - 1; i >= 0; i--) {
-            int mult = ch_mult[i];
+            int mult      = ch_mult[i];
             int block_out = ch * mult;
             for (int j = 0; j < num_res_blocks + 1; j++) {
-                up_blocks[i][j].in_channels = block_in;
+                up_blocks[i][j].in_channels  = block_in;
                 up_blocks[i][j].out_channels = block_out;
-                block_in = block_out;
+                block_in                     = block_out;
             }
             if (i != 0) {
-                up_samples[i - 1].channels = block_in;
+                up_samples[i - 1].channels     = block_in;
                 up_samples[i - 1].out_channels = block_in;
             }
         }
@@ -2412,8 +2453,8 @@ struct Decoder {
 
     size_t compute_params_mem_size(ggml_type wtype) {
         double mem_size = 0;
-        int len_mults = sizeof(ch_mult) / sizeof(int);
-        int block_in = ch * ch_mult[len_mults - 1];
+        int len_mults   = sizeof(ch_mult) / sizeof(int);
+        int block_in    = ch * ch_mult[len_mults - 1];
 
         mem_size += block_in * z_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv_in_w
         mem_size += block_in * ggml_type_sizef(GGML_TYPE_F32);                       // conv_in_b
@@ -2443,7 +2484,7 @@ struct Decoder {
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
         int len_mults = sizeof(ch_mult) / sizeof(int);
-        int block_in = ch * ch_mult[len_mults - 1];
+        int block_in  = ch * ch_mult[len_mults - 1];
 
         norm_out_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ch * ch_mult[0]);
         norm_out_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ch * ch_mult[0]);
@@ -2470,11 +2511,11 @@ struct Decoder {
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         tensors[prefix + "norm_out.weight"] = norm_out_w;
-        tensors[prefix + "norm_out.bias"] = norm_out_b;
-        tensors[prefix + "conv_in.weight"] = conv_in_w;
-        tensors[prefix + "conv_in.bias"] = conv_in_b;
+        tensors[prefix + "norm_out.bias"]   = norm_out_b;
+        tensors[prefix + "conv_in.weight"]  = conv_in_w;
+        tensors[prefix + "conv_in.bias"]    = conv_in_b;
         tensors[prefix + "conv_out.weight"] = conv_out_w;
-        tensors[prefix + "conv_out.bias"] = conv_out_b;
+        tensors[prefix + "conv_out.bias"]   = conv_out_b;
 
         mid.block_1.map_by_name(tensors, prefix + "mid.block_1.");
         mid.attn_1.map_by_name(tensors, prefix + "mid.attn_1.");
@@ -2496,11 +2537,11 @@ struct Decoder {
 
         // conv_in
         auto h = ggml_conv_2d(ctx, conv_in_w, z, 1, 1, 1, 1, 1, 1);
-        h = ggml_add(ctx,
-                     h,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, conv_in_b, 1, 1, conv_in_b->ne[0], 1),
-                                 h));  // [N, block_in, h, w]
+        h      = ggml_add(ctx,
+                          h,
+                          ggml_repeat(ctx,
+                                      ggml_reshape_4d(ctx, conv_in_b, 1, 1, conv_in_b->ne[0], 1),
+                                      h));  // [N, block_in, h, w]
 
         h = mid.block_1.forward(ctx, h);
         h = mid.attn_1.forward(ctx, h);
@@ -2541,15 +2582,15 @@ struct Decoder {
 // ldm.models.autoencoder.AutoencoderKL
 struct AutoEncoderKL {
     bool decode_only = true;
-    int embed_dim = 4;
+    int embed_dim    = 4;
     struct
     {
-        int z_channels = 4;
-        int resolution = 256;
-        int in_channels = 3;
-        int out_ch = 3;
-        int ch = 128;
-        int ch_mult[4] = {1, 2, 4, 4};
+        int z_channels     = 4;
+        int resolution     = 256;
+        int in_channels    = 3;
+        int out_ch         = 3;
+        int ch             = 128;
+        int ch_mult[4]     = {1, 2, 4, 4};
         int num_res_blocks = 2;
     } dd_config;
 
@@ -2567,14 +2608,14 @@ struct AutoEncoderKL {
         assert(sizeof(dd_config.ch_mult) == sizeof(encoder.ch_mult));
         assert(sizeof(dd_config.ch_mult) == sizeof(decoder.ch_mult));
 
-        encoder.embed_dim = embed_dim;
-        decoder.embed_dim = embed_dim;
-        encoder.ch = dd_config.ch;
-        decoder.ch = dd_config.ch;
-        encoder.z_channels = dd_config.z_channels;
-        decoder.z_channels = dd_config.z_channels;
-        encoder.in_channels = dd_config.in_channels;
-        decoder.out_ch = dd_config.out_ch;
+        encoder.embed_dim      = embed_dim;
+        decoder.embed_dim      = embed_dim;
+        encoder.ch             = dd_config.ch;
+        decoder.ch             = dd_config.ch;
+        encoder.z_channels     = dd_config.z_channels;
+        decoder.z_channels     = dd_config.z_channels;
+        encoder.in_channels    = dd_config.in_channels;
+        decoder.out_ch         = dd_config.out_ch;
         encoder.num_res_blocks = dd_config.num_res_blocks;
 
         int len_mults = sizeof(dd_config.ch_mult) / sizeof(int);
@@ -2615,12 +2656,12 @@ struct AutoEncoderKL {
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         if (!decode_only) {
             tensors[prefix + "quant_conv.weight"] = quant_conv_w;
-            tensors[prefix + "quant_conv.bias"] = quant_conv_b;
+            tensors[prefix + "quant_conv.bias"]   = quant_conv_b;
             encoder.map_by_name(tensors, prefix + "encoder.");
         }
 
         tensors[prefix + "post_quant_conv.weight"] = post_quant_conv_w;
-        tensors[prefix + "post_quant_conv.bias"] = post_quant_conv_b;
+        tensors[prefix + "post_quant_conv.bias"]   = post_quant_conv_b;
         decoder.map_by_name(tensors, prefix + "decoder.");
     }
 
@@ -2629,12 +2670,12 @@ struct AutoEncoderKL {
 
         // post_quant_conv
         auto h = ggml_conv_2d(ctx, post_quant_conv_w, z, 1, 1, 0, 0, 1, 1);
-        h = ggml_add(ctx,
-                     h,
-                     ggml_repeat(ctx,
-                                 ggml_reshape_4d(ctx, post_quant_conv_b, 1, 1, post_quant_conv_b->ne[0], 1),
-                                 h));  // [N, z_channels, h, w]
-        h = decoder.forward(ctx, h);
+        h      = ggml_add(ctx,
+                          h,
+                          ggml_repeat(ctx,
+                                      ggml_reshape_4d(ctx, post_quant_conv_b, 1, 1, post_quant_conv_b->ne[0], 1),
+                                      h));  // [N, z_channels, h, w]
+        h      = decoder.forward(ctx, h);
         return h;
     }
 
@@ -2677,22 +2718,22 @@ struct SigmaSchedule {
                 low_idx++;
             }
         }
-        low_idx = std::min(std::max(low_idx - 1, 0), TIMESTEPS - 2);
+        low_idx      = std::min(std::max(low_idx - 1, 0), TIMESTEPS - 2);
         int high_idx = low_idx + 1;
 
-        float low = log_sigmas[low_idx];
+        float low  = log_sigmas[low_idx];
         float high = log_sigmas[high_idx];
-        float w = (low - log_sigma) / (low - high);
-        w = std::max(0.f, std::min(1.f, w));
-        float t = (1.0f - w) * low_idx + w * high_idx;
+        float w    = (low - log_sigma) / (low - high);
+        w          = std::max(0.f, std::min(1.f, w));
+        float t    = (1.0f - w) * low_idx + w * high_idx;
 
         return t;
     }
 
     float t_to_sigma(float t) {
-        int low_idx = static_cast<int>(std::floor(t));
-        int high_idx = static_cast<int>(std::ceil(t));
-        float w = t - static_cast<float>(low_idx);
+        int low_idx     = static_cast<int>(std::floor(t));
+        int high_idx    = static_cast<int>(std::ceil(t));
+        float w         = t - static_cast<float>(low_idx);
         float log_sigma = (1.0f - w) * log_sigmas[low_idx] + w * log_sigmas[high_idx];
         return std::exp(log_sigma);
     }
@@ -2728,7 +2769,7 @@ struct KarrasSchedule : SigmaSchedule {
         // but does anybody ever bother to touch them?
         float sigma_min = 0.1f;
         float sigma_max = 10.f;
-        float rho = 7.f;
+        float rho       = 7.f;
 
         std::vector<float> result(n + 1);
 
@@ -2744,7 +2785,7 @@ struct KarrasSchedule : SigmaSchedule {
 };
 
 struct Denoiser {
-    std::shared_ptr<SigmaSchedule> schedule = std::make_shared<DiscreteSchedule>();
+    std::shared_ptr<SigmaSchedule> schedule              = std::make_shared<DiscreteSchedule>();
     virtual std::vector<float> get_scalings(float sigma) = 0;
 };
 
@@ -2753,7 +2794,7 @@ struct CompVisDenoiser : public Denoiser {
 
     std::vector<float> get_scalings(float sigma) {
         float c_out = -sigma;
-        float c_in = 1.0f / std::sqrt(sigma * sigma + sigma_data * sigma_data);
+        float c_in  = 1.0f / std::sqrt(sigma * sigma + sigma_data * sigma_data);
         return {c_out, c_in};
     }
 };
@@ -2763,8 +2804,8 @@ struct CompVisVDenoiser : public Denoiser {
 
     std::vector<float> get_scalings(float sigma) {
         float c_skip = sigma_data * sigma_data / (sigma * sigma + sigma_data * sigma_data);
-        float c_out = -sigma * sigma_data / std::sqrt(sigma * sigma + sigma_data * sigma_data);
-        float c_in = 1.0f / std::sqrt(sigma * sigma + sigma_data * sigma_data);
+        float c_out  = -sigma * sigma_data / std::sqrt(sigma * sigma + sigma_data * sigma_data);
+        float c_in   = 1.0f / std::sqrt(sigma * sigma + sigma_data * sigma_data);
         return {c_skip, c_out, c_in};
     }
 };
@@ -2772,27 +2813,37 @@ struct CompVisVDenoiser : public Denoiser {
 /*=============================================== StableDiffusionGGML ================================================*/
 
 class StableDiffusionGGML {
-   public:
+public:
     ggml_context* clip_params_ctx = NULL;
     ggml_context* unet_params_ctx = NULL;
-    ggml_context* vae_params_ctx = NULL;
+    ggml_context* vae_params_ctx  = NULL;
 
-    bool dynamic = true;
-    bool vae_decode_only = false;
+    bool dynamic                 = true;
+    bool vae_decode_only         = false;
     bool free_params_immediately = false;
 
-    std::shared_ptr<RNG> rng = std::make_shared<STDDefaultRNG>();
-    int32_t ftype = 1;
-    int n_threads = -1;
-    float scale_factor = 0.18215f;
-    size_t max_mem_size = 0;
+    std::shared_ptr<RNG> rng    = std::make_shared<STDDefaultRNG>();
+    int32_t ftype               = 1;
+    int n_threads               = -1;
+    float scale_factor          = 0.18215f;
+    size_t max_mem_size         = 0;
     size_t curr_params_mem_size = 0;
-    size_t max_params_mem_size = 0;
-    size_t max_rt_mem_size = 0;
+    size_t max_params_mem_size  = 0;
+    size_t max_rt_mem_size      = 0;
 
     FrozenCLIPEmbedderWithCustomWords cond_stage_model;
     UNetModel diffusion_model;
     AutoEncoderKL first_stage_model;
+
+    std::map<std::string, struct ggml_tensor*> tensors;
+
+    std::string lora_model_dir;
+    // lora_name => lora_tensor_name => tensor
+    std::map<std::string, std::map<std::string, struct ggml_tensor*>> lora_tensors;
+    // lora_name => lora_params_ctx
+    std::map<std::string, ggml_context*> lora_params_ctxs;
+    // lora_name => multiplier
+    std::unordered_map<std::string, float> curr_lora_state;
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
 
@@ -2801,15 +2852,22 @@ class StableDiffusionGGML {
     StableDiffusionGGML(int n_threads,
                         bool vae_decode_only,
                         bool free_params_immediately,
+                        std::string lora_model_dir,
                         RNGType rng_type)
         : n_threads(n_threads),
           vae_decode_only(vae_decode_only),
-          free_params_immediately(free_params_immediately) {
+          free_params_immediately(free_params_immediately),
+          lora_model_dir(lora_model_dir) {
         first_stage_model.decode_only = vae_decode_only;
         if (rng_type == STD_DEFAULT_RNG) {
             rng = std::make_shared<STDDefaultRNG>();
         } else if (rng_type == CUDA_RNG) {
             rng = std::make_shared<PhiloxRNG>();
+        }
+        if (lora_model_dir.size() > 0) {
+            if (lora_model_dir[lora_model_dir.size() - 1] != '/' && lora_model_dir[lora_model_dir.size() - 1] != '\\') {
+                this->lora_model_dir = lora_model_dir + "/";
+            }
         }
     }
 
@@ -2826,6 +2884,13 @@ class StableDiffusionGGML {
             ggml_free(vae_params_ctx);
             vae_params_ctx = NULL;
         }
+        for (auto& kv : lora_params_ctxs) {
+            ggml_free(kv.second);
+        }
+        lora_params_ctxs.clear();
+
+        tensors.clear();
+        lora_tensors.clear();
     }
 
     bool load_from_file(const std::string& file_path, Schedule schedule) {
@@ -2861,7 +2926,7 @@ class StableDiffusionGGML {
 
         if (model_type == SD2) {
             cond_stage_model = FrozenCLIPEmbedderWithCustomWords((ModelType)model_type);
-            diffusion_model = UNetModel((ModelType)model_type);
+            diffusion_model  = UNetModel((ModelType)model_type);
         }
 
         ggml_type wtype = ggml_ftype_to_ggml_type((ggml_ftype)(ftype & 0xFFFF));
@@ -2907,10 +2972,10 @@ class StableDiffusionGGML {
             LOG_DEBUG("clip params ctx size = % 6.2f MB", ctx_size / (1024.0 * 1024.0));
 
             struct ggml_init_params params;
-            params.mem_size = static_cast<size_t>(ctx_size);
+            params.mem_size   = static_cast<size_t>(ctx_size);
             params.mem_buffer = NULL;
-            params.no_alloc = false;
-            params.dynamic = false;
+            params.no_alloc   = false;
+            params.dynamic    = false;
 
             clip_params_ctx = ggml_init(params);
             if (!clip_params_ctx) {
@@ -2926,10 +2991,10 @@ class StableDiffusionGGML {
             LOG_DEBUG("unet params ctx size = % 6.2f MB", ctx_size / (1024.0 * 1024.0));
 
             struct ggml_init_params params;
-            params.mem_size = static_cast<size_t>(ctx_size);
+            params.mem_size   = static_cast<size_t>(ctx_size);
             params.mem_buffer = NULL;
-            params.no_alloc = false;
-            params.dynamic = false;
+            params.no_alloc   = false;
+            params.dynamic    = false;
 
             unet_params_ctx = ggml_init(params);
             if (!unet_params_ctx) {
@@ -2947,10 +3012,10 @@ class StableDiffusionGGML {
             LOG_DEBUG("vae params ctx size = % 6.2f MB", ctx_size / (1024.0 * 1024.0));
 
             struct ggml_init_params params;
-            params.mem_size = static_cast<size_t>(ctx_size);
+            params.mem_size   = static_cast<size_t>(ctx_size);
             params.mem_buffer = NULL;
-            params.no_alloc = false;
-            params.dynamic = false;
+            params.no_alloc   = false;
+            params.dynamic    = false;
 
             vae_params_ctx = ggml_init(params);
             if (!vae_params_ctx) {
@@ -2962,8 +3027,6 @@ class StableDiffusionGGML {
                 return false;
             }
         }
-
-        std::map<std::string, struct ggml_tensor*> tensors;
 
         LOG_DEBUG("preparing memory for the weights");
         // prepare memory for the weights
@@ -2987,7 +3050,7 @@ class StableDiffusionGGML {
         // load weights
         float alphas_cumprod[TIMESTEPS];
         {
-            int n_tensors = 0;
+            int n_tensors     = 0;
             size_t total_size = 0;
 
             while (true) {
@@ -3004,7 +3067,7 @@ class StableDiffusionGGML {
                 }
 
                 int32_t nelements = 1;
-                int32_t ne[4] = {1, 1, 1, 1};
+                int32_t ne[4]     = {1, 1, 1, 1};
                 for (int i = 0; i < n_dims; ++i) {
                     file.read(reinterpret_cast<char*>(&ne[i]), sizeof(ne[i]));
                     nelements *= ne[i];
@@ -3086,8 +3149,8 @@ class StableDiffusionGGML {
             }
             LOG_DEBUG("model size = %.2fMB", total_size / 1024.0 / 1024.0);
         }
-        max_params_mem_size = ggml_used_mem(clip_params_ctx) + ggml_used_mem(unet_params_ctx) + ggml_used_mem(vae_params_ctx);
-        max_mem_size = max_params_mem_size;
+        max_params_mem_size  = ggml_used_mem(clip_params_ctx) + ggml_used_mem(unet_params_ctx) + ggml_used_mem(vae_params_ctx);
+        max_mem_size         = max_params_mem_size;
         curr_params_mem_size = max_params_mem_size;
         LOG_INFO("total params size = %.2fMB (clip %.2fMB, unet %.2fMB, vae %.2fMB)",
                  max_params_mem_size / 1024.0 / 1024.0,
@@ -3102,10 +3165,10 @@ class StableDiffusionGGML {
         bool is_using_v_parameterization = false;
         if (model_type == SD2) {
             struct ggml_init_params params;
-            params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10M
-            params.mem_buffer = NULL;
-            params.no_alloc = false;
-            params.dynamic = false;
+            params.mem_size          = static_cast<size_t>(10 * 1024) * 1024;  // 10M
+            params.mem_buffer        = NULL;
+            params.no_alloc          = false;
+            params.dynamic           = false;
             struct ggml_context* ctx = ggml_init(params);
             if (!ctx) {
                 LOG_ERROR("ggml_init() failed");
@@ -3144,8 +3207,8 @@ class StableDiffusionGGML {
 
         for (int i = 0; i < TIMESTEPS; i++) {
             denoiser->schedule->alphas_cumprod[i] = alphas_cumprod[i];
-            denoiser->schedule->sigmas[i] = std::sqrt((1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
-            denoiser->schedule->log_sigmas[i] = std::log(denoiser->schedule->sigmas[i]);
+            denoiser->schedule->sigmas[i]         = std::sqrt((1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
+            denoiser->schedule->log_sigmas[i]     = std::log(denoiser->schedule->sigmas[i]);
         }
 
         return true;
@@ -3163,10 +3226,10 @@ class StableDiffusionGGML {
         // calculate the amount of memory required
         {
             struct ggml_init_params params;
-            params.mem_size = ctx_size;
+            params.mem_size   = ctx_size;
             params.mem_buffer = NULL;
-            params.no_alloc = true;
-            params.dynamic = dynamic;
+            params.no_alloc   = true;
+            params.dynamic    = dynamic;
 
             struct ggml_context* ctx = ggml_init(params);
             if (!ctx) {
@@ -3175,15 +3238,15 @@ class StableDiffusionGGML {
             }
 
             ggml_set_dynamic(ctx, false);
-            struct ggml_tensor* timesteps = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);                           // [N, ]
-            struct ggml_tensor* t_emb = new_timestep_embedding(ctx, timesteps, diffusion_model.model_channels);  // [N, model_channels]
+            struct ggml_tensor* timesteps = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);                               // [N, ]
+            struct ggml_tensor* t_emb     = new_timestep_embedding(ctx, timesteps, diffusion_model.model_channels);  // [N, model_channels]
             ggml_set_dynamic(ctx, params.dynamic);
 
             struct ggml_tensor* out = diffusion_model.forward(ctx, x_t, NULL, c, t_emb);
             ctx_size += ggml_used_mem(ctx) + ggml_used_mem_of_data(ctx);
 
             struct ggml_cgraph* diffusion_graph = ggml_build_forward_ctx(ctx, out);
-            cplan = ggml_graph_plan(diffusion_graph, n_threads);
+            cplan                               = ggml_graph_plan(diffusion_graph, n_threads);
 
             ctx_size += cplan.work_size;
             LOG_DEBUG("diffusion context need %.2fMB static memory, with work_size needing %.2fMB",
@@ -3194,10 +3257,10 @@ class StableDiffusionGGML {
         }
 
         struct ggml_init_params params;
-        params.mem_size = ctx_size;
+        params.mem_size   = ctx_size;
         params.mem_buffer = NULL;
-        params.no_alloc = false;
-        params.dynamic = dynamic;
+        params.no_alloc   = false;
+        params.dynamic    = dynamic;
 
         struct ggml_context* ctx = ggml_init(params);
         if (!ctx) {
@@ -3206,8 +3269,8 @@ class StableDiffusionGGML {
         }
 
         ggml_set_dynamic(ctx, false);
-        struct ggml_tensor* timesteps = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);                           // [N, ]
-        struct ggml_tensor* t_emb = new_timestep_embedding(ctx, timesteps, diffusion_model.model_channels);  // [N, model_channels]
+        struct ggml_tensor* timesteps = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);                               // [N, ]
+        struct ggml_tensor* t_emb     = new_timestep_embedding(ctx, timesteps, diffusion_model.model_channels);  // [N, model_channels]
         ggml_set_dynamic(ctx, params.dynamic);
         ggml_set_f32(timesteps, 999);
         set_timestep_embedding(timesteps, t_emb, diffusion_model.model_channels);
@@ -3216,7 +3279,7 @@ class StableDiffusionGGML {
         ggml_hold_dynamic_tensor(out);
 
         struct ggml_cgraph* diffusion_graph = ggml_build_forward_ctx(ctx, out);
-        cplan = ggml_graph_plan(diffusion_graph, n_threads);
+        cplan                               = ggml_graph_plan(diffusion_graph, n_threads);
 
         ggml_set_dynamic(ctx, false);
         struct ggml_tensor* buf = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, cplan.work_size);
@@ -3230,7 +3293,7 @@ class StableDiffusionGGML {
         double result = 0.f;
 
         {
-            float* vec_x = (float*)x_t->data;
+            float* vec_x   = (float*)x_t->data;
             float* vec_out = (float*)out->data;
 
             int64_t n = ggml_nelements(out);
@@ -3255,21 +3318,321 @@ class StableDiffusionGGML {
         return result < -1;
     }
 
+    bool load_lora_from_file(const std::string& lora_name) {
+        if (lora_tensors.find(lora_name) != lora_tensors.end()) {
+            return true;
+        }
+        std::string file_path = lora_model_dir + lora_name + "-ggml-lora.bin";
+        LOG_INFO("loading lora '%s' from '%s'", lora_name.c_str(), file_path.c_str());
+
+        std::ifstream file(file_path, std::ios::binary);
+        if (!file.is_open()) {
+            LOG_ERROR("failed to open '%s'", file_path.c_str());
+            return false;
+        }
+
+        // get file size
+        file.seekg(0, file.end);
+        int file_size = (int)file.tellg();
+        file.seekg(0, file.beg);
+
+        LOG_DEBUG("'%s': %.2fMB", file_path.c_str(), file_size * 1.f / 1024 / 1024);
+
+        LOG_DEBUG("verifying magic");
+        // verify magic
+        {
+            uint32_t magic;
+            file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+            if (magic != GGML_FILE_MAGIC) {
+                LOG_ERROR("invalid model file '%s' (bad magic)", file_path.c_str());
+                return false;
+            }
+        }
+
+        LOG_DEBUG("loading hparams");
+        // load hparams
+        file.read(reinterpret_cast<char*>(&ftype), sizeof(ftype));
+
+        int model_type = (ftype >> 16) & 0xFFFF;
+        if (model_type >= MODEL_TYPE_COUNT) {
+            LOG_ERROR("invalid model file '%s' (bad model type value %d)", file_path.c_str(), ftype);
+            return false;
+        }
+        LOG_INFO("lora model type: %s", model_type_to_str[model_type]);
+
+        ggml_type wtype = ggml_ftype_to_ggml_type((ggml_ftype)(ftype & 0xFFFF));
+        LOG_INFO("ftype: %s", ggml_type_name(wtype));
+        if (wtype == GGML_TYPE_COUNT) {
+            LOG_ERROR("invalid model file '%s' (bad ftype value %d)", file_path.c_str(), ftype);
+            return false;
+        }
+
+        // create the ggml context for network params
+        struct ggml_init_params params;
+        size_t ctx_size = 10 * 1024 * 1024;  // 10 MB, for padding
+        ctx_size += file_size;
+        params.mem_size   = ctx_size;
+        params.mem_buffer = NULL;
+        params.no_alloc   = false;
+        params.dynamic    = false;
+        LOG_DEBUG("lora '%s' params ctx size = % 6.2f MB", lora_name.c_str(), ctx_size / (1024.0 * 1024.0));
+        ggml_context* lora_params_ctx = ggml_init(params);
+        if (!lora_params_ctx) {
+            LOG_ERROR("ggml_init() failed");
+            return false;
+        }
+        lora_params_ctxs[lora_name] = lora_params_ctx;
+
+        std::map<std::string, struct ggml_tensor*> lora_tensor_map;
+        int64_t t0 = ggml_time_ms();
+        // load weights
+        {
+            int n_tensors     = 0;
+            size_t total_size = 0;
+
+            while (true) {
+                int32_t n_dims;
+                int32_t length;
+                int32_t ttype;
+
+                file.read(reinterpret_cast<char*>(&n_dims), sizeof(n_dims));
+                file.read(reinterpret_cast<char*>(&length), sizeof(length));
+                file.read(reinterpret_cast<char*>(&ttype), sizeof(ttype));
+
+                if (file.eof()) {
+                    break;
+                }
+
+                int32_t nelements = 1;
+                int32_t ne[4]     = {1, 1, 1, 1};
+                for (int i = 0; i < n_dims; ++i) {
+                    file.read(reinterpret_cast<char*>(&ne[i]), sizeof(ne[i]));
+                    nelements *= ne[i];
+                }
+
+                const size_t num_bytes = nelements / ggml_blck_size(ggml_type(ttype)) * ggml_type_size(ggml_type(ttype));
+
+                std::string name_buf(length, 0);
+                file.read(&name_buf[0], length);
+                std::string name = std::string(name_buf.data());
+
+                // LOG_DEBUG("load lora tensor %s", name.c_str());
+
+                int64_t ne64[4]            = {ne[0], ne[1], ne[2], ne[3]};
+                struct ggml_tensor* tensor = ggml_new_tensor(lora_params_ctx, (ggml_type)ttype, n_dims, ne64);
+                file.read(reinterpret_cast<char*>(tensor->data), num_bytes);
+
+                lora_tensor_map[name] = tensor;
+
+                total_size += ggml_nbytes(tensor);
+            }
+        }
+        lora_tensors[lora_name] = lora_tensor_map;
+        int64_t t1              = ggml_time_ms();
+        LOG_INFO("lora '%s' params size = %.2fMB",
+                 lora_name.c_str(),
+                 ggml_used_mem(lora_params_ctx) / 1024.0 / 1024.0);
+        LOG_INFO("loading lora from '%s' completed, taking %.2fs", file_path.c_str(), (t1 - t0) * 1.0f / 1000);
+        file.close();
+        return true;
+    }
+
+    void remove_lora_params(const std::string& lora_name) {
+        if (lora_params_ctxs.find(lora_name) == lora_params_ctxs.end()) {
+            return;
+        }
+        ggml_free(lora_params_ctxs[lora_name]);
+        lora_params_ctxs.erase(lora_name);
+        lora_tensors.erase(lora_name);
+    }
+
+    void apply_lora(const std::string& lora_name, float multiplier) {
+        int64_t t0 = ggml_time_ms();
+        if (!load_lora_from_file(lora_name)) {
+            std::string file_path = lora_model_dir + lora_name + "-ggml-lora.bin";
+            LOG_WARN("apply lora '%s' failed", lora_name.c_str());
+            return;
+        }
+
+        size_t ctx_size  = 500 * 1024 * 1024;  // 500MB
+        void* mem_buffer = malloc(ctx_size);
+        if (!mem_buffer) {
+            if (free_params_immediately) {
+                remove_lora_params(lora_name);
+            }
+            LOG_ERROR("malloc() failed");
+            return;
+        }
+
+        std::map<std::string, struct ggml_tensor*>& lora_tensor_map = lora_tensors[lora_name];
+        std::set<std::string> applied_lora_tensors;
+        for (auto& kv : tensors) {
+            const std::string name = kv.first;
+            ggml_tensor* weight    = kv.second;
+            std::string ending     = ".weight";
+            if (!ends_with(name, ending)) {
+                continue;
+            }
+
+            // find corresponding lora tensors
+            std::string network_name = name.substr(0, name.size() - ending.size());  // remove .weight
+            replace_all_chars(network_name, '.', '_');
+            std::string lora_up_name   = network_name + ".lora_up.weight";
+            std::string lora_down_name = network_name + ".lora_down.weight";
+            std::string alpha_name     = network_name + ".alpha";
+            std::string scale_name     = network_name + ".scale";
+
+            ggml_tensor* lora_up   = NULL;
+            ggml_tensor* lora_down = NULL;
+
+            float scale = 1.0f;
+
+            if (lora_tensor_map.find(lora_up_name) != lora_tensor_map.end()) {
+                lora_up = lora_tensor_map[lora_up_name];
+            }
+
+            if (lora_tensor_map.find(lora_down_name) != lora_tensor_map.end()) {
+                lora_down = lora_tensor_map[lora_down_name];
+            }
+
+            if (lora_up == NULL || lora_down == NULL) {
+                continue;
+            }
+
+            // LOG_DEBUG("apply lora tensor %s [%ld %ld %ld %ld]", network_name.c_str(), weight->ne[0], weight->ne[1], weight->ne[2], weight->ne[3]);
+
+            applied_lora_tensors.insert(lora_up_name);
+            applied_lora_tensors.insert(lora_down_name);
+            applied_lora_tensors.insert(alpha_name);
+            applied_lora_tensors.insert(scale_name);
+
+            // calc_scale
+            int64_t dim = lora_down->ne[lora_down->n_dims - 1];
+            if (lora_tensor_map.find(scale_name) != lora_tensor_map.end()) {
+                ggml_tensor* t = lora_tensor_map[scale_name];
+                scale          = ggml_get_f32_1d(t, 0);
+            } else if (lora_tensor_map.find(alpha_name) != lora_tensor_map.end()) {
+                ggml_tensor* t = lora_tensor_map[alpha_name];
+                scale          = ggml_get_f32_1d(t, 0) / dim;
+            }
+
+            // LOG_DEBUG("scale: %f %ld", scale, dim);
+
+            scale = scale * multiplier;
+
+            // apply
+            {
+                struct ggml_init_params params;
+                params.mem_size   = ctx_size;
+                params.mem_buffer = mem_buffer;
+                params.no_alloc   = false;
+                params.dynamic    = false;
+
+                struct ggml_context* ctx = ggml_init(params);
+                if (!ctx) {
+                    LOG_ERROR("ggml_init() failed");
+                    free(mem_buffer);
+                    if (free_params_immediately) {
+                        remove_lora_params(lora_name);
+                    }
+                    return;
+                }
+
+                ggml_tensor* scale_factor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+                ggml_set_f32_1d(scale_factor, 0, scale);
+                int64_t lora_up_size_0   = lora_up->ne[lora_up->n_dims - 1];
+                lora_up                  = ggml_reshape_2d(ctx, lora_up, ggml_nelements(lora_up) / lora_up_size_0, lora_up_size_0);
+                int64_t lora_down_size_0 = lora_down->ne[lora_down->n_dims - 1];
+                lora_down                = ggml_reshape_2d(ctx, lora_down, ggml_nelements(lora_down) / lora_down_size_0, lora_down_size_0);
+
+                lora_down = ggml_cont(ctx, ggml_transpose(ctx, lora_down));
+
+                if (lora_down->type != GGML_TYPE_F32) {
+                    ggml_tensor* lora_down_f32 = ggml_new_tensor(ctx, GGML_TYPE_F32, lora_down->n_dims, lora_down->ne);
+                    lora_down                  = ggml_cpy_inplace(ctx, lora_down, lora_down_f32);
+                }
+
+                ggml_tensor* updown = ggml_mul_mat(ctx, lora_up, lora_down);
+                updown              = ggml_cont(ctx, ggml_transpose(ctx, updown));
+                updown              = ggml_reshape(ctx, updown, weight);
+
+                GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
+
+                updown = ggml_scale_inplace(ctx, updown, scale_factor);
+                ggml_tensor* final_weight;
+                final_weight = ggml_add_inplace(ctx, weight, updown);
+                final_weight = ggml_cpy_inplace(ctx, final_weight, weight);
+
+                struct ggml_cgraph* graph = ggml_build_forward_ctx(ctx, final_weight);
+
+                ggml_graph_compute_with_ctx(ctx, graph, n_threads);
+
+                // LOG_INFO("network_name '%s' ggml_used_mem size = %.2fMB",
+                //           network_name.c_str(),
+                //           ggml_used_mem(ctx) / 1024.0 / 1024.0);
+
+                ggml_free(ctx);
+            }
+        }
+        free(mem_buffer);
+
+        for (auto& kv : lora_tensor_map) {
+            if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
+                LOG_WARN("unused lora tensor %s", kv.first.c_str());
+            }
+        }
+
+        if (free_params_immediately) {
+            remove_lora_params(lora_name);
+        }
+
+        int64_t t1 = ggml_time_ms();
+
+        LOG_INFO("apply lora '%s:%f' completed, taking %.2fs",
+                 lora_name.c_str(),
+                 multiplier,
+                 (t1 - t0) * 1.0f / 1000);
+    }
+
+    void apply_loras(const std::unordered_map<std::string, float>& lora_state) {
+        std::unordered_map<std::string, float> lora_state_diff;
+        for (auto& kv : lora_state) {
+            const std::string& lora_name = kv.first;
+            float multiplier             = kv.second;
+
+            if (curr_lora_state.find(lora_name) != curr_lora_state.end()) {
+                float curr_multiplier = curr_lora_state[lora_name];
+                float multiplier_diff = multiplier - curr_multiplier;
+                if (multiplier_diff != 0.f) {
+                    lora_state_diff[lora_name] = multiplier_diff;
+                }
+            } else {
+                lora_state_diff[lora_name] = multiplier;
+            }
+        }
+
+        for (auto& kv : lora_state_diff) {
+            apply_lora(kv.first, kv.second);
+        }
+
+        curr_lora_state = lora_state;
+    }
+
     ggml_tensor* get_learned_condition(ggml_context* res_ctx, const std::string& text) {
-        auto tokens_and_weights = cond_stage_model.tokenize(text,
-                                                            cond_stage_model.text_model.max_position_embeddings,
-                                                            true);
-        std::vector<int>& tokens = tokens_and_weights.first;
+        auto tokens_and_weights     = cond_stage_model.tokenize(text,
+                                                                cond_stage_model.text_model.max_position_embeddings,
+                                                                true);
+        std::vector<int>& tokens    = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
         struct ggml_cplan cplan;
         size_t ctx_size = 10 * 1024 * 1024;  // 10MB
         // calculate the amount of memory required
         {
             struct ggml_init_params params;
-            params.mem_size = ctx_size;
+            params.mem_size   = ctx_size;
             params.mem_buffer = NULL;
-            params.no_alloc = true;
-            params.dynamic = dynamic;
+            params.no_alloc   = true;
+            params.dynamic    = dynamic;
 
             struct ggml_context* ctx = ggml_init(params);
             if (!ctx) {
@@ -3284,7 +3647,7 @@ class StableDiffusionGGML {
             struct ggml_tensor* hidden_states = cond_stage_model.text_model.forward(ctx, input_ids);
 
             struct ggml_cgraph* cond_graph = ggml_build_forward_ctx(ctx, hidden_states);
-            cplan = ggml_graph_plan(cond_graph, n_threads);
+            cplan                          = ggml_graph_plan(cond_graph, n_threads);
             ctx_size += cplan.work_size;
 
             ctx_size += ggml_used_mem(ctx) + ggml_used_mem_of_data(ctx);
@@ -3296,10 +3659,10 @@ class StableDiffusionGGML {
 
         // allocate the required memory and compute forward
         struct ggml_init_params params;
-        params.mem_size = ctx_size;
+        params.mem_size   = ctx_size;
         params.mem_buffer = NULL;
-        params.no_alloc = false;
-        params.dynamic = dynamic;
+        params.no_alloc   = false;
+        params.dynamic    = dynamic;
 
         struct ggml_context* ctx = ggml_init(params);
         if (!ctx) {
@@ -3312,7 +3675,7 @@ class StableDiffusionGGML {
         ggml_set_dynamic(ctx, params.dynamic);
 
         struct ggml_tensor* hidden_states = cond_stage_model.text_model.forward(ctx, input_ids);
-        struct ggml_cgraph* cond_graph = ggml_build_forward_ctx(ctx, hidden_states);
+        struct ggml_cgraph* cond_graph    = ggml_build_forward_ctx(ctx, hidden_states);
         LOG_DEBUG("building condition graph completed: %d nodes, %d leafs",
                   cond_graph->n_nodes, cond_graph->n_leafs);
 
@@ -3326,10 +3689,10 @@ class StableDiffusionGGML {
         ggml_tensor* result = ggml_dup_tensor(res_ctx, hidden_states);  // [N, n_token, hidden_size]
 
         {
-            int64_t nelements = ggml_nelements(hidden_states);
+            int64_t nelements   = ggml_nelements(hidden_states);
             float original_mean = 0.f;
-            float new_mean = 0.f;
-            float* vec = (float*)hidden_states->data;
+            float new_mean      = 0.f;
+            float* vec          = (float*)hidden_states->data;
             for (int i = 0; i < nelements; i++) {
                 original_mean += vec[i] / nelements * 1.0f;
             }
@@ -3401,10 +3764,10 @@ class StableDiffusionGGML {
         // calculate the amount of memory required
         {
             struct ggml_init_params params;
-            params.mem_size = ctx_size;
+            params.mem_size   = ctx_size;
             params.mem_buffer = NULL;
-            params.no_alloc = true;
-            params.dynamic = dynamic;
+            params.no_alloc   = true;
+            params.dynamic    = dynamic;
 
             struct ggml_context* ctx = ggml_init(params);
             if (!ctx) {
@@ -3414,16 +3777,16 @@ class StableDiffusionGGML {
 
             ggml_set_dynamic(ctx, false);
             struct ggml_tensor* noised_input = ggml_dup_tensor(ctx, x_t);
-            struct ggml_tensor* context = ggml_dup_tensor(ctx, c);
-            struct ggml_tensor* timesteps = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);                           // [N, ]
-            struct ggml_tensor* t_emb = new_timestep_embedding(ctx, timesteps, diffusion_model.model_channels);  // [N, model_channels]
+            struct ggml_tensor* context      = ggml_dup_tensor(ctx, c);
+            struct ggml_tensor* timesteps    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);                               // [N, ]
+            struct ggml_tensor* t_emb        = new_timestep_embedding(ctx, timesteps, diffusion_model.model_channels);  // [N, model_channels]
             ggml_set_dynamic(ctx, params.dynamic);
 
             struct ggml_tensor* out = diffusion_model.forward(ctx, noised_input, NULL, context, t_emb);
             ctx_size += ggml_used_mem(ctx) + ggml_used_mem_of_data(ctx);
 
             struct ggml_cgraph* diffusion_graph = ggml_build_forward_ctx(ctx, out);
-            cplan = ggml_graph_plan(diffusion_graph, n_threads);
+            cplan                               = ggml_graph_plan(diffusion_graph, n_threads);
 
             ctx_size += cplan.work_size;
             LOG_DEBUG("diffusion context need %.2fMB static memory, with work_size needing %.2fMB",
@@ -3434,10 +3797,10 @@ class StableDiffusionGGML {
         }
 
         struct ggml_init_params params;
-        params.mem_size = ctx_size;
+        params.mem_size   = ctx_size;
         params.mem_buffer = NULL;
-        params.no_alloc = false;
-        params.dynamic = dynamic;
+        params.no_alloc   = false;
+        params.dynamic    = dynamic;
 
         struct ggml_context* ctx = ggml_init(params);
         if (!ctx) {
@@ -3447,16 +3810,16 @@ class StableDiffusionGGML {
 
         ggml_set_dynamic(ctx, false);
         struct ggml_tensor* noised_input = ggml_dup_tensor(ctx, x_t);
-        struct ggml_tensor* context = ggml_dup_tensor(ctx, c);
-        struct ggml_tensor* timesteps = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);                           // [N, ]
-        struct ggml_tensor* t_emb = new_timestep_embedding(ctx, timesteps, diffusion_model.model_channels);  // [N, model_channels]
+        struct ggml_tensor* context      = ggml_dup_tensor(ctx, c);
+        struct ggml_tensor* timesteps    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);                               // [N, ]
+        struct ggml_tensor* t_emb        = new_timestep_embedding(ctx, timesteps, diffusion_model.model_channels);  // [N, model_channels]
         ggml_set_dynamic(ctx, params.dynamic);
 
         struct ggml_tensor* out = diffusion_model.forward(ctx, noised_input, NULL, context, t_emb);
         ggml_hold_dynamic_tensor(out);
 
         struct ggml_cgraph* diffusion_graph = ggml_new_graph(ctx);
-        diffusion_graph->order = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT;
+        diffusion_graph->order              = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT;
         ggml_build_forward_expand(diffusion_graph, out);
         cplan = ggml_graph_plan(diffusion_graph, n_threads);
 
@@ -3476,7 +3839,7 @@ class StableDiffusionGGML {
 
         // denoise wrapper
         ggml_set_dynamic(ctx, false);
-        struct ggml_tensor* out_cond = NULL;
+        struct ggml_tensor* out_cond   = NULL;
         struct ggml_tensor* out_uncond = NULL;
         if (cfg_scale != 1.0f && uc != NULL) {
             out_uncond = ggml_dup_tensor(ctx, x);
@@ -3487,17 +3850,17 @@ class StableDiffusionGGML {
         auto denoise = [&](ggml_tensor* input, float sigma, int step) {
             int64_t t0 = ggml_time_ms();
 
-            float c_skip = 1.0f;
-            float c_out = 1.0f;
-            float c_in = 1.0f;
+            float c_skip               = 1.0f;
+            float c_out                = 1.0f;
+            float c_in                 = 1.0f;
             std::vector<float> scaling = denoiser->get_scalings(sigma);
             if (scaling.size() == 3) {  // CompVisVDenoiser
                 c_skip = scaling[0];
-                c_out = scaling[1];
-                c_in = scaling[2];
+                c_out  = scaling[1];
+                c_in   = scaling[2];
             } else {  // CompVisDenoiser
                 c_out = scaling[0];
-                c_in = scaling[1];
+                c_in  = scaling[1];
             }
 
             float t = denoiser->schedule->sigma_to_t(sigma);
@@ -3527,9 +3890,9 @@ class StableDiffusionGGML {
 
                 // out_uncond + cfg_scale * (out_cond - out_uncond)
                 {
-                    float* vec_out = (float*)out->data;
+                    float* vec_out        = (float*)out->data;
                     float* vec_out_uncond = (float*)out_uncond->data;
-                    float* vec_out_cond = (float*)out_cond->data;
+                    float* vec_out_cond   = (float*)out_cond->data;
 
                     for (int i = 0; i < ggml_nelements(out); i++) {
                         vec_out[i] = vec_out_uncond[i] + cfg_scale * (vec_out_cond[i] - vec_out_uncond[i]);
@@ -3545,8 +3908,8 @@ class StableDiffusionGGML {
             // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
             {
                 float* vec_denoised = (float*)denoised->data;
-                float* vec_input = (float*)input->data;
-                float* vec_out = (float*)out->data;
+                float* vec_input    = (float*)input->data;
+                float* vec_out      = (float*)out->data;
 
                 for (int i = 0; i < ggml_nelements(denoised); i++) {
                     vec_denoised[i] = vec_out[i] * c_out + vec_input[i] * c_skip;
@@ -3573,7 +3936,7 @@ class StableDiffusionGGML {
                 LOG_INFO("sampling using Euler A method");
                 ggml_set_dynamic(ctx, false);
                 struct ggml_tensor* noise = ggml_dup_tensor(ctx, x);
-                struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* d     = ggml_dup_tensor(ctx, x);
                 ggml_set_dynamic(ctx, params.dynamic);
 
                 for (int i = 0; i < steps; i++) {
@@ -3584,8 +3947,8 @@ class StableDiffusionGGML {
 
                     // d = (x - denoised) / sigma
                     {
-                        float* vec_d = (float*)d->data;
-                        float* vec_x = (float*)x->data;
+                        float* vec_d        = (float*)d->data;
+                        float* vec_x        = (float*)x->data;
                         float* vec_denoised = (float*)denoised->data;
 
                         for (int i = 0; i < ggml_nelements(d); i++) {
@@ -3594,8 +3957,8 @@ class StableDiffusionGGML {
                     }
 
                     // get_ancestral_step
-                    float sigma_up = std::min(sigmas[i + 1],
-                                              std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
+                    float sigma_up   = std::min(sigmas[i + 1],
+                                                std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
                     float sigma_down = std::sqrt(sigmas[i + 1] * sigmas[i + 1] - sigma_up * sigma_up);
 
                     // Euler method
@@ -3615,7 +3978,7 @@ class StableDiffusionGGML {
                         ggml_tensor_set_f32_randn(noise, rng);
                         // noise = load_tensor_from_file(res_ctx, "./rand" + std::to_string(i+1) + ".bin");
                         {
-                            float* vec_x = (float*)x->data;
+                            float* vec_x     = (float*)x->data;
                             float* vec_noise = (float*)noise->data;
 
                             for (int i = 0; i < ggml_nelements(x); i++) {
@@ -3640,8 +4003,8 @@ class StableDiffusionGGML {
 
                     // d = (x - denoised) / sigma
                     {
-                        float* vec_d = (float*)d->data;
-                        float* vec_x = (float*)x->data;
+                        float* vec_d        = (float*)d->data;
+                        float* vec_x        = (float*)x->data;
                         float* vec_denoised = (float*)denoised->data;
 
                         for (int j = 0; j < ggml_nelements(d); j++) {
@@ -3664,7 +4027,7 @@ class StableDiffusionGGML {
             case HEUN: {
                 LOG_INFO("sampling using Heun method");
                 ggml_set_dynamic(ctx, false);
-                struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* d  = ggml_dup_tensor(ctx, x);
                 struct ggml_tensor* x2 = ggml_dup_tensor(ctx, x);
                 ggml_set_dynamic(ctx, params.dynamic);
 
@@ -3674,8 +4037,8 @@ class StableDiffusionGGML {
 
                     // d = (x - denoised) / sigma
                     {
-                        float* vec_d = (float*)d->data;
-                        float* vec_x = (float*)x->data;
+                        float* vec_d        = (float*)d->data;
+                        float* vec_x        = (float*)x->data;
                         float* vec_denoised = (float*)denoised->data;
 
                         for (int j = 0; j < ggml_nelements(x); j++) {
@@ -3695,9 +4058,9 @@ class StableDiffusionGGML {
                         }
                     } else {
                         // Heun step
-                        float* vec_d = (float*)d->data;
+                        float* vec_d  = (float*)d->data;
                         float* vec_d2 = (float*)d->data;
-                        float* vec_x = (float*)x->data;
+                        float* vec_x  = (float*)x->data;
                         float* vec_x2 = (float*)x2->data;
 
                         for (int j = 0; j < ggml_nelements(x); j++) {
@@ -3717,7 +4080,7 @@ class StableDiffusionGGML {
             case DPM2: {
                 LOG_INFO("sampling using DPM2 method");
                 ggml_set_dynamic(ctx, false);
-                struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* d  = ggml_dup_tensor(ctx, x);
                 struct ggml_tensor* x2 = ggml_dup_tensor(ctx, x);
                 ggml_set_dynamic(ctx, params.dynamic);
 
@@ -3727,8 +4090,8 @@ class StableDiffusionGGML {
 
                     // d = (x - denoised) / sigma
                     {
-                        float* vec_d = (float*)d->data;
-                        float* vec_x = (float*)x->data;
+                        float* vec_d        = (float*)d->data;
+                        float* vec_x        = (float*)x->data;
                         float* vec_denoised = (float*)denoised->data;
 
                         for (int j = 0; j < ggml_nelements(x); j++) {
@@ -3739,7 +4102,7 @@ class StableDiffusionGGML {
                     if (sigmas[i + 1] == 0) {
                         // Euler step
                         // x = x + d * dt
-                        float dt = sigmas[i + 1] - sigmas[i];
+                        float dt     = sigmas[i + 1] - sigmas[i];
                         float* vec_d = (float*)d->data;
                         float* vec_x = (float*)x->data;
 
@@ -3749,11 +4112,11 @@ class StableDiffusionGGML {
                     } else {
                         // DPM-Solver-2
                         float sigma_mid = exp(0.5f * (log(sigmas[i]) + log(sigmas[i + 1])));
-                        float dt_1 = sigma_mid - sigmas[i];
-                        float dt_2 = sigmas[i + 1] - sigmas[i];
+                        float dt_1      = sigma_mid - sigmas[i];
+                        float dt_2      = sigmas[i + 1] - sigmas[i];
 
-                        float* vec_d = (float*)d->data;
-                        float* vec_x = (float*)x->data;
+                        float* vec_d  = (float*)d->data;
+                        float* vec_x  = (float*)x->data;
                         float* vec_x2 = (float*)x2->data;
                         for (int j = 0; j < ggml_nelements(x); j++) {
                             vec_x2[j] = vec_x[j] + vec_d[j] * dt_1;
@@ -3773,8 +4136,8 @@ class StableDiffusionGGML {
                 LOG_INFO("sampling using DPM++ (2s) a method");
                 ggml_set_dynamic(ctx, false);
                 struct ggml_tensor* noise = ggml_dup_tensor(ctx, x);
-                struct ggml_tensor* d = ggml_dup_tensor(ctx, x);
-                struct ggml_tensor* x2 = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* d     = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* x2    = ggml_dup_tensor(ctx, x);
                 ggml_set_dynamic(ctx, params.dynamic);
 
                 for (int i = 0; i < steps; i++) {
@@ -3782,16 +4145,16 @@ class StableDiffusionGGML {
                     denoise(x, sigmas[i], i + 1);
 
                     // get_ancestral_step
-                    float sigma_up = std::min(sigmas[i + 1],
-                                              std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
+                    float sigma_up   = std::min(sigmas[i + 1],
+                                                std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
                     float sigma_down = std::sqrt(sigmas[i + 1] * sigmas[i + 1] - sigma_up * sigma_up);
-                    auto t_fn = [](float sigma) -> float { return -log(sigma); };
-                    auto sigma_fn = [](float t) -> float { return exp(-t); };
+                    auto t_fn        = [](float sigma) -> float { return -log(sigma); };
+                    auto sigma_fn    = [](float t) -> float { return exp(-t); };
 
                     if (sigma_down == 0) {
                         // Euler step
-                        float* vec_d = (float*)d->data;
-                        float* vec_x = (float*)x->data;
+                        float* vec_d        = (float*)d->data;
+                        float* vec_x        = (float*)x->data;
                         float* vec_denoised = (float*)denoised->data;
 
                         for (int j = 0; j < ggml_nelements(d); j++) {
@@ -3808,14 +4171,14 @@ class StableDiffusionGGML {
                         }
                     } else {
                         // DPM-Solver++(2S)
-                        float t = t_fn(sigmas[i]);
+                        float t      = t_fn(sigmas[i]);
                         float t_next = t_fn(sigma_down);
-                        float h = t_next - t;
-                        float s = t + 0.5f * h;
+                        float h      = t_next - t;
+                        float s      = t + 0.5f * h;
 
-                        float* vec_d = (float*)d->data;
-                        float* vec_x = (float*)x->data;
-                        float* vec_x2 = (float*)x2->data;
+                        float* vec_d        = (float*)d->data;
+                        float* vec_x        = (float*)x->data;
+                        float* vec_x2       = (float*)x2->data;
                         float* vec_denoised = (float*)denoised->data;
 
                         // First half-step
@@ -3835,7 +4198,7 @@ class StableDiffusionGGML {
                     if (sigmas[i + 1] > 0) {
                         ggml_tensor_set_f32_randn(noise, rng);
                         {
-                            float* vec_x = (float*)x->data;
+                            float* vec_x     = (float*)x->data;
                             float* vec_noise = (float*)noise->data;
 
                             for (int i = 0; i < ggml_nelements(x); i++) {
@@ -3858,13 +4221,13 @@ class StableDiffusionGGML {
                     // denoise
                     denoise(x, sigmas[i], i + 1);
 
-                    float t = t_fn(sigmas[i]);
-                    float t_next = t_fn(sigmas[i + 1]);
-                    float h = t_next - t;
-                    float a = sigmas[i + 1] / sigmas[i];
-                    float b = exp(-h) - 1.f;
-                    float* vec_x = (float*)x->data;
-                    float* vec_denoised = (float*)denoised->data;
+                    float t                 = t_fn(sigmas[i]);
+                    float t_next            = t_fn(sigmas[i + 1]);
+                    float h                 = t_next - t;
+                    float a                 = sigmas[i + 1] / sigmas[i];
+                    float b                 = exp(-h) - 1.f;
+                    float* vec_x            = (float*)x->data;
+                    float* vec_denoised     = (float*)denoised->data;
                     float* vec_old_denoised = (float*)old_denoised->data;
 
                     if (i == 0 || sigmas[i + 1] == 0) {
@@ -3874,10 +4237,10 @@ class StableDiffusionGGML {
                         }
                     } else {
                         float h_last = t - t_fn(sigmas[i - 1]);
-                        float r = h_last / h;
+                        float r      = h_last / h;
                         for (int j = 0; j < ggml_nelements(x); j++) {
                             float denoised_d = (1.f + 1.f / (2.f * r)) * vec_denoised[j] - (1.f / (2.f * r)) * vec_old_denoised[j];
-                            vec_x[j] = a * vec_x[j] - b * denoised_d;
+                            vec_x[j]         = a * vec_x[j] - b * denoised_d;
                         }
                     }
 
@@ -3900,12 +4263,12 @@ class StableDiffusionGGML {
                     // denoise
                     denoise(x, sigmas[i], i + 1);
 
-                    float t = t_fn(sigmas[i]);
-                    float t_next = t_fn(sigmas[i + 1]);
-                    float h = t_next - t;
-                    float a = sigmas[i + 1] / sigmas[i];
-                    float* vec_x = (float*)x->data;
-                    float* vec_denoised = (float*)denoised->data;
+                    float t                 = t_fn(sigmas[i]);
+                    float t_next            = t_fn(sigmas[i + 1]);
+                    float h                 = t_next - t;
+                    float a                 = sigmas[i + 1] / sigmas[i];
+                    float* vec_x            = (float*)x->data;
+                    float* vec_denoised     = (float*)denoised->data;
                     float* vec_old_denoised = (float*)old_denoised->data;
 
                     if (i == 0 || sigmas[i + 1] == 0) {
@@ -3916,20 +4279,58 @@ class StableDiffusionGGML {
                         }
                     } else {
                         float h_last = t - t_fn(sigmas[i - 1]);
-                        float h_min = std::min(h_last, h);
-                        float h_max = std::max(h_last, h);
-                        float r = h_max / h_min;
-                        float h_d = (h_max + h_min) / 2.f;
-                        float b = exp(-h_d) - 1.f;
+                        float h_min  = std::min(h_last, h);
+                        float h_max  = std::max(h_last, h);
+                        float r      = h_max / h_min;
+                        float h_d    = (h_max + h_min) / 2.f;
+                        float b      = exp(-h_d) - 1.f;
                         for (int j = 0; j < ggml_nelements(x); j++) {
                             float denoised_d = (1.f + 1.f / (2.f * r)) * vec_denoised[j] - (1.f / (2.f * r)) * vec_old_denoised[j];
-                            vec_x[j] = a * vec_x[j] - b * denoised_d;
+                            vec_x[j]         = a * vec_x[j] - b * denoised_d;
                         }
                     }
 
                     // old_denoised = denoised
                     for (int j = 0; j < ggml_nelements(x); j++) {
                         vec_old_denoised[j] = vec_denoised[j];
+                    }
+                }
+            } break;
+            case LCM:  // Latent Consistency Models
+            {
+                LOG_INFO("sampling using LCM method");
+                ggml_set_dynamic(ctx, false);
+                struct ggml_tensor* noise = ggml_dup_tensor(ctx, x);
+                struct ggml_tensor* d     = ggml_dup_tensor(ctx, x);
+                ggml_set_dynamic(ctx, params.dynamic);
+
+                for (int i = 0; i < steps; i++) {
+                    float sigma = sigmas[i];
+
+                    // denoise
+                    denoise(x, sigma, i + 1);
+
+                    // x = denoised
+                    {
+                        float* vec_x        = (float*)x->data;
+                        float* vec_denoised = (float*)denoised->data;
+                        for (int j = 0; j < ggml_nelements(x); j++) {
+                            vec_x[j] = vec_denoised[j];
+                        }
+                    }
+
+                    if (sigmas[i + 1] > 0) {
+                        // x += sigmas[i + 1] * noise_sampler(sigmas[i], sigmas[i + 1])
+                        ggml_tensor_set_f32_randn(noise, rng);
+                        // noise = load_tensor_from_file(res_ctx, "./rand" + std::to_string(i+1) + ".bin");
+                        {
+                            float* vec_x     = (float*)x->data;
+                            float* vec_noise = (float*)noise->data;
+
+                            for (int j = 0; j < ggml_nelements(x); j++) {
+                                vec_x[j] = vec_x[j] + sigmas[i + 1] * vec_noise[j];
+                            }
+                        }
                     }
                 }
             } break;
@@ -3966,8 +4367,8 @@ class StableDiffusionGGML {
     }
 
     ggml_tensor* encode_first_stage(ggml_context* res_ctx, ggml_tensor* x) {
-        int64_t W = x->ne[0];
-        int64_t H = x->ne[1];
+        int64_t W                  = x->ne[0];
+        int64_t H                  = x->ne[1];
         struct ggml_tensor* result = NULL;
         struct ggml_cplan cplan;
 
@@ -3975,10 +4376,10 @@ class StableDiffusionGGML {
         size_t ctx_size = 10 * 1024 * 1024;  // 10MB
         {
             struct ggml_init_params params;
-            params.mem_size = ctx_size;
+            params.mem_size   = ctx_size;
             params.mem_buffer = NULL;
-            params.no_alloc = true;
-            params.dynamic = dynamic;
+            params.no_alloc   = true;
+            params.dynamic    = dynamic;
 
             struct ggml_context* ctx = ggml_init(params);
             if (!ctx) {
@@ -3990,7 +4391,7 @@ class StableDiffusionGGML {
             ctx_size += ggml_used_mem(ctx) + ggml_used_mem_of_data(ctx);
 
             struct ggml_cgraph* vae_graph = ggml_build_forward_ctx(ctx, moments);
-            cplan = ggml_graph_plan(vae_graph, n_threads);
+            cplan                         = ggml_graph_plan(vae_graph, n_threads);
 
             ctx_size += cplan.work_size;
             LOG_DEBUG("vae context need %.2fMB static memory, with work_size needing %.2fMB",
@@ -4002,10 +4403,10 @@ class StableDiffusionGGML {
 
         {
             struct ggml_init_params params;
-            params.mem_size = ctx_size;
+            params.mem_size   = ctx_size;
             params.mem_buffer = NULL;
-            params.no_alloc = false;
-            params.dynamic = dynamic;
+            params.no_alloc   = false;
+            params.dynamic    = dynamic;
 
             struct ggml_context* ctx = ggml_init(params);
             if (!ctx) {
@@ -4016,7 +4417,7 @@ class StableDiffusionGGML {
             struct ggml_tensor* moments = first_stage_model.encode(ctx, x);
 
             struct ggml_cgraph* vae_graph = ggml_new_graph(ctx);
-            vae_graph->order = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT;
+            vae_graph->order              = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT;
             ggml_build_forward_expand(vae_graph, moments);
 
             int64_t t0 = ggml_time_ms();
@@ -4061,26 +4462,26 @@ class StableDiffusionGGML {
     // ldm.models.diffusion.ddpm.LatentDiffusion.get_first_stage_encoding
     ggml_tensor* get_first_stage_encoding(ggml_context* res_ctx, ggml_tensor* moments) {
         // ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample
-        ggml_tensor* latent = ggml_new_tensor_4d(res_ctx, moments->type, moments->ne[0],
-                                                 moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
+        ggml_tensor* latent       = ggml_new_tensor_4d(res_ctx, moments->type, moments->ne[0],
+                                                       moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
         struct ggml_tensor* noise = ggml_dup_tensor(res_ctx, latent);
         ggml_tensor_set_f32_randn(noise, rng);
         // noise = load_tensor_from_file(res_ctx, "noise.bin");
         {
-            float mean = 0;
+            float mean   = 0;
             float logvar = 0;
-            float value = 0;
-            float std_ = 0;
+            float value  = 0;
+            float std_   = 0;
             for (int i = 0; i < latent->ne[3]; i++) {
                 for (int j = 0; j < latent->ne[2]; j++) {
                     for (int k = 0; k < latent->ne[1]; k++) {
                         for (int l = 0; l < latent->ne[0]; l++) {
-                            mean = ggml_tensor_get_f32(moments, l, k, j, i);
+                            mean   = ggml_tensor_get_f32(moments, l, k, j, i);
                             logvar = ggml_tensor_get_f32(moments, l, k, j + (int)latent->ne[2], i);
                             logvar = std::max(-30.0f, std::min(logvar, 20.0f));
-                            std_ = std::exp(0.5f * logvar);
-                            value = mean + std_ * ggml_tensor_get_f32(noise, l, k, j, i);
-                            value = value * scale_factor;
+                            std_   = std::exp(0.5f * logvar);
+                            value  = mean + std_ * ggml_tensor_get_f32(noise, l, k, j, i);
+                            value  = value * scale_factor;
                             // printf("%d %d %d %d -> %f\n", i, j, k, l, value);
                             ggml_tensor_set_f32(latent, value, l, k, j, i);
                         }
@@ -4092,8 +4493,8 @@ class StableDiffusionGGML {
     }
 
     ggml_tensor* decode_first_stage(ggml_context* res_ctx, ggml_tensor* z) {
-        int64_t W = z->ne[0];
-        int64_t H = z->ne[1];
+        int64_t W                      = z->ne[0];
+        int64_t H                      = z->ne[1];
         struct ggml_tensor* result_img = NULL;
         struct ggml_cplan cplan;
 
@@ -4108,10 +4509,10 @@ class StableDiffusionGGML {
         size_t ctx_size = 10 * 1024 * 1024;  // 10MB
         {
             struct ggml_init_params params;
-            params.mem_size = ctx_size;
+            params.mem_size   = ctx_size;
             params.mem_buffer = NULL;
-            params.no_alloc = true;
-            params.dynamic = dynamic;
+            params.no_alloc   = true;
+            params.dynamic    = dynamic;
 
             struct ggml_context* ctx = ggml_init(params);
             if (!ctx) {
@@ -4123,7 +4524,7 @@ class StableDiffusionGGML {
             ctx_size += ggml_used_mem(ctx) + ggml_used_mem_of_data(ctx);
 
             struct ggml_cgraph* vae_graph = ggml_build_forward_ctx(ctx, img);
-            cplan = ggml_graph_plan(vae_graph, n_threads);
+            cplan                         = ggml_graph_plan(vae_graph, n_threads);
 
             ctx_size += cplan.work_size;
             LOG_DEBUG("vae context need %.2fMB static memory, with work_size needing %.2fMB",
@@ -4135,10 +4536,10 @@ class StableDiffusionGGML {
 
         {
             struct ggml_init_params params;
-            params.mem_size = ctx_size;
+            params.mem_size   = ctx_size;
             params.mem_buffer = NULL;
-            params.no_alloc = false;
-            params.dynamic = dynamic;
+            params.no_alloc   = false;
+            params.dynamic    = dynamic;
 
             struct ggml_context* ctx = ggml_init(params);
             if (!ctx) {
@@ -4149,7 +4550,7 @@ class StableDiffusionGGML {
             struct ggml_tensor* img = first_stage_model.decode(ctx, z);
 
             struct ggml_cgraph* vae_graph = ggml_new_graph(ctx);
-            vae_graph->order = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT;
+            vae_graph->order              = GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT;
             ggml_build_forward_expand(vae_graph, img);
 
             int64_t t0 = ggml_time_ms();
@@ -4197,10 +4598,12 @@ class StableDiffusionGGML {
 StableDiffusion::StableDiffusion(int n_threads,
                                  bool vae_decode_only,
                                  bool free_params_immediately,
+                                 std::string lora_model_dir,
                                  RNGType rng_type) {
     sd = std::make_shared<StableDiffusionGGML>(n_threads,
                                                vae_decode_only,
                                                free_params_immediately,
+                                               lora_model_dir,
                                                rng_type);
 }
 
@@ -4208,8 +4611,8 @@ bool StableDiffusion::load_from_file(const std::string& file_path, Schedule s) {
     return sd->load_from_file(file_path, s);
 }
 
-std::vector<uint8_t> StableDiffusion::txt2img(const std::string& prompt,
-                                              const std::string& negative_prompt,
+std::vector<uint8_t> StableDiffusion::txt2img(std::string prompt,
+                                              std::string negative_prompt,
                                               float cfg_scale,
                                               int width,
                                               int height,
@@ -4220,9 +4623,9 @@ std::vector<uint8_t> StableDiffusion::txt2img(const std::string& prompt,
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10M
     params.mem_size += width * height * 3 * sizeof(float) * 2;
-    params.mem_buffer = NULL;
-    params.no_alloc = false;
-    params.dynamic = false;
+    params.mem_buffer        = NULL;
+    params.no_alloc          = false;
+    params.dynamic           = false;
     struct ggml_context* ctx = ggml_init(params);
     if (!ctx) {
         LOG_ERROR("ggml_init() failed");
@@ -4234,13 +4637,28 @@ std::vector<uint8_t> StableDiffusion::txt2img(const std::string& prompt,
     }
     sd->rng->manual_seed(seed);
 
+    // extract and remove lora
+    auto result_pair                                = extract_and_remove_lora(prompt);
+    std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
+    for (auto& kv : lora_f2m) {
+        LOG_DEBUG("lora %s:%.2f", kv.first.c_str(), kv.second);
+    }
+    prompt = result_pair.second;
+    LOG_DEBUG("prompt after extract and remove lora: \"%s\"", prompt.c_str());
+
+    // load lora from file
     int64_t t0 = ggml_time_ms();
-    ggml_tensor* c = sd->get_learned_condition(ctx, prompt);
+    sd->apply_loras(lora_f2m);
+    int64_t t1 = ggml_time_ms();
+    LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+
+    t0                     = ggml_time_ms();
+    ggml_tensor* c         = sd->get_learned_condition(ctx, prompt);
     struct ggml_tensor* uc = NULL;
     if (cfg_scale != 1.0) {
         uc = sd->get_learned_condition(ctx, negative_prompt);
     }
-    int64_t t1 = ggml_time_ms();
+    t1 = ggml_time_ms();
     LOG_INFO("get_learned_condition completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     if (sd->free_params_immediately) {
@@ -4249,9 +4667,9 @@ std::vector<uint8_t> StableDiffusion::txt2img(const std::string& prompt,
         sd->clip_params_ctx = NULL;
     }
 
-    int C = 4;
-    int W = width / 8;
-    int H = height / 8;
+    int C                   = 4;
+    int W                   = width / 8;
+    int H                   = height / 8;
     struct ggml_tensor* x_t = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, W, H, C, 1);
     ggml_tensor_set_f32_randn(x_t, sd->rng);
 
@@ -4296,8 +4714,8 @@ std::vector<uint8_t> StableDiffusion::txt2img(const std::string& prompt,
 }
 
 std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_img_vec,
-                                              const std::string& prompt,
-                                              const std::string& negative_prompt,
+                                              std::string prompt,
+                                              std::string negative_prompt,
                                               float cfg_scale,
                                               int width,
                                               int height,
@@ -4312,7 +4730,7 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     LOG_INFO("img2img %dx%d", width, height);
 
     std::vector<float> sigmas = sd->denoiser->schedule->get_sigmas(sample_steps);
-    size_t t_enc = static_cast<size_t>(sample_steps * strength);
+    size_t t_enc              = static_cast<size_t>(sample_steps * strength);
     LOG_INFO("target t_enc is %zu steps", t_enc);
     std::vector<float> sigma_sched;
     sigma_sched.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
@@ -4320,9 +4738,9 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10M
     params.mem_size += width * height * 3 * sizeof(float) * 2;
-    params.mem_buffer = NULL;
-    params.no_alloc = false;
-    params.dynamic = false;
+    params.mem_buffer        = NULL;
+    params.no_alloc          = false;
+    params.dynamic           = false;
     struct ggml_context* ctx = ggml_init(params);
     if (!ctx) {
         LOG_ERROR("ggml_init() failed");
@@ -4334,19 +4752,34 @@ std::vector<uint8_t> StableDiffusion::img2img(const std::vector<uint8_t>& init_i
     }
     sd->rng->manual_seed(seed);
 
+    // extract and remove lora
+    auto result_pair                                = extract_and_remove_lora(prompt);
+    std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
+    for (auto& kv : lora_f2m) {
+        LOG_DEBUG("lora %s:%.2f", kv.first.c_str(), kv.second);
+    }
+    prompt = result_pair.second;
+    LOG_DEBUG("prompt after extract and remove lora: \"%s\"", prompt.c_str());
+
+    // load lora from file
+    int64_t t0 = ggml_time_ms();
+    sd->apply_loras(lora_f2m);
+    int64_t t1 = ggml_time_ms();
+    LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+
     ggml_tensor* init_img = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, width, height, 3, 1);
     image_vec_to_ggml(init_img_vec, init_img);
 
-    int64_t t0 = ggml_time_ms();
-    ggml_tensor* moments = sd->encode_first_stage(ctx, init_img);
+    t0                       = ggml_time_ms();
+    ggml_tensor* moments     = sd->encode_first_stage(ctx, init_img);
     ggml_tensor* init_latent = sd->get_first_stage_encoding(ctx, moments);
     // print_ggml_tensor(init_latent);
-    int64_t t1 = ggml_time_ms();
+    t1 = ggml_time_ms();
     LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     ggml_reset_curr_max_dynamic_size();  // reset counter
 
-    ggml_tensor* c = sd->get_learned_condition(ctx, prompt);
+    ggml_tensor* c         = sd->get_learned_condition(ctx, prompt);
     struct ggml_tensor* uc = NULL;
     if (cfg_scale != 1.0) {
         uc = sd->get_learned_condition(ctx, negative_prompt);

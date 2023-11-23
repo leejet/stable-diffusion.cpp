@@ -80,7 +80,9 @@ const char* sample_method_str[] = {
     "dpm2",
     "dpm++2s_a",
     "dpm++2m",
-    "dpm++2mv2"};
+    "dpm++2mv2",
+    "lcm",
+};
 
 // Names of the sigma schedule overrides, same order as Schedule in stable-diffusion.h
 const char* schedule_str[] = {
@@ -89,29 +91,31 @@ const char* schedule_str[] = {
     "karras"};
 
 struct Option {
-    int n_threads = -1;
+    int n_threads    = -1;
     std::string mode = TXT2IMG;
     std::string model_path;
+    std::string lora_model_dir;
     std::string output_path = "output.png";
     std::string init_img;
     std::string prompt;
     std::string negative_prompt;
-    float cfg_scale = 7.0f;
-    int w = 512;
-    int h = 512;
+    float cfg_scale            = 7.0f;
+    int w                      = 512;
+    int h                      = 512;
     SampleMethod sample_method = EULER_A;
-    Schedule schedule = DEFAULT;
-    int sample_steps = 20;
-    float strength = 0.75f;
-    RNGType rng_type = CUDA_RNG;
-    int64_t seed = 42;
-    bool verbose = false;
+    Schedule schedule          = DEFAULT;
+    int sample_steps           = 20;
+    float strength             = 0.75f;
+    RNGType rng_type           = CUDA_RNG;
+    int64_t seed               = 42;
+    bool verbose               = false;
 
     void print() {
         printf("Option: \n");
         printf("    n_threads:       %d\n", n_threads);
         printf("    mode:            %s\n", mode.c_str());
         printf("    model_path:      %s\n", model_path.c_str());
+        printf("    lora_model_dir:  %s\n", lora_model_dir.c_str());
         printf("    output_path:     %s\n", output_path.c_str());
         printf("    init_img:        %s\n", init_img.c_str());
         printf("    prompt:          %s\n", prompt.c_str());
@@ -137,6 +141,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -t, --threads N                    number of threads to use during computation (default: -1).\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to model\n");
+    printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: .\\output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
@@ -146,7 +151,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2}\n");
+    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}\n");
     printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
@@ -180,6 +185,12 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 break;
             }
             opt->model_path = argv[i];
+        } else if (arg == "--lora-model-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            opt->lora_model_dir = argv[i];
         } else if (arg == "-i" || arg == "--init-img") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -254,7 +265,7 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 break;
             }
             const char* schedule_selected = argv[i];
-            int schedule_found = -1;
+            int schedule_found            = -1;
             for (int d = 0; d < N_SCHEDULES; d++) {
                 if (!strcmp(schedule_selected, schedule_str[d])) {
                     schedule_found = d;
@@ -277,7 +288,7 @@ void parse_args(int argc, const char* argv[], Option* opt) {
                 break;
             }
             const char* sample_method_selected = argv[i];
-            int sample_method_found = -1;
+            int sample_method_found            = -1;
             for (int m = 0; m < N_SAMPLE_METHODS; m++) {
                 if (!strcmp(sample_method_selected, sample_method_str[m])) {
                     sample_method_found = m;
@@ -393,6 +404,7 @@ int main(int argc, const char* argv[]) {
         vae_decode_only = false;
 
         int c = 0;
+
         unsigned char* img_data = stbi_load(opt.init_img.c_str(), &opt.w, &opt.h, &c, 3);
         if (img_data == NULL) {
             fprintf(stderr, "load image from '%s' failed\n", opt.init_img.c_str());
@@ -416,7 +428,7 @@ int main(int argc, const char* argv[]) {
         init_img.assign(img_data, img_data + (opt.w * opt.h * c));
     }
 
-    StableDiffusion sd(opt.n_threads, vae_decode_only, true, opt.rng_type);
+    StableDiffusion sd(opt.n_threads, vae_decode_only, true, opt.lora_model_dir, opt.rng_type);
     if (!sd.load_from_file(opt.model_path, opt.schedule)) {
         return 1;
     }
