@@ -23,81 +23,19 @@ endif()
 
 # general
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
-option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
-option(SD_BUILD_SHARED_LIBS         "sd: build shared libs" OFF)
+option(SD_BUILD_EXAMPLES              "sd: build examples" ${SD_STANDALONE})
+option(SD_BUILD_SHARED_LIBS           "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
-# Instruction set specific
-option(SD_AVX                    "sd: enable AVX"                                     ON)
-option(SD_AVX2                   "sd: enable AVX2"                                    ON)
-option(SD_AVX512                 "sd: enable AVX512"                                  OFF)
-option(SD_FMA                    "sd: enable FMA"                                     ON)
-
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_STANDARD_REQUIRED true)
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED true)
-set(THREADS_PREFER_PTHREAD_FLAG ON)
-find_package(Threads REQUIRED)
-
-if (MSVC)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
-
-    if (BUILD_SHARED_LIBS)
-        set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-    endif ()
-endif ()
-
-if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm" OR ${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
-    message(STATUS "ARM detected")
-    if (MSVC)
-        # TODO [llama.cpp]: arm msvc?
-    else()
-        if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
-            add_compile_options(-mcpu=native)
-        endif()
-        # TODO [llama.cpp]: armv6,7,8 version specific flags
-    endif()
-elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "^(x86_64|i686|AMD64)$")
-    message(STATUS "x86 detected")
-    if (MSVC)
-        if (SD_AVX512)
-            add_compile_options($<$<COMPILE_LANGUAGE:C>:/arch:AVX512>)
-            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX512>)
-            # MSVC has no compile-time flags enabling specific
-            # AVX512 extensions, neither it defines the
-            # macros corresponding to the extensions.
-            # Do it manually.
-        elseif (SD_AVX2)
-            add_compile_options($<$<COMPILE_LANGUAGE:C>:/arch:AVX2>)
-            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>)
-        elseif (SD_AVX)
-            add_compile_options($<$<COMPILE_LANGUAGE:C>:/arch:AVX>)
-            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/arch:AVX>)
-        endif()
-    else()
-        add_compile_options(-mf16c)
-        if (SD_FMA)
-            add_compile_options(-mfma)
-        endif()
-        if (SD_AVX)
-            add_compile_options(-mavx)
-        endif()
-        if (SD_AVX2)
-            add_compile_options(-mavx2)
-        endif()
-        if (SD_AVX512)
-            add_compile_options(-mavx512f)
-            add_compile_options(-mavx512bw)
-        endif()
-    endif()
-else()
-    # TODO [llama.cpp]: support PowerPC
-    message(STATUS "Unknown architecture")
-endif()
 # deps
 add_subdirectory(ggml)
 include_directories(ggml/include)
+
+if (WIN32 OR MSVC)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".lib")
+elseif (UNIX)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+endif()
 
 set(SD_LIB stable-diffusion)
 if (SD_BUILD_SHARED_LIBS)
@@ -105,17 +43,16 @@ if (SD_BUILD_SHARED_LIBS)
     add_library(${SD_LIB} SHARED stable-diffusion.cpp stable-diffusion-c.cpp stable-diffusion.h stable-diffusion-c.h)
     set_target_properties(${SD_LIB} PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(${SD_LIB} PRIVATE STABLE_DIFFUSION_SHARED STABLE_DIFFUSION_BUILD)
-    target_link_libraries(${SD_LIB} PRIVATE $<TARGET_OBJECTS:ggml> ${SD_EXTRA_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+    target_link_libraries(${SD_LIB} PRIVATE ggml ${SD_EXTRA_LIBS} ${CMAKE_THREAD_LIBS_INIT})
 else ()
     add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp)
-    target_link_libraries(${SD_LIB} PUBLIC $<TARGET_OBJECTS:ggml>)
+    target_link_libraries(${SD_LIB} PUBLIC ggml)
 endif ()
 
 target_include_directories(${SD_LIB} PUBLIC .)
 target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
 
 
-if (SD_BUILD_EXAMPLES AND NOT BUILD_SHARED_LIBS)
+if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
-endif ()
-
+endif()
