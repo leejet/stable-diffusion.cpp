@@ -77,6 +77,17 @@ const char* lora_type_to_str[] = {
     "diffusers",
     "transformers"};
 
+const char* sampling_methods_str[] = {
+    "Euler A",
+    "Euler",
+    "Heun",
+    "DPM2",
+    "DPM++ (2s)",
+    "DPM++ (2M)",
+    "modified DPM++ (2M)",
+    "LCM"
+};
+
 /*================================================== Helper Functions ================================================*/
 
 void set_sd_log_level(sd_log_level level) {
@@ -4157,7 +4168,6 @@ class StableDiffusionGGML {
         // sample_euler_ancestral
         switch (method) {
             case EULER_A: {
-                LOG_INFO("sampling using Euler A method");
                 struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
                 struct ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
 
@@ -4212,7 +4222,6 @@ class StableDiffusionGGML {
             } break;
             case EULER:  // Implemented without any sigma churn
             {
-                LOG_INFO("sampling using Euler method");
                 struct ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
 
                 for (int i = 0; i < steps; i++) {
@@ -4245,7 +4254,6 @@ class StableDiffusionGGML {
                 }
             } break;
             case HEUN: {
-                LOG_INFO("sampling using Heun method");
                 struct ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
                 struct ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
@@ -4296,7 +4304,6 @@ class StableDiffusionGGML {
                 }
             } break;
             case DPM2: {
-                LOG_INFO("sampling using DPM2 method");
                 struct ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
                 struct ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
@@ -4349,7 +4356,6 @@ class StableDiffusionGGML {
 
             } break;
             case DPMPP2S_A: {
-                LOG_INFO("sampling using DPM++ (2s) a method");
                 struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
                 struct ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
                 struct ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
@@ -4424,7 +4430,6 @@ class StableDiffusionGGML {
             } break;
             case DPMPP2M:  // DPM++ (2M) from Karras et al (2022)
             {
-                LOG_INFO("sampling using DPM++ (2M) method");
                 struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
                 auto t_fn = [](float sigma) -> float { return -log(sigma); };
@@ -4464,7 +4469,6 @@ class StableDiffusionGGML {
             } break;
             case DPMPP2Mv2:  // Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
             {
-                LOG_INFO("sampling using modified DPM++ (2M) method");
                 struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
                 auto t_fn = [](float sigma) -> float { return -log(sigma); };
@@ -4508,7 +4512,6 @@ class StableDiffusionGGML {
             } break;
             case LCM:  // Latent Consistency Models
             {
-                LOG_INFO("sampling using LCM method");
                 struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
                 struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
@@ -4680,8 +4683,9 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     int C                   = 4;
     int W                   = width / 8;
     int H                   = height / 8;
-
+    LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     for(int b = 0; b < batch_count; b++) {
+        int64_t sampling_start = ggml_time_ms();
         LOG_INFO("generating image: %i/%i", b + 1, batch_count);
 
         sd->rng->manual_seed(seed + b);
@@ -4690,26 +4694,29 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
 
         std::vector<float> sigmas = sd->denoiser->schedule->get_sigmas(sample_steps);
 
-        LOG_INFO("start sampling");
         struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, postive, negative, cfg_scale, sample_method, sigmas);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
-        int64_t t2 = ggml_time_ms();
-        LOG_INFO("sampling completed, taking %.2fs", (t2 - t1) * 1.0f / 1000);
+        int64_t sampling_end = ggml_time_ms();
+        LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
         final_latents.push_back(x_0);
     }
 
     if (sd->free_params_immediately) {
         sd->diffusion_model.destroy();
     }
+    int64_t t3 = ggml_time_ms();
+    LOG_INFO("generating %i latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
 
     LOG_INFO("decoding %zu latents", final_latents.size());
-    int64_t t3 = ggml_time_ms();
-    for(ggml_tensor* x_0 : final_latents) {
-        struct ggml_tensor* img = sd->compute_first_stage(work_ctx, x_0, true);
+    for(size_t i = 0;i < final_latents.size(); i++) {
+        t1 = ggml_time_ms();
+        struct ggml_tensor* img = sd->compute_first_stage(work_ctx, final_latents[i] /* x_0 */, true);
         if (img != NULL) {
             results.push_back(ggml_to_image_vec(img));
         }
+        int64_t t2 = ggml_time_ms();
+        LOG_INFO("latent %i decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
     }
 
     int64_t t4 = ggml_time_ms();
@@ -4802,9 +4809,8 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
     // SDXL
     // requires encode_adm
     // apply set_timestep_embedding with dim 256
-    
 
-    LOG_INFO("start sampling");
+    LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     struct ggml_tensor* x_0 = sd->sample(work_ctx, init_latent, c, uc, cfg_scale, sample_method, sigma_sched);
     // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
     // print_ggml_tensor(x_0);
