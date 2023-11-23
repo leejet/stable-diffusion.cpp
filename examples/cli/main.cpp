@@ -84,17 +84,12 @@ int main(int argc, const char* argv[]) {
         return 1;
     }
 
-    if(results.size() == 1) {
-        stbi_write_png(params.output_path.c_str(), params.width, params.height, 3, results[0], 0, get_image_params(params, params.seed));
-        printf("save result image to '%s'\n", params.output_path.c_str());
-    } else {
-        size_t last = params.output_path.find_last_of(".");
-        std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
-        for(int i = 0;i < params.batch_count; i++) {
-            std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
-            stbi_write_png(final_image_path.c_str(), params.width, params.height, 3, results[i], 0, get_image_params(params, params.seed + i));
-            printf("save result image to '%s'\n", final_image_path.c_str());
-        }
+    size_t last = params.output_path.find_last_of(".");
+    std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
+    for(int i = 0;i < params.batch_count; i++) {
+        std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
+        stbi_write_png(final_image_path.c_str(), params.width, params.height, 3, results[i], 0, get_image_params(params, params.seed + i));
+        printf("save result image to '%s'\n", final_image_path.c_str());
     }
 
     return 0;
