@@ -102,6 +102,7 @@ void print_params(sd_params params) {
     printf("    strength:        %.2f\n", params.strength);
     printf("    rng:             %s\n", rng_type_to_str[params.rng_type]);
     printf("    seed:            %ld\n", params.seed);
+    printf("    batch_count:     %d\n", params.batch_count);
 }
 
 void print_usage(int argc, const char* argv[]) {

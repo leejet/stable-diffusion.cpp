@@ -4663,7 +4663,11 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     }
 
     if (seed < 0) {
-        seed = (int)time(NULL);
+        // Generally, when using the provided command line, the seed is always >0. 
+        // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
+        // by a third party with a seed <0, let's incorporate randomization here.
+        srand((int)time(NULL));
+        seed = rand();
     }
 
     t0                     = ggml_time_ms();
