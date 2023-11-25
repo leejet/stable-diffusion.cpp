@@ -221,17 +221,26 @@ typedef std::unordered_map<std::string, Tensor> tensor_umap_t;
 
 */
 
+
+void sd_fread(void * ptr,size_t size,size_t count,FILE * stream) {
+    size_t ret = std::fread(ptr, size, count, stream);
+    if (ret != count) {
+        printf("Error: read from file failed");
+        exit(1);
+    }
+}
+
 int64_t read_long(uint8_t* buffer) {
     // little endian
     int64_t value = 0;
-    value |= buffer[7] << 56;
-    value |= buffer[6] << 48;
-    value |= buffer[5] << 40;
-    value |= buffer[4] << 32;
-    value |= buffer[3] << 24;
-    value |= buffer[2] << 16;
-    value |= buffer[1] << 8;
-    value |= buffer[0];
+    value |= static_cast<int64_t>(buffer[7]) << 56;
+    value |= static_cast<int64_t>(buffer[6]) << 48;
+    value |= static_cast<int64_t>(buffer[5]) << 40;
+    value |= static_cast<int64_t>(buffer[4]) << 32;
+    value |= static_cast<int64_t>(buffer[3]) << 24;
+    value |= static_cast<int64_t>(buffer[2]) << 16;
+    value |= static_cast<int64_t>(buffer[1]) << 8;
+    value |= static_cast<int64_t>(buffer[0]);
     return value;
 }
 
@@ -267,15 +276,15 @@ std::map<char, int> unicode_to_byte() {
     std::map<int, char> byteToUnicode;
     
     // List of utf-8 byte ranges
-    for (int b = static_cast<int>('!'); b <= static_cast<int>('~'); ++b) {
+    for (int b = static_cast<int>(u'!'); b <= static_cast<int>(u'~'); ++b) {
         byteToUnicode[b] = static_cast<char>(b);
     }
     
-    for (int b = static_cast<int>('¡'); b <= static_cast<int>('¬'); ++b) {
+    for (int b = static_cast<int>(u'¡'); b <= static_cast<int>(u'¬'); ++b) {
         byteToUnicode[b] = static_cast<char>(b);
     }
     
-    for (int b = static_cast<int>('®'); b <= static_cast<int>('ÿ'); ++b) {
+    for (int b = static_cast<int>(u'®'); b <= static_cast<int>(u'ÿ'); ++b) {
         byteToUnicode[b] = static_cast<char>(b);
     }
     
@@ -510,7 +519,7 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
             case 't':
                 if(tensor.t_phase == READ_DIMENS) {
                     if(!is_unused_tensor(tensor.name)) { // ignore unused tensors
-                        tensor.ptr_idx = params.pkl_fp.size();
+                        tensor.ptr_idx = (int32_t)params.pkl_fp.size();
                         if(target != NONE) {
                             tensor.target = target;
                         } else if(params.merge_custom_vae) {
@@ -548,14 +557,13 @@ void read_vocab_json(std::map<int, std::string> & vocab_map, convert_params para
         if(fv == NULL) {
             printf("Error: failed to open vocab file '%s'\n", params.vocab_path.c_str());
             exit(0);
-            return;
         }
         fseek(fv, 0, SEEK_END);
         size_t file_size = ftell(fv);
         // return to begin
         fseek(fv, 0, SEEK_SET);
         vocab_buffer = (char*)malloc(file_size);
-        fread(vocab_buffer, 1, file_size, fv);
+        sd_fread(vocab_buffer, 1, file_size, fv);
         fclose(fv);
     } else {
         // read embedded vocab
@@ -787,7 +795,7 @@ void* fetch_data(Tensor tensor, convert_params params) {
             std::fseek(params.sf_fp[tensor.ptr_idx], (long) tensor.data_offset, SEEK_SET);
 #endif
             tensor.data = malloc(tensor.data_size);
-            std::fread(tensor.data, 1, tensor.data_size, params.sf_fp[tensor.ptr_idx]);
+            sd_fread(tensor.data, 1, tensor.data_size, params.sf_fp[tensor.ptr_idx]);
         }
     }
     return tensor.data;
@@ -905,11 +913,11 @@ void preprocess_tensors(
         }
 
         if(params.lora) {
-            int pos = name.find("lora.up.weight");
+            int pos = (int)name.find("lora.up.weight");
             if(pos != std::string::npos) {
                 std::string key = name.substr(0, pos) + "alpha";
                 if(params.lora_alphas.find(key) != params.lora_alphas.end()) {
-                    int kpos = tensor.name.find("lora_up");
+                    int kpos = (int)tensor.name.find("lora_up");
                     std::string target = tensor.name.substr(0, kpos) + "alpha";
                     params.alpha_keys.emplace(target);
                     params.alpha_values.push_back(params.lora_alphas[key]);
@@ -1008,8 +1016,8 @@ void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
         for (const auto& src : params.alpha_keys) {
             dest.push_back(src.c_str());
         }
-        gguf_set_arr_str(g_ctx, "sd.lora.alphas_k", dest.data(), dest.size());
-        gguf_set_arr_data(g_ctx, "sd.lora.alphas_v", GGUF_TYPE_FLOAT32, params.alpha_values.data(), params.alpha_values.size());
+        gguf_set_arr_str(g_ctx, "sd.lora.alphas_k", dest.data(), (int)dest.size());
+        gguf_set_arr_data(g_ctx, "sd.lora.alphas_v", GGUF_TYPE_FLOAT32, params.alpha_values.data(), (int)params.alpha_values.size());
     } else if(params.vae) {
         gguf_set_val_str(g_ctx, "sd.vae.name", params.model_name.c_str());
         gguf_set_val_i32(g_ctx, "sd.vae.dtype", (int)params.out_type);
@@ -1032,7 +1040,7 @@ void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
         if(params.verbose) {
             printf("writing vocab: %zu tokens\n", vocab_data.size());
         }
-        gguf_set_arr_str(g_ctx, "sd.vocab.tokens", vocab_data.data(), vocab_data.size());
+        gguf_set_arr_str(g_ctx, "sd.vocab.tokens", vocab_data.data(), (int)vocab_data.size());
     }
 
     printf("converting %zu tensors\n", processed_tensors.size());
@@ -1113,7 +1121,7 @@ void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
 void load_checkpoint(const char * file_name, tensor_umap_t & tensors, convert_params & params, bool root_model, tensor_target target = NONE) {
     struct zip_t *zip = zip_open(file_name, 0, 'r');
     {
-        int i, n = zip_entries_total(zip);
+        int i, n = (int)zip_entries_total(zip);
         for (i = 0; i < n; ++i) {
             zip_entry_openbyindex(zip, i);
             {
@@ -1141,10 +1149,10 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
 
     char* metadata_buffer = new char[metadata_size + 1];
     memset(metadata_buffer, 0, metadata_size + 1);
-    std::fread(metadata_buffer, 1, metadata_size, fp);
+    sd_fread(metadata_buffer, 1, metadata_size, fp);
     json sf_mt = json::parse(metadata_buffer);
 
-    int data_begin = 8 + metadata_size;
+    int data_begin = 8 + (int)metadata_size;
     for (json::iterator it = sf_mt.begin(); it != sf_mt.end(); ++it) {
         std::string tensor_name = it.key();
         json tensor_props = it.value();
@@ -1162,7 +1170,7 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
         }
 
         if(tensor_props.contains("dtype") && !is_unused_tensor(tensor_name)) { // check if there dtype param
-            int n_dims = tensor_props["shape"].size();
+            int n_dims = (int)tensor_props["shape"].size();
             std::string dtype = tensor_props["dtype"];
             size_t start_data = tensor_props["data_offsets"][0].get<size_t>();
             size_t end_data = tensor_props["data_offsets"][1].get<size_t>();
@@ -1188,25 +1196,25 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
             if(params.lora &&
                 n_dims == 0 &&
                 tensor_name.find(".alpha") != std::string::npos) {
-                    std::fseek(fp, data_begin + start_data, SEEK_SET);
+                    std::fseek(fp, data_begin + (int)start_data, SEEK_SET);
                     if(dtype == "F16") {
                         ggml_fp16_t val;
-                        std::fread(&val, 1, sizeof(val), fp);
+                        sd_fread(&val, 1, sizeof(val), fp);
                         params.lora_alphas[tensor_name] = ggml_fp16_to_fp32(val);
                     } else if(dtype == "F32") {
                         float val;
-                        std::fread(&val, 1, sizeof(val), fp);
+                        sd_fread(&val, 1, sizeof(val), fp);
                         params.lora_alphas[tensor_name] = val;
                     } else if(dtype == "BF16") { // force float 32 bits
                         uint16_t val;
-                        std::fread(&val, 1, sizeof(val), fp);
+                        sd_fread(&val, 1, sizeof(val), fp);
                         params.lora_alphas[tensor_name] = bfloat16_to_fp32(val);
                     }
                     continue;
             }
 
             Tensor tensor = Tensor{tensor_name.c_str(), 0, GGML_TYPE_F32, 0, {1, 1, 1, 1}, n_dims, READ_NAME, 0};
-            tensor.ptr_idx = params.sf_fp.size();
+            tensor.ptr_idx = (int)params.sf_fp.size();
             if(target != NONE) {
                 tensor.target = target;
             } else if(params.merge_custom_vae) {
@@ -1226,22 +1234,22 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
                 tensor.dtype = GGML_TYPE_F16;
             } else if(dtype == "F64") { // force float 32 bits
                 void* data = (void*)malloc(tensor.data_size);
-                std::fseek(fp, data_begin + start_data, SEEK_SET);
-                std::fread(data, 1, tensor.data_size, fp);
+                std::fseek(fp, data_begin + (int)start_data, SEEK_SET);
+                sd_fread(data, 1, tensor.data_size, fp);
                 tensor.data_size /= 2;
                 tensor.data = malloc(tensor.data_size);
-                int ne = tensor.data_size / ggml_type_size(tensor.dtype);
+                int ne = (int)tensor.data_size / (int)ggml_type_size(tensor.dtype);
                 for(int i = 0;i < ne; i++) {
-                    ((float*)tensor.data)[i] = ((double*)data)[i];
+                    ((float*)tensor.data)[i] = (float)((double*)data)[i];
                 }
                 free(data);
             } else if(dtype == "BF16") { // force float 32 bits
                 void* data = (void*)malloc(tensor.data_size);
-                std::fseek(fp, data_begin + start_data, SEEK_SET);
-                std::fread(data, 1, tensor.data_size, fp);
+                std::fseek(fp, data_begin + (int)start_data, SEEK_SET);
+                sd_fread(data, 1, tensor.data_size, fp);
                 tensor.data_size *= 2;
                 tensor.data = malloc(tensor.data_size);
-                int ne = tensor.data_size / ggml_type_size(tensor.dtype);
+                int ne = (int)tensor.data_size / (int)ggml_type_size(tensor.dtype);
                 for(int i = 0;i < ne; i++) {
                     ((float*)tensor.data)[i] = bfloat16_to_fp32(((uint16_t*)data)[i]);
                 }
@@ -1255,7 +1263,7 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
                 tensor.shape[i] = tensor_props["shape"][i];
             }
 
-            tensor.num_elements = tensor.data_size / ggml_type_size(tensor.dtype);
+            tensor.num_elements = (int32_t)tensor.data_size / (int32_t)ggml_type_size(tensor.dtype);
             tensor.data_offset = data_begin + start_data;
             tensors[tensor_name] = tensor;
         }
@@ -1279,20 +1287,20 @@ void load_tensors_from_model(std::string path, tensor_umap_t &tensors, convert_p
     std::fseek(fp, 0, SEEK_SET);
     // read first 9 bytes
     uint8_t buffer_[9];
-    std::fread(buffer_, 1, 9, fp);
+    sd_fread(buffer_, 1, 9, fp);
     int64_t safe_tensor_metadata_size = read_long(buffer_);
     bool safe_tensor = false;
     if(
         buffer_[8] == '{' &&
         safe_tensor_metadata_size > 0 &&
-        safe_tensor_metadata_size < file_size) { // begin safetensor metadata
+        safe_tensor_metadata_size < (int64_t)file_size) { // begin safetensor metadata
         size_t offset = safe_tensor_metadata_size + /* long */ 8L - 1L;
 #ifdef _WIN32
         _fseeki64(fp, (__int64) offset, SEEK_SET);
 #else
         std::fseek(fp, (long) offset, SEEK_SET);
 #endif
-        std::fread(buffer_, 1, 1, fp);
+        sd_fread(buffer_, 1, 1, fp);
         safe_tensor = buffer_[0] == '}' || buffer_[0] == ' ';
     } else {
         std::fclose(fp);

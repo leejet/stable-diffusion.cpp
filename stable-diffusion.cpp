@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <cinttypes>
 
 #include "ggml/ggml.h"
 #include "ggml/ggml-alloc.h"
@@ -269,6 +270,14 @@ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_pa
 //     file.write((char*)tensor->data, ggml_nbytes(tensor));
 //     file.close();
 // }
+
+void sd_fread(void * ptr,size_t size,size_t count,FILE * stream) {
+    size_t ret = std::fread(ptr, size, count, stream);
+    if (ret != count) {
+        printf("Error: read from file failed");
+        exit(1);
+    }
+}
 
 void copy_ggml_tensor(
     struct ggml_tensor* dst,
@@ -3106,14 +3115,14 @@ struct AutoEncoderKL {
         backend = backend_;
         wtype = wtype_;
         memory_buffer_size = 1 * 1024 * 1024;  // 1 MB, for padding
-        memory_buffer_size += calculate_mem_size();
+        memory_buffer_size += (int)calculate_mem_size();
         int num_tensors = 0;
         if (!decode_only) {
             num_tensors += 2;
-            num_tensors += encoder.getNumTensors();
+            num_tensors += (int)encoder.getNumTensors();
         }
 
-        num_tensors += decoder.getNumTensors();
+        num_tensors += (int)decoder.getNumTensors();
         LOG_DEBUG("vae params backend buffer size = % 6.2f MB (%i tensors)", memory_buffer_size / (1024.0 * 1024.0), num_tensors);
 
         struct ggml_init_params params;
@@ -3347,7 +3356,7 @@ struct LoraModel {
         for(int i = 0; i < n_tensors; i++) {
             std::string name = gguf_get_tensor_name(ctx_gguf, i);
             struct ggml_tensor * dummy = ggml_get_tensor(ctx_meta, name.c_str());
-            memory_buffer_size += ggml_nbytes(dummy);
+            memory_buffer_size += (int)ggml_nbytes(dummy);
         }
         LOG_DEBUG("lora params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
 
@@ -3390,15 +3399,15 @@ struct LoraModel {
             struct ggml_tensor * real = ggml_dup_tensor(ctx, dummy);
             ggml_allocr_alloc(alloc, real);
 
-            int num_bytes = ggml_nbytes(dummy);
+            int num_bytes = (int)ggml_nbytes(dummy);
 
             if (ggml_backend_is_cpu(backend)) {
                 // for the CPU and Metal backend, we can read directly into the tensor
-                std::fread(real->data, 1, num_bytes, fp);
+                sd_fread(real->data, 1, num_bytes, fp);
             } else {
                 // read into a temporary buffer first, then copy to device memory
                 read_buf.resize(num_bytes);
-                std::fread(read_buf.data(), 1, num_bytes, fp);
+                sd_fread(read_buf.data(), 1, num_bytes, fp);
                 ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
             }
 
@@ -3458,9 +3467,9 @@ struct LoraModel {
                 }
 
                 // flat lora tensors to multiply it
-                int loraA_rows = loraA->ne[loraA->n_dims - 1];
+                int64_t loraA_rows = loraA->ne[loraA->n_dims - 1];
                 loraA = ggml_reshape_2d(ctx0, loraA, ggml_nelements(loraA) / loraA_rows, loraA_rows);
-                int loraB_rows = loraB->ne[loraB->n_dims - 1];
+                int64_t loraB_rows = loraB->ne[loraB->n_dims - 1];
                 loraB = ggml_reshape_2d(ctx0, loraB, ggml_nelements(loraB) / loraB_rows, loraB_rows);
 
                 // ggml_mul_mat requires tensor b transposed
@@ -3818,7 +3827,7 @@ class StableDiffusionGGML {
             }
 
             if(name == "alphas_cumprod") {
-                std::fread(alphas_cumprod, 1, ggml_nbytes(dummy), fp);
+                sd_fread(alphas_cumprod, 1, ggml_nbytes(dummy), fp);
                 continue;
             }
 
@@ -3846,7 +3855,7 @@ class StableDiffusionGGML {
                     "tensor '%s' has wrong shape in model file: "
                     "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
                     name.c_str(),
-                    dummy->ne[0], dummy->ne[1], dummy->ne[2], dummy->ne[3],
+                    (int)dummy->ne[0], (int)dummy->ne[1], (int)dummy->ne[2], (int)dummy->ne[3],
                     (int)real->ne[0], (int)real->ne[1], (int)real->ne[2], (int)real->ne[3]);
                 return false;
             }
@@ -3857,15 +3866,15 @@ class StableDiffusionGGML {
                 return false;
             }
 
-            int num_bytes = ggml_nbytes(dummy);
+            int num_bytes = (int)ggml_nbytes(dummy);
 
             if (ggml_backend_is_cpu(backend)) {
                 // for the CPU and Metal backend, we can read directly into the tensor
-                std::fread(real->data, 1, num_bytes, fp);
+                sd_fread(real->data, 1, num_bytes, fp);
             } else {
                 // read into a temporary buffer first, then copy to device memory
                 read_buf.resize(num_bytes);
-                std::fread(read_buf.data(), 1, num_bytes, fp);
+                sd_fread(read_buf.data(), 1, num_bytes, fp);
                 ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
             }
 
@@ -4053,11 +4062,11 @@ class StableDiffusionGGML {
         std::vector<int>& tokens = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
         int64_t t0 = ggml_time_ms();
-        cond_stage_model.text_model.begin(work_ctx, tokens.size());
+        cond_stage_model.text_model.begin(work_ctx, (int)tokens.size());
         struct ggml_tensor* hidden_states = cond_stage_model.text_model.compute(n_threads, tokens); // [N, n_token, hidden_size]
         cond_stage_model.text_model.end();
         int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("computing condition graph completed, taking %i ms", t1 - t0);
+        LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
         ggml_tensor* result = ggml_dup_tensor(work_ctx, hidden_states);
         {
             float original_mean = ggml_mean(hidden_states);
@@ -4109,7 +4118,7 @@ class StableDiffusionGGML {
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) {
             if(step == 1) {
-                pretty_progress(0, steps, 0);
+                pretty_progress(0, (int)steps, 0);
             }
             int64_t t0 = ggml_time_us();
 
@@ -4147,7 +4156,7 @@ class StableDiffusionGGML {
             float* vec_denoised = (float*)denoised->data;
             float* vec_input    = (float*)input->data;
             float* positive_data = (float*)out_cond->data;
-            int ne_elements = ggml_nelements(denoised);
+            int ne_elements = (int)ggml_nelements(denoised);
             for (int i = 0; i < ne_elements; i++) {
                 float latent_result = positive_data[i];
                 if(has_unconditioned) {
@@ -4160,7 +4169,7 @@ class StableDiffusionGGML {
             }
             int64_t t1 = ggml_time_us();
             if (step > 0) {
-                pretty_progress(step, steps, (t1 - t0) / 1000000.f);
+                pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
                 //LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
         };
@@ -4587,8 +4596,8 @@ class StableDiffusionGGML {
     }
 
     ggml_tensor* compute_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode) {
-        int W = x->ne[0];
-        int H = x->ne[1];
+        int64_t W = x->ne[0];
+        int64_t H = x->ne[1];
         if(decode) {
             sd_scale(x, 1.0f / scale_factor);
         }
@@ -4677,7 +4686,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
         negative = sd->get_learned_condition(work_ctx, negative_prompt);
     }
     t1 = ggml_time_ms();
-    LOG_INFO("get_learned_condition completed, taking %i ms", t1 - t0);
+    LOG_INFO("get_learned_condition completed, taking %" PRId64 " ms", t1 - t0);
 
     if (sd->free_params_immediately) {
         sd->cond_stage_model.text_model.destroy();
@@ -4710,7 +4719,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
         sd->diffusion_model.destroy();
     }
     int64_t t3 = ggml_time_ms();
-    LOG_INFO("generating %i latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
+    LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
 
     LOG_INFO("decoding %zu latents", final_latents.size());
     for(size_t i = 0;i < final_latents.size(); i++) {
@@ -4720,7 +4729,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
             results.push_back(ggml_to_image_vec(img));
         }
         int64_t t2 = ggml_time_ms();
-        LOG_INFO("latent %i decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
+        LOG_INFO("latent %" PRId64 " decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
     }
 
     int64_t t4 = ggml_time_ms();
@@ -4805,7 +4814,7 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
         uc = sd->get_learned_condition(work_ctx, negative_prompt);
     }
     int64_t t2 = ggml_time_ms();
-    LOG_INFO("get_learned_condition completed, taking %i ms", t2 - t1);
+    LOG_INFO("get_learned_condition completed, taking %" PRId64 " ms", t2 - t1);
     if (sd->free_params_immediately) {
         sd->cond_stage_model.text_model.destroy();
     }
