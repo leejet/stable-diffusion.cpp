@@ -128,7 +128,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
-    printf("  -bc, --batch-count COUNT           number of images to generate.\n");
+    printf("  -b, --batch-count COUNT            number of images to generate.\n");
     printf("  --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
@@ -229,7 +229,7 @@ void parse_args(int argc, const char** argv,sd_params & params) {
                 break;
             }
             params.sample_steps = std::stoi(argv[i]);
-        } else if (arg == "-bc" || arg == "--batch-count") {
+        } else if (arg == "-b" || arg == "--batch-count") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;

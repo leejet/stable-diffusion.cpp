@@ -12,5 +12,5 @@ arguments:
   -v, --verbose                      print processing info - dev info
   -l, --lora                         force read the model as a LoRA
   --vae [FILENAME]                   merge a custom VAE
-  -tp, --type [OUT_TYPE]             output format (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
+  -t, --type [OUT_TYPE]              output format (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
 ```

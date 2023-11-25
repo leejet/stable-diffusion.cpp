@@ -1353,7 +1353,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -v, --verbose                      print processing info - dev info\n");
     printf("  -l, --lora                         force read the model as a LoRA\n");
     printf("  --vae [FILENAME]                   merge a custom VAE\n");
-    printf("  -tp, --type [OUT_TYPE]             output format (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
+    printf("  -t, --type [OUT_TYPE]              output format (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
 }
 
 bool parse_params(int argc, const char* argv[], convert_params & params) {
@@ -1394,7 +1394,7 @@ bool parse_params(int argc, const char* argv[], convert_params & params) {
                 params.merge_custom_vae = true;
                 printf("merge custom vae '%s'\n", params.custom_vae_path.c_str());
             }
-        } else if(arg == "--type" || arg == "-tp") {
+        } else if(arg == "--type" || arg == "-t") {
             if (++i >= argc) {
                 printf("specify the output format\n");
                 exit(1);
