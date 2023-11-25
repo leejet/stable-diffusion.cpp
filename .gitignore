@@ -9,3 +9,4 @@ test/
 *.exe
 *.gguf
 output.png
+models/*
