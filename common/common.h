@@ -9,7 +9,7 @@ enum sd_mode {
     MODE_COUNT
 };
 
-struct sd_params {
+struct SDParams {
     int n_threads = -1;
     sd_mode mode = TXT2IMG;
 
@@ -25,19 +25,19 @@ struct sd_params {
     int height = 512;
     int batch_count = 1;
 
-    sd_sample_method sample_method = EULER_A;
-    sd_sample_schedule schedule = DEFAULT;
+    SampleMethod sample_method = EULER_A;
+    Schedule schedule = DEFAULT;
     int sample_steps = 20;
     float strength = 0.75f;
-    sd_rng_type rng_type = CUDA_RNG;
+    RNGType rng_type = CUDA_RNG;
     int64_t seed = 42;
     bool verbose = false;
 };
 
-void print_params(sd_params params);
+void print_params(SDParams params);
 
 void print_usage(int argc, const char* argv[]);
 
-void parse_args(int argc, const char** argv, sd_params & params);
+void parse_args(int argc, const char** argv, SDParams & params);
 
-const char* get_image_params(sd_params params, int seed);
+const char* get_image_params(SDParams params, int seed);

@@ -12,7 +12,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <cinttypes>
+#include <inttypes.h>
 
 #include "ggml/ggml.h"
 #include "ggml/ggml-alloc.h"
@@ -28,7 +28,7 @@
 
 #define EPS 1e-05f
 
-static sd_log_level log_level = sd_log_level::INFO;
+static SDLogLevel log_level = SDLogLevel::INFO;
 
 #define UNET_GRAPH_SIZE 3328
 #define LORA_GRAPH_SIZE 4096
@@ -39,29 +39,29 @@ static sd_log_level log_level = sd_log_level::INFO;
         if (level < log_level) {                                                                      \
             break;                                                                                    \
         }                                                                                             \
-        if (level == sd_log_level::DEBUG) {                                                             \
+        if (level == SDLogLevel::DEBUG) {                                                             \
             printf("[DEBUG] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
             fflush(stdout);                                                                           \
-        } else if (level == sd_log_level::INFO) {                                                       \
+        } else if (level == SDLogLevel::INFO) {                                                       \
             printf("[INFO]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
             fflush(stdout);                                                                           \
-        } else if (level == sd_log_level::WARN) {                                                       \
+        } else if (level == SDLogLevel::WARN) {                                                       \
             fprintf(stderr, "[WARN]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
             fflush(stdout);                                                                           \
-        } else if (level == sd_log_level::ERROR) {                                                      \
+        } else if (level == SDLogLevel::ERROR) {                                                      \
             fprintf(stderr, "[ERROR] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
             fflush(stdout);                                                                           \
         }                                                                                             \
     } while (0)
 
-#define LOG_DEBUG(format, ...) SD_LOG(sd_log_level::DEBUG, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...) SD_LOG(sd_log_level::INFO, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...) SD_LOG(sd_log_level::WARN, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) SD_LOG(sd_log_level::ERROR, format, ##__VA_ARGS__)
+#define LOG_DEBUG(format, ...) SD_LOG(SDLogLevel::DEBUG, format, ##__VA_ARGS__)
+#define LOG_INFO(format, ...) SD_LOG(SDLogLevel::INFO, format, ##__VA_ARGS__)
+#define LOG_WARN(format, ...) SD_LOG(SDLogLevel::WARN, format, ##__VA_ARGS__)
+#define LOG_ERROR(format, ...) SD_LOG(SDLogLevel::ERROR, format, ##__VA_ARGS__)
 
 #define TIMESTEPS 1000
 
-enum sd_version {
+enum SDVersion {
     VERSION_1_x,
     VERSION_2_x,
     VERSION_XL,
@@ -91,7 +91,7 @@ const char* sampling_methods_str[] = {
 
 /*================================================== Helper Functions ================================================*/
 
-void set_sd_log_level(sd_log_level level) {
+void set_sd_log_level(SDLogLevel level) {
     log_level = level;
 }
 
@@ -430,7 +430,7 @@ const int PAD_TOKEN_ID = 49407;
 // TODO: implement bpe
 class CLIPTokenizer {
    private:
-    sd_version version = VERSION_1_x;
+    SDVersion version = VERSION_1_x;
     std::map<std::string, int32_t> encoder;
     std::regex pat;
 
@@ -453,7 +453,7 @@ class CLIPTokenizer {
     }
 
    public:
-    CLIPTokenizer(sd_version version = VERSION_1_x)
+    CLIPTokenizer(SDVersion version = VERSION_1_x)
         : version(version){};
     std::string bpe(std::string token) {
         std::string word = token + "</w>";
@@ -821,7 +821,7 @@ struct ResidualAttentionBlock {
 // SDXL CLIPModel
 // CLIPTextModelWithProjection seems optional
 struct CLIPTextModel {
-    sd_version version = VERSION_1_x;
+    SDVersion version = VERSION_1_x;
     // network hparams
     int32_t vocab_size              = 49408;
     int32_t max_position_embeddings = 77;
@@ -853,7 +853,7 @@ struct CLIPTextModel {
     ggml_backend_t backend = NULL;
     ggml_tensor* work_output = NULL;
 
-    CLIPTextModel(sd_version version = VERSION_1_x, bool has_pool = false)
+    CLIPTextModel(SDVersion version = VERSION_1_x, bool has_pool = false)
         : version(version) {
         if (version == VERSION_2_x) {
             hidden_size = 1024;
@@ -1099,11 +1099,11 @@ struct FrozenCLIPEmbedder {
 
 // Ref: https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/cad87bf4e3e0b0a759afa94e933527c3123d59bc/modules/sd_hijack_clip.py#L283
 struct FrozenCLIPEmbedderWithCustomWords {
-    sd_version version = VERSION_1_x;
+    SDVersion version = VERSION_1_x;
     CLIPTokenizer tokenizer;
     CLIPTextModel text_model;
 
-    FrozenCLIPEmbedderWithCustomWords(sd_version version = VERSION_1_x)
+    FrozenCLIPEmbedderWithCustomWords(SDVersion version = VERSION_1_x)
         : version(version), tokenizer(version), text_model(version) {}
 
     std::pair<std::vector<int>, std::vector<float>> tokenize(std::string text,
@@ -1802,7 +1802,7 @@ struct UNetModel {
     ggml_type wtype;
     ggml_backend_t backend = NULL;
 
-    UNetModel(sd_version version = VERSION_1_x) {
+    UNetModel(SDVersion version = VERSION_1_x) {
         // transformer_depth size is the same of channel_mult size
         // transformer_depth = {1, 1, 1, 0}
         // transformer_depth[index of channel_mult] is applied to SpatialTransformer.depth var
@@ -1977,7 +1977,7 @@ struct UNetModel {
         return static_cast<size_t>(mem_size);
     }
 
-    int getNumTensors() {
+    int get_num_tensors() {
         // in
         int num_tensors = 6;
 
@@ -2027,7 +2027,7 @@ struct UNetModel {
         wtype = wtype_;
         memory_buffer_size = 1 * 1024 * 1024;  // 1 MB, for padding
         memory_buffer_size += calculate_mem_size();
-        int num_tensors = getNumTensors();
+        int num_tensors = get_num_tensors();
 
         LOG_DEBUG("unet params backend buffer size = % 6.2f MB (%i tensors)", memory_buffer_size / (1024.0 * 1024.0), num_tensors);
 
@@ -2709,7 +2709,7 @@ struct Encoder {
         mid.block_2.out_channels = block_in;
     }
 
-    size_t getNumTensors() {
+    size_t get_num_tensors() {
         int num_tensors = 6;
 
         // mid
@@ -2931,7 +2931,7 @@ struct Decoder {
         return static_cast<size_t>(mem_size);
     }
 
-    size_t getNumTensors() {
+    size_t get_num_tensors() {
         int num_tensors = 8;
 
         // mid
@@ -3119,10 +3119,10 @@ struct AutoEncoderKL {
         int num_tensors = 0;
         if (!decode_only) {
             num_tensors += 2;
-            num_tensors += (int)encoder.getNumTensors();
+            num_tensors += (int)encoder.get_num_tensors();
         }
 
-        num_tensors += (int)decoder.getNumTensors();
+        num_tensors += (int)decoder.get_num_tensors();
         LOG_DEBUG("vae params backend buffer size = % 6.2f MB (%i tensors)", memory_buffer_size / (1024.0 * 1024.0), num_tensors);
 
         struct ggml_init_params params;
@@ -3311,7 +3311,7 @@ struct LoraModel {
 
         FILE* fp = std::fopen(file_path.c_str(), "rb");
 
-        sd_version version = VERSION_COUNT;
+        SDVersion version = VERSION_COUNT;
 
         int n_kv      = gguf_get_n_kv(ctx_gguf);
         int n_tensors = gguf_get_n_tensors(ctx_gguf);
@@ -3680,7 +3680,7 @@ class StableDiffusionGGML {
                         bool vae_decode_only,
                         bool free_params_immediately,
                         std::string lora_model_dir,
-                        sd_rng_type rng_type)
+                        RNGType rng_type)
         : n_threads(n_threads),
           vae_decode_only(vae_decode_only),
           free_params_immediately(free_params_immediately),
@@ -3704,7 +3704,7 @@ class StableDiffusionGGML {
         first_stage_model.destroy();
     }
 
-    bool load_from_file(const std::string& file_path, sd_sample_schedule schedule) {
+    bool load_from_file(const std::string& file_path, Schedule schedule) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init();
@@ -3730,7 +3730,7 @@ class StableDiffusionGGML {
 
         FILE* fp = std::fopen(file_path.c_str(), "rb");
 
-        sd_version version = VERSION_COUNT;
+        SDVersion version = VERSION_COUNT;
 
         int n_kv      = gguf_get_n_kv(ctx_gguf);
         int n_tensors = gguf_get_n_tensors(ctx_gguf);
@@ -3745,7 +3745,7 @@ class StableDiffusionGGML {
             int nidx = gguf_find_key(ctx_gguf, "sd.model.name");
             int vidx = gguf_find_key(ctx_gguf, "sd.model.version");
             if(vidx >= 0 && nidx >= 0) {
-                version = (sd_version)gguf_get_val_i8(ctx_gguf, vidx);
+                version = (SDVersion)gguf_get_val_i8(ctx_gguf, vidx);
                 cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
                 diffusion_model = UNetModel(version);
                 LOG_INFO("Stable Diffusion %s | %s", model_version_to_str[version], gguf_get_val_str(ctx_gguf, nidx));
@@ -4090,7 +4090,7 @@ class StableDiffusionGGML {
                         ggml_tensor* positive,
                         ggml_tensor* negative,
                         float cfg_scale,
-                        sd_sample_method method,
+                        SampleMethod method,
                         const std::vector<float>& sigmas) {
         size_t steps = sigmas.size() - 1;
         // x_t = load_tensor_from_file(work_ctx, "./rand0.bin");
@@ -4621,7 +4621,7 @@ StableDiffusion::StableDiffusion(int n_threads,
                                  bool vae_decode_only,
                                  bool free_params_immediately,
                                  std::string lora_model_dir,
-                                 sd_rng_type rng_type) {
+                                 RNGType rng_type) {
     sd = std::make_shared<StableDiffusionGGML>(n_threads,
                                                vae_decode_only,
                                                free_params_immediately,
@@ -4629,7 +4629,7 @@ StableDiffusion::StableDiffusion(int n_threads,
                                                rng_type);
 }
 
-bool StableDiffusion::load_from_file(const std::string& file_path, sd_sample_schedule s) {
+bool StableDiffusion::load_from_file(const std::string& file_path, Schedule s) {
     return sd->load_from_file(file_path, s);
 }
 
@@ -4638,7 +4638,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
                                               float cfg_scale,
                                               int width,
                                               int height,
-                                              sd_sample_method sample_method,
+                                              SampleMethod sample_method,
                                               int sample_steps,
                                               int64_t seed,
                                               int batch_count) {
@@ -4751,7 +4751,7 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
                                               float cfg_scale,
                                               int width,
                                               int height,
-                                              sd_sample_method sample_method,
+                                              SampleMethod sample_method,
                                               int sample_steps,
                                               float strength,
                                               int64_t seed) {

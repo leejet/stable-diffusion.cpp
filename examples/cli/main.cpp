@@ -13,13 +13,13 @@
 
 
 int main(int argc, const char* argv[]) {
-    sd_params params;
+    SDParams params;
     parse_args(argc, argv, params);
 
     if (params.verbose) {
         print_params(params);
         printf("%s", sd_get_system_info().c_str());
-        set_sd_log_level(sd_log_level::DEBUG);
+        set_sd_log_level(SDLogLevel::DEBUG);
     }
 
     bool vae_decode_only = true;

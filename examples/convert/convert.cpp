@@ -80,12 +80,12 @@ std::string kqv_self[6] = {
 #ifdef _WIN32  // code for windows
 #include <windows.h>
 
-bool fileExists(const std::string& filename) {
+bool file_exists(const std::string& filename) {
     DWORD attributes = GetFileAttributesA(filename.c_str());
     return (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
-bool isDirectory(const std::string& path) {
+bool is_directory(const std::string& path) {
     DWORD attributes = GetFileAttributesA(path.c_str());
     return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
@@ -94,53 +94,53 @@ bool isDirectory(const std::string& path) {
 #include <dirent.h>
 #include <sys/stat.h>
 
-bool fileExists(const std::string& filename) {
+bool file_exists(const std::string& filename) {
     struct stat buffer;
     return (stat(filename.c_str(), &buffer) == 0 && S_ISREG(buffer.st_mode));
 }
 
-bool isDirectory(const std::string& path) {
+bool is_directory(const std::string& path) {
     struct stat buffer;
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
 }
 
 #endif
 
-enum sd_version {
+enum SDVersion {
     VERSION_1_x,
     VERSION_2_x,
     VERSION_XL
 };
 
-enum read_phase {
+enum ReadPhase {
     READ_NAME,
     READ_DATA,
     CHECK_SIZE,
     READ_DIMENS
 };
 
-enum sd_lora_type {
+enum SDLoraType {
     LORA_NONE,
     LORA_REGULAR,
     LORA_DIFFUSERS,
     LORA_TRANSFORMERS
 };
 
-enum data_pointer_type {
+enum DataPointerType {
     CHECKPOINT,
     SAFETENSOR
 };
 
-enum tensor_target {
+enum TensorTarget {
     NONE,
     CLIP,
     UNET,
     VAE,
 };
 
-struct convert_params {
+struct ConvertParams {
     ggml_type out_type = GGML_TYPE_F32;
-    sd_version version = VERSION_1_x;
+    SDVersion version = VERSION_1_x;
     std::string model_name = "";
     std::string model_path = "";
     std::string custom_vae_path = "";
@@ -162,7 +162,7 @@ struct convert_params {
     std::map<std::string, float> lora_alphas;
     std::set<std::string> alpha_keys;
     std::vector<float> alpha_values;
-    sd_lora_type lora_type = LORA_NONE;
+    SDLoraType lora_type = LORA_NONE;
 
     // VAE
     bool vae = false;
@@ -170,20 +170,20 @@ struct convert_params {
 
 struct Tensor {
     std::string name;
-    size_t data_offset;
-    ggml_type dtype;
+    size_t data_offset = 0;
+    ggml_type dtype = GGML_TYPE_F32;
     size_t data_size = 0;
-    int32_t shape[4];
+    int32_t shape[4] = {1, 1, 1, 1};
     int32_t n_dims = 0;
-    read_phase t_phase;
+    ReadPhase t_phase = READ_NAME;
     int32_t num_elements = 0;
     bool is_view = false;
     void* data = NULL;
     int32_t ptr_idx = -1;
-    data_pointer_type ptr_type = CHECKPOINT;
-    tensor_target target = NONE;
+    DataPointerType ptr_type = CHECKPOINT;
+    TensorTarget target = NONE;
 
-    bool detect_target(convert_params params) {
+    bool detect_target(ConvertParams params) {
         if(target != NONE) {
             return false;
         }
@@ -213,7 +213,7 @@ struct Tensor {
     }
 };
 
-typedef std::unordered_map<std::string, Tensor> tensor_umap_t;
+typedef std::unordered_map<std::string, Tensor> TensorMap;
 
 /*
 
@@ -262,7 +262,7 @@ uint16_t read_short(uint8_t* buffer) {
     return value;
 }
 
-int8_t findChar(uint8_t* buffer, char c) {
+int8_t find_char(uint8_t* buffer, char c) {
     for(int8_t len = 0; len < MAX_STRING_BUFFER; len++) {
         if(buffer[len] == c) {
             return len;
@@ -273,40 +273,40 @@ int8_t findChar(uint8_t* buffer, char c) {
 
 // ported from https://github.com/openai/CLIP/blob/main/clip/simple_tokenizer.py#L16
 std::map<char, int> unicode_to_byte() {
-    std::map<int, char> byteToUnicode;
+    std::map<int, char> byte_to_unicode;
     
     // List of utf-8 byte ranges
     for (int b = static_cast<int>(u'!'); b <= static_cast<int>(u'~'); ++b) {
-        byteToUnicode[b] = static_cast<char>(b);
+        byte_to_unicode[b] = static_cast<char>(b);
     }
     
     for (int b = static_cast<int>(u'¡'); b <= static_cast<int>(u'¬'); ++b) {
-        byteToUnicode[b] = static_cast<char>(b);
+        byte_to_unicode[b] = static_cast<char>(b);
     }
     
     for (int b = static_cast<int>(u'®'); b <= static_cast<int>(u'ÿ'); ++b) {
-        byteToUnicode[b] = static_cast<char>(b);
+        byte_to_unicode[b] = static_cast<char>(b);
     }
     
     int n = 0;
     for (int b = 0; b < 256; ++b) {
-        if (byteToUnicode.find(b) == byteToUnicode.end()) {
-            byteToUnicode[b] = static_cast<char>(256 + n);
+        if (byte_to_unicode.find(b) == byte_to_unicode.end()) {
+            byte_to_unicode[b] = static_cast<char>(256 + n);
             n++;
         }
     }
 
     // byte_encoder = bytes_to_unicode()
     // byte_decoder = {v: k for k, v in byte_encoder.items()}
-    std::map<char, int> byteDecoder;
+    std::map<char, int> byte_decoder;
 
-     for (const auto& entry : byteToUnicode) {
-        byteDecoder[entry.second] = entry.first;
+     for (const auto& entry : byte_to_unicode) {
+        byte_decoder[entry.second] = entry.first;
     }
 
-    byteToUnicode.clear();
+    byte_to_unicode.clear();
     
-    return byteDecoder;
+    return byte_decoder;
 }
 
 bool is_unused_tensor(std::string name) {
@@ -413,7 +413,105 @@ void read_pkl_string(char* text_str,struct zip_t *zip, std::string dir, struct T
     }
 }
 
-void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t & tensors, convert_params & params, bool root_model, tensor_target target = NONE) {
+// $ python -m pickletools sd-v1-4/archive/data.pkl | head -n 100
+//     0: \x80 PROTO      2
+//     2: }    EMPTY_DICT
+//     3: q    BINPUT     0
+//     5: (    MARK
+//     6: X        BINUNICODE 'epoch'
+//    16: q        BINPUT     1
+//    18: K        BININT1    6
+//    20: X        BINUNICODE 'global_step'
+//    36: q        BINPUT     2
+//    38: J        BININT     470000
+//    43: X        BINUNICODE 'pytorch-lightning_version'
+//    73: q        BINPUT     3
+//    75: X        BINUNICODE '1.4.2'
+//    85: q        BINPUT     4
+//    87: X        BINUNICODE 'state_dict'
+//   102: q        BINPUT     5
+//   104: }        EMPTY_DICT
+//   105: q        BINPUT     6
+//   107: (        MARK
+//   108: X            BINUNICODE 'betas'
+//   118: q            BINPUT     7
+//   120: c            GLOBAL     'torch._utils _rebuild_tensor_v2'
+//   153: q            BINPUT     8
+//   155: (            MARK
+//   156: (                MARK
+//   157: X                    BINUNICODE 'storage'
+//   169: q                    BINPUT     9
+//   171: c                    GLOBAL     'torch FloatStorage'
+//   191: q                    BINPUT     10
+//   193: X                    BINUNICODE '0'
+//   199: q                    BINPUT     11
+//   201: X                    BINUNICODE 'cpu'
+//   209: q                    BINPUT     12
+//   211: M                    BININT2    1000
+//   214: t                    TUPLE      (MARK at 156)
+//   215: q                BINPUT     13
+//   217: Q                BINPERSID
+//   218: K                BININT1    0
+//   220: M                BININT2    1000
+//  ...............................
+//  3201: q            BINPUT     250
+//  3203: R            REDUCE
+//  3204: q            BINPUT     251
+//  3206: X            BINUNICODE 'model.diffusion_model.input_blocks.1.1.proj_in.weight'
+//  3264: q            BINPUT     252
+//  3266: h            BINGET     8
+//  3268: (            MARK
+//  3269: (                MARK
+//  3270: h                    BINGET     9
+//  3272: h                    BINGET     10
+//  3274: X                    BINUNICODE '30'
+//  3281: q                    BINPUT     253
+//  3283: h                    BINGET     12
+//  3285: J                    BININT     102400
+//  3290: t                    TUPLE      (MARK at 3269)
+//  3291: q                BINPUT     254
+//  3293: Q                BINPERSID
+//  3294: K                BININT1    0
+//  3296: (                MARK
+//  3297: M                    BININT2    320
+//  3300: M                    BININT2    320
+//  3303: K                    BININT1    1
+//  3305: K                    BININT1    1
+//  3307: t                    TUPLE      (MARK at 3296)
+//  3308: q                BINPUT     255
+//  3310: (                MARK
+//  3311: M                    BININT2    320
+//  3314: K                    BININT1    1
+//  3316: K                    BININT1    1
+//  3318: K                    BININT1    1
+//  3320: t                    TUPLE      (MARK at 3310)
+//  3321: r                LONG_BINPUT 256
+//  3326: \x89             NEWFALSE
+//  3327: h                BINGET     16
+//  3329: )                EMPTY_TUPLE
+//  3330: R                REDUCE
+//  3331: r                LONG_BINPUT 257
+//  3336: t                TUPLE      (MARK at 3268)
+//  3337: r            LONG_BINPUT 258
+//  3342: R            REDUCE
+//  3343: r            LONG_BINPUT 259
+//  3348: X            BINUNICODE 'model.diffusion_model.input_blocks.1.1.proj_in.bias'
+//  3404: r            LONG_BINPUT 260
+//  3409: h            BINGET     8
+//  3411: (            MARK
+//  3412: (                MARK
+//  3413: h                    BINGET     9
+//  3415: h                    BINGET     10
+//  3417: X                    BINUNICODE '31'
+
+
+void read_pkl_props(uint8_t*  buffer,
+                    zip_t *zip,
+                    std::string dir,
+                    TensorMap & tensors,
+                    ConvertParams & params,
+                    bool root_model,
+                    TensorTarget target = NONE) {
     if(buffer[0] == 0x80) { // proto
         if(buffer[1] != 2) {
             printf("Unsupported protocol\n");
@@ -422,34 +520,36 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
         buffer += 2; // 0x80 and version
         char string_buffer [MAX_STRING_BUFFER];
         bool finish = false;
-        Tensor tensor = Tensor{"", 0, GGML_TYPE_F32, 0, {1, 1, 1, 1}, 0, READ_NAME, 0};
+        Tensor tensor;
         // read pickle binary file
         while(!finish) {
-            uint8_t type = *buffer;
+            uint8_t opcode = *buffer;
             buffer++;
-            switch (type)
+            // https://github.com/python/cpython/blob/3.7/Lib/pickletools.py#L1048
+            // https://github.com/python/cpython/blob/main/Lib/pickle.py#L105
+            switch (opcode)
             {
-            case '}':
+            case '}': // EMPTY_DICT     = b'}'   # push empty dict
                 break;
-            case ']':
+            case ']': // EMPTY_LIST     = b']'   # push empty list
                 break;
             // skip unused sections
-            case 'h':
-            case 'q':
-            case 'Q': // 0
+            case 'h': // BINGET         = b'h'   #   "    "    "    "   "   "  ;   "    " 1-byte arg
+            case 'q': // BINPUT         = b'q'   #   "     "    "   "   " ;   "    " 1-byte arg
+            case 'Q': // BINPERSID      = b'Q'   #  "       "         "  ;  "  "   "     "  stack
                 buffer++;
                 break;
-            case 'r':
+            case 'r': // LONG_BINPUT    = b'r'   #   "     "    "   "   " ;   "    " 4-byte arg
                 buffer += 4;
                 break;
-            case 0x95:
+            case 0x95: // FRAME            = b'\x95'  # indicate the beginning of a new frame
                 buffer += 8;
             break;
-            case 0x94:
+            case 0x94: // MEMOIZE          = b'\x94'  # store top of the stack in memo
             break;
-            case '(':
+            case '(': // MARK           = b'('   # push special markobject on stack
                 break;
-            case 'K':
+            case 'K': // BININT1        = b'K'   # push 1-byte unsigned int
                 {
                     uint8_t value =  *buffer;
                     if(set_pkl_tensor_props(value, tensor)) {
@@ -458,7 +558,7 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
                     buffer++;
                 }
                 break;
-             case 'M':
+             case 'M': // BININT2        = b'M'   # push 2-byte unsigned int
                 {
                     uint16_t value = read_short(buffer);
                     if(set_pkl_tensor_props(value, tensor)) {
@@ -467,7 +567,7 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
                     buffer += 2;
                 }
                 break;
-            case 'J':
+            case 'J': // BININT         = b'J'   # push four-byte signed int
                 {
                     const int32_t value = read_int(buffer);
                     if(set_pkl_tensor_props(value, tensor)) {
@@ -476,7 +576,7 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
                     buffer += 4;
                 }
                 break;
-            case 'X':
+            case 'X': // BINUNICODE     = b'X'   #   "     "       "  ; counted UTF-8 string argument
                 {
                     const int32_t len = read_int(buffer);
                     buffer += 4;
@@ -492,7 +592,7 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
                     }
                 }
                 break;
-            case 0x8C:
+            case 0x8C: // SHORT_BINUNICODE = b'\x8c'  # push short string; UTF-8 length < 256 bytes
                 {
                     const int8_t len = *buffer;
                     buffer ++;
@@ -502,11 +602,11 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
                     //printf("String: '%s'\n", string_buffer);
                 }
                 break;
-            case 'c':
+            case 'c': // GLOBAL         = b'c'   # push self.find_class(modname, name); 2 string args
                 {
-                    int8_t len = findChar(buffer, '\n');
+                    int8_t len = find_char(buffer, '\n');
                     buffer += len + 1;
-                    len = findChar(buffer, '\n');
+                    len = find_char(buffer, '\n');
                     memset(string_buffer, 0, MAX_STRING_BUFFER);
                     memcpy(string_buffer, buffer, len);
                     buffer += len + 1;
@@ -514,9 +614,9 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
                     //printf("Global: %s\n", string_buffer);
                 }
                 break;
-            case 0x86: // tuple 2
-            case 0x85: // tuple 1
-            case 't':
+            case 0x86: // TUPLE2         = b'\x86'  # build 2-tuple from two topmost stack items
+            case 0x85: // TUPLE1         = b'\x85'  # build 1-tuple from stack top
+            case 't':  // TUPLE          = b't'   # build tuple from topmost stack items
                 if(tensor.t_phase == READ_DIMENS) {
                     if(!is_unused_tensor(tensor.name)) { // ignore unused tensors
                         tensor.ptr_idx = (int32_t)params.pkl_fp.size();
@@ -526,7 +626,7 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
                             if(root_model) {
                                 tensor.detect_target(params);
                                 if(tensor.target == VAE) {
-                                    tensor = Tensor{"", 0, GGML_TYPE_F32, 0, {1, 1, 1, 1}, 0, READ_NAME, 0};
+                                    tensor = Tensor();
                                     continue; // ignore original vae tensors
                                 }
                             } else {
@@ -537,10 +637,10 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
                         tensors[tensor.name] = tensor;
                     }
                     // reset
-                    tensor = Tensor{"", 0, GGML_TYPE_F32, 0, {1, 1, 1, 1}, 0, READ_NAME, 0};
+                    tensor = Tensor();
                 }
                 break;
-            case '.':
+            case '.': // STOP           = b'.'   # every pickle ends with STOP
                 finish = true;
                 break;
             default:
@@ -550,7 +650,7 @@ void read_pkl_props(uint8_t*  buffer, zip_t *zip, std::string dir,tensor_umap_t 
     }
 }
 
-void read_vocab_json(std::map<int, std::string> & vocab_map, convert_params params) {
+void read_vocab_json(std::map<int, std::string> & vocab_map, ConvertParams params) {
     char* vocab_buffer = NULL;
     if(!params.vocab_path.empty()) {
         FILE* fv = std::fopen(params.vocab_path.c_str(), "r");
@@ -608,7 +708,7 @@ std::unordered_map<std::string, std::string> vae_convert_map;
 std::unordered_map<std::string, std::string> clip_convert_map;
 std::unordered_map<std::string, std::string> lora_fix_map;
 
-std::string convert_unet_to_original(std::string name, convert_params params) {
+std::string convert_unet_to_original(std::string name, ConvertParams params) {
     bool resnet_tensor = name.find("resnets") != std::string::npos;
     const char* separator = params.lora ? "." : "_";
     if(unet_convert_map.empty()) {
@@ -677,7 +777,7 @@ std::string convert_unet_to_original(std::string name, convert_params params) {
     return result;
 }
 
-std::string convert_vae_to_original(std::string name, convert_params params) {
+std::string convert_vae_to_original(std::string name, ConvertParams params) {
     std::unordered_map<std::string, std::string> vae_map;
     bool hf_attention = name.find("attentions") != std::string::npos;
     if(vae_convert_map.empty()) {
@@ -719,7 +819,7 @@ std::string convert_vae_to_original(std::string name, convert_params params) {
     return replace_name_by_map(name, vae_convert_map);
 }
 
-std::string convert_clip_to_hf_clip(std::string name, convert_params params) {
+std::string convert_clip_to_hf_clip(std::string name, ConvertParams params) {
     std::string separator = params.lora ? "." : "_";
     if(clip_convert_map.empty()) {
         if(params.version == VERSION_2_x) {
@@ -780,7 +880,7 @@ std::string fix_lora_names(std::string name) {
     return replace_name_by_map(name, lora_fix_map);
 }
 
-void* fetch_data(Tensor tensor, convert_params params) {
+void* fetch_data(Tensor tensor, ConvertParams params) {
     if(!tensor.data) { // fetch tensor data from zip (.ckpt) or file stream (.safetensors)
         if(tensor.ptr_type == CHECKPOINT) {
             zip_entry_openbyindex(params.pkl_fp[tensor.ptr_idx], tensor.data_offset);
@@ -822,9 +922,9 @@ std::tuple<Tensor, Tensor, Tensor> split_qkv_tensor(Tensor qkv_tensor, void* qkv
 }
 
 void preprocess_tensors(
-    tensor_umap_t & src,
+    TensorMap & src,
     std::vector<Tensor> & dst,
-    convert_params & params) {
+    ConvertParams & params) {
     printf("preprocessing %zu tensors\n", src.size());
     for(auto & it : src) {
         std::string name = it.first;
@@ -971,7 +1071,7 @@ void *convert_tensor(void * source, Tensor tensor, ggml_type dst_type) {
     return NULL;
 }
 
-void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
+void convert_to_gguf(TensorMap & tensors, ConvertParams & params) {
     if(params.lora && params.out_type != GGML_TYPE_F32 && params.out_type != GGML_TYPE_F16) {
         printf("Error: The LoRa conversion only supports f32 and f16.\n");
         return;
@@ -1113,12 +1213,12 @@ void convert_to_gguf(tensor_umap_t & tensors, convert_params & params) {
         }
     }
     gguf_write_to_file(g_ctx, params.output_path.c_str(), false, true);
-    printf("model saved '%s' correctly.", params.output_path.c_str());
+    printf("model saved '%s' correctly.\n", params.output_path.c_str());
     ggml_free(ctx);
     gguf_free(g_ctx);
 }
 
-void load_checkpoint(const char * file_name, tensor_umap_t & tensors, convert_params & params, bool root_model, tensor_target target = NONE) {
+void load_checkpoint(const char * file_name, TensorMap & tensors, ConvertParams & params, bool root_model, TensorTarget target = NONE) {
     struct zip_t *zip = zip_open(file_name, 0, 'r');
     {
         int i, n = (int)zip_entries_total(zip);
@@ -1144,7 +1244,7 @@ void load_checkpoint(const char * file_name, tensor_umap_t & tensors, convert_pa
     params.pkl_fp.push_back(zip);
 }
 
-void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors, convert_params & params, bool root_model, tensor_target target = NONE) {
+void load_safetensors(FILE * fp, int64_t metadata_size, TensorMap & tensors, ConvertParams & params, bool root_model, TensorTarget target = NONE) {
     std::fseek(fp, 8, SEEK_SET); // from begin
 
     char* metadata_buffer = new char[metadata_size + 1];
@@ -1273,7 +1373,7 @@ void load_safetensors(FILE * fp, int64_t metadata_size, tensor_umap_t & tensors,
     params.sf_fp.push_back(fp);
 }
 
-void load_tensors_from_model(std::string path, tensor_umap_t &tensors, convert_params &params, bool root_model, tensor_target target = NONE)
+void load_tensors_from_model(std::string path, TensorMap &tensors, ConvertParams &params, bool root_model, TensorTarget target = NONE)
 {
     // check if the model is safetensor or pytorch checkpoint
     FILE* fp = std::fopen(path.c_str(), "rb");
@@ -1314,8 +1414,8 @@ void load_tensors_from_model(std::string path, tensor_umap_t &tensors, convert_p
     }
 }
 
-void convert_model(convert_params & params) {
-    tensor_umap_t loaded_tensors;
+void convert_model(ConvertParams & params) {
+    TensorMap loaded_tensors;
     size_t last = params.model_path.find_last_of("/\\");
     params.model_name = params.model_path.substr(last + 1);
     if(params.from_folder) {
@@ -1323,19 +1423,19 @@ void convert_model(convert_params & params) {
         std::string diff_clip_path = params.model_path + "/text_encoder/model.safetensors";
         std::string diff_unet_path = params.model_path + "/unet/diffusion_pytorch_model.safetensors";
         std::string diff_vae_path = params.model_path + "/vae/diffusion_pytorch_model.safetensors";
-        if(fileExists(diff_clip_path)) {
+        if(file_exists(diff_clip_path)) {
             load_tensors_from_model(diff_clip_path, loaded_tensors, params, true, CLIP);
         } else {
             printf("ERROR: missing CLIP model: %s\n", diff_clip_path.c_str());
             exit(0);
         }
-        if(fileExists(diff_unet_path)) {
+        if(file_exists(diff_unet_path)) {
             load_tensors_from_model(diff_unet_path, loaded_tensors, params, true, UNET);
         } else {
             printf("ERROR: missing UNET model: %s\n", diff_unet_path.c_str());
             exit(0);
         }
-        if(fileExists(diff_vae_path)) {
+        if(file_exists(diff_vae_path)) {
             load_tensors_from_model(diff_vae_path, loaded_tensors, params, true, VAE);
         } else {
             printf("ERROR: missing VAE model: %s\n", diff_vae_path.c_str());
@@ -1364,9 +1464,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -t, --type [OUT_TYPE]              output format (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
 }
 
-bool parse_params(int argc, const char* argv[], convert_params & params) {
+bool parse_params(int argc, const char* argv[], ConvertParams & params) {
     params.model_path = argv[1];
-    if(isDirectory(params.model_path)) {
+    if(is_directory(params.model_path)) {
         params.from_folder = true;
         // if the model path ends with '/' ignore it
         if(params.model_path.size() > 0 && params.model_path.back() == '/') {
@@ -1398,7 +1498,7 @@ bool parse_params(int argc, const char* argv[], convert_params & params) {
                 break;
             }
             params.custom_vae_path = argv[i];
-            if(fileExists(params.custom_vae_path)) {
+            if(file_exists(params.custom_vae_path)) {
                 params.merge_custom_vae = true;
                 printf("merge custom vae '%s'\n", params.custom_vae_path.c_str());
             }
@@ -1447,7 +1547,7 @@ bool parse_params(int argc, const char* argv[], convert_params & params) {
 // support safetensors and ckpt (pikle)
 
 int main(int argc, const char* argv[]) {
-    convert_params params;
+    ConvertParams params;
     if(argc > 2) {
         // needed to initialize f16 tables
         {

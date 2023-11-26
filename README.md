@@ -84,12 +84,12 @@ git submodule update
 - convert weights to gguf model format
 
     ```shell
-    ./bin/convert sd-v1-4.ckpt -tp f16
+    ./bin/convert sd-v1-4.ckpt -t f16
     ```
 
 ### Quantization
 
-You can specify the output model format using the `--type` or `-tp` parameter
+You can specify the output model format using the `--type` or `-t` parameter
 
 - `f16` for 16-bit floating-point
 - `f32` for 32-bit floating-point
@@ -194,8 +194,8 @@ Using formats of different precisions will yield results of varying quality.
 - convert lora weights to gguf model format
 
     ```shell
-    bin/convert [lora path] -tp f16
-    # For example,  bin/convert marblesh.safetensors -tp f16
+    bin/convert [lora path] -t f16
+    # For example,  bin/convert marblesh.safetensors -t f16
     ```
 
 - You can specify the directory where the lora weights are stored via `--lora-model-dir`. If not specified, the default is the current working directory.

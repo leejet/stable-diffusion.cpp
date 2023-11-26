@@ -84,7 +84,7 @@ const char* modes_str[] = {
     "txt2img",
     "img2img"};
 
-void print_params(sd_params params) {
+void print_params(SDParams params) {
     printf("Option: \n");
     printf("    n_threads:       %d\n", params.n_threads);
     printf("    mode:            %s\n", modes_str[params.mode]);
@@ -134,7 +134,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -v, --verbose                      print extra info\n");
 }
 
-void parse_args(int argc, const char** argv,sd_params & params) {
+void parse_args(int argc, const char** argv,SDParams & params) {
     bool invalid_arg = false;
     std::string arg;
     for (int i = 1; i < argc; i++) {
@@ -266,7 +266,7 @@ void parse_args(int argc, const char** argv,sd_params & params) {
                 invalid_arg = true;
                 break;
             }
-            params.schedule = (sd_sample_schedule)schedule_found;
+            params.schedule = (Schedule)schedule_found;
         } else if (arg == "-s" || arg == "--seed") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -289,7 +289,7 @@ void parse_args(int argc, const char** argv,sd_params & params) {
                 invalid_arg = true;
                 break;
             }
-            params.sample_method = (sd_sample_method)sample_method_found;
+            params.sample_method = (SampleMethod)sample_method_found;
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv);
             exit(0);
@@ -372,7 +372,7 @@ std::string basename(const std::string& path) {
     return path;
 }
 
-const char* get_image_params(sd_params params, int seed) {
+const char* get_image_params(SDParams params, int seed) {
     std::string parameter_string = params.prompt + "\n";
     if (params.negative_prompt.size() != 0) {
         parameter_string += "Negative prompt: " + params.negative_prompt + "\n";
