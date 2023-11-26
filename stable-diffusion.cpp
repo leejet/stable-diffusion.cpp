@@ -255,7 +255,7 @@ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_pa
 // void save_tensor_to_file(const std::string& file_name, ggml_tensor* tensor, const std::string & name) {
 //     std::string file_name_ = file_name + ".tensor";
 //     std::string name_ = name;
-//     std::ofstream file("C:/proyects/output-tensors/" + file_name_, std::ios::binary);
+//     std::ofstream file("./" + file_name_, std::ios::binary);
 //     file.write(reinterpret_cast<char*>(&tensor->n_dims), sizeof(tensor->n_dims));
 //     int len = (int)name_.size();
 //     file.write(reinterpret_cast<char*>(&len), sizeof(len));

@@ -183,6 +183,15 @@ struct Tensor {
     DataPointerType ptr_type = CHECKPOINT;
     TensorTarget target = NONE;
 
+    Tensor() {}
+
+    Tensor(std::string name, ggml_type type, size_t data_size, const int32_t *ne, int n_dims, int32_t num_elements, bool is_view)
+    : name(name), dtype(type), data_size(data_size), n_dims(n_dims), num_elements(num_elements), is_view(is_view) {
+        for (int i = 0; i < n_dims; i++) {
+            shape[i] = ne[i];
+        }
+    }
+
     bool detect_target(ConvertParams params) {
         if(target != NONE) {
             return false;
@@ -276,18 +285,20 @@ std::map<char, int> unicode_to_byte() {
     std::map<int, char> byte_to_unicode;
     
     // List of utf-8 byte ranges
-    for (int b = static_cast<int>(u'!'); b <= static_cast<int>(u'~'); ++b) {
+    for (int b = static_cast<int>('!'); b <= static_cast<int>('~'); ++b) {
         byte_to_unicode[b] = static_cast<char>(b);
     }
     
-    for (int b = static_cast<int>(u'¡'); b <= static_cast<int>(u'¬'); ++b) {
+    for (int b = static_cast<int>('¡'); b <= static_cast<int>('¬'); ++b) {
         byte_to_unicode[b] = static_cast<char>(b);
     }
     
-    for (int b = static_cast<int>(u'®'); b <= static_cast<int>(u'ÿ'); ++b) {
+    for (int b = static_cast<int>('®'); b <= static_cast<int>('ÿ'); ++b) {
         byte_to_unicode[b] = static_cast<char>(b);
     }
-    
+    // printf("%d %d %d %d\n", static_cast<int>('¡'), static_cast<int>('¬'), static_cast<int>('®'), static_cast<int>('ÿ'));
+    // exit(1);
+
     int n = 0;
     for (int b = 0; b < 256; ++b) {
         if (byte_to_unicode.find(b) == byte_to_unicode.end()) {
@@ -910,9 +921,11 @@ std::tuple<Tensor, Tensor, Tensor> split_qkv_tensor(Tensor qkv_tensor, void* qkv
 
     size_t chunk_size = (size_t)num_elements * ggml_type_size(qkv_tensor.dtype);
 
-    Tensor q = Tensor{"", 0, dtype, chunk_size, {ne0, ne1, 1, 1}, n_dims, READ_NAME, num_elements, true}; // query
-    Tensor k = Tensor{"", 0, dtype, chunk_size, {ne0, ne1, 1, 1}, n_dims, READ_NAME, num_elements, true}; // key
-    Tensor v = Tensor{"", 0, dtype, chunk_size, {ne0, ne1, 1, 1}, n_dims, READ_NAME, num_elements, true}; // value
+    int32_t ne[4] = {ne0, ne1, 1, 1};
+
+    Tensor q = Tensor("", dtype, chunk_size, ne, n_dims, num_elements, true); // query
+    Tensor k = Tensor("", dtype, chunk_size, ne, n_dims, num_elements, true); // key
+    Tensor v = Tensor("", dtype, chunk_size, ne, n_dims, num_elements, true); // value
 
     // make a view of original tensor data
     q.data = qkv_data;
@@ -1313,7 +1326,9 @@ void load_safetensors(FILE * fp, int64_t metadata_size, TensorMap & tensors, Con
                     continue;
             }
 
-            Tensor tensor = Tensor{tensor_name.c_str(), 0, GGML_TYPE_F32, 0, {1, 1, 1, 1}, n_dims, READ_NAME, 0};
+            Tensor tensor;
+            tensor.name = tensor_name;
+            tensor.n_dims = n_dims;
             tensor.ptr_idx = (int)params.sf_fp.size();
             if(target != NONE) {
                 tensor.target = target;
