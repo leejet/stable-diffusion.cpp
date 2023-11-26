@@ -289,11 +289,11 @@ std::map<char, int> unicode_to_byte() {
         byte_to_unicode[b] = static_cast<char>(b);
     }
     
-    for (int b = static_cast<int>('¡'); b <= static_cast<int>('¬'); ++b) {
+    for (int b = 49825; b <= 49836; ++b) {
         byte_to_unicode[b] = static_cast<char>(b);
     }
     
-    for (int b = static_cast<int>('®'); b <= static_cast<int>('ÿ'); ++b) {
+    for (int b = 49838; b <= 50111; ++b) {
         byte_to_unicode[b] = static_cast<char>(b);
     }
     // printf("%d %d %d %d\n", static_cast<int>('¡'), static_cast<int>('¬'), static_cast<int>('®'), static_cast<int>('ÿ'));
