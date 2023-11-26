@@ -3619,7 +3619,6 @@ struct TinyDecoder {
     }
 
     void init_params(ggml_context* ctx) {
-        printf("allocating ");
         conv_input_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, z_channels, channels);
         conv_input_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, channels);
 
@@ -3758,7 +3757,8 @@ struct TinyAutoEncoder {
         if (!decode_only) {
             num_tensors += encoder.getNumTensors();
         }
-        printf("TAE params backend buffer size = % 6.2f MB (%i tensors)\n", memory_buffer_size / (1024.0 * 1024.0), num_tensors);
+
+        LOG_DEBUG("TAE params backend buffer size = % 6.2f MB (%i tensors)", memory_buffer_size / (1024.0 * 1024.0), num_tensors);
 
         struct ggml_init_params params;
         params.mem_size = static_cast<size_t>(num_tensors * ggml_tensor_overhead());
@@ -3769,7 +3769,7 @@ struct TinyAutoEncoder {
 
         ctx = ggml_init(params);
         if (!ctx) {
-            printf("ggml_init() failed\n");
+            LOG_ERROR("ggml_init() failed");
             return false;
         }
         return true;
@@ -3787,7 +3787,6 @@ struct TinyAutoEncoder {
             ggml_allocr_alloc(alloc, t);
         }
         ggml_allocr_free(alloc);
-        printf("all TAE tensors allocated\n");
     }
 
     void map_tensors(std::map<std::string, ggml_tensor*> & tensors) {
@@ -3849,7 +3848,7 @@ struct TinyAutoEncoder {
         // recreate the allocator with the required memory
         ggml_allocr_free(compute_alloc);
 
-        printf("TAE compute buffer size: %.2f MB\n", compute_memory_buffer_size / 1024.0 / 1024.0);
+        LOG_DEBUG("TAE compute buffer size: %.2f MB", compute_memory_buffer_size / 1024.0 / 1024.0);
 
         compute_buffer = ggml_backend_alloc_buffer(backend, compute_memory_buffer_size);
         compute_alloc = ggml_allocr_new_from_buffer(compute_buffer);
@@ -3885,7 +3884,7 @@ bool load_taesd(TinyAutoEncoder & taesd, const char* file_path, ggml_backend_t b
     ggml_context* ctx_meta = NULL;
     gguf_context* ctx_gguf = gguf_init_from_file(file_path, {true, &ctx_meta});
     if (!ctx_gguf) {
-        printf("failed to open '%s'", file_path);
+        LOG_ERROR("failed to open '%s'", file_path);
         return false;
     }
 
@@ -3894,8 +3893,8 @@ bool load_taesd(TinyAutoEncoder & taesd, const char* file_path, ggml_backend_t b
     int n_kv      = gguf_get_n_kv(ctx_gguf);
     int n_tensors = gguf_get_n_tensors(ctx_gguf);
 
-    printf("loading taesd from '%s'\n", file_path);
-    
+    LOG_INFO("loading taesd from '%s'", file_path);
+
     if(!taesd.init(backend)) {
         return false;
     }
@@ -3929,7 +3928,7 @@ bool load_taesd(TinyAutoEncoder & taesd, const char* file_path, ggml_backend_t b
         if (taesd_tensors.find(name) != taesd_tensors.end()) {
             real = taesd_tensors[name];
         } else {
-            printf("unknown tensor '%s' in model file\n", name.data());
+            LOG_ERROR("unknown tensor '%s' in model file", name.data());
             continue;
         }
 
@@ -3938,9 +3937,9 @@ bool load_taesd(TinyAutoEncoder & taesd, const char* file_path, ggml_backend_t b
             real->ne[1] != dummy->ne[1] ||
             real->ne[2] != dummy->ne[2] ||
             real->ne[3] != dummy->ne[3]) {
-            printf(
+            LOG_ERROR(
                 "ERROR: tensor '%s' has wrong shape in model file: "
-                "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]\n",
+                "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
                 name.c_str(),
                 dummy->ne[0], dummy->ne[1], dummy->ne[2], dummy->ne[3],
                 (int)real->ne[0], (int)real->ne[1], (int)real->ne[2], (int)real->ne[3]);
@@ -3970,7 +3969,7 @@ bool load_taesd(TinyAutoEncoder & taesd, const char* file_path, ggml_backend_t b
     ggml_free(ctx_meta);
 
     std::fclose(fp);
-    printf("TAESD loaded");
+    LOG_INFO("taesd model loaded");
     return true;
 }
 
@@ -5304,7 +5303,7 @@ public:
         }
         ggml_tensor* result = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32,
                                                  decode ? (W * 8) : (W / 8),  // width
-                                                 decode ? (H * 8) : (H / 8),  // hegiht
+                                                 decode ? (H * 8) : (H / 8),  // height
                                                  decode ? 3 : 8);             // channels
         int64_t t0          = ggml_time_ms();
         if(!use_tiny_autoencoder) {
