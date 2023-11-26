@@ -1,11 +1,11 @@
-#include <vector>
-#include <string>
 #include "common.h"
-#include <thread>
+#include <cstring>
 #include <fstream>
 #include <iostream>
-#include <cstring>
+#include <string>
+#include <thread>
 #include <unordered_set>
+#include <vector>
 
 #if defined(__APPLE__) && defined(__MACH__)
 #include <sys/sysctl.h>
@@ -55,7 +55,6 @@ int32_t get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
-
 const char* rng_type_to_str[] = {
     "std_default",
     "cuda",
@@ -77,8 +76,7 @@ const char* sample_method_str[] = {
 const char* schedule_str[] = {
     "default",
     "discrete",
-    "karras"
-};
+    "karras"};
 
 const char* modes_str[] = {
     "txt2img",
@@ -134,7 +132,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -v, --verbose                      print extra info\n");
 }
 
-void parse_args(int argc, const char** argv,SDParams & params) {
+void parse_args(int argc, const char** argv, SDParams& params) {
     bool invalid_arg = false;
     std::string arg;
     for (int i = 1; i < argc; i++) {
@@ -152,7 +150,7 @@ void parse_args(int argc, const char** argv,SDParams & params) {
                 break;
             }
             const char* mode_selected = argv[i];
-            int mode_found = -1;
+            int mode_found            = -1;
             for (int d = 0; d < MODE_COUNT; d++) {
                 if (!strcmp(mode_selected, modes_str[d])) {
                     mode_found = d;
