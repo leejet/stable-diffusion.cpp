@@ -10,3 +10,4 @@ test/
 *.gguf
 output.png
 models/*
+!taesd-decoder.gguf

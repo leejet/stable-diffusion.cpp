@@ -3281,6 +3281,699 @@ struct AutoEncoderKL {
     }
 };
 
+/*
+
+    References:
+    https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/autoencoder_tiny.py
+    https://github.com/madebyollin/taesd/blob/main/taesd.py
+
+*/
+struct TAEBlock {
+    int in_channels;
+    int out_channels;
+
+    // conv
+    ggml_tensor* conv_0_w; // [in_channels, out_channels, 3, 3]
+    ggml_tensor* conv_0_b; // [in_channels]
+    ggml_tensor* conv_1_w; // [out_channels, out_channels, 3, 3]
+    ggml_tensor* conv_1_b; // [out_channels]
+    ggml_tensor* conv_2_w; // [out_channels, out_channels, 3, 3]
+    ggml_tensor* conv_2_b; // [out_channels]
+
+    // skip
+    ggml_tensor* conv_skip_w; // [in_channels, out_channels, 1, 1]
+
+    size_t calculate_mem_size() {
+        size_t mem_size = in_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_0_w
+        mem_size += in_channels * ggml_type_size(GGML_TYPE_F32); // conv_0_b
+        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_1_w
+        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32); // conv_1_b
+        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_1_w
+        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32); // conv_1_b
+        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_2_w
+        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32); // conv_2_b
+
+        if(in_channels != out_channels) {
+            mem_size += in_channels * out_channels * ggml_type_size(GGML_TYPE_F16); // conv_skip_w
+        }
+        return mem_size;
+    }
+
+    int getNumTensors() {
+        return 6 + (in_channels != out_channels ? 1 : 0);
+    }
+
+    void init_params(ggml_context* ctx) {
+        conv_0_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, out_channels, in_channels);
+        conv_0_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
+
+        conv_1_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, out_channels, out_channels);
+        conv_1_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
+
+        conv_2_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, out_channels, out_channels);
+        conv_2_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
+
+        if(in_channels != out_channels) {
+            conv_skip_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, out_channels, in_channels);
+        }
+    }
+
+    void map_tensors(std::map<std::string, ggml_tensor*> & tensors, std::string prefix) {
+        tensors[prefix + "conv.0.weight"] = conv_0_w;
+        tensors[prefix + "conv.0.bias"] = conv_0_b;
+
+        tensors[prefix + "conv.2.weight"] = conv_1_w;
+        tensors[prefix + "conv.2.bias"] = conv_1_b;
+
+        tensors[prefix + "conv.4.weight"] = conv_2_w;
+        tensors[prefix + "conv.4.bias"] = conv_2_b;
+
+        if(in_channels != out_channels) {
+            tensors[prefix + "skip.weight"] = conv_skip_w;
+        }
+    }
+
+    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* x) {
+        // conv(n_in, n_out)
+        ggml_tensor* h;
+        h = ggml_conv_2d(ctx, conv_0_w, x, 1, 1, 1, 1, 1, 1);
+        h = ggml_add(ctx, h, ggml_reshape_4d(ctx, conv_0_b, 1, 1, conv_0_b->ne[0], 1));
+
+        // relu
+        h = ggml_relu_inplace(ctx, h);
+
+        h = ggml_conv_2d(ctx, conv_1_w, h, 1, 1, 1, 1, 1, 1);
+        h = ggml_add(ctx, h, ggml_reshape_4d(ctx, conv_1_b, 1, 1, conv_1_b->ne[0], 1));
+
+        // relu
+        h = ggml_relu_inplace(ctx, h);
+
+        h = ggml_conv_2d(ctx, conv_2_w, h, 1, 1, 1, 1, 1, 1);
+        h = ggml_add(ctx, h, ggml_reshape_4d(ctx, conv_2_b, 1, 1, conv_2_b->ne[0], 1));
+
+        // skip connection
+        if(in_channels != out_channels) {
+            // skip = nn.Conv2d(n_in, n_out, 1, bias=False) if n_in != n_out else nn.Identity()
+            x = ggml_conv_2d(ctx, conv_skip_w, x, 1, 1, 1, 1, 1, 1);
+        }
+
+        h = ggml_add(ctx, h, x);
+        h = ggml_relu_inplace(ctx, h);
+        return h;
+    }
+
+};
+
+struct TinyEncoder {
+    int in_channels = 3;
+    int z_channels = 4;
+    int channels = 64;
+    int num_blocks = 3;
+
+    // input
+    ggml_tensor* conv_input_w; // [channels, in_channels, 3, 3]
+    ggml_tensor* conv_input_b; // [channels]
+    TAEBlock initial_block;
+
+    ggml_tensor* conv_1_w; // [channels, channels, 3, 3]
+    TAEBlock input_blocks[3];
+
+    // middle
+    ggml_tensor* conv_2_w; // [channels, channels, 3, 3]
+    TAEBlock middle_blocks[3];
+
+    // output
+    ggml_tensor* conv_3_w; // [channels, channels, 3, 3]
+    TAEBlock output_blocks[3];
+
+    // final
+    ggml_tensor* conv_final_w; // [z_channels, channels, 3, 3]
+    ggml_tensor* conv_final_b; // [z_channels]
+
+    TinyEncoder() {
+        for(int i = 0; i < num_blocks;i++) {
+            input_blocks[i].in_channels = channels;
+            input_blocks[i].out_channels = channels;
+
+            middle_blocks[i].in_channels = channels;
+            middle_blocks[i].out_channels = channels;
+
+            output_blocks[i].in_channels = channels;
+            output_blocks[i].out_channels = channels;
+        }
+
+        initial_block.in_channels = channels;
+        initial_block.out_channels = channels;
+    }
+
+    size_t calculate_mem_size() {
+        size_t mem_size = channels * in_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_input_w
+        mem_size += channels * ggml_type_size(GGML_TYPE_F32); // conv_input_b
+
+        mem_size += initial_block.calculate_mem_size();
+
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_1_w
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_2_w
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_3_w
+
+        for(int i = 0; i < num_blocks; i++) {
+            mem_size += input_blocks[i].calculate_mem_size();
+            mem_size += middle_blocks[i].calculate_mem_size();
+            mem_size += output_blocks[i].calculate_mem_size();
+        }
+        mem_size += z_channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_input_w
+        mem_size += z_channels * ggml_type_size(GGML_TYPE_F32); // conv_input_b
+        return mem_size;
+    }
+
+    int getNumTensors() {
+        int num_tensors = 7;
+        for(int i = 0; i < num_blocks; i++) {
+            num_tensors += input_blocks[i].getNumTensors();
+            num_tensors += middle_blocks[i].getNumTensors();
+            num_tensors += output_blocks[i].getNumTensors();
+        }
+        num_tensors += initial_block.getNumTensors();
+        return num_tensors;
+    }
+
+    void init_params(ggml_context* ctx) {
+        conv_input_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, in_channels, channels);
+        conv_input_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, channels);
+
+        initial_block.init_params(ctx);
+
+        conv_1_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, channels);
+        conv_2_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, channels);
+        conv_3_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, channels);
+
+        conv_final_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, z_channels);
+        conv_final_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, z_channels);
+
+        for(int i = 0; i < num_blocks;i++) {
+            input_blocks[i].init_params(ctx);
+            middle_blocks[i].init_params(ctx);
+            output_blocks[i].init_params(ctx);
+        }
+    }
+
+    void map_tensors(std::map<std::string, ggml_tensor*> & tensors, std::string prefix) {
+        tensors[prefix + "0.weight"] = conv_input_w;
+        tensors[prefix + "0.bias"] = conv_input_b;
+
+        initial_block.map_tensors(tensors, prefix + "1.");
+
+        tensors[prefix + "2.weight"] = conv_1_w;
+        for(int i = 0; i < num_blocks; i++) {
+            input_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 3) +".");
+        }
+
+        tensors[prefix + "6.weight"] = conv_2_w;
+        for(int i = 0; i < num_blocks; i++) {
+            middle_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 7) +".");
+        }
+
+        tensors[prefix + "10.weight"] = conv_3_w;
+        for(int i = 0; i < num_blocks; i++) {
+            output_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 11) +".");
+        }
+
+        tensors[prefix + "14.weight"] = conv_final_w;
+        tensors[prefix + "14.bias"] = conv_final_b;
+    }
+
+    ggml_tensor* forward(ggml_context* ctx,  ggml_tensor* x) {
+        // conv(3, 64)
+        auto z = ggml_conv_2d(ctx, conv_input_w, x, 1, 1, 1, 1, 1, 1);
+        z = ggml_add(ctx, z, ggml_reshape_4d(ctx, conv_input_b, 1, 1, conv_input_b->ne[0], 1));
+
+        // Block(64, 64)
+        z = initial_block.forward(ctx, z);
+
+        // conv(64, 64, stride=2, bias=False)
+        z = ggml_conv_2d(ctx, conv_1_w, z, 2, 2, 1, 1, 1, 1);
+
+        // Block(64, 64), Block(64, 64), Block(64, 64)
+        for(int i = 0; i < num_blocks; i++) {
+            z = input_blocks[i].forward(ctx, z);
+        }
+
+        // conv(64, 64, stride=2, bias=False)
+        z = ggml_conv_2d(ctx, conv_2_w, z, 2, 2, 1, 1, 1, 1);
+
+        // Block(64, 64), Block(64, 64), Block(64, 64)
+        for(int i = 0; i < num_blocks; i++) {
+            z = middle_blocks[i].forward(ctx, z);
+        }
+
+        // conv(64, 64, stride=2, bias=False)
+        z = ggml_conv_2d(ctx, conv_3_w, z, 2, 2, 1, 1, 1, 1);
+
+        // Block(64, 64), Block(64, 64), Block(64, 64)
+        for(int i = 0; i < num_blocks; i++) {
+            z = output_blocks[i].forward(ctx, z);
+        }
+
+        // conv(64, 4)
+        z = ggml_conv_2d(ctx, conv_final_w, z, 1, 1, 1, 1, 1, 1);
+        z = ggml_add(ctx, z, ggml_reshape_4d(ctx, conv_final_b, 1, 1, conv_final_b->ne[0], 1));
+        return z;
+    }
+};
+
+struct TinyDecoder {
+    int z_channels = 4;
+    int channels = 64;
+    int output_channels = 3;
+    int num_blocks = 3;
+
+    // input
+    ggml_tensor* conv_input_w; // [channels, z_channels, 3, 3]
+    ggml_tensor* conv_input_b; // [channels]
+    TAEBlock input_blocks[3];
+    ggml_tensor* conv_1_w; // [channels, channels, 3, 3]
+
+    // middle
+    TAEBlock middle_blocks[3];
+    ggml_tensor* conv_2_w; // [channels, channels, 3, 3]
+
+    // output
+    TAEBlock output_blocks[3];
+    ggml_tensor* conv_3_w; // [channels, channels, 3, 3]
+
+    // final
+    TAEBlock final_block;
+    ggml_tensor* conv_final_w; // [output_channels, channels, 3, 3]
+    ggml_tensor* conv_final_b; // [output_channels]
+
+    TinyDecoder() {
+        for(int i = 0; i < num_blocks;i++) {
+            input_blocks[i].in_channels = channels;
+            input_blocks[i].out_channels = channels;
+
+            middle_blocks[i].in_channels = channels;
+            middle_blocks[i].out_channels = channels;
+
+            output_blocks[i].in_channels = channels;
+            output_blocks[i].out_channels = channels;
+        }
+
+        final_block.in_channels = channels;
+        final_block.out_channels = channels;
+    }
+
+    size_t calculate_mem_size() {
+        size_t mem_size = channels * z_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_input_w
+        mem_size += channels * ggml_type_size(GGML_TYPE_F32); // conv_input_b
+
+        for(int i = 0; i < num_blocks; i++) {
+            mem_size += input_blocks[i].calculate_mem_size();
+        }
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_1_w
+
+        for(int i = 0; i < num_blocks; i++) {
+            mem_size += middle_blocks[i].calculate_mem_size();
+        }
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_2_w
+
+        for(int i = 0; i < num_blocks; i++) {
+            mem_size += output_blocks[i].calculate_mem_size();
+        }
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_3_w
+
+        mem_size += final_block.calculate_mem_size();
+        mem_size += output_channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_input_w
+        mem_size += output_channels * ggml_type_size(GGML_TYPE_F32); // conv_input_b
+        return mem_size;
+    }
+
+    int getNumTensors() {
+        int num_tensors = 7;
+        for(int i = 0; i < num_blocks; i++) {
+            num_tensors += input_blocks[i].getNumTensors();
+            num_tensors += middle_blocks[i].getNumTensors();
+            num_tensors += output_blocks[i].getNumTensors();
+        }
+        num_tensors += final_block.getNumTensors();
+        return num_tensors;
+    }
+
+    void init_params(ggml_context* ctx) {
+        printf("allocating ");
+        conv_input_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, z_channels, channels);
+        conv_input_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, channels);
+
+        conv_1_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, channels);
+        conv_2_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, channels);
+        conv_3_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, channels);
+
+        conv_final_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, output_channels);
+        conv_final_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, output_channels);
+
+        for(int i = 0; i < num_blocks;i++) {
+            input_blocks[i].init_params(ctx);
+            middle_blocks[i].init_params(ctx);
+            output_blocks[i].init_params(ctx);
+        }
+
+        final_block.init_params(ctx);
+    }
+
+    void map_tensors(std::map<std::string, ggml_tensor*> & tensors, std::string prefix) {
+        tensors[prefix + "1.weight"] = conv_input_w;
+        tensors[prefix + "1.bias"] = conv_input_b;
+
+        for(int i = 0; i < num_blocks; i++) {
+            input_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 3) +".");
+        }
+
+        tensors[prefix + "7.weight"] = conv_1_w;
+        for(int i = 0; i < num_blocks; i++) {
+            middle_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 8) +".");
+        }
+
+        tensors[prefix + "12.weight"] = conv_2_w;
+        for(int i = 0; i < num_blocks; i++) {
+            output_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 13) +".");
+        }
+
+        tensors[prefix + "17.weight"] = conv_3_w;
+
+        final_block.map_tensors(tensors, prefix + "18.");
+
+        tensors[prefix + "19.weight"] = conv_final_w;
+        tensors[prefix + "19.bias"] = conv_final_b;
+    }
+
+    ggml_tensor* forward(ggml_context* ctx,  ggml_tensor* z) {
+        // torch.tanh(x / 3) * 3
+        auto h = ggml_scale(ctx, z, ggml_new_f32(ctx, 1.0f / 3.0f));
+        h = ggml_tanh_inplace(ctx, h);
+        h = ggml_scale(ctx, h, ggml_new_f32(ctx, 3.0f));
+
+        // conv(4, 64)
+        h = ggml_conv_2d(ctx, conv_input_w, h, 1, 1, 1, 1, 1, 1);
+        h = ggml_add(ctx, h, ggml_reshape_4d(ctx, conv_input_b, 1, 1, conv_input_b->ne[0], 1));
+
+        // nn.ReLU()
+        h = ggml_relu_inplace(ctx, h);
+
+        // Block(64, 64), Block(64, 64), Block(64, 64)
+        for(int i = 0; i < num_blocks; i++) {
+            h = input_blocks[i].forward(ctx, h);
+        }
+
+        // nn.Upsample(scale_factor=2)
+        h = ggml_upscale(ctx, h, 2);
+
+        // conv(64, 64, bias=False)
+        h = ggml_conv_2d(ctx, conv_1_w, h, 1, 1, 1, 1, 1, 1);
+
+        // Block(64, 64), Block(64, 64), Block(64, 64)
+        for(int i = 0; i < num_blocks; i++) {
+            h = middle_blocks[i].forward(ctx, h);
+        }
+
+        // nn.Upsample(scale_factor=2)
+        h = ggml_upscale(ctx, h, 2);
+
+        // conv(64, 64, bias=False)
+        h = ggml_conv_2d(ctx, conv_2_w, h, 1, 1, 1, 1, 1, 1);
+
+        // Block(64, 64), Block(64, 64), Block(64, 64)
+        for(int i = 0; i < num_blocks; i++) {
+            h = output_blocks[i].forward(ctx, h);
+        }
+
+        // nn.Upsample(scale_factor=2)
+        h = ggml_upscale(ctx, h, 2);
+
+        // conv(64, 64, bias=False)
+        h = ggml_conv_2d(ctx, conv_3_w, h, 1, 1, 1, 1, 1, 1);
+
+        // Block(64, 64)
+        h = final_block.forward(ctx, h);
+
+        // conv(64, 3)
+        h = ggml_conv_2d(ctx, conv_final_w, h, 1, 1, 1, 1, 1, 1);
+        h = ggml_add(ctx, h, ggml_reshape_4d(ctx, conv_final_b, 1, 1, conv_final_b->ne[0], 1));
+        return h;
+    }
+};
+
+struct TinyAutoEncoder {
+    TinyEncoder encoder;
+    TinyDecoder decoder;
+
+    ggml_context* ctx;
+    bool decode_only = false;
+    ggml_backend_buffer_t params_buffer;
+    ggml_backend_buffer_t compute_buffer; // for compute
+    struct ggml_allocr * compute_alloc = NULL;
+
+    int memory_buffer_size = 0;
+    ggml_type wtype;
+    ggml_backend_t backend = NULL;
+
+    TinyAutoEncoder(bool decoder_only_ = true) : decode_only(decoder_only_) {
+        decoder = TinyDecoder();
+        if(!decoder_only_){
+            encoder = TinyEncoder();
+        }
+    }
+
+    size_t calculate_mem_size() {
+        size_t mem_size = decoder.calculate_mem_size();
+        if (!decode_only) {
+            mem_size += encoder.calculate_mem_size();
+        }
+        mem_size += 1024; // padding
+        return mem_size;
+    }
+
+    bool init(ggml_backend_t backend_) {
+        backend = backend_;
+        memory_buffer_size = calculate_mem_size();
+        int num_tensors = decoder.getNumTensors();
+        if (!decode_only) {
+            num_tensors += encoder.getNumTensors();
+        }
+        printf("TAE params backend buffer size = % 6.2f MB (%i tensors)\n", memory_buffer_size / (1024.0 * 1024.0), num_tensors);
+
+        struct ggml_init_params params;
+        params.mem_size = static_cast<size_t>(num_tensors * ggml_tensor_overhead());
+        params.mem_buffer = NULL;
+        params.no_alloc = true;
+
+        params_buffer = ggml_backend_alloc_buffer(backend, memory_buffer_size);
+
+        ctx = ggml_init(params);
+        if (!ctx) {
+            printf("ggml_init() failed\n");
+            return false;
+        }
+        return true;
+    }
+
+    void alloc_params() {
+        ggml_allocr * alloc = ggml_allocr_new_from_buffer(params_buffer);
+        decoder.init_params(ctx);
+        if(!decode_only) {
+            encoder.init_params(ctx);
+        }
+
+        // alloc all tensors linked to this context
+        for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            ggml_allocr_alloc(alloc, t);
+        }
+        ggml_allocr_free(alloc);
+        printf("all TAE tensors allocated\n");
+    }
+
+    void map_tensors(std::map<std::string, ggml_tensor*> & tensors) {
+        decoder.map_tensors(tensors, "first_stage_model.decoder.");
+        if(!decode_only) {
+            encoder.map_tensors(tensors, "first_stage_model.encoder.");
+        }
+    }
+
+    struct ggml_cgraph * build_graph(struct ggml_tensor* z, bool decode_graph) {
+        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
+        static size_t buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
+        static std::vector<uint8_t> buf(buf_size);
+
+        struct ggml_init_params params = {
+            /*.mem_size   =*/ buf_size,
+            /*.mem_buffer =*/ buf.data(),
+            /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_allocr_alloc_graph()
+        };
+
+        struct ggml_context * ctx0 = ggml_init(params);
+
+        struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
+
+        struct ggml_tensor* z_ = NULL;
+
+         // it's performing a compute, check if backend isn't cpu
+        if(!ggml_backend_is_cpu(backend)) {
+            // pass input tensors to gpu memory
+            z_ = ggml_dup_tensor(ctx0, z);
+            ggml_allocr_alloc(compute_alloc, z_);
+
+            // pass data to device backend
+            if(!ggml_allocr_is_measure(compute_alloc)) {
+                ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
+            }
+        } else {
+            z_ = z;
+        }
+
+        struct ggml_tensor* out = decode_graph ? decoder.forward(ctx0, z_) : encoder.forward(ctx0, z_);
+
+        ggml_build_forward_expand(gf, out);
+        ggml_free(ctx0);
+
+        return gf;
+    }
+
+    void begin(struct ggml_tensor* x, bool decode) {
+        // calculate the amount of memory required
+        // alignment required by the backend
+        compute_alloc = ggml_allocr_new_measure_from_backend(backend);
+
+        struct ggml_cgraph * gf = build_graph(x, decode);
+
+        // compute the required memory
+        size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf);
+
+        // recreate the allocator with the required memory
+        ggml_allocr_free(compute_alloc);
+
+        printf("TAE compute buffer size: %.2f MB\n", compute_memory_buffer_size / 1024.0 / 1024.0);
+
+        compute_buffer = ggml_backend_alloc_buffer(backend, compute_memory_buffer_size);
+        compute_alloc = ggml_allocr_new_from_buffer(compute_buffer);
+    }
+
+    void compute(struct ggml_tensor* work_result, const int n_threads, struct ggml_tensor* z, bool decode_graph) {
+        ggml_allocr_reset(compute_alloc);
+
+        struct ggml_cgraph * gf = build_graph(z, decode_graph);
+        ggml_allocr_alloc_graph(compute_alloc, gf);
+
+        if (ggml_backend_is_cpu(backend)) {
+            ggml_backend_cpu_set_n_threads(backend, n_threads);
+        }
+
+        ggml_backend_graph_compute(backend, gf);
+
+#ifdef GGML_PERF
+        ggml_graph_print(gf);
+#endif
+
+        ggml_backend_tensor_get(gf->nodes[gf->n_nodes - 1], work_result->data, 0, ggml_nbytes(work_result));
+    }
+
+    void end() {
+        ggml_allocr_free(compute_alloc);
+        ggml_backend_buffer_free(compute_buffer);
+        compute_alloc = NULL;
+    }
+};
+
+bool load_taesd(TinyAutoEncoder & taesd, const char* file_path, ggml_backend_t backend) {
+    ggml_context* ctx_meta = NULL;
+    gguf_context* ctx_gguf = gguf_init_from_file(file_path, {true, &ctx_meta});
+    if (!ctx_gguf) {
+        printf("failed to open '%s'", file_path);
+        return false;
+    }
+
+    FILE* fp = std::fopen(file_path, "rb");
+
+    int n_kv      = gguf_get_n_kv(ctx_gguf);
+    int n_tensors = gguf_get_n_tensors(ctx_gguf);
+
+    printf("loading taesd from '%s'\n", file_path);
+    
+    if(!taesd.init(backend)) {
+        return false;
+    }
+
+    std::map<std::string, ggml_tensor*> taesd_tensors;
+
+    // prepare memory for the weights
+    {
+        taesd.alloc_params();
+        taesd.map_tensors(taesd_tensors);
+    }
+
+    std::vector<char> read_buf;
+    size_t data_offset = gguf_get_data_offset(ctx_gguf);
+
+    for(int i = 0; i < n_tensors; i++) {
+        std::string name = gguf_get_tensor_name(ctx_gguf, i);
+        struct ggml_tensor * dummy = ggml_get_tensor(ctx_meta, name.c_str());
+        size_t offset = data_offset + gguf_get_tensor_offset(ctx_gguf, i);
+
+#ifdef _WIN32
+        int ret = _fseeki64(fp, (__int64) offset, SEEK_SET);
+#else
+        int ret = std::fseek(fp, (long) offset, SEEK_SET);
+#endif
+        if(ret == -1) {
+            return false;
+        }
+
+        struct ggml_tensor* real;
+        if (taesd_tensors.find(name) != taesd_tensors.end()) {
+            real = taesd_tensors[name];
+        } else {
+            printf("unknown tensor '%s' in model file\n", name.data());
+            continue;
+        }
+
+        if (
+            real->ne[0] != dummy->ne[0] ||
+            real->ne[1] != dummy->ne[1] ||
+            real->ne[2] != dummy->ne[2] ||
+            real->ne[3] != dummy->ne[3]) {
+            printf(
+                "ERROR: tensor '%s' has wrong shape in model file: "
+                "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]\n",
+                name.c_str(),
+                dummy->ne[0], dummy->ne[1], dummy->ne[2], dummy->ne[3],
+                (int)real->ne[0], (int)real->ne[1], (int)real->ne[2], (int)real->ne[3]);
+            return false;
+        }
+
+        if (real->type != dummy->type) {
+            printf("Error: tensor '%s' has wrong type in model file: got %s, expect %s",
+                        name.c_str(), ggml_type_name(dummy->type), ggml_type_name(real->type));
+            return false;
+        }
+
+        int num_bytes = ggml_nbytes(dummy);
+
+        if (ggml_backend_is_cpu(backend)) {
+            // for the CPU and Metal backend, we can read directly into the tensor
+            std::fread(real->data, 1, num_bytes, fp);
+        } else {
+            // read into a temporary buffer first, then copy to device memory
+            read_buf.resize(num_bytes);
+            std::fread(read_buf.data(), 1, num_bytes, fp);
+            ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
+        }
+    }
+
+    gguf_free(ctx_gguf);
+    ggml_free(ctx_meta);
+
+    std::fclose(fp);
+    printf("TAESD loaded");
+    return true;
+}
+
 struct LoraModel {
     float strength = 1.0f;
     std::map<std::string, float> lora_alphas;
@@ -3654,6 +4347,7 @@ public:
     FrozenCLIPEmbedderWithCustomWords cond_stage_model;
     UNetModel diffusion_model;
     AutoEncoderKL first_stage_model;
+    bool use_tiny_autoencoder = false;
 
     std::map<std::string, struct ggml_tensor*> tensors;
 
@@ -3665,6 +4359,8 @@ public:
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
     ggml_backend_t backend             = NULL;  // general backend
     ggml_type model_data_type          = GGML_TYPE_COUNT;
+
+    TinyAutoEncoder tae_first_stage;
 
     StableDiffusionGGML() = default;
 
@@ -3693,7 +4389,9 @@ public:
     ~StableDiffusionGGML() {
         cond_stage_model.text_model.destroy();
         diffusion_model.destroy();
-        first_stage_model.destroy();
+        if(!use_tiny_autoencoder) {
+            first_stage_model.destroy();
+        }
     }
 
     bool load_from_file(const std::string& file_path, Schedule schedule) {
@@ -3772,8 +4470,11 @@ public:
 
         if (
             !cond_stage_model.text_model.initialize(backend, model_data_type) ||
-            !diffusion_model.initialize(backend, model_data_type) ||
-            !first_stage_model.initialize(backend, model_data_type)) {
+            !diffusion_model.initialize(backend, model_data_type)) {
+            return false;
+        }
+
+        if(!use_tiny_autoencoder && !first_stage_model.initialize(backend, model_data_type)) {
             return false;
         }
 
@@ -3788,9 +4489,11 @@ public:
             diffusion_model.alloc_params();
             diffusion_model.map_by_name(tensors, "model.diffusion_model.");
 
-            // firest_stage_model(AutoEncoderKL)
-            first_stage_model.alloc_params();
-            first_stage_model.map_by_name(tensors, "first_stage_model.");
+            if(!use_tiny_autoencoder) {
+                // firest_stage_model(AutoEncoderKL)
+                first_stage_model.alloc_params();
+                first_stage_model.map_by_name(tensors, "first_stage_model.");
+            }
         }
 
         std::set<std::string> tensor_names_in_file;
@@ -3827,6 +4530,9 @@ public:
             if (tensors.find(name) != tensors.end()) {
                 real = tensors[name];
             } else {
+                if(use_tiny_autoencoder && name.find("first_stage_model.") == 0) {
+                    continue;
+                }
                 if (name.find("quant") == std::string::npos && name.find("first_stage_model.encoder.") == std::string::npos) {
                     LOG_WARN("unknown tensor '%s' in model file", name.data());
                 } else {
@@ -3964,6 +4670,9 @@ public:
             denoiser->schedule->log_sigmas[i]     = std::log(denoiser->schedule->sigmas[i]);
         }
         LOG_DEBUG("finished loaded file");
+        if(use_tiny_autoencoder) {
+            return load_taesd(tae_first_stage, "taesd-decoder.gguf", backend);
+        }
         return true;
     }
 
@@ -4590,7 +5299,7 @@ public:
     ggml_tensor* compute_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode) {
         int64_t W = x->ne[0];
         int64_t H = x->ne[1];
-        if (decode) {
+        if (decode && !use_tiny_autoencoder) {
             sd_scale(x, 1.0f / scale_factor);
         }
         ggml_tensor* result = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32,
@@ -4598,9 +5307,22 @@ public:
                                                  decode ? (H * 8) : (H / 8),  // hegiht
                                                  decode ? 3 : 8);             // channels
         int64_t t0          = ggml_time_ms();
-        first_stage_model.begin(x, decode);
-        first_stage_model.compute(result, n_threads, x, decode);
-        first_stage_model.end();
+        if(!use_tiny_autoencoder) {
+            first_stage_model.begin(x, decode);
+            first_stage_model.compute(result, n_threads, x, decode);
+            first_stage_model.end();
+        } else {
+            tae_first_stage.begin(x, decode);
+            tae_first_stage.compute(result, n_threads, x, decode);
+            tae_first_stage.end();
+            // Source: https://github.com/comfyanonymous/ComfyUI/blob/master/latent_preview.py
+            // x_sample = x_sample.sub(0.5).mul(2)
+            float* result_data = (float*)result->data;
+            int ne = ggml_nelements(result);
+            for(int i = 0; i < ne; i++) {
+                result_data[i] = (result_data[i] - 0.5f) * 2.0f;
+            }
+        }
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing vae [mode: %s] graph completed, taking %.2fs", decode ? "DECODE" : "ENCODE", (t1 - t0) * 1.0f / 1000);
         return result;
@@ -4611,6 +5333,7 @@ public:
 
 StableDiffusion::StableDiffusion(int n_threads,
                                  bool vae_decode_only,
+                                 bool tiny_autoencoder,
                                  bool free_params_immediately,
                                  std::string lora_model_dir,
                                  RNGType rng_type) {
@@ -4619,6 +5342,7 @@ StableDiffusion::StableDiffusion(int n_threads,
                                                free_params_immediately,
                                                lora_model_dir,
                                                rng_type);
+    sd->use_tiny_autoencoder = tiny_autoencoder;
 }
 
 bool StableDiffusion::load_from_file(const std::string& file_path, Schedule s) {
@@ -4726,7 +5450,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
 
     int64_t t4 = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
-    if (sd->free_params_immediately) {
+    if (sd->free_params_immediately && !sd->use_tiny_autoencoder) {
         sd->first_stage_model.destroy();
     }
     ggml_free(work_ctx);

@@ -44,6 +44,7 @@ private:
 public:
     StableDiffusion(int n_threads                = -1,
                     bool vae_decode_only         = false,
+                    bool tiny_autoencoder        = false,
                     bool free_params_immediately = false,
                     std::string lora_model_dir   = "",
                     RNGType rng_type             = STD_DEFAULT_RNG);

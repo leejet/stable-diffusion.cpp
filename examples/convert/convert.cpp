@@ -136,6 +136,12 @@ enum TensorTarget {
     VAE,
 };
 
+enum TinyAutoEncoderType {
+    TAE_DECODER,
+    TAE_ENCODER,
+    TAE_NONE
+};
+
 struct ConvertParams {
     ggml_type out_type          = GGML_TYPE_F32;
     SDVersion version           = VERSION_1_x;
@@ -164,6 +170,7 @@ struct ConvertParams {
 
     // VAE
     bool vae = false;
+    TinyAutoEncoderType taesd_type = TAE_NONE;
 };
 
 struct Tensor {
@@ -940,12 +947,17 @@ void preprocess_tensors(
 
         if (tensor.target == VAE) {
             tensor.name = convert_vae_to_original(tensor.name, params);
-
-            // convert vae attn block linear to conv2d 1x1
             if (params.vae && name.find("first_stage_model.") == std::string::npos) {
-                tensor.name = "first_stage_model." + tensor.name;
+                std::string tae = "";
+                if(params.taesd_type == TAE_DECODER) {
+                    tae = "decoder.";
+                } else if(params.taesd_type == TAE_ENCODER) {
+                    tae = "encoder.";
+                }
+                tensor.name = "first_stage_model." + tae + tensor.name;
             }
 
+            // convert vae attn block linear to conv2d 1x1
             if (tensor.name.find("attn_1") != std::string::npos) {
                 if (tensor.n_dims == 2) {
                     tensor.n_dims += 2;
@@ -1080,7 +1092,7 @@ void convert_to_gguf(TensorMap& tensors, ConvertParams& params) {
     }
 
     if (!params.lora && tensors.find("alphas_cumprod") == tensors.end()) {
-        params.generate_alphas_cumprod = true;
+        params.generate_alphas_cumprod = !params.vae;
     }
 
     std::vector<Tensor> processed_tensors;
@@ -1116,7 +1128,6 @@ void convert_to_gguf(TensorMap& tensors, ConvertParams& params) {
     } else if (params.vae) {
         gguf_set_val_str(g_ctx, "sd.vae.name", params.model_name.c_str());
         gguf_set_val_i32(g_ctx, "sd.vae.dtype", (int)params.out_type);
-        gguf_set_val_i32(g_ctx, "sd.vae.type", (int)params.lora_type);
     } else {
         // process vocab
         std::map<int, std::string> vocab_map;
@@ -1502,6 +1513,21 @@ bool parse_params(int argc, const char* argv[], ConvertParams& params) {
                 params.merge_custom_vae = true;
                 printf("merge custom vae '%s'\n", params.custom_vae_path.c_str());
             }
+        } else if (arg == "--taesd") {
+            if (++i >= argc) {
+                printf("specify the type of taesd model (decoder, encoder)\n");
+                exit(1);
+            }
+            std::string type = argv[i];
+            if(type  == "decoder") {
+                params.taesd_type = TAE_DECODER;
+            } else if(type  == "encoder") {
+                params.taesd_type = TAE_ENCODER;
+            } else {
+                printf("specify the type of taesd model (decoder, encoder)\n");
+                exit(1);
+            }
+            params.vae = true;
         } else if (arg == "--type" || arg == "-t") {
             if (++i >= argc) {
                 printf("specify the output format\n");
