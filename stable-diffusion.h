@@ -48,7 +48,7 @@ public:
                     std::string lora_model_dir   = "",
                     RNGType rng_type             = STD_DEFAULT_RNG);
     bool load_from_file(const std::string& file_path, Schedule d = DEFAULT);
-    std::vector<uint8_t> txt2img(
+    std::vector<uint8_t*> txt2img(
         std::string prompt,
         std::string negative_prompt,
         float cfg_scale,
@@ -56,9 +56,11 @@ public:
         int height,
         SampleMethod sample_method,
         int sample_steps,
-        int64_t seed);
-    std::vector<uint8_t> img2img(
-        const std::vector<uint8_t>& init_img,
+        int64_t seed,
+        int batch_count);
+
+    std::vector<uint8_t*> img2img(
+        const uint8_t* init_img_data,
         std::string prompt,
         std::string negative_prompt,
         float cfg_scale,
