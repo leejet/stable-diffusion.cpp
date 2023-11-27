@@ -4610,10 +4610,10 @@ public:
 /*================================================= StableDiffusion ==================================================*/
 
 void StableDiffusion::setup(int n_threads,
-                                 bool vae_decode_only,
-                                 bool free_params_immediately,
-                                 std::string lora_model_dir,
-                                 RNGType rng_type) {
+                            bool vae_decode_only,
+                            bool free_params_immediately,
+                            std::string lora_model_dir,
+                            RNGType rng_type) {
     sd = std::make_shared<StableDiffusionGGML>(n_threads,
                                                vae_decode_only,
                                                free_params_immediately,
