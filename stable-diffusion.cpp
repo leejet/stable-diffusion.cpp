@@ -164,24 +164,6 @@ ggml_fp16_t ggml_tensor_get_f16(const ggml_tensor* tensor, int l, int k = 0, int
     return *(ggml_fp16_t*)((char*)(tensor->data) + i * tensor->nb[3] + j * tensor->nb[2] + k * tensor->nb[1] + l * tensor->nb[0]);
 }
 
-float ggml_mean(struct ggml_tensor* src) {
-    float mean        = 0.0f;
-    int64_t nelements = ggml_nelements(src);
-    float* data       = (float*)src->data;
-    for (int i = 0; i < nelements; i++) {
-        mean += data[i] / nelements * 1.0f;
-    }
-    return mean;
-}
-
-void sd_scale(struct ggml_tensor* src, float scale) {
-    int64_t nelements = ggml_nelements(src);
-    float* data       = (float*)src->data;
-    for (int i = 0; i < nelements; i++) {
-        data[i] = data[i] * scale;
-    }
-}
-
 void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false) {
     printf("shape(%zu, %zu, %zu, %zu)\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     fflush(stdout);
@@ -326,43 +308,86 @@ struct ggml_tensor* new_timestep_embedding(struct ggml_context* ctx, struct ggml
     return embedding;
 }
 
-uint8_t* ggml_to_image_vec(struct ggml_tensor* t) {
-    int64_t w         = t->ne[0];
-    int64_t h         = t->ne[1];
-    int64_t c         = t->ne[2];
-    uint8_t* img_data = (uint8_t*)malloc(w * h * c);
-    for (int i = 0; i < h; i++) {
-        for (int j = 0; j < w; j++) {
-            for (int k = 0; k < c; k++) {
-                float value = ggml_tensor_get_f32(t, j, i, k);
-                value       = (value + 1.0f) * 0.5f;
-                if (value < 0) {
-                    value = 0;
-                } else if (value > 1) {
-                    value = 1;
-                }
-                value *= 255.f;
-                *(img_data + i * w * c + j * c + k) = (uint8_t)value;
+// SPECIAL OPERATIONS WITH TENSORS
+
+uint8_t* sd_tensor_to_image(struct ggml_tensor* input) {
+    int64_t width       = input->ne[0];
+    int64_t height      = input->ne[1];
+    int64_t channels    = input->ne[2];
+    GGML_ASSERT(channels == 3 && input->type == GGML_TYPE_F32);
+    uint8_t* image_data = (uint8_t*)malloc(width * height * channels);
+    for (int iy = 0; iy < height; iy++) {
+        for (int ix = 0; ix < width; ix++) {
+            for (int k = 0; k < channels; k++) {
+                float value = ggml_tensor_get_f32(input, ix, iy, k);
+                *(image_data + iy * width * channels + ix * channels + k) = (uint8_t)(value * 255.0f);
             }
         }
     }
-    return img_data;
+    return image_data;
 }
 
-void image_vec_to_ggml(const uint8_t* image_data,
-                       struct ggml_tensor* t) {
-    int64_t w = t->ne[0];
-    int64_t h = t->ne[1];
-    int64_t c = t->ne[2];
-    for (int i = 0; i < h; i++) {
-        for (int j = 0; j < w; j++) {
-            for (int k = 0; k < c; k++) {
-                float value = *(image_data + i * w * c + j * c + k);
-                value       = value / 255.f;
-                value       = 2 * value - 1;
-                ggml_tensor_set_f32(t, value, j, i, k);
+void sd_image_to_tensor(const uint8_t* image_data,
+                       struct ggml_tensor* output) {
+    int64_t width       = output->ne[0];
+    int64_t height      = output->ne[1];
+    int64_t channels    = output->ne[2];
+    GGML_ASSERT(channels == 3 && output->type == GGML_TYPE_F32);
+    for (int iy = 0; iy < height; iy++) {
+        for (int ix = 0; ix < width; ix++) {
+            for (int k = 0; k < channels; k++) {
+                float value = *(image_data + iy * width * channels + ix * channels + k);
+                ggml_tensor_set_f32(output, value / 255.0f, ix, iy, k);
             }
         }
+    }
+}
+
+
+float sd_mean(struct ggml_tensor* src) {
+    float mean        = 0.0f;
+    int64_t nelements = ggml_nelements(src);
+    float* data       = (float*)src->data;
+    for (int i = 0; i < nelements; i++) {
+        mean += data[i] / nelements * 1.0f;
+    }
+    return mean;
+}
+
+void sd_scale(struct ggml_tensor* src, float scale) {
+    int64_t nelements = ggml_nelements(src);
+    float* data       = (float*)src->data;
+    for (int i = 0; i < nelements; i++) {
+        data[i] = data[i] * scale;
+    }
+}
+
+void sd_clamp(struct ggml_tensor* src, float min, float max) {
+    int64_t nelements = ggml_nelements(src);
+    float* data       = (float*)src->data;
+    for (int i = 0; i < nelements; i++) {
+        float val = data[i];
+        data[i] = val < min ? min : (val > max ? max : val);
+    }
+}
+
+// convert values from [0, 1] to [-1, 1]
+void sd_convert_input(struct ggml_tensor* src) {
+    int64_t nelements = ggml_nelements(src);
+    float* data       = (float*)src->data;
+    for (int i = 0; i < nelements; i++) {
+        float val = data[i];
+        data[i] = val * 2.0f - 1.0f;
+    }
+}
+
+// convert values from [-1, 1] to [0, 1]
+void sd_convert_output(struct ggml_tensor* src) {
+    int64_t nelements = ggml_nelements(src);
+    float* data       = (float*)src->data;
+    for (int i = 0; i < nelements; i++) {
+        float val = data[i];
+        data[i] = (val + 1.0f) * 0.5f;
     }
 }
 
@@ -4789,7 +4814,7 @@ public:
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
         ggml_tensor* result = ggml_dup_tensor(work_ctx, hidden_states);
         {
-            float original_mean = ggml_mean(hidden_states);
+            float original_mean = sd_mean(hidden_states);
             for (int i2 = 0; i2 < hidden_states->ne[2]; i2++) {
                 for (int i1 = 0; i1 < hidden_states->ne[1]; i1++) {
                     for (int i0 = 0; i0 < hidden_states->ne[0]; i0++) {
@@ -4799,7 +4824,7 @@ public:
                     }
                 }
             }
-            float new_mean = ggml_mean(result);
+            float new_mean = sd_mean(result);
             sd_scale(result, (original_mean / new_mean));
         }
         return result;  // [1, 77, 768]
@@ -5318,42 +5343,33 @@ public:
     ggml_tensor* compute_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode) {
         int64_t W = x->ne[0];
         int64_t H = x->ne[1];
-        if (decode && !use_tiny_autoencoder) {
-            sd_scale(x, 1.0f / scale_factor);
-        }
         ggml_tensor* result = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32,
                                                  decode ? (W * 8) : (W / 8),  // width
                                                  decode ? (H * 8) : (H / 8),  // height
                                                  decode ? 3 : (use_tiny_autoencoder ? 4 : 8)); // channels
         int64_t t0          = ggml_time_ms();
         if(!use_tiny_autoencoder) {
+            if(decode) {
+                sd_scale(x, 1.0f / scale_factor);
+            } else {
+                sd_convert_input(x);
+            }
             first_stage_model.begin(x, decode);
             first_stage_model.compute(result, n_threads, x, decode);
             first_stage_model.end();
-        } else {
-            // Source: https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/vae.py
-            // image_raw = x.add(1).div(2)
-            if(!decode) {
-                float* x_data = (float*)x->data;
-                int ne = ggml_nelements(result);
-                for(int i = 0; i < ne; i++) {
-                    x_data[i] = (x_data[i] + 1.0f) * 0.5f;
-                }
+            if(decode) {
+                sd_convert_output(result);
             }
+        } else {
             tae_first_stage.begin(x, decode);
             tae_first_stage.compute(result, n_threads, x, decode);
             tae_first_stage.end();
-            // x_sample = x.mul(2).sub(1)
-            if(decode) {
-                float* result_data = (float*)result->data;
-                int ne = ggml_nelements(result);
-                for(int i = 0; i < ne; i++) {
-                    result_data[i] = (result_data[i] * 2.0f) - 1.0f;
-                }
-            }
         }
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing vae [mode: %s] graph completed, taking %.2fs", decode ? "DECODE" : "ENCODE", (t1 - t0) * 1.0f / 1000);
+        if(decode) {
+            sd_clamp(result, 0.0f, 1.0f);
+        }
         return result;
     }
 };
@@ -5472,7 +5488,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
         t1                      = ggml_time_ms();
         struct ggml_tensor* img = sd->compute_first_stage(work_ctx, final_latents[i] /* x_0 */, true);
         if (img != NULL) {
-            results.push_back(ggml_to_image_vec(img));
+            results.push_back(sd_tensor_to_image(img));
         }
         int64_t t2 = ggml_time_ms();
         LOG_INFO("latent %" PRId64 " decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
@@ -5545,10 +5561,8 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-    image_vec_to_ggml(init_img_data, init_img);
-
+    sd_image_to_tensor(init_img_data, init_img);
     t0                       = ggml_time_ms();
-    
     ggml_tensor* init_latent = NULL;
     if(!sd->use_tiny_autoencoder) {
         ggml_tensor* moments     = sd->compute_first_stage(work_ctx, init_img, false);
@@ -5587,8 +5601,9 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
 
     struct ggml_tensor* img = sd->compute_first_stage(work_ctx, x_0, true);
     if (img != NULL) {
-        result.push_back(ggml_to_image_vec(img));
+        result.push_back(sd_tensor_to_image(img));
     }
+
     int64_t t4 = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
 
