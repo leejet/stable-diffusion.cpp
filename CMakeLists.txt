@@ -23,19 +23,28 @@ endif()
 
 # general
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
-option(SD_BUILD_EXAMPLES              "sd: build examples" ${SD_STANDALONE})
-option(SD_BUILD_SHARED_LIBS           "sd: build shared libs" OFF)
+option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
+option(SD_CUBLAS                     "sd: cuda backend" OFF)
+option(SD_FLASH_ATTN            "sd: use flash attention for x4 less memory usage" OFF)
+option(SD_BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
+if(SD_CUBLAS)
+	message("Use CUBLAS as backend stable-diffusion")
+    set(GGML_CUBLAS ON)
+    add_definitions(-DSD_USE_CUBLAS)
+endif()
+
+if(SD_FLASH_ATTN)
+    message("Use Flash Attention for memory optimization")
+    add_definitions(-DSD_USE_FLASH_ATTENTION)
+endif()
+
+
+set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 # deps
 add_subdirectory(ggml)
 include_directories(ggml/include)
-
-if (WIN32 OR MSVC)
-    set(CMAKE_FIND_LIBRARY_SUFFIXES ".lib")
-elseif (UNIX)
-    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
-endif()
 
 set(SD_LIB stable-diffusion)
 if (SD_BUILD_SHARED_LIBS)
@@ -52,7 +61,9 @@ endif ()
 target_include_directories(${SD_LIB} PUBLIC .)
 target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
 
+add_subdirectory(common)
 
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
+

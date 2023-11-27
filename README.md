@@ -9,17 +9,20 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 ## Features
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
+- Super lightweight and without external dependencies.
 - 16-bit, 32-bit float support
 - 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
-    - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image
+    - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
 - SD1.x and SD2.x support
+- Full CUDA backend for GPU acceleration, for now just for float16 and float32 models. There are some issues with quantized models and CUDA; it will be fixed in the future.
+- Flash Attention for memory usage optimization (only cpu for now).
 - Original `txt2img` and `img2img` mode
 - Negative prompt
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
 - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
-- Latent Consistency Models support(LCM/LCM-LoRA)
+- Latent Consistency Models support (LCM/LCM-LoRA)
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -40,10 +43,11 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 ### TODO
 
 - [ ] More sampling methods
-- [ ] GPU support
 - [ ] Make inference faster
     - The current implementation of ggml_conv_2d is slow and has high memory usage
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
+- [ ] Implement BPE Tokenizer
+- [ ] Add [TAESD](https://github.com/madebyollin/taesd) for faster VAE decoding
 - [ ] k-quants support
 
 ## Usage
@@ -77,24 +81,20 @@ git submodule update
     # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-2-1/blob/main/v2-1_768-nonema-pruned.safetensors
     ```
 
-- convert weights to ggml model format
+- convert weights to gguf model format
 
     ```shell
-    cd models
-    pip install -r requirements.txt
-    # (optional) python convert_diffusers_to_original_stable_diffusion.py --model_path [path to diffusers weights] --checkpoint_path [path to weights]
-    python convert.py [path to weights] --out_type [output precision]
-    # For example, python convert.py sd-v1-4.ckpt --out_type f16
+    ./bin/convert sd-v1-4.ckpt -t f16
     ```
 
 ### Quantization
 
-You can specify the output model format using the --out_type parameter
+You can specify the output model format using the `--type` or `-t` parameter
 
 - `f16` for 16-bit floating-point
 - `f32` for 32-bit floating-point
-- `q8_0` for 8-bit integer quantization 
-- `q5_0` or `q5_1` for 5-bit integer quantization 
+- `q8_0` for 8-bit integer quantization
+- `q5_0` or `q5_1` for 5-bit integer quantization
 - `q4_0` or `q4_1` for 4-bit integer quantization
 
 ### Build
@@ -112,6 +112,24 @@ cmake --build . --config Release
 
 ```
 cmake .. -DGGML_OPENBLAS=ON
+cmake --build . --config Release
+```
+
+##### Using CUBLAS
+
+This provides BLAS acceleration using the CUDA cores of your Nvidia GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from here: [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads). Recommended to have at least 4 GB of VRAM.
+
+```
+cmake .. -DSD_CUBLAS=ON
+cmake --build . --config Release
+```
+
+### Using Flash Attention
+
+Enabling flash attention reduces memory usage by at least 400 MB. At the moment, it is not supported when CUBLAS is enabled because the kernel implementation is missing.
+
+```
+cmake .. -DSD_FLASH_ATTN=ON
 cmake --build . --config Release
 ```
 
@@ -141,6 +159,7 @@ arguments:
   --steps  STEPS                     number of sample steps (default: 20)
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
+  -b, --batch-count COUNT            number of images to generate.
   --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)
   -v, --verbose                      print extra info
 ```
@@ -148,7 +167,7 @@ arguments:
 #### txt2img example
 
 ```
-./bin/sd -m ../models/sd-v1-4-ggml-model-f16.bin -p "a lovely cat"
+./bin/sd -m ../sd-v1-4-f16.gguf -p "a lovely cat"
 ```
 
 Using formats of different precisions will yield results of varying quality.
@@ -163,7 +182,7 @@ Using formats of different precisions will yield results of varying quality.
 
 
 ```
-./bin/sd --mode img2img -m ../models/sd-v1-4-ggml-model-f16.bin -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
+./bin/sd --mode img2img -m ../models/sd-v1-4-f16.gguf -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
 ```
 
 <p align="center">
@@ -172,12 +191,11 @@ Using formats of different precisions will yield results of varying quality.
 
 #### with LoRA
 
-- convert lora weights to ggml model format
+- convert lora weights to gguf model format
 
     ```shell
-    cd models
-    python convert.py [path to weights] --lora
-    # For example, python convert.py marblesh.safetensors
+    bin/convert [lora path] -t f16
+    # For example,  bin/convert marblesh.safetensors -t f16
     ```
 
 - You can specify the directory where the lora weights are stored via `--lora-model-dir`. If not specified, the default is the current working directory.
@@ -187,10 +205,10 @@ Using formats of different precisions will yield results of varying quality.
 Here's a simple example:
 
 ```
-./bin/sd -m ../models/v1-5-pruned-emaonly-ggml-model-f16.bin -p "a lovely cat<lora:marblesh:1>" --lora-model-dir ../models
+./bin/sd -m ../models/v1-5-pruned-emaonly-f16.gguf -p "a lovely cat<lora:marblesh:1>" --lora-model-dir ../models
 ```
 
-`../models/marblesh-ggml-lora.bin` will be applied to the model
+`../models/marblesh.gguf` will be applied to the model
 
 #### LCM/LCM-LoRA
 
@@ -201,7 +219,7 @@ Here's a simple example:
 Here's a simple example:
 
 ```
-./bin/sd -m ../models/v1-5-pruned-emaonly-ggml-model-f16.bin -p "a lovely cat<lora:lcm-lora-sdv1-5:1>" --steps 4 --lora-model-dir ../models -v --cfg-scale 1
+./bin/sd -m ../models/v1-5-pruned-emaonly-f16.gguf -p "a lovely cat<lora:lcm-lora-sdv1-5:1>" --steps 4 --lora-model-dir ../models -v --cfg-scale 1
 ```
 
 | without LCM-LoRA (--cfg-scale 7)  | with LCM-LoRA (--cfg-scale 1)  |
@@ -222,7 +240,7 @@ docker build -t sd .
 ```shell
 docker run -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
 # For example
-# docker run -v ./models:/models -v ./build:/output sd -m /models/sd-v1-4-ggml-model-f16.bin -p "a lovely cat" -v -o /output/output.png
+# docker run -v ./models:/models -v ./build:/output sd -m /models/sd-v1-4-f16.gguf -p "a lovely cat" -v -o /output/output.png
 ```
 
 ## Memory/Disk Requirements
@@ -230,7 +248,8 @@ docker run -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
 | precision | f32  | f16  |q8_0  |q5_0  |q5_1  |q4_0  |q4_1  |
 | ----         | ----  |----  |----  |----  |----  |----  |----  |
 |  **Disk**        | 2.7G | 2.0G | 1.7G | 1.6G | 1.6G | 1.5G | 1.5G |
-|  **Memory**(txt2img - 512 x 512) | ~2.8G | ~2.3G | ~2.1G | ~2.0G | ~2.0G | ~2.0G | ~2.0G |
+|  **Memory** (txt2img - 512 x 512) | ~2.8G | ~2.3G | ~2.1G | ~2.0G | ~2.0G | ~2.0G | ~2.0G |
+|  **Memory** (txt2img - 512 x 512) *with Flash Attention* | ~2.4G | ~1.9G | ~1.6G | ~1.5G | ~1.5G | ~1.5G | ~1.5G |
 
 ## Contributors
 
