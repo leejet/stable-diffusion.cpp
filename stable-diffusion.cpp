@@ -5461,9 +5461,10 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
-        LOG_INFO("generating image: %i/%i", b + 1, batch_count);
+        int cur_seed = seed + b;
+        LOG_INFO("generating image: %i/%i - seed %i", b + 1, batch_count, cur_seed);
 
-        sd->rng->manual_seed(seed + b);
+        sd->rng->manual_seed(cur_seed);
         struct ggml_tensor* x_t = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
         ggml_tensor_set_f32_randn(x_t, sd->rng);
 

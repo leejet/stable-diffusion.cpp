@@ -8,6 +8,6 @@ test/
 *.bin
 *.exe
 *.gguf
-output.png
+output*.png
 models/*
 !taesd-model.gguf
