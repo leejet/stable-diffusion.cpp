@@ -4609,7 +4609,7 @@ public:
 
 /*================================================= StableDiffusion ==================================================*/
 
-StableDiffusion::StableDiffusion(int n_threads,
+void StableDiffusion::setup(int n_threads,
                                  bool vae_decode_only,
                                  bool free_params_immediately,
                                  std::string lora_model_dir,
