@@ -5585,7 +5585,7 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
         sd->diffusion_model.destroy();
     }
 
-    struct ggml_tensor* img = sd->compute_first_stage(work_ctx, init_latent, true);
+    struct ggml_tensor* img = sd->compute_first_stage(work_ctx, x_0, true);
     if (img != NULL) {
         result.push_back(ggml_to_image_vec(img));
     }
