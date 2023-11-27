@@ -32,7 +32,7 @@ struct SDParams {
     RNGType rng_type           = CUDA_RNG;
     int64_t seed               = 42;
     bool verbose               = false;
-    bool use_taesd             = false;
+    std::string taesd_model_path;
 };
 
 void print_params(SDParams params);

@@ -3943,6 +3943,9 @@ bool load_taesd(TinyAutoEncoder & taesd, const char* file_path, ggml_backend_t b
         if (taesd_tensors.find(name) != taesd_tensors.end()) {
             real = taesd_tensors[name];
         } else {
+            if(name.find(".encoder.") != std::string::npos && taesd.decode_only) {
+                continue;
+            }
             LOG_ERROR("unknown tensor '%s' in model file", name.data());
             continue;
         }
@@ -4375,6 +4378,7 @@ public:
     ggml_type model_data_type          = GGML_TYPE_COUNT;
 
     TinyAutoEncoder tae_first_stage;
+    std::string taesd_path;
 
     StableDiffusionGGML() = default;
 
@@ -4388,6 +4392,7 @@ public:
           free_params_immediately(free_params_immediately),
           lora_model_dir(lora_model_dir) {
         first_stage_model.decode_only = vae_decode_only;
+        tae_first_stage.decode_only = vae_decode_only;
         if (rng_type == STD_DEFAULT_RNG) {
             rng = std::make_shared<STDDefaultRNG>();
         } else if (rng_type == CUDA_RNG) {
@@ -4685,7 +4690,7 @@ public:
         }
         LOG_DEBUG("finished loaded file");
         if(use_tiny_autoencoder) {
-            return load_taesd(tae_first_stage, "taesd-decoder.gguf", backend);
+            return load_taesd(tae_first_stage, taesd_path.c_str(), backend);
         }
         return true;
     }
@@ -5319,7 +5324,7 @@ public:
         ggml_tensor* result = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32,
                                                  decode ? (W * 8) : (W / 8),  // width
                                                  decode ? (H * 8) : (H / 8),  // height
-                                                 decode ? 3 : 8);             // channels
+                                                 decode ? 3 : (use_tiny_autoencoder ? 4 : 8)); // channels
         int64_t t0          = ggml_time_ms();
         if(!use_tiny_autoencoder) {
             first_stage_model.begin(x, decode);
@@ -5331,10 +5336,12 @@ public:
             tae_first_stage.end();
             // Source: https://github.com/comfyanonymous/ComfyUI/blob/master/latent_preview.py
             // x_sample = x_sample.sub(0.5).mul(2)
-            float* result_data = (float*)result->data;
-            int ne = ggml_nelements(result);
-            for(int i = 0; i < ne; i++) {
-                result_data[i] = (result_data[i] - 0.5f) * 2.0f;
+            if(decode) {
+                float* result_data = (float*)result->data;
+                int ne = ggml_nelements(result);
+                for(int i = 0; i < ne; i++) {
+                    result_data[i] = (result_data[i] - 0.5f) * 2.0f;
+                }
             }
         }
         int64_t t1 = ggml_time_ms();
@@ -5347,7 +5354,7 @@ public:
 
 StableDiffusion::StableDiffusion(int n_threads,
                                  bool vae_decode_only,
-                                 bool tiny_autoencoder,
+                                 std::string  taesd_path,
                                  bool free_params_immediately,
                                  std::string lora_model_dir,
                                  RNGType rng_type) {
@@ -5356,7 +5363,8 @@ StableDiffusion::StableDiffusion(int n_threads,
                                                free_params_immediately,
                                                lora_model_dir,
                                                rng_type);
-    sd->use_tiny_autoencoder = tiny_autoencoder;
+    sd->use_tiny_autoencoder = taesd_path.size() > 0;
+    sd->taesd_path = taesd_path;
 }
 
 bool StableDiffusion::load_from_file(const std::string& file_path, Schedule s) {
@@ -5532,8 +5540,14 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
     image_vec_to_ggml(init_img_data, init_img);
 
     t0                       = ggml_time_ms();
-    ggml_tensor* moments     = sd->compute_first_stage(work_ctx, init_img, false);
-    ggml_tensor* init_latent = sd->get_first_stage_encoding(work_ctx, moments);
+    
+    ggml_tensor* init_latent = NULL;
+    if(!sd->use_tiny_autoencoder) {
+        ggml_tensor* moments     = sd->compute_first_stage(work_ctx, init_img, false);
+        init_latent = sd->get_first_stage_encoding(work_ctx, moments);
+    } else {
+        init_latent = sd->compute_first_stage(work_ctx, init_img, false);
+    }
     // print_ggml_tensor(init_latent);
     t1 = ggml_time_ms();
     LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);

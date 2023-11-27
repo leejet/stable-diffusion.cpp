@@ -170,7 +170,7 @@ struct ConvertParams {
 
     // VAE
     bool vae = false;
-    TinyAutoEncoderType taesd_type = TAE_NONE;
+    bool taesd = false;
 };
 
 struct Tensor {
@@ -187,6 +187,7 @@ struct Tensor {
     int32_t ptr_idx          = -1;
     DataPointerType ptr_type = CHECKPOINT;
     TensorTarget target      = NONE;
+    TinyAutoEncoderType taesd_type = TAE_NONE;
 
     Tensor() {}
 
@@ -940,7 +941,7 @@ void preprocess_tensors(
                 }
             } else if (name.find("model.diffusion_model.") == std::string::npos && tensor.target == UNET) {
                 tensor.name = "model.diffusion_model." + name;
-            } else if (name.find("first_stage_model.") == std::string::npos && tensor.target == VAE) {
+            } else if (name.find("first_stage_model.") == std::string::npos && tensor.target == VAE && tensor.taesd_type == TAE_NONE) {
                 tensor.name = "first_stage_model." + name;
             }
         }
@@ -949,9 +950,9 @@ void preprocess_tensors(
             tensor.name = convert_vae_to_original(tensor.name, params);
             if (params.vae && name.find("first_stage_model.") == std::string::npos) {
                 std::string tae = "";
-                if(params.taesd_type == TAE_DECODER) {
+                if(tensor.taesd_type == TAE_DECODER) {
                     tae = "decoder.";
-                } else if(params.taesd_type == TAE_ENCODER) {
+                } else if(tensor.taesd_type == TAE_ENCODER) {
                     tae = "encoder.";
                 }
                 tensor.name = "first_stage_model." + tae + tensor.name;
@@ -1210,12 +1211,16 @@ void convert_to_gguf(TensorMap& tensors, ConvertParams& params) {
            num_vae_tensors);
     if (params.output_path.empty()) {
         size_t last       = params.model_path.find_last_of("/\\");
-        params.model_name = params.model_path.substr(last + 1);
-        last              = params.from_folder ? params.model_name.length() : params.model_name.find_last_of(".");
-        if (!params.lora) {
-            params.output_path = params.model_name.substr(0, last) + "-" + ggml_type_name(params.out_type) + ".gguf";
+        if(params.model_name.empty()){
+            params.model_name = params.model_path.substr(last + 1);
+            last              = params.from_folder ? params.model_name.length() : params.model_name.find_last_of(".");
+            if (!params.lora) {
+                params.output_path = params.model_name.substr(0, last) + "-" + ggml_type_name(params.out_type) + ".gguf";
+            } else {
+                params.output_path = params.model_name.substr(0, last) + ".gguf";
+            }
         } else {
-            params.output_path = params.model_name.substr(0, last) + ".gguf";
+            params.output_path = params.model_name + ".gguf";
         }
     }
     gguf_write_to_file(g_ctx, params.output_path.c_str(), false, true);
@@ -1250,7 +1255,7 @@ void load_checkpoint(const char* file_name, TensorMap& tensors, ConvertParams& p
     params.pkl_fp.push_back(zip);
 }
 
-void load_safetensors(FILE* fp, int64_t metadata_size, TensorMap& tensors, ConvertParams& params, bool root_model, TensorTarget target = NONE) {
+void load_safetensors(FILE* fp, int64_t metadata_size, TensorMap& tensors, ConvertParams& params, bool root_model, TensorTarget target = NONE, TinyAutoEncoderType tae_type = TAE_NONE) {
     std::fseek(fp, 8, SEEK_SET);  // from begin
 
     char* metadata_buffer = new char[metadata_size + 1];
@@ -1327,6 +1332,7 @@ void load_safetensors(FILE* fp, int64_t metadata_size, TensorMap& tensors, Conve
             tensor.name    = tensor_name;
             tensor.n_dims  = n_dims;
             tensor.ptr_idx = (int)params.sf_fp.size();
+            tensor.taesd_type = tae_type;
             if (target != NONE) {
                 tensor.target = target;
             } else if (params.merge_custom_vae) {
@@ -1385,7 +1391,7 @@ void load_safetensors(FILE* fp, int64_t metadata_size, TensorMap& tensors, Conve
     params.sf_fp.push_back(fp);
 }
 
-void load_tensors_from_model(std::string path, TensorMap& tensors, ConvertParams& params, bool root_model, TensorTarget target = NONE) {
+void load_tensors_from_model(std::string path, TensorMap& tensors, ConvertParams& params, bool root_model, TensorTarget target = NONE, TinyAutoEncoderType tae_type = TAE_NONE) {
     // check if the model is safetensor or pytorch checkpoint
     FILE* fp = std::fopen(path.c_str(), "rb");
     if (!fp) {
@@ -1419,7 +1425,7 @@ void load_tensors_from_model(std::string path, TensorMap& tensors, ConvertParams
     printf("loading model '%s'\n", path.c_str());
     printf("model type: %s\n", safe_tensor ? "safetensors" : "checkpoint");
     if (safe_tensor) {
-        load_safetensors(fp, safe_tensor_metadata_size, tensors, params, root_model, target);
+        load_safetensors(fp, safe_tensor_metadata_size, tensors, params, root_model, target, tae_type);
     } else {
         load_checkpoint(params.model_path.c_str(), tensors, params, root_model, target);
     }
@@ -1427,9 +1433,12 @@ void load_tensors_from_model(std::string path, TensorMap& tensors, ConvertParams
 
 void convert_model(ConvertParams& params) {
     TensorMap loaded_tensors;
-    size_t last       = params.model_path.find_last_of("/\\");
-    params.model_name = params.model_path.substr(last + 1);
+    if(params.model_name.empty()) {
+        size_t last       = params.model_path.find_last_of("/\\");
+        params.model_name = params.model_path.substr(last + 1);
+    }
     if (params.from_folder) {
+        printf("loading diffusers model\n");
         // Hardcoded in https://github.com/huggingface/diffusers/blob/main/scripts/convert_diffusers_to_original_stable_diffusion.py
         std::string diff_clip_path = params.model_path + "/text_encoder/model.safetensors";
         std::string diff_unet_path = params.model_path + "/unet/diffusion_pytorch_model.safetensors";
@@ -1452,6 +1461,23 @@ void convert_model(ConvertParams& params) {
             printf("ERROR: missing VAE model: %s\n", diff_vae_path.c_str());
             exit(0);
         }
+    } else if(params.taesd) {
+        // hardcode due models must have this name https://huggingface.co/madebyollin/taesd/tree/main
+        std::string diff_taesd_encoder = params.model_path + "/taesd_encoder.safetensors";
+        std::string diff_taesd_decoder = params.model_path + "/taesd_decoder.safetensors";
+        if (file_exists(diff_taesd_encoder)) {
+            load_tensors_from_model(diff_taesd_encoder, loaded_tensors, params, true, VAE, TAE_ENCODER);
+        } else {
+            printf("ERROR: missing Encoder: %s\n", diff_taesd_encoder.c_str());
+            exit(0);
+        }
+        if (file_exists(diff_taesd_decoder)) {
+            load_tensors_from_model(diff_taesd_decoder, loaded_tensors, params, true, VAE, TAE_DECODER);
+        } else {
+            printf("ERROR: missing Decoder: %s\n", diff_taesd_decoder.c_str());
+            exit(0);
+        }
+        params.vae = true;
     } else {
         load_tensors_from_model(params.model_path.c_str(), loaded_tensors, params, true);
         if (params.merge_custom_vae) {
@@ -1483,7 +1509,6 @@ bool parse_params(int argc, const char* argv[], ConvertParams& params) {
         if (params.model_path.size() > 0 && params.model_path.back() == '/') {
             params.model_path.pop_back();
         }
-        printf("loading diffusers model\n");
     }
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
@@ -1514,20 +1539,10 @@ bool parse_params(int argc, const char* argv[], ConvertParams& params) {
                 printf("merge custom vae '%s'\n", params.custom_vae_path.c_str());
             }
         } else if (arg == "--taesd") {
-            if (++i >= argc) {
-                printf("specify the type of taesd model (decoder, encoder)\n");
-                exit(1);
-            }
-            std::string type = argv[i];
-            if(type  == "decoder") {
-                params.taesd_type = TAE_DECODER;
-            } else if(type  == "encoder") {
-                params.taesd_type = TAE_ENCODER;
-            } else {
-                printf("specify the type of taesd model (decoder, encoder)\n");
-                exit(1);
-            }
-            params.vae = true;
+            params.taesd = true;
+            params.from_folder = false;
+            params.model_name = "taesd-model";
+            printf("TAESD Merge\nChecking the taesd_encoder.safetensors and taesd_decoder.safetensors\n     from https://huggingface.co/madebyollin/taesd/tree/main\n");
         } else if (arg == "--type" || arg == "-t") {
             if (++i >= argc) {
                 printf("specify the output format\n");

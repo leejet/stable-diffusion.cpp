@@ -49,7 +49,7 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    StableDiffusion sd(params.n_threads, vae_decode_only, params.use_taesd, true, params.lora_model_dir, params.rng_type);
+    StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_model_path, true, params.lora_model_dir, params.rng_type);
 
     if (!sd.load_from_file(params.model_path, params.schedule)) {
         return 1;

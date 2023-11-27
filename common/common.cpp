@@ -129,7 +129,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate.\n");
     printf("  --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)\n");
-    printf("  --taesd                            use Tiny AutoEncoder for fast decoding (low quality)\n");
+    printf("  --taesd TAESD_PATH                 path of taesd-model.gguf. use Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -295,7 +295,11 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
         } else if (arg == "--taesd") {
-            params.use_taesd = true;
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.taesd_model_path = argv[i];
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
