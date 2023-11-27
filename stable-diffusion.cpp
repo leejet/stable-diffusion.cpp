@@ -5331,16 +5331,24 @@ public:
             first_stage_model.compute(result, n_threads, x, decode);
             first_stage_model.end();
         } else {
+            // Source: https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/vae.py
+            // image_raw = x.add(1).div(2)
+            if(!decode) {
+                float* x_data = (float*)x->data;
+                int ne = ggml_nelements(result);
+                for(int i = 0; i < ne; i++) {
+                    x_data[i] = (x_data[i] + 1.0f) * 0.5f;
+                }
+            }
             tae_first_stage.begin(x, decode);
             tae_first_stage.compute(result, n_threads, x, decode);
             tae_first_stage.end();
-            // Source: https://github.com/comfyanonymous/ComfyUI/blob/master/latent_preview.py
-            // x_sample = x_sample.sub(0.5).mul(2)
+            // x_sample = x.mul(2).sub(1)
             if(decode) {
                 float* result_data = (float*)result->data;
                 int ne = ggml_nelements(result);
                 for(int i = 0; i < ne; i++) {
-                    result_data[i] = (result_data[i] - 0.5f) * 2.0f;
+                    result_data[i] = (result_data[i] * 2.0f) - 1.0f;
                 }
             }
         }
@@ -5577,7 +5585,7 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
         sd->diffusion_model.destroy();
     }
 
-    struct ggml_tensor* img = sd->compute_first_stage(work_ctx, x_0, true);
+    struct ggml_tensor* img = sd->compute_first_stage(work_ctx, init_latent, true);
     if (img != NULL) {
         result.push_back(ggml_to_image_vec(img));
     }
