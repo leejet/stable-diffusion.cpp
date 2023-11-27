@@ -187,7 +187,6 @@ struct Tensor {
     int32_t ptr_idx          = -1;
     DataPointerType ptr_type = CHECKPOINT;
     TensorTarget target      = NONE;
-    TinyAutoEncoderType taesd_type = TAE_NONE;
 
     Tensor() {}
 
@@ -941,7 +940,7 @@ void preprocess_tensors(
                 }
             } else if (name.find("model.diffusion_model.") == std::string::npos && tensor.target == UNET) {
                 tensor.name = "model.diffusion_model." + name;
-            } else if (name.find("first_stage_model.") == std::string::npos && tensor.target == VAE && tensor.taesd_type == TAE_NONE) {
+            } else if (name.find("first_stage_model.") == std::string::npos && tensor.target == VAE) {
                 tensor.name = "first_stage_model." + name;
             }
         }
@@ -949,13 +948,7 @@ void preprocess_tensors(
         if (tensor.target == VAE) {
             tensor.name = convert_vae_to_original(tensor.name, params);
             if (params.vae && name.find("first_stage_model.") == std::string::npos) {
-                std::string tae = "";
-                if(tensor.taesd_type == TAE_DECODER) {
-                    tae = "decoder.";
-                } else if(tensor.taesd_type == TAE_ENCODER) {
-                    tae = "encoder.";
-                }
-                tensor.name = "first_stage_model." + tae + tensor.name;
+                tensor.name = "first_stage_model." + tensor.name;
             }
 
             // convert vae attn block linear to conv2d 1x1
@@ -1332,7 +1325,15 @@ void load_safetensors(FILE* fp, int64_t metadata_size, TensorMap& tensors, Conve
             tensor.name    = tensor_name;
             tensor.n_dims  = n_dims;
             tensor.ptr_idx = (int)params.sf_fp.size();
-            tensor.taesd_type = tae_type;
+            if(tae_type != TAE_NONE) {
+                 std::string tae = "";
+                if(tae_type == TAE_DECODER) {
+                    tae = "decoder.";
+                } else if(tae_type == TAE_ENCODER) {
+                    tae = "encoder.";
+                }
+                tensor.name = "first_stage_model." + tae + tensor.name;
+            }
             if (target != NONE) {
                 tensor.target = target;
             } else if (params.merge_custom_vae) {
@@ -1383,7 +1384,7 @@ void load_safetensors(FILE* fp, int64_t metadata_size, TensorMap& tensors, Conve
 
             tensor.num_elements  = (int32_t)tensor.data_size / (int32_t)ggml_type_size(tensor.dtype);
             tensor.data_offset   = data_begin + start_data;
-            tensors[tensor_name] = tensor;
+            tensors[tensor.name] = tensor;
         }
     }
 

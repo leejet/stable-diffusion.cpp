@@ -10,4 +10,4 @@ test/
 *.gguf
 output.png
 models/*
-taesd-model.gguf
+!taesd-model.gguf
