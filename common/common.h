@@ -40,4 +40,4 @@ void print_usage(int argc, const char* argv[]);
 
 void parse_args(int argc, const char** argv, SDParams& params);
 
-const char* get_image_params(SDParams params, int seed);
+std::string get_image_params(SDParams params, int seed);

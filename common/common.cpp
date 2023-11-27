@@ -370,7 +370,7 @@ std::string basename(const std::string& path) {
     return path;
 }
 
-const char* get_image_params(SDParams params, int seed) {
+std::string get_image_params(SDParams params, int seed) {
     std::string parameter_string = params.prompt + "\n";
     if (params.negative_prompt.size() != 0) {
         parameter_string += "Negative prompt: " + params.negative_prompt + "\n";
@@ -387,5 +387,5 @@ const char* get_image_params(SDParams params, int seed) {
     }
     parameter_string += ", ";
     parameter_string += "Version: stable-diffusion.cpp";
-    return parameter_string.c_str();
+    return parameter_string;
 }
