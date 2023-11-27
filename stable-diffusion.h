@@ -42,7 +42,7 @@ private:
     std::shared_ptr<StableDiffusionGGML> sd;
 
 public:
-    void setup(int n_threads                = -1,
+    StableDiffusion(int n_threads                = -1,
                     bool vae_decode_only         = false,
                     bool free_params_immediately = false,
                     std::string lora_model_dir   = "",
