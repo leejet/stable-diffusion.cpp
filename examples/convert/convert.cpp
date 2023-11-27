@@ -1203,8 +1203,8 @@ void convert_to_gguf(TensorMap& tensors, ConvertParams& params) {
            num_unet_tensors,
            num_vae_tensors);
     if (params.output_path.empty()) {
-        size_t last       = params.model_path.find_last_of("/\\");
-        if(params.model_name.empty()){
+        if(!params.taesd) {
+            size_t last       = params.model_path.find_last_of("/\\");
             params.model_name = params.model_path.substr(last + 1);
             last              = params.from_folder ? params.model_name.length() : params.model_name.find_last_of(".");
             if (!params.lora) {
@@ -1400,7 +1400,7 @@ void load_tensors_from_model(std::string path, TensorMap& tensors, ConvertParams
         return;
     }
     std::fseek(fp, 0, SEEK_END);
-    size_t file_size = ftell(fp);
+    long file_size = ftell(fp);
     // return to begin
     std::fseek(fp, 0, SEEK_SET);
     // read first 9 bytes
@@ -1410,8 +1410,7 @@ void load_tensors_from_model(std::string path, TensorMap& tensors, ConvertParams
     bool safe_tensor                  = false;
     if (
         buffer_[8] == '{' &&
-        safe_tensor_metadata_size > 0 &&
-        safe_tensor_metadata_size < (int64_t)file_size) {  // begin safetensor metadata
+        safe_tensor_metadata_size > 0 && ((int64_t)file_size <= 0 || safe_tensor_metadata_size < (int64_t)file_size)) {  // begin safetensor metadata
         size_t offset = safe_tensor_metadata_size + /* long */ 8L - 1L;
 #ifdef _WIN32
         _fseeki64(fp, (__int64)offset, SEEK_SET);
