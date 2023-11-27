@@ -48,6 +48,9 @@ add_subdirectory(ggml)
 set(SD_LIB stable-diffusion)
 
 add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp)
+set_target_properties(${SD_LIB} PROPERTIES
+        BUILD_WITH_INSTALL_RPATH FALSE
+        LINK_FLAGS "-Wl,-rpath,$ORIGIN/")
 target_link_libraries(${SD_LIB} PUBLIC ggml)
 target_include_directories(${SD_LIB} PUBLIC .)
 target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
