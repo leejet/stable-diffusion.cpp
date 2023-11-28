@@ -5405,6 +5405,10 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
                                                int64_t seed,
                                                int batch_count) {
     std::vector<uint8_t*> results;
+    if(width >= 1024 || height >= 1024) { // 1024 x 1024 images
+        LOG_WARN("Image too large, try a smaller size.");
+        return results;
+    }
     // extract and remove lora
     auto result_pair                                = extract_and_remove_lora(prompt);
     std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
@@ -5608,7 +5612,7 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
     int64_t t4 = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
 
-    if (sd->free_params_immediately) {
+    if (sd->free_params_immediately && !sd->use_tiny_autoencoder) {
         sd->first_stage_model.destroy();
     }
 

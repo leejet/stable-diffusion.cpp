@@ -23,6 +23,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
 - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
 - Latent Consistency Models support (LCM/LCM-LoRA)
+- Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -45,9 +46,10 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] More sampling methods
 - [ ] Make inference faster
     - The current implementation of ggml_conv_2d is slow and has high memory usage
+    - Implement Winograd Convolution 2D for 3x3 kernel filtering
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
 - [ ] Implement BPE Tokenizer
-- [ ] Add [TAESD](https://github.com/madebyollin/taesd) for faster VAE decoding
+- [ ] Implement [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN/tree/master) upscaler
 - [ ] k-quants support
 
 ## Usage
@@ -146,7 +148,7 @@ arguments:
   -m, --model [MODEL]                path to model
   --lora-model-dir [DIR]             lora model directory
   -i, --init-img [IMAGE]             path to the input image, required by img2img
-  -o, --output OUTPUT                path to write result image to (default: .\output.png)
+  -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
   --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)
@@ -161,6 +163,7 @@ arguments:
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate.
   --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)
+  --taesd TAESD_PATH                 path of taesd-model.gguf. use Tiny AutoEncoder for fast decoding (low quality)
   -v, --verbose                      print extra info
 ```
 
