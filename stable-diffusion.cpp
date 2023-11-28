@@ -2260,7 +2260,7 @@ struct UNetModel {
         h = ggml_add(ctx0,
                      h,
                      ggml_reshape_4d(ctx0, input_block_0_b, 1, 1, input_block_0_b->ne[0], 1));  // [N, model_channels, h, w]
-        ggml_set_name(h, "b-start");
+        ggml_set_name(h, "bench-start");
         hs.push_back(h);
         // input block 1-11
         int len_mults = sizeof(channel_mult) / sizeof(int);
@@ -2321,7 +2321,7 @@ struct UNetModel {
         h = ggml_conv_2d(ctx0, out_2_w, h, 1, 1, 1, 1, 1, 1);
         h = ggml_add(ctx0,
                      h, ggml_reshape_4d(ctx0, out_2_b, 1, 1, out_2_b->ne[0], 1));  // [N, out_channels, h, w]
-        ggml_set_name(h, "b-end");
+        ggml_set_name(h, "bench-end");
         return h;
     }
 
@@ -3204,9 +3204,9 @@ struct AutoEncoderKL {
         auto h = ggml_conv_2d(ctx0, post_quant_conv_w, z, 1, 1, 0, 0, 1, 1);
         h      = ggml_add(ctx0,
                           h, ggml_reshape_4d(ctx0, post_quant_conv_b, 1, 1, post_quant_conv_b->ne[0], 1));  // [N, z_channels, h, w]
-        ggml_set_name(h, "b-start");
+        ggml_set_name(h, "bench-start");
         h = decoder.forward(ctx0, h);
-        ggml_set_name(h, "b-end");
+        ggml_set_name(h, "bench-end");
         return h;
     }
 
