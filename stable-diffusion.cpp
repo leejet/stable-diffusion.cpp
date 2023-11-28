@@ -5405,7 +5405,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
                                                int64_t seed,
                                                int batch_count) {
     std::vector<uint8_t*> results;
-    if(width >= 1024 || height >= 1024) { // 1024 x 1024 images
+    if(width >= 1024 && height >= 1024) { // 1024 x 1024 images
         LOG_WARN("Image too large, try a smaller size.");
         return results;
     }
