@@ -16,7 +16,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
 - SD1.x and SD2.x support
-- Full CUDA backend for GPU acceleration, for now just for float16 and float32 models. There are some issues with quantized models and CUDA; it will be fixed in the future.
+- Full CUDA backend for GPU acceleration.
 - Flash Attention for memory usage optimization (only cpu for now).
 - Original `txt2img` and `img2img` mode
 - Negative prompt
