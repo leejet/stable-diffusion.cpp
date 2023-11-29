@@ -9,5 +9,5 @@ test/
 *.exe
 *.gguf
 output*.png
-models/*
+models*
 !taesd-model.gguf
