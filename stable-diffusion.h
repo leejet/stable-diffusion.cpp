@@ -1,6 +1,7 @@
 #ifndef __STABLE_DIFFUSION_H__
 #define __STABLE_DIFFUSION_H__
 
+#include <string>
 #include <memory>
 #include <vector>
 
