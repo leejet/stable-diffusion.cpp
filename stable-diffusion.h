@@ -4,13 +4,6 @@
 #include <memory>
 #include <vector>
 
-enum SDLogLevel {
-    DEBUG,
-    INFO,
-    WARN,
-    ERROR
-};
-
 enum RNGType {
     STD_DEFAULT_RNG,
     CUDA_RNG
@@ -47,7 +40,10 @@ public:
                     bool free_params_immediately = false,
                     std::string lora_model_dir   = "",
                     RNGType rng_type             = STD_DEFAULT_RNG);
-    bool load_from_file(const std::string& file_path, Schedule d = DEFAULT);
+    bool load_from_file(const std::string& model_path,
+                        const std::string& vae_path,
+                        ggml_type wtype,
+                        Schedule d = DEFAULT);
     std::vector<uint8_t*> txt2img(
         std::string prompt,
         std::string negative_prompt,
@@ -72,7 +68,6 @@ public:
         int64_t seed);
 };
 
-void set_sd_log_level(SDLogLevel level);
 std::string sd_get_system_info();
 
 #endif  // __STABLE_DIFFUSION_H__

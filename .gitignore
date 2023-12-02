@@ -8,5 +8,6 @@ test/
 *.bin
 *.exe
 *.gguf
+*.log
 output.png
-models/*
+models/
