@@ -25,7 +25,7 @@ endif()
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_CUBLAS                     "sd: cuda backend" OFF)
-option(SD_FLASH_ATTN            "sd: use flash attention for x4 less memory usage" OFF)
+option(SD_FLASH_ATTN                 "sd: use flash attention for x4 less memory usage" OFF)
 option(BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
@@ -45,14 +45,15 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 # deps
 add_subdirectory(ggml)
 
+add_subdirectory(thirdparty)
+
 set(SD_LIB stable-diffusion)
 
-add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp)
-target_link_libraries(${SD_LIB} PUBLIC ggml)
-target_include_directories(${SD_LIB} PUBLIC .)
+add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp model.h model.cpp util.h util.cpp)
+target_link_libraries(${SD_LIB} PUBLIC ggml zip)
+target_include_directories(${SD_LIB} PUBLIC . thirdparty)
 target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
 
-add_subdirectory(common)
 
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)

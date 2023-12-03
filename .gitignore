@@ -8,6 +8,12 @@ test/
 *.bin
 *.exe
 *.gguf
+<<<<<<< HEAD
 output*.png
 models*
 !taesd-model.gguf
+=======
+*.log
+output.png
+models/
+>>>>>>> master

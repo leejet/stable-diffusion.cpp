@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <inttypes.h>
+#include <stdarg.h>
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -22,61 +23,24 @@
 #include "ggml-cuda.h"
 #endif
 
+#include "model.h"
 #include "rng.h"
 #include "rng_philox.h"
 #include "stable-diffusion.h"
+#include "util.h"
 
 #define EPS 1e-05f
-
-static SDLogLevel log_level = SDLogLevel::INFO;
 
 #define UNET_GRAPH_SIZE 3328
 #define LORA_GRAPH_SIZE 4096
 
-#define __FILENAME__ "stable-diffusion.cpp"
-#define SD_LOG(level, format, ...)                                                                    \
-    do {                                                                                              \
-        if (level < log_level) {                                                                      \
-            break;                                                                                    \
-        }                                                                                             \
-        if (level == SDLogLevel::DEBUG) {                                                             \
-            printf("[DEBUG] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
-            fflush(stdout);                                                                           \
-        } else if (level == SDLogLevel::INFO) {                                                       \
-            printf("[INFO]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
-            fflush(stdout);                                                                           \
-        } else if (level == SDLogLevel::WARN) {                                                       \
-            fprintf(stderr, "[WARN]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
-            fflush(stdout);                                                                           \
-        } else if (level == SDLogLevel::ERROR) {                                                      \
-            fprintf(stderr, "[ERROR] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
-            fflush(stdout);                                                                           \
-        }                                                                                             \
-    } while (0)
-
-#define LOG_DEBUG(format, ...) SD_LOG(SDLogLevel::DEBUG, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...) SD_LOG(SDLogLevel::INFO, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...) SD_LOG(SDLogLevel::WARN, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) SD_LOG(SDLogLevel::ERROR, format, ##__VA_ARGS__)
-
 #define TIMESTEPS 1000
-
-enum SDVersion {
-    VERSION_1_x,
-    VERSION_2_x,
-    VERSION_XL,
-    VERSION_COUNT,
-};
 
 const char* model_version_to_str[] = {
     "1.x",
     "2.x",
-    "XL"};
-
-const char* lora_type_to_str[] = {
-    "regular",
-    "diffusers",
-    "transformers"};
+    "XL",
+};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -86,13 +50,10 @@ const char* sampling_methods_str[] = {
     "DPM++ (2s)",
     "DPM++ (2M)",
     "modified DPM++ (2M)",
-    "LCM"};
+    "LCM",
+};
 
 /*================================================== Helper Functions ================================================*/
-
-void set_sd_log_level(SDLogLevel level) {
-    log_level = level;
-}
 
 std::string sd_get_system_info() {
     std::stringstream ss;
@@ -170,7 +131,7 @@ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false) {
     if (shape_only) {
         return;
     }
-    int range = 3;
+    int range = 1000;
     for (int i = 0; i < tensor->ne[3]; i++) {
         if (i >= range && i + range < tensor->ne[3]) {
             continue;
@@ -259,15 +220,46 @@ void sd_fread(void* ptr, size_t size, size_t count, FILE* stream) {
     }
 }
 
-void copy_ggml_tensor(
-    struct ggml_tensor* dst,
-    const struct ggml_tensor* src) {
-    dst->nb[0] = src->nb[0];
-    dst->nb[1] = src->nb[1];
-    dst->nb[2] = src->nb[2];
-    dst->nb[3] = src->nb[3];
+void copy_ggml_tensor(struct ggml_tensor* dst, struct ggml_tensor* src) {
+    if (dst->type == src->type) {
+        dst->nb[0] = src->nb[0];
+        dst->nb[1] = src->nb[1];
+        dst->nb[2] = src->nb[2];
+        dst->nb[3] = src->nb[3];
 
-    memcpy(((char*)dst->data), ((char*)src->data), ggml_nbytes(dst));
+        memcpy(((char*)dst->data), ((char*)src->data), ggml_nbytes(dst));
+        return;
+    }
+    struct ggml_init_params params;
+    params.mem_size          = 10 * 1024 * 1024;  // for padding
+    params.mem_buffer        = NULL;
+    params.no_alloc          = false;
+    struct ggml_context* ctx = ggml_init(params);
+    if (!ctx) {
+        LOG_ERROR("ggml_init() failed");
+        return;
+    }
+    ggml_tensor* final = ggml_cpy_inplace(ctx, src, dst);
+
+    struct ggml_cgraph* graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, final);
+    ggml_graph_compute_with_ctx(ctx, graph, 1);
+    ggml_free(ctx);
+}
+
+void calculate_alphas_cumprod(float* alphas_cumprod,
+                              float linear_start = 0.00085f,
+                              float linear_end   = 0.0120,
+                              int timesteps      = TIMESTEPS) {
+    float ls_sqrt = sqrtf(linear_start);
+    float le_sqrt = sqrtf(linear_end);
+    float amount  = le_sqrt - ls_sqrt;
+    float product = 1.0f;
+    for (int i = 0; i < timesteps; i++) {
+        float beta = ls_sqrt + amount * ((float)i / (timesteps - 1));
+        product *= 1.0f - powf(beta, 2.0f);
+        alphas_cumprod[i] = product;
+    }
 }
 
 // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
@@ -311,15 +303,15 @@ struct ggml_tensor* new_timestep_embedding(struct ggml_context* ctx, struct ggml
 // SPECIAL OPERATIONS WITH TENSORS
 
 uint8_t* sd_tensor_to_image(struct ggml_tensor* input) {
-    int64_t width       = input->ne[0];
-    int64_t height      = input->ne[1];
-    int64_t channels    = input->ne[2];
+    int64_t width    = input->ne[0];
+    int64_t height   = input->ne[1];
+    int64_t channels = input->ne[2];
     GGML_ASSERT(channels == 3 && input->type == GGML_TYPE_F32);
     uint8_t* image_data = (uint8_t*)malloc(width * height * channels);
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                float value = ggml_tensor_get_f32(input, ix, iy, k);
+                float value                                               = ggml_tensor_get_f32(input, ix, iy, k);
                 *(image_data + iy * width * channels + ix * channels + k) = (uint8_t)(value * 255.0f);
             }
         }
@@ -328,10 +320,10 @@ uint8_t* sd_tensor_to_image(struct ggml_tensor* input) {
 }
 
 void sd_image_to_tensor(const uint8_t* image_data,
-                       struct ggml_tensor* output) {
-    int64_t width       = output->ne[0];
-    int64_t height      = output->ne[1];
-    int64_t channels    = output->ne[2];
+                        struct ggml_tensor* output) {
+    int64_t width    = output->ne[0];
+    int64_t height   = output->ne[1];
+    int64_t channels = output->ne[2];
     GGML_ASSERT(channels == 3 && output->type == GGML_TYPE_F32);
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
@@ -342,7 +334,6 @@ void sd_image_to_tensor(const uint8_t* image_data,
         }
     }
 }
-
 
 float sd_mean(struct ggml_tensor* src) {
     float mean        = 0.0f;
@@ -367,7 +358,7 @@ void sd_clamp(struct ggml_tensor* src, float min, float max) {
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
         float val = data[i];
-        data[i] = val < min ? min : (val > max ? max : val);
+        data[i]   = val < min ? min : (val > max ? max : val);
     }
 }
 
@@ -377,7 +368,7 @@ void sd_convert_input(struct ggml_tensor* src) {
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
         float val = data[i];
-        data[i] = val * 2.0f - 1.0f;
+        data[i]   = val * 2.0f - 1.0f;
     }
 }
 
@@ -387,7 +378,7 @@ void sd_convert_output(struct ggml_tensor* src) {
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
         float val = data[i];
-        data[i] = (val + 1.0f) * 0.5f;
+        data[i]   = (val + 1.0f) * 0.5f;
     }
 }
 
@@ -419,22 +410,6 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
     }
 
     return std::make_pair(filename2multiplier, text);
-}
-
-bool ends_with(const std::string& str, const std::string& ending) {
-    if (str.length() >= ending.length()) {
-        return (str.compare(str.length() - ending.length(), ending.length(), ending) == 0);
-    } else {
-        return false;
-    }
-}
-
-void replace_all_chars(std::string& str, char target, char replacement) {
-    for (size_t i = 0; i < str.length(); ++i) {
-        if (str[i] == target) {
-            str[i] = replacement;
-        }
-    }
 }
 
 /*================================================== CLIPTokenizer ===================================================*/
@@ -3269,7 +3244,7 @@ struct AutoEncoderKL {
         struct ggml_cgraph* gf = build_graph(x, decode);
 
         // compute the required memory
-        size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf);
+        size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf) + 10 * 1024 * 1024;
 
         // recreate the allocator with the required memory
         ggml_allocr_free(compute_alloc);
@@ -3318,33 +3293,33 @@ struct TAEBlock {
     int out_channels;
 
     // conv
-    ggml_tensor* conv_0_w; // [in_channels, out_channels, 3, 3]
-    ggml_tensor* conv_0_b; // [in_channels]
-    ggml_tensor* conv_1_w; // [out_channels, out_channels, 3, 3]
-    ggml_tensor* conv_1_b; // [out_channels]
-    ggml_tensor* conv_2_w; // [out_channels, out_channels, 3, 3]
-    ggml_tensor* conv_2_b; // [out_channels]
+    ggml_tensor* conv_0_w;  // [in_channels, out_channels, 3, 3]
+    ggml_tensor* conv_0_b;  // [in_channels]
+    ggml_tensor* conv_1_w;  // [out_channels, out_channels, 3, 3]
+    ggml_tensor* conv_1_b;  // [out_channels]
+    ggml_tensor* conv_2_w;  // [out_channels, out_channels, 3, 3]
+    ggml_tensor* conv_2_b;  // [out_channels]
 
     // skip
-    ggml_tensor* conv_skip_w; // [in_channels, out_channels, 1, 1]
+    ggml_tensor* conv_skip_w;  // [in_channels, out_channels, 1, 1]
 
     size_t calculate_mem_size() {
-        size_t mem_size = in_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_0_w
-        mem_size += in_channels * ggml_type_size(GGML_TYPE_F32); // conv_0_b
-        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_1_w
-        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32); // conv_1_b
-        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_1_w
-        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32); // conv_1_b
-        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_2_w
-        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32); // conv_2_b
+        size_t mem_size = in_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_0_w
+        mem_size += in_channels * ggml_type_size(GGML_TYPE_F32);                               // conv_0_b
+        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);       // conv_1_w
+        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32);                              // conv_1_b
+        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);       // conv_1_w
+        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32);                              // conv_1_b
+        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);       // conv_2_w
+        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32);                              // conv_2_b
 
-        if(in_channels != out_channels) {
-            mem_size += in_channels * out_channels * ggml_type_size(GGML_TYPE_F16); // conv_skip_w
+        if (in_channels != out_channels) {
+            mem_size += in_channels * out_channels * ggml_type_size(GGML_TYPE_F16);  // conv_skip_w
         }
         return mem_size;
     }
 
-    int getNumTensors() {
+    int get_num_tensors() {
         return 6 + (in_channels != out_channels ? 1 : 0);
     }
 
@@ -3358,22 +3333,22 @@ struct TAEBlock {
         conv_2_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, out_channels, out_channels);
         conv_2_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
 
-        if(in_channels != out_channels) {
+        if (in_channels != out_channels) {
             conv_skip_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, out_channels, in_channels);
         }
     }
 
-    void map_tensors(std::map<std::string, ggml_tensor*> & tensors, std::string prefix) {
+    void map_by_name(std::map<std::string, ggml_tensor*>& tensors, std::string prefix) {
         tensors[prefix + "conv.0.weight"] = conv_0_w;
-        tensors[prefix + "conv.0.bias"] = conv_0_b;
+        tensors[prefix + "conv.0.bias"]   = conv_0_b;
 
         tensors[prefix + "conv.2.weight"] = conv_1_w;
-        tensors[prefix + "conv.2.bias"] = conv_1_b;
+        tensors[prefix + "conv.2.bias"]   = conv_1_b;
 
         tensors[prefix + "conv.4.weight"] = conv_2_w;
-        tensors[prefix + "conv.4.bias"] = conv_2_b;
+        tensors[prefix + "conv.4.bias"]   = conv_2_b;
 
-        if(in_channels != out_channels) {
+        if (in_channels != out_channels) {
             tensors[prefix + "skip.weight"] = conv_skip_w;
         }
     }
@@ -3397,7 +3372,7 @@ struct TAEBlock {
         h = ggml_add(ctx, h, ggml_reshape_4d(ctx, conv_2_b, 1, 1, conv_2_b->ne[0], 1));
 
         // skip connection
-        if(in_channels != out_channels) {
+        if (in_channels != out_channels) {
             // skip = nn.Conv2d(n_in, n_out, 1, bias=False) if n_in != n_out else nn.Identity()
             x = ggml_conv_2d(ctx, conv_skip_w, x, 1, 1, 1, 1, 1, 1);
         }
@@ -3406,79 +3381,78 @@ struct TAEBlock {
         h = ggml_relu_inplace(ctx, h);
         return h;
     }
-
 };
 
 struct TinyEncoder {
     int in_channels = 3;
-    int z_channels = 4;
-    int channels = 64;
-    int num_blocks = 3;
+    int z_channels  = 4;
+    int channels    = 64;
+    int num_blocks  = 3;
 
     // input
-    ggml_tensor* conv_input_w; // [channels, in_channels, 3, 3]
-    ggml_tensor* conv_input_b; // [channels]
+    ggml_tensor* conv_input_w;  // [channels, in_channels, 3, 3]
+    ggml_tensor* conv_input_b;  // [channels]
     TAEBlock initial_block;
 
-    ggml_tensor* conv_1_w; // [channels, channels, 3, 3]
+    ggml_tensor* conv_1_w;  // [channels, channels, 3, 3]
     TAEBlock input_blocks[3];
 
     // middle
-    ggml_tensor* conv_2_w; // [channels, channels, 3, 3]
+    ggml_tensor* conv_2_w;  // [channels, channels, 3, 3]
     TAEBlock middle_blocks[3];
 
     // output
-    ggml_tensor* conv_3_w; // [channels, channels, 3, 3]
+    ggml_tensor* conv_3_w;  // [channels, channels, 3, 3]
     TAEBlock output_blocks[3];
 
     // final
-    ggml_tensor* conv_final_w; // [z_channels, channels, 3, 3]
-    ggml_tensor* conv_final_b; // [z_channels]
+    ggml_tensor* conv_final_w;  // [z_channels, channels, 3, 3]
+    ggml_tensor* conv_final_b;  // [z_channels]
 
     TinyEncoder() {
-        for(int i = 0; i < num_blocks;i++) {
-            input_blocks[i].in_channels = channels;
+        for (int i = 0; i < num_blocks; i++) {
+            input_blocks[i].in_channels  = channels;
             input_blocks[i].out_channels = channels;
 
-            middle_blocks[i].in_channels = channels;
+            middle_blocks[i].in_channels  = channels;
             middle_blocks[i].out_channels = channels;
 
-            output_blocks[i].in_channels = channels;
+            output_blocks[i].in_channels  = channels;
             output_blocks[i].out_channels = channels;
         }
 
-        initial_block.in_channels = channels;
+        initial_block.in_channels  = channels;
         initial_block.out_channels = channels;
     }
 
     size_t calculate_mem_size() {
-        size_t mem_size = channels * in_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_input_w
-        mem_size += channels * ggml_type_size(GGML_TYPE_F32); // conv_input_b
+        size_t mem_size = channels * in_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_input_w
+        mem_size += channels * ggml_type_size(GGML_TYPE_F32);                              // conv_input_b
 
         mem_size += initial_block.calculate_mem_size();
 
-        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_1_w
-        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_2_w
-        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_3_w
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_1_w
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_2_w
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_3_w
 
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             mem_size += input_blocks[i].calculate_mem_size();
             mem_size += middle_blocks[i].calculate_mem_size();
             mem_size += output_blocks[i].calculate_mem_size();
         }
-        mem_size += z_channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_input_w
-        mem_size += z_channels * ggml_type_size(GGML_TYPE_F32); // conv_input_b
+        mem_size += z_channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_input_w
+        mem_size += z_channels * ggml_type_size(GGML_TYPE_F32);                     // conv_input_b
         return mem_size;
     }
 
-    int getNumTensors() {
+    int get_num_tensors() {
         int num_tensors = 7;
-        for(int i = 0; i < num_blocks; i++) {
-            num_tensors += input_blocks[i].getNumTensors();
-            num_tensors += middle_blocks[i].getNumTensors();
-            num_tensors += output_blocks[i].getNumTensors();
+        for (int i = 0; i < num_blocks; i++) {
+            num_tensors += input_blocks[i].get_num_tensors();
+            num_tensors += middle_blocks[i].get_num_tensors();
+            num_tensors += output_blocks[i].get_num_tensors();
         }
-        num_tensors += initial_block.getNumTensors();
+        num_tensors += initial_block.get_num_tensors();
         return num_tensors;
     }
 
@@ -3495,42 +3469,42 @@ struct TinyEncoder {
         conv_final_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, z_channels);
         conv_final_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, z_channels);
 
-        for(int i = 0; i < num_blocks;i++) {
+        for (int i = 0; i < num_blocks; i++) {
             input_blocks[i].init_params(ctx);
             middle_blocks[i].init_params(ctx);
             output_blocks[i].init_params(ctx);
         }
     }
 
-    void map_tensors(std::map<std::string, ggml_tensor*> & tensors, std::string prefix) {
+    void map_by_name(std::map<std::string, ggml_tensor*>& tensors, std::string prefix) {
         tensors[prefix + "0.weight"] = conv_input_w;
-        tensors[prefix + "0.bias"] = conv_input_b;
+        tensors[prefix + "0.bias"]   = conv_input_b;
 
-        initial_block.map_tensors(tensors, prefix + "1.");
+        initial_block.map_by_name(tensors, prefix + "1.");
 
         tensors[prefix + "2.weight"] = conv_1_w;
-        for(int i = 0; i < num_blocks; i++) {
-            input_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 3) +".");
+        for (int i = 0; i < num_blocks; i++) {
+            input_blocks[i].map_by_name(tensors, prefix + std::to_string(i + 3) + ".");
         }
 
         tensors[prefix + "6.weight"] = conv_2_w;
-        for(int i = 0; i < num_blocks; i++) {
-            middle_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 7) +".");
+        for (int i = 0; i < num_blocks; i++) {
+            middle_blocks[i].map_by_name(tensors, prefix + std::to_string(i + 7) + ".");
         }
 
         tensors[prefix + "10.weight"] = conv_3_w;
-        for(int i = 0; i < num_blocks; i++) {
-            output_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 11) +".");
+        for (int i = 0; i < num_blocks; i++) {
+            output_blocks[i].map_by_name(tensors, prefix + std::to_string(i + 11) + ".");
         }
 
         tensors[prefix + "14.weight"] = conv_final_w;
-        tensors[prefix + "14.bias"] = conv_final_b;
+        tensors[prefix + "14.bias"]   = conv_final_b;
     }
 
-    ggml_tensor* forward(ggml_context* ctx,  ggml_tensor* x) {
+    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* x) {
         // conv(3, 64)
         auto z = ggml_conv_2d(ctx, conv_input_w, x, 1, 1, 1, 1, 1, 1);
-        z = ggml_add(ctx, z, ggml_reshape_4d(ctx, conv_input_b, 1, 1, conv_input_b->ne[0], 1));
+        z      = ggml_add(ctx, z, ggml_reshape_4d(ctx, conv_input_b, 1, 1, conv_input_b->ne[0], 1));
 
         // Block(64, 64)
         z = initial_block.forward(ctx, z);
@@ -3539,7 +3513,7 @@ struct TinyEncoder {
         z = ggml_conv_2d(ctx, conv_1_w, z, 2, 2, 1, 1, 1, 1);
 
         // Block(64, 64), Block(64, 64), Block(64, 64)
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             z = input_blocks[i].forward(ctx, z);
         }
 
@@ -3547,7 +3521,7 @@ struct TinyEncoder {
         z = ggml_conv_2d(ctx, conv_2_w, z, 2, 2, 1, 1, 1, 1);
 
         // Block(64, 64), Block(64, 64), Block(64, 64)
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             z = middle_blocks[i].forward(ctx, z);
         }
 
@@ -3555,7 +3529,7 @@ struct TinyEncoder {
         z = ggml_conv_2d(ctx, conv_3_w, z, 2, 2, 1, 1, 1, 1);
 
         // Block(64, 64), Block(64, 64), Block(64, 64)
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             z = output_blocks[i].forward(ctx, z);
         }
 
@@ -3567,82 +3541,82 @@ struct TinyEncoder {
 };
 
 struct TinyDecoder {
-    int z_channels = 4;
-    int channels = 64;
+    int z_channels      = 4;
+    int channels        = 64;
     int output_channels = 3;
-    int num_blocks = 3;
+    int num_blocks      = 3;
 
     // input
-    ggml_tensor* conv_input_w; // [channels, z_channels, 3, 3]
-    ggml_tensor* conv_input_b; // [channels]
+    ggml_tensor* conv_input_w;  // [channels, z_channels, 3, 3]
+    ggml_tensor* conv_input_b;  // [channels]
     TAEBlock input_blocks[3];
-    ggml_tensor* conv_1_w; // [channels, channels, 3, 3]
+    ggml_tensor* conv_1_w;  // [channels, channels, 3, 3]
 
     // middle
     TAEBlock middle_blocks[3];
-    ggml_tensor* conv_2_w; // [channels, channels, 3, 3]
+    ggml_tensor* conv_2_w;  // [channels, channels, 3, 3]
 
     // output
     TAEBlock output_blocks[3];
-    ggml_tensor* conv_3_w; // [channels, channels, 3, 3]
+    ggml_tensor* conv_3_w;  // [channels, channels, 3, 3]
 
     // final
     TAEBlock final_block;
-    ggml_tensor* conv_final_w; // [output_channels, channels, 3, 3]
-    ggml_tensor* conv_final_b; // [output_channels]
+    ggml_tensor* conv_final_w;  // [output_channels, channels, 3, 3]
+    ggml_tensor* conv_final_b;  // [output_channels]
 
-    ggml_tensor* in_scale_1d3; // [1]
-    ggml_tensor* in_scale_3; // [1]
+    ggml_tensor* in_scale_1d3;  // [1]
+    ggml_tensor* in_scale_3;    // [1]
 
     TinyDecoder() {
-        for(int i = 0; i < num_blocks;i++) {
-            input_blocks[i].in_channels = channels;
+        for (int i = 0; i < num_blocks; i++) {
+            input_blocks[i].in_channels  = channels;
             input_blocks[i].out_channels = channels;
 
-            middle_blocks[i].in_channels = channels;
+            middle_blocks[i].in_channels  = channels;
             middle_blocks[i].out_channels = channels;
 
-            output_blocks[i].in_channels = channels;
+            output_blocks[i].in_channels  = channels;
             output_blocks[i].out_channels = channels;
         }
 
-        final_block.in_channels = channels;
+        final_block.in_channels  = channels;
         final_block.out_channels = channels;
     }
 
     size_t calculate_mem_size() {
-        size_t mem_size = channels * z_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_input_w
-        mem_size += channels * ggml_type_size(GGML_TYPE_F32); // conv_input_b
+        size_t mem_size = channels * z_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_input_w
+        mem_size += channels * ggml_type_size(GGML_TYPE_F32);                             // conv_input_b
 
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             mem_size += input_blocks[i].calculate_mem_size();
         }
-        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_1_w
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_1_w
 
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             mem_size += middle_blocks[i].calculate_mem_size();
         }
-        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_2_w
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_2_w
 
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             mem_size += output_blocks[i].calculate_mem_size();
         }
-        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_3_w
+        mem_size += channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_3_w
 
         mem_size += final_block.calculate_mem_size();
-        mem_size += output_channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_input_w
-        mem_size += output_channels * ggml_type_size(GGML_TYPE_F32); // conv_input_b
+        mem_size += output_channels * channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_input_w
+        mem_size += output_channels * ggml_type_size(GGML_TYPE_F32);                     // conv_input_b
         return mem_size;
     }
 
-    int getNumTensors() {
+    int get_num_tensors() {
         int num_tensors = 9;
-        for(int i = 0; i < num_blocks; i++) {
-            num_tensors += input_blocks[i].getNumTensors();
-            num_tensors += middle_blocks[i].getNumTensors();
-            num_tensors += output_blocks[i].getNumTensors();
+        for (int i = 0; i < num_blocks; i++) {
+            num_tensors += input_blocks[i].get_num_tensors();
+            num_tensors += middle_blocks[i].get_num_tensors();
+            num_tensors += output_blocks[i].get_num_tensors();
         }
-        num_tensors += final_block.getNumTensors();
+        num_tensors += final_block.get_num_tensors();
         return num_tensors;
     }
 
@@ -3657,7 +3631,7 @@ struct TinyDecoder {
         conv_final_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, channels, output_channels);
         conv_final_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, output_channels);
 
-        for(int i = 0; i < num_blocks;i++) {
+        for (int i = 0; i < num_blocks; i++) {
             input_blocks[i].init_params(ctx);
             middle_blocks[i].init_params(ctx);
             output_blocks[i].init_params(ctx);
@@ -3667,7 +3641,7 @@ struct TinyDecoder {
 
         // initialize constants scales
         in_scale_1d3 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-        in_scale_3 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        in_scale_3   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
         ggml_allocr_alloc(alloc, in_scale_1d3);
         float scale_1d3 = 1.0f / 3.0f;
         ggml_backend_tensor_set(in_scale_1d3, &scale_1d3, 0, sizeof(scale_1d3));
@@ -3676,37 +3650,37 @@ struct TinyDecoder {
         ggml_backend_tensor_set(in_scale_3, &scale_3, 0, sizeof(scale_3));
     }
 
-    void map_tensors(std::map<std::string, ggml_tensor*> & tensors, std::string prefix) {
-        tensors[prefix + "1.weight"] = conv_input_w;
-        tensors[prefix + "1.bias"] = conv_input_b;
+    void map_by_name(std::map<std::string, ggml_tensor*>& tensors, std::string prefix) {
+        tensors[prefix + "0.weight"] = conv_input_w;
+        tensors[prefix + "0.bias"]   = conv_input_b;
 
-        for(int i = 0; i < num_blocks; i++) {
-            input_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 3) +".");
+        for (int i = 0; i < num_blocks; i++) {
+            input_blocks[i].map_by_name(tensors, prefix + std::to_string(i + 2) + ".");
         }
 
-        tensors[prefix + "7.weight"] = conv_1_w;
-        for(int i = 0; i < num_blocks; i++) {
-            middle_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 8) +".");
+        tensors[prefix + "6.weight"] = conv_1_w;
+        for (int i = 0; i < num_blocks; i++) {
+            middle_blocks[i].map_by_name(tensors, prefix + std::to_string(i + 7) + ".");
         }
 
-        tensors[prefix + "12.weight"] = conv_2_w;
-        for(int i = 0; i < num_blocks; i++) {
-            output_blocks[i].map_tensors(tensors, prefix + std::to_string(i + 13) +".");
+        tensors[prefix + "11.weight"] = conv_2_w;
+        for (int i = 0; i < num_blocks; i++) {
+            output_blocks[i].map_by_name(tensors, prefix + std::to_string(i + 12) + ".");
         }
 
-        tensors[prefix + "17.weight"] = conv_3_w;
+        tensors[prefix + "16.weight"] = conv_3_w;
 
-        final_block.map_tensors(tensors, prefix + "18.");
+        final_block.map_by_name(tensors, prefix + "17.");
 
-        tensors[prefix + "19.weight"] = conv_final_w;
-        tensors[prefix + "19.bias"] = conv_final_b;
+        tensors[prefix + "18.weight"] = conv_final_w;
+        tensors[prefix + "18.bias"]   = conv_final_b;
     }
 
-    ggml_tensor* forward(ggml_context* ctx,  ggml_tensor* z) {
+    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* z) {
         // torch.tanh(x / 3) * 3
         auto h = ggml_scale(ctx, z, in_scale_1d3);
-        h = ggml_tanh_inplace(ctx, h);
-        h = ggml_scale(ctx, h, in_scale_3);
+        h      = ggml_tanh_inplace(ctx, h);
+        h      = ggml_scale(ctx, h, in_scale_3);
 
         // conv(4, 64)
         h = ggml_conv_2d(ctx, conv_input_w, h, 1, 1, 1, 1, 1, 1);
@@ -3716,7 +3690,7 @@ struct TinyDecoder {
         h = ggml_relu_inplace(ctx, h);
 
         // Block(64, 64), Block(64, 64), Block(64, 64)
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             h = input_blocks[i].forward(ctx, h);
         }
 
@@ -3727,7 +3701,7 @@ struct TinyDecoder {
         h = ggml_conv_2d(ctx, conv_1_w, h, 1, 1, 1, 1, 1, 1);
 
         // Block(64, 64), Block(64, 64), Block(64, 64)
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             h = middle_blocks[i].forward(ctx, h);
         }
 
@@ -3738,7 +3712,7 @@ struct TinyDecoder {
         h = ggml_conv_2d(ctx, conv_2_w, h, 1, 1, 1, 1, 1, 1);
 
         // Block(64, 64), Block(64, 64), Block(64, 64)
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             h = output_blocks[i].forward(ctx, h);
         }
 
@@ -3765,16 +3739,17 @@ struct TinyAutoEncoder {
     ggml_context* ctx;
     bool decode_only = false;
     ggml_backend_buffer_t params_buffer;
-    ggml_backend_buffer_t compute_buffer; // for compute
-    struct ggml_allocr * compute_alloc = NULL;
+    ggml_backend_buffer_t compute_buffer;  // for compute
+    struct ggml_allocr* compute_alloc = NULL;
 
     int memory_buffer_size = 0;
     ggml_type wtype;
     ggml_backend_t backend = NULL;
 
-    TinyAutoEncoder(bool decoder_only_ = true) : decode_only(decoder_only_) {
+    TinyAutoEncoder(bool decoder_only_ = true)
+        : decode_only(decoder_only_) {
         decoder = TinyDecoder();
-        if(!decoder_only_){
+        if (!decoder_only_) {
             encoder = TinyEncoder();
         }
     }
@@ -3784,24 +3759,24 @@ struct TinyAutoEncoder {
         if (!decode_only) {
             mem_size += encoder.calculate_mem_size();
         }
-        mem_size += 1024; // padding
+        mem_size += 1024;  // padding
         return mem_size;
     }
 
     bool init(ggml_backend_t backend_) {
-        backend = backend_;
+        backend            = backend_;
         memory_buffer_size = calculate_mem_size();
-        int num_tensors = decoder.getNumTensors();
+        int num_tensors    = decoder.get_num_tensors();
         if (!decode_only) {
-            num_tensors += encoder.getNumTensors();
+            num_tensors += encoder.get_num_tensors();
         }
 
         LOG_DEBUG("TAE params backend buffer size = % 6.2f MB (%i tensors)", memory_buffer_size / (1024.0 * 1024.0), num_tensors);
 
         struct ggml_init_params params;
-        params.mem_size = static_cast<size_t>(num_tensors * ggml_tensor_overhead());
+        params.mem_size   = static_cast<size_t>(num_tensors * ggml_tensor_overhead());
         params.mem_buffer = NULL;
-        params.no_alloc = true;
+        params.no_alloc   = true;
 
         params_buffer = ggml_backend_alloc_buffer(backend, memory_buffer_size);
 
@@ -3814,53 +3789,129 @@ struct TinyAutoEncoder {
     }
 
     void alloc_params() {
-        ggml_allocr * alloc = ggml_allocr_new_from_buffer(params_buffer);
+        ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
         decoder.init_params(alloc, ctx);
-        if(!decode_only) {
+        if (!decode_only) {
             encoder.init_params(ctx);
         }
 
         // alloc all tensors linked to this context
-        for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            if(t->data == NULL) {
+        for (struct ggml_tensor* t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->data == NULL) {
                 ggml_allocr_alloc(alloc, t);
             }
         }
         ggml_allocr_free(alloc);
     }
 
-    void map_tensors(std::map<std::string, ggml_tensor*> & tensors) {
-        decoder.map_tensors(tensors, "first_stage_model.decoder.");
-        if(!decode_only) {
-            encoder.map_tensors(tensors, "first_stage_model.encoder.");
+    void map_by_name(std::map<std::string, ggml_tensor*>& tensors) {
+        decoder.map_by_name(tensors, "decoder.layers.");
+        if (!decode_only) {
+            encoder.map_by_name(tensors, "encoder.layers.");
         }
     }
 
-    struct ggml_cgraph * build_graph(struct ggml_tensor* z, bool decode_graph) {
+    bool load_from_file(const std::string& file_path, ggml_backend_t backend) {
+        LOG_INFO("loading taesd from '%s'", file_path.c_str());
+
+        if (!init(backend)) {
+            return false;
+        }
+
+        std::map<std::string, ggml_tensor*> taesd_tensors;
+
+        ModelLoader model_loader;
+        if (!model_loader.init_from_file(file_path)) {
+            LOG_ERROR("init taesd model loader from file failed: '%s'", file_path.c_str());
+            return false;
+        }
+
+        // prepare memory for the weights
+        {
+            alloc_params();
+            map_by_name(taesd_tensors);
+        }
+
+        std::set<std::string> tensor_names_in_file;
+
+        auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+            const std::string& name = tensor_storage.name;
+            tensor_names_in_file.insert(name);
+
+            struct ggml_tensor* real;
+            if (taesd_tensors.find(name) != taesd_tensors.end()) {
+                real = taesd_tensors[name];
+            } else {
+                if (name.find(".encoder.") != std::string::npos && decode_only) {
+                    return true;
+                }
+                LOG_ERROR("unknown tensor '%s' in model file", name.data());
+                return true;
+            }
+
+            if (
+                real->ne[0] != tensor_storage.ne[0] ||
+                real->ne[1] != tensor_storage.ne[1] ||
+                real->ne[2] != tensor_storage.ne[2] ||
+                real->ne[3] != tensor_storage.ne[3]) {
+                LOG_ERROR(
+                    "tensor '%s' has wrong shape in model file: "
+                    "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
+                    name.c_str(),
+                    (int)tensor_storage.ne[0], (int)tensor_storage.ne[1], (int)tensor_storage.ne[2], (int)tensor_storage.ne[3],
+                    (int)real->ne[0], (int)real->ne[1], (int)real->ne[2], (int)real->ne[3]);
+                return false;
+            }
+
+            *dst_tensor = real;
+
+            return true;
+        };
+
+        bool success = model_loader.load_tensors(on_new_tensor_cb);
+
+        bool some_tensor_not_init = false;
+
+        for (auto pair : taesd_tensors) {
+            if (tensor_names_in_file.find(pair.first) == tensor_names_in_file.end()) {
+                LOG_ERROR("tensor '%s' not in model file", pair.first.c_str());
+                some_tensor_not_init = true;
+            }
+        }
+
+        if (some_tensor_not_init) {
+            return false;
+        }
+
+        LOG_INFO("taesd model loaded");
+        return success;
+    }
+
+    struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
         static size_t buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
 
         struct ggml_init_params params = {
-            /*.mem_size   =*/ buf_size,
-            /*.mem_buffer =*/ buf.data(),
-            /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_allocr_alloc_graph()
+            /*.mem_size   =*/buf_size,
+            /*.mem_buffer =*/buf.data(),
+            /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
         };
 
-        struct ggml_context * ctx0 = ggml_init(params);
+        struct ggml_context* ctx0 = ggml_init(params);
 
-        struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
+        struct ggml_cgraph* gf = ggml_new_graph(ctx0);
 
         struct ggml_tensor* z_ = NULL;
 
-         // it's performing a compute, check if backend isn't cpu
-        if(!ggml_backend_is_cpu(backend)) {
+        // it's performing a compute, check if backend isn't cpu
+        if (!ggml_backend_is_cpu(backend)) {
             // pass input tensors to gpu memory
             z_ = ggml_dup_tensor(ctx0, z);
             ggml_allocr_alloc(compute_alloc, z_);
 
             // pass data to device backend
-            if(!ggml_allocr_is_measure(compute_alloc)) {
+            if (!ggml_allocr_is_measure(compute_alloc)) {
                 ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
             }
         } else {
@@ -3880,7 +3931,7 @@ struct TinyAutoEncoder {
         // alignment required by the backend
         compute_alloc = ggml_allocr_new_measure_from_backend(backend);
 
-        struct ggml_cgraph * gf = build_graph(x, decode);
+        struct ggml_cgraph* gf = build_graph(x, decode);
 
         // compute the required memory
         size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf);
@@ -3891,13 +3942,13 @@ struct TinyAutoEncoder {
         LOG_DEBUG("TAE compute buffer size: %.2f MB", compute_memory_buffer_size / 1024.0 / 1024.0);
 
         compute_buffer = ggml_backend_alloc_buffer(backend, compute_memory_buffer_size);
-        compute_alloc = ggml_allocr_new_from_buffer(compute_buffer);
+        compute_alloc  = ggml_allocr_new_from_buffer(compute_buffer);
     }
 
     void compute(struct ggml_tensor* work_result, const int n_threads, struct ggml_tensor* z, bool decode_graph) {
         ggml_allocr_reset(compute_alloc);
 
-        struct ggml_cgraph * gf = build_graph(z, decode_graph);
+        struct ggml_cgraph* gf = build_graph(z, decode_graph);
         ggml_allocr_alloc_graph(compute_alloc, gf);
 
         if (ggml_backend_is_cpu(backend)) {
@@ -3920,105 +3971,21 @@ struct TinyAutoEncoder {
     }
 };
 
-bool load_taesd(TinyAutoEncoder & taesd, const char* file_path, ggml_backend_t backend) {
-    ggml_context* ctx_meta = NULL;
-    gguf_context* ctx_gguf = gguf_init_from_file(file_path, {true, &ctx_meta});
-    if (!ctx_gguf) {
-        LOG_ERROR("failed to open '%s'", file_path);
-        return false;
+float ggml_backend_tensor_get_f32(ggml_tensor* tensor) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16);
+    float value;
+    if (tensor->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(tensor, &value, 0, sizeof(value));
+    } else {  // GGML_TYPE_F16
+        ggml_fp16_t f16_value;
+        ggml_backend_tensor_get(tensor, &f16_value, 0, sizeof(f16_value));
+        value = ggml_fp16_to_fp32(f16_value);
     }
-
-    FILE* fp = std::fopen(file_path, "rb");
-
-    int n_kv      = gguf_get_n_kv(ctx_gguf);
-    int n_tensors = gguf_get_n_tensors(ctx_gguf);
-
-    LOG_INFO("loading taesd from '%s'", file_path);
-
-    if(!taesd.init(backend)) {
-        return false;
-    }
-
-    std::map<std::string, ggml_tensor*> taesd_tensors;
-
-    // prepare memory for the weights
-    {
-        taesd.alloc_params();
-        taesd.map_tensors(taesd_tensors);
-    }
-
-    std::vector<char> read_buf;
-    size_t data_offset = gguf_get_data_offset(ctx_gguf);
-
-    for(int i = 0; i < n_tensors; i++) {
-        std::string name = gguf_get_tensor_name(ctx_gguf, i);
-        struct ggml_tensor * dummy = ggml_get_tensor(ctx_meta, name.c_str());
-        size_t offset = data_offset + gguf_get_tensor_offset(ctx_gguf, i);
-
-#ifdef _WIN32
-        int ret = _fseeki64(fp, (__int64) offset, SEEK_SET);
-#else
-        int ret = std::fseek(fp, (long) offset, SEEK_SET);
-#endif
-        if(ret == -1) {
-            return false;
-        }
-
-        struct ggml_tensor* real;
-        if (taesd_tensors.find(name) != taesd_tensors.end()) {
-            real = taesd_tensors[name];
-        } else {
-            if(name.find(".encoder.") != std::string::npos && taesd.decode_only) {
-                continue;
-            }
-            LOG_ERROR("unknown tensor '%s' in model file", name.data());
-            continue;
-        }
-
-        if (
-            real->ne[0] != dummy->ne[0] ||
-            real->ne[1] != dummy->ne[1] ||
-            real->ne[2] != dummy->ne[2] ||
-            real->ne[3] != dummy->ne[3]) {
-            LOG_ERROR(
-                "ERROR: tensor '%s' has wrong shape in model file: "
-                "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
-                name.c_str(),
-                dummy->ne[0], dummy->ne[1], dummy->ne[2], dummy->ne[3],
-                (int)real->ne[0], (int)real->ne[1], (int)real->ne[2], (int)real->ne[3]);
-            return false;
-        }
-
-        if (real->type != dummy->type) {
-            printf("Error: tensor '%s' has wrong type in model file: got %s, expect %s",
-                        name.c_str(), ggml_type_name(dummy->type), ggml_type_name(real->type));
-            return false;
-        }
-
-        int num_bytes = ggml_nbytes(dummy);
-
-        if (ggml_backend_is_cpu(backend)) {
-            // for the CPU and Metal backend, we can read directly into the tensor
-            std::fread(real->data, 1, num_bytes, fp);
-        } else {
-            // read into a temporary buffer first, then copy to device memory
-            read_buf.resize(num_bytes);
-            std::fread(read_buf.data(), 1, num_bytes, fp);
-            ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
-        }
-    }
-
-    gguf_free(ctx_gguf);
-    ggml_free(ctx_meta);
-
-    std::fclose(fp);
-    LOG_INFO("taesd model loaded");
-    return true;
+    return value;
 }
 
 struct LoraModel {
-    float strength = 1.0f;
-    std::map<std::string, float> lora_alphas;
+    float multiplier = 1.0f;
     std::map<std::string, struct ggml_tensor*> lora_tensors;
 
     struct ggml_context* ctx;
@@ -4028,37 +3995,15 @@ struct LoraModel {
     bool load(ggml_backend_t backend_, std::string file_path) {
         backend = backend_;
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
-        ggml_context* ctx_meta = NULL;
-        gguf_context* ctx_gguf = gguf_init_from_file(file_path.c_str(), {true, &ctx_meta});
+        ModelLoader model_loader;
 
-        if (!ctx_gguf) {
-            LOG_ERROR("failed to open '%s'", file_path.c_str());
+        if (!model_loader.init_from_file(file_path)) {
+            LOG_ERROR("init lora model loader from file failed: '%s'", file_path.c_str());
             return false;
         }
 
-        FILE* fp = std::fopen(file_path.c_str(), "rb");
-
-        SDVersion version = VERSION_COUNT;
-
-        int n_kv      = gguf_get_n_kv(ctx_gguf);
-        int n_tensors = gguf_get_n_tensors(ctx_gguf);
-
-        for (int i = 0; i < n_kv; i++) {
-            const char* name          = gguf_get_key(ctx_gguf, i);
-            const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
-            LOG_DEBUG("%s: - kv %3d: %42s %-8s", __func__, i, name, gguf_type_name(type));
-        }
-
-        {
-            int nidx = gguf_find_key(ctx_gguf, "sd.lora.name");
-            int tidx = gguf_find_key(ctx_gguf, "sd.lora.type");
-            if (tidx >= 0 && nidx >= 0) {
-                LOG_INFO("LoRA Type: %s | %s", lora_type_to_str[gguf_get_val_i32(ctx_gguf, tidx) - 1], gguf_get_val_str(ctx_gguf, nidx));
-            }
-        }
-
         struct ggml_init_params params;
-        params.mem_size   = static_cast<size_t>(n_tensors * ggml_tensor_overhead());
+        params.mem_size   = static_cast<size_t>(1024 * ggml_tensor_overhead());
         params.mem_buffer = NULL;
         params.no_alloc   = true;
 
@@ -4068,82 +4013,28 @@ struct LoraModel {
             return false;
         }
 
-        ggml_type wtype = GGML_TYPE_COUNT;
-        {
-            int idx = gguf_find_key(ctx_gguf, "sd.lora.dtype");
-            if (idx >= 0) {
-                wtype = (ggml_type)gguf_get_val_i32(ctx_gguf, idx);
-                LOG_INFO("LoRA data type: %s", ggml_type_name(wtype));
-            }
-        }
+        ggml_type wtype = model_loader.get_sd_wtype();
 
         LOG_DEBUG("calculating buffer size");
-        int memory_buffer_size = 0;
-
-        for (int i = 0; i < n_tensors; i++) {
-            std::string name          = gguf_get_tensor_name(ctx_gguf, i);
-            struct ggml_tensor* dummy = ggml_get_tensor(ctx_meta, name.c_str());
-            memory_buffer_size += (int)ggml_nbytes(dummy);
-        }
+        int64_t memory_buffer_size = model_loader.cal_mem_size();
         LOG_DEBUG("lora params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
 
         params_buffer_lora = ggml_backend_alloc_buffer(backend, memory_buffer_size);
-
-        LOG_DEBUG("loading alphas");
-        {
-            int kidx     = gguf_find_key(ctx_gguf, "sd.lora.alphas_k");
-            int vidx     = gguf_find_key(ctx_gguf, "sd.lora.alphas_v");
-            int n_alphas = gguf_get_arr_n(ctx_gguf, kidx);
-            if (n_alphas * 2 != n_tensors) {
-                LOG_ERROR("lora alphas expected: %i, got %i", n_tensors, n_alphas * 2);
-                return false;
-            }
-            float* alphas_values = (float*)gguf_get_arr_data(ctx_gguf, vidx);
-            for (int i = 0; i < n_alphas; i++) {
-                std::string alpha_name  = gguf_get_arr_str(ctx_gguf, kidx, i);
-                lora_alphas[alpha_name] = alphas_values[i];
-            }
-        }
-
         ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer_lora);
 
-        size_t data_offset = gguf_get_data_offset(ctx_gguf);
-        std::vector<char> read_buf;
-        for (int i = 0; i < n_tensors; i++) {
-            std::string name          = gguf_get_tensor_name(ctx_gguf, i);
-            struct ggml_tensor* dummy = ggml_get_tensor(ctx_meta, name.c_str());
-            size_t offset             = data_offset + gguf_get_tensor_offset(ctx_gguf, i);
+        auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+            const std::string& name = tensor_storage.name;
 
-#ifdef _WIN32
-            int ret = _fseeki64(fp, (__int64)offset, SEEK_SET);
-#else
-            int ret = std::fseek(fp, (long)offset, SEEK_SET);
-#endif
-            if (ret == -1) {
-                return false;
-            }
-
-            struct ggml_tensor* real = ggml_dup_tensor(ctx, dummy);
+            struct ggml_tensor* real = ggml_new_tensor(ctx, tensor_storage.type, tensor_storage.n_dims, tensor_storage.ne);
             ggml_allocr_alloc(alloc, real);
 
-            int num_bytes = (int)ggml_nbytes(dummy);
-
-            if (ggml_backend_is_cpu(backend)) {
-                // for the CPU and Metal backend, we can read directly into the tensor
-                sd_fread(real->data, 1, num_bytes, fp);
-            } else {
-                // read into a temporary buffer first, then copy to device memory
-                read_buf.resize(num_bytes);
-                sd_fread(read_buf.data(), 1, num_bytes, fp);
-                ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
-            }
+            *dst_tensor = real;
 
             lora_tensors[name] = real;
-        }
-        read_buf.clear();
-        std::fclose(fp);
-        gguf_free(ctx_gguf);
-        ggml_free(ctx_meta);
+            return true;
+        };
+
+        model_loader.load_tensors(on_new_tensor_cb);
 
         LOG_DEBUG("finished loaded lora");
         ggml_allocr_free(alloc);
@@ -4163,54 +4054,94 @@ struct LoraModel {
         };
 
         struct ggml_context* ctx0 = ggml_init(params);
+        struct ggml_cgraph* gf    = ggml_new_graph_custom(ctx0, LORA_GRAPH_SIZE, false);
 
-        struct ggml_cgraph* gf = ggml_new_graph_custom(ctx0, LORA_GRAPH_SIZE, false);
+        std::set<std::string> applied_lora_tensors;
         for (auto it : model_tensors) {
-            std::string k_tensor = it.first;
+            std::string k_tensor       = it.first;
+            struct ggml_tensor* weight = model_tensors[it.first];
 
             size_t k_pos = k_tensor.find(".weight");
             if (k_pos == std::string::npos) {
                 continue;
             }
-            k_tensor                    = k_tensor.substr(0, k_pos);
-            std::string lora_up_name    = "lora." + k_tensor + ".lora_up.weight";
-            std::string lora_down_name  = "lora." + k_tensor + ".lora_down.weight";
-            std::string lora_alpha_name = "lora." + k_tensor + ".alpha";
-            if (
-                lora_tensors.find(lora_up_name) != lora_tensors.end() &&
-                lora_tensors.find(lora_down_name) != lora_tensors.end() &&
-                lora_alphas.find(lora_alpha_name) != lora_alphas.end()) {
-                struct ggml_tensor* loraA  = lora_tensors[lora_up_name];
-                struct ggml_tensor* loraB  = lora_tensors[lora_down_name];
-                struct ggml_tensor* weight = model_tensors[it.first];
+            k_tensor = k_tensor.substr(0, k_pos);
+            replace_all_chars(k_tensor, '.', '_');
+            std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
+            std::string lora_down_name = "lora." + k_tensor + ".lora_down.weight";
+            std::string alpha_name     = "lora." + k_tensor + ".alpha";
+            std::string scale_name     = "lora." + k_tensor + ".scale";
 
-                float scale = strength;
-                scale *= (lora_alphas[lora_alpha_name] / loraB->ne[loraB->n_dims - 1]);
-                ggml_tensor* lora_scale = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+            ggml_tensor* lora_up   = NULL;
+            ggml_tensor* lora_down = NULL;
 
-                ggml_allocr_alloc(compute_alloc, lora_scale);
-                if (!ggml_allocr_is_measure(compute_alloc)) {
-                    ggml_backend_tensor_set(lora_scale, &scale, 0, ggml_nbytes(lora_scale));
-                }
+            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
+                lora_up = lora_tensors[lora_up_name];
+            }
 
-                // flat lora tensors to multiply it
-                int64_t loraA_rows = loraA->ne[loraA->n_dims - 1];
-                loraA              = ggml_reshape_2d(ctx0, loraA, ggml_nelements(loraA) / loraA_rows, loraA_rows);
-                int64_t loraB_rows = loraB->ne[loraB->n_dims - 1];
-                loraB              = ggml_reshape_2d(ctx0, loraB, ggml_nelements(loraB) / loraB_rows, loraB_rows);
+            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
+                lora_down = lora_tensors[lora_down_name];
+            }
 
-                // ggml_mul_mat requires tensor b transposed
-                loraB                      = ggml_cont(ctx0, ggml_transpose(ctx0, loraB));
-                struct ggml_tensor* loraBA = ggml_mul_mat(ctx0, loraA, loraB);
-                loraBA                     = ggml_cont(ctx0, ggml_transpose(ctx0, loraBA));
-                loraBA                     = ggml_reshape(ctx0, loraBA, weight);
-                GGML_ASSERT(ggml_nelements(loraBA) == ggml_nelements(weight));
-                loraBA = ggml_scale_inplace(ctx0, loraBA, lora_scale);
-                ggml_tensor* final_weight;
-                final_weight = ggml_add_inplace(ctx0, weight, loraBA);  // apply directly
-                ggml_build_forward_expand(gf, final_weight);
+            if (lora_up == NULL || lora_down == NULL) {
+                continue;
+            }
+
+            applied_lora_tensors.insert(lora_up_name);
+            applied_lora_tensors.insert(lora_down_name);
+            applied_lora_tensors.insert(alpha_name);
+            applied_lora_tensors.insert(scale_name);
+
+            // calc_cale
+            int64_t dim       = lora_down->ne[lora_down->n_dims - 1];
+            float scale_value = 1.0f;
+            if (lora_tensors.find(scale_name) != lora_tensors.end()) {
+                scale_value = ggml_backend_tensor_get_f32(lora_tensors[scale_name]);
+            } else if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
+                float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
+                scale_value = alpha / dim;
+            }
+            scale_value *= multiplier;
+
+            ggml_tensor* lora_scale = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+
+            ggml_allocr_alloc(compute_alloc, lora_scale);
+            if (!ggml_allocr_is_measure(compute_alloc)) {
+                ggml_backend_tensor_set(lora_scale, &scale_value, 0, ggml_nbytes(lora_scale));
+            }
+
+            // flat lora tensors to multiply it
+            int64_t lora_up_rows   = lora_up->ne[lora_up->n_dims - 1];
+            lora_up                = ggml_reshape_2d(ctx0, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
+            int64_t lora_down_rows = lora_down->ne[lora_down->n_dims - 1];
+            lora_down              = ggml_reshape_2d(ctx0, lora_down, ggml_nelements(lora_down) / lora_down_rows, lora_down_rows);
+
+            // ggml_mul_mat requires tensor b transposed
+            lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
+            struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_up, lora_down);
+            updown                     = ggml_cont(ctx0, ggml_transpose(ctx0, updown));
+            updown                     = ggml_reshape(ctx0, updown, weight);
+            GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
+            updown = ggml_scale_inplace(ctx0, updown, lora_scale);
+            ggml_tensor* final_weight;
+            // if (weight->type != GGML_TYPE_F32 && weight->type != GGML_TYPE_F16) {
+            //     final_weight = ggml_new_tensor(ctx0, GGML_TYPE_F32, weight->n_dims, weight->ne);
+            //     final_weight = ggml_cpy_inplace(ctx0, weight, final_weight);
+            //     final_weight = ggml_add_inplace(ctx0, final_weight, updown);
+            //     final_weight = ggml_cpy_inplace(ctx0, final_weight, weight);
+            // } else {
+            //     final_weight = ggml_add_inplace(ctx0, weight, updown);
+            // }
+            final_weight = ggml_add_inplace(ctx0, weight, updown);  // apply directly
+            ggml_build_forward_expand(gf, final_weight);
+        }
+
+        for (auto& kv : lora_tensors) {
+            if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
+                LOG_WARN("unused lora tensor %s", kv.first.c_str());
             }
         }
+
         return gf;
     }
 
@@ -4417,28 +4348,27 @@ public:
           free_params_immediately(free_params_immediately),
           lora_model_dir(lora_model_dir) {
         first_stage_model.decode_only = vae_decode_only;
-        tae_first_stage.decode_only = vae_decode_only;
+        tae_first_stage.decode_only   = vae_decode_only;
         if (rng_type == STD_DEFAULT_RNG) {
             rng = std::make_shared<STDDefaultRNG>();
         } else if (rng_type == CUDA_RNG) {
             rng = std::make_shared<PhiloxRNG>();
         }
-        if (lora_model_dir.size() > 0) {
-            if (lora_model_dir[lora_model_dir.size() - 1] != '/' && lora_model_dir[lora_model_dir.size() - 1] != '\\') {
-                this->lora_model_dir = lora_model_dir + "/";
-            }
-        }
+        this->lora_model_dir = lora_model_dir;
     }
 
     ~StableDiffusionGGML() {
         cond_stage_model.text_model.destroy();
         diffusion_model.destroy();
-        if(!use_tiny_autoencoder) {
+        if (!use_tiny_autoencoder) {
             first_stage_model.destroy();
         }
     }
 
-    bool load_from_file(const std::string& file_path, Schedule schedule) {
+    bool load_from_file(const std::string& model_path,
+                        const std::string& vae_path,
+                        ggml_type wtype,
+                        Schedule schedule) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init();
@@ -4454,59 +4384,44 @@ public:
         LOG_INFO("Flash Attention enabled");
 #endif
 #endif
-        LOG_INFO("loading model from '%s'", file_path.c_str());
-        ggml_context* ctx_meta = NULL;
-        gguf_context* ctx_gguf = gguf_init_from_file(file_path.c_str(), {true, &ctx_meta});
-        if (!ctx_gguf) {
-            LOG_ERROR("failed to open '%s'", file_path.c_str());
+        LOG_INFO("loading model from '%s'", model_path.c_str());
+        ModelLoader model_loader;
+
+        if (!model_loader.init_from_file(model_path)) {
+            LOG_ERROR("init model loader from file failed: '%s'", model_path.c_str());
             return false;
         }
 
-        FILE* fp = std::fopen(file_path.c_str(), "rb");
-
-        SDVersion version = VERSION_COUNT;
-
-        int n_kv      = gguf_get_n_kv(ctx_gguf);
-        int n_tensors = gguf_get_n_tensors(ctx_gguf);
-
-        for (int i = 0; i < n_kv; i++) {
-            const char* name          = gguf_get_key(ctx_gguf, i);
-            const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
-            LOG_DEBUG("%s: - kv %3d: %42s %-8s", __func__, i, name, gguf_type_name(type));
-        }
-
-        {
-            int nidx = gguf_find_key(ctx_gguf, "sd.model.name");
-            int vidx = gguf_find_key(ctx_gguf, "sd.model.version");
-            if (vidx >= 0 && nidx >= 0) {
-                version          = (SDVersion)gguf_get_val_i8(ctx_gguf, vidx);
-                cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
-                diffusion_model  = UNetModel(version);
-                LOG_INFO("Stable Diffusion %s | %s", model_version_to_str[version], gguf_get_val_str(ctx_gguf, nidx));
+        if (vae_path.size() > 0) {
+            LOG_INFO("loading vae from '%s'", vae_path.c_str());
+            if (!model_loader.init_from_file(vae_path, "vae.")) {
+                LOG_WARN("loading vae from '%s' failed", vae_path.c_str());
             }
         }
 
-        {
-            int idx = gguf_find_key(ctx_gguf, "sd.model.dtype");
-            if (idx >= 0) {
-                model_data_type = (ggml_type)gguf_get_val_i32(ctx_gguf, idx);
-                LOG_INFO("model data type: %s", ggml_type_name(model_data_type));
-            }
+        SDVersion version = model_loader.get_sd_version();
+        if (version == VERSION_COUNT) {
+            LOG_ERROR("get sd version from file failed: '%s'", model_path.c_str());
+            return false;
         }
+        cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
+        diffusion_model  = UNetModel(version);
+        LOG_INFO("Stable Diffusion %s ", model_version_to_str[version]);
+        if (wtype == GGML_TYPE_COUNT) {
+            model_data_type = model_loader.get_sd_wtype();
+        } else {
+            model_data_type = wtype;
+        }
+        LOG_INFO("Stable Diffusion weight type: %s", ggml_type_name(model_data_type));
 
         LOG_DEBUG("loading vocab");
-
-        // load vocab
-        {
-            int tidx = gguf_find_key(ctx_gguf, "sd.vocab.tokens");
-            if (tidx == -1) {
-                LOG_ERROR("vocab not found");
-                return false;
-            }
-            int n_vocab = gguf_get_arr_n(ctx_gguf, tidx);
-            for (int i = 0; i < n_vocab; i++) {
-                cond_stage_model.tokenizer.add_token(gguf_get_arr_str(ctx_gguf, tidx, i), i);
-            }
+        auto add_token = [&](const std::string& token, int32_t token_id) {
+            cond_stage_model.tokenizer.add_token(token, token_id);
+        };
+        bool success = model_loader.load_vocab(add_token);
+        if (!success) {
+            LOG_ERROR("get vocab from file failed: '%s'", model_path.c_str());
+            return false;
         }
 
         // create the ggml context for network params
@@ -4518,7 +4433,7 @@ public:
             return false;
         }
 
-        if(!use_tiny_autoencoder && !first_stage_model.initialize(backend, model_data_type)) {
+        if (!use_tiny_autoencoder && !first_stage_model.initialize(backend, model_data_type)) {
             return false;
         }
 
@@ -4533,105 +4448,100 @@ public:
             diffusion_model.alloc_params();
             diffusion_model.map_by_name(tensors, "model.diffusion_model.");
 
-            if(!use_tiny_autoencoder) {
+            if (!use_tiny_autoencoder) {
                 // firest_stage_model(AutoEncoderKL)
                 first_stage_model.alloc_params();
                 first_stage_model.map_by_name(tensors, "first_stage_model.");
             }
         }
 
-        std::set<std::string> tensor_names_in_file;
-        int64_t t0 = ggml_time_ms();
-        LOG_DEBUG("loading weights");
+        struct ggml_init_params params;
+        params.mem_size          = static_cast<size_t>(10 * 1024) * 1024;  // 10M
+        params.mem_buffer        = NULL;
+        params.no_alloc          = false;
+        struct ggml_context* ctx = ggml_init(params);  // for  alphas_cumprod and is_using_v_parameterization check
+        if (!ctx) {
+            LOG_ERROR("ggml_init() failed");
+            return false;
+        }
+        ggml_tensor* alphas_cumprod_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, TIMESTEPS);
+        calculate_alphas_cumprod((float*)alphas_cumprod_tensor->data);
 
         // load weights
-        float alphas_cumprod[TIMESTEPS];
+        LOG_DEBUG("loading weights");
+        std::set<std::string> tensor_names_in_file;
+        int64_t t0 = ggml_time_ms();
 
+        size_t total_size = 0;
         std::vector<char> read_buf;
-        size_t total_size  = 0;
-        size_t data_offset = gguf_get_data_offset(ctx_gguf);
-        for (int i = 0; i < n_tensors; i++) {
-            std::string name          = gguf_get_tensor_name(ctx_gguf, i);
-            struct ggml_tensor* dummy = ggml_get_tensor(ctx_meta, name.c_str());
-            size_t offset             = data_offset + gguf_get_tensor_offset(ctx_gguf, i);
+
+        auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+            const std::string& name = tensor_storage.name;
             tensor_names_in_file.insert(name);
 
-#ifdef _WIN32
-            int ret = _fseeki64(fp, (__int64)offset, SEEK_SET);
-#else
-            int ret = std::fseek(fp, (long)offset, SEEK_SET);
-#endif
-            if (ret == -1) {
-                return false;
-            }
-
             if (name == "alphas_cumprod") {
-                sd_fread(alphas_cumprod, 1, ggml_nbytes(dummy), fp);
-                continue;
+                *dst_tensor = alphas_cumprod_tensor;
+                return true;
             }
 
             struct ggml_tensor* real;
             if (tensors.find(name) != tensors.end()) {
                 real = tensors[name];
             } else {
-                if(use_tiny_autoencoder && name.find("first_stage_model.") == 0) {
-                    continue;
+                if (use_tiny_autoencoder && starts_with(name, "first_stage_model.")) {
+                    return true;
                 }
                 if (name.find("quant") == std::string::npos && name.find("first_stage_model.encoder.") == std::string::npos) {
                     LOG_WARN("unknown tensor '%s' in model file", name.data());
                 } else {
                     if (!vae_decode_only) {
                         LOG_WARN("unknown tensor '%s' in model file", name.data());
-                        return false;
                     }
                 }
-                continue;
+                return true;
             }
 
             if (
-                real->ne[0] != dummy->ne[0] ||
-                real->ne[1] != dummy->ne[1] ||
-                real->ne[2] != dummy->ne[2] ||
-                real->ne[3] != dummy->ne[3]) {
+                real->ne[0] != tensor_storage.ne[0] ||
+                real->ne[1] != tensor_storage.ne[1] ||
+                real->ne[2] != tensor_storage.ne[2] ||
+                real->ne[3] != tensor_storage.ne[3]) {
                 LOG_ERROR(
                     "tensor '%s' has wrong shape in model file: "
                     "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
                     name.c_str(),
-                    (int)dummy->ne[0], (int)dummy->ne[1], (int)dummy->ne[2], (int)dummy->ne[3],
+                    (int)tensor_storage.ne[0], (int)tensor_storage.ne[1], (int)tensor_storage.ne[2], (int)tensor_storage.ne[3],
                     (int)real->ne[0], (int)real->ne[1], (int)real->ne[2], (int)real->ne[3]);
                 return false;
             }
 
-            if (real->type != dummy->type) {
-                LOG_ERROR("tensor '%s' has wrong type in model file: got %s, expect %s",
-                          name.c_str(), ggml_type_name(dummy->type), ggml_type_name(real->type));
-                return false;
-            }
+            *dst_tensor = real;
 
-            int num_bytes = (int)ggml_nbytes(dummy);
+            total_size += ggml_nbytes(real);
+            return true;
+        };
 
-            if (ggml_backend_is_cpu(backend)) {
-                // for the CPU and Metal backend, we can read directly into the tensor
-                sd_fread(real->data, 1, num_bytes, fp);
-            } else {
-                // read into a temporary buffer first, then copy to device memory
-                read_buf.resize(num_bytes);
-                sd_fread(read_buf.data(), 1, num_bytes, fp);
-                ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
-            }
+        // print_ggml_tensor(alphas_cumprod_tensor);
 
-            total_size += ggml_nbytes(dummy);
+        success = model_loader.load_tensors(on_new_tensor_cb);
+        if (!success) {
+            LOG_ERROR("load tensors from file failed");
+            ggml_free(ctx);
+            return false;
         }
 
-        gguf_free(ctx_gguf);
-        ggml_free(ctx_meta);
+        // print_ggml_tensor(alphas_cumprod_tensor);
 
-        std::fclose(fp);
-        read_buf.clear();
+        // calculate_alphas_cumprod((float*)alphas_cumprod_tensor->data);
 
         bool some_tensor_not_init = false;
+
         for (auto pair : tensors) {
             if (pair.first.find("cond_stage_model.transformer.text_model.encoder.layers.23") != std::string::npos) {
+                continue;
+            }
+
+            if (use_tiny_autoencoder && starts_with(pair.first, "first_stage_model.")) {
                 continue;
             }
 
@@ -4641,12 +4551,8 @@ public:
             }
         }
 
-        if (tensor_names_in_file.find("alphas_cumprod") == tensor_names_in_file.end()) {
-            LOG_ERROR("tensor alphas_cumprod not in model file");
-            some_tensor_not_init = true;
-        }
-
         if (some_tensor_not_init) {
+            ggml_free(ctx);
             return false;
         }
 
@@ -4662,24 +4568,14 @@ public:
                  diffusion_model.memory_buffer_size / 1024.0 / 1024.0,
                  first_stage_model.memory_buffer_size / 1024.0 / 1024.0);
         int64_t t1 = ggml_time_ms();
-        LOG_INFO("loading model from '%s' completed, taking %.2fs", file_path.c_str(), (t1 - t0) * 1.0f / 1000);
+        LOG_INFO("loading model from '%s' completed, taking %.2fs", model_path.c_str(), (t1 - t0) * 1.0f / 1000);
 
         // check is_using_v_parameterization_for_sd2
         bool is_using_v_parameterization = false;
         if (version == VERSION_2_x) {
-            struct ggml_init_params params;
-            params.mem_size          = static_cast<size_t>(10 * 1024) * 1024;  // 10M
-            params.mem_buffer        = NULL;
-            params.no_alloc          = false;
-            struct ggml_context* ctx = ggml_init(params);
-            if (!ctx) {
-                LOG_ERROR("ggml_init() failed");
-                return false;
-            }
             if (is_using_v_parameterization_for_sd2(ctx)) {
                 is_using_v_parameterization = true;
             }
-            ggml_free(ctx);
         }
 
         if (is_using_v_parameterization) {
@@ -4709,13 +4605,14 @@ public:
         }
 
         for (int i = 0; i < TIMESTEPS; i++) {
-            denoiser->schedule->alphas_cumprod[i] = alphas_cumprod[i];
+            denoiser->schedule->alphas_cumprod[i] = ((float*)alphas_cumprod_tensor->data)[i];
             denoiser->schedule->sigmas[i]         = std::sqrt((1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
             denoiser->schedule->log_sigmas[i]     = std::log(denoiser->schedule->sigmas[i]);
         }
         LOG_DEBUG("finished loaded file");
-        if(use_tiny_autoencoder) {
-            return load_taesd(tae_first_stage, taesd_path.c_str(), backend);
+        ggml_free(ctx);
+        if (use_tiny_autoencoder) {
+            return tae_first_stage.load_from_file(taesd_path, backend);
         }
         return true;
     }
@@ -4758,13 +4655,26 @@ public:
     void apply_lora(const std::string& lora_name, float multiplier) {
         int64_t t0 = ggml_time_ms();
         LoraModel lora;
-        std::string file_path = lora_model_dir + lora_name + ".gguf";
-        if (lora.load(backend, file_path)) {
-            lora.strength = multiplier;
-            lora.apply(tensors, n_threads);
-            loras[lora_name] = lora;
-            lora.release();
+        std::string st_file_path   = path_join(lora_model_dir, lora_name + ".safetensors");
+        std::string ckpt_file_path = path_join(lora_model_dir, lora_name + ".ckpt");
+        std::string file_path;
+        if (file_exists(st_file_path)) {
+            file_path = st_file_path;
+        } else if (file_exists(ckpt_file_path)) {
+            file_path = ckpt_file_path;
+        } else {
+            LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
+            return;
         }
+        if (!lora.load(backend, file_path)) {
+            LOG_WARN("load lora tensors from %s failed", file_path.c_str());
+            return;
+        }
+
+        lora.multiplier = multiplier;
+        lora.apply(tensors, n_threads);
+        loras[lora_name] = lora;
+        lora.release();
 
         int64_t t1 = ggml_time_ms();
 
@@ -5341,15 +5251,15 @@ public:
     }
 
     ggml_tensor* compute_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode) {
-        int64_t W = x->ne[0];
-        int64_t H = x->ne[1];
+        int64_t W           = x->ne[0];
+        int64_t H           = x->ne[1];
         ggml_tensor* result = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32,
-                                                 decode ? (W * 8) : (W / 8),  // width
-                                                 decode ? (H * 8) : (H / 8),  // height
-                                                 decode ? 3 : (use_tiny_autoencoder ? 4 : 8)); // channels
+                                                 decode ? (W * 8) : (W / 8),                    // width
+                                                 decode ? (H * 8) : (H / 8),                    // height
+                                                 decode ? 3 : (use_tiny_autoencoder ? 4 : 8));  // channels
         int64_t t0          = ggml_time_ms();
-        if(!use_tiny_autoencoder) {
-            if(decode) {
+        if (!use_tiny_autoencoder) {
+            if (decode) {
                 sd_scale(x, 1.0f / scale_factor);
             } else {
                 sd_convert_input(x);
@@ -5357,7 +5267,7 @@ public:
             first_stage_model.begin(x, decode);
             first_stage_model.compute(result, n_threads, x, decode);
             first_stage_model.end();
-            if(decode) {
+            if (decode) {
                 sd_convert_output(result);
             }
         } else {
@@ -5367,7 +5277,7 @@ public:
         }
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing vae [mode: %s] graph completed, taking %.2fs", decode ? "DECODE" : "ENCODE", (t1 - t0) * 1.0f / 1000);
-        if(decode) {
+        if (decode) {
             sd_clamp(result, 0.0f, 1.0f);
         }
         return result;
@@ -5378,21 +5288,24 @@ public:
 
 StableDiffusion::StableDiffusion(int n_threads,
                                  bool vae_decode_only,
-                                 std::string  taesd_path,
+                                 std::string taesd_path,
                                  bool free_params_immediately,
                                  std::string lora_model_dir,
                                  RNGType rng_type) {
-    sd = std::make_shared<StableDiffusionGGML>(n_threads,
+    sd                       = std::make_shared<StableDiffusionGGML>(n_threads,
                                                vae_decode_only,
                                                free_params_immediately,
                                                lora_model_dir,
                                                rng_type);
     sd->use_tiny_autoencoder = taesd_path.size() > 0;
-    sd->taesd_path = taesd_path;
+    sd->taesd_path           = taesd_path;
 }
 
-bool StableDiffusion::load_from_file(const std::string& file_path, Schedule s) {
-    return sd->load_from_file(file_path, s);
+bool StableDiffusion::load_from_file(const std::string& model_path,
+                                     const std::string& vae_path,
+                                     ggml_type wtype,
+                                     Schedule s) {
+    return sd->load_from_file(model_path, vae_path, wtype, s);
 }
 
 std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
@@ -5405,7 +5318,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
                                                int64_t seed,
                                                int batch_count) {
     std::vector<uint8_t*> results;
-    if(width >= 1024 && height >= 1024) { // 1024 x 1024 images
+    if (width >= 1024 && height >= 1024) {  // 1024 x 1024 images
         LOG_WARN("Image too large, try a smaller size.");
         return results;
     }
@@ -5465,7 +5378,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
-        int cur_seed = seed + b;
+        int cur_seed           = seed + b;
         LOG_INFO("generating image: %i/%i - seed %i", b + 1, batch_count, cur_seed);
 
         sd->rng->manual_seed(cur_seed);
@@ -5569,9 +5482,9 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
     sd_image_to_tensor(init_img_data, init_img);
     t0                       = ggml_time_ms();
     ggml_tensor* init_latent = NULL;
-    if(!sd->use_tiny_autoencoder) {
-        ggml_tensor* moments     = sd->compute_first_stage(work_ctx, init_img, false);
-        init_latent = sd->get_first_stage_encoding(work_ctx, moments);
+    if (!sd->use_tiny_autoencoder) {
+        ggml_tensor* moments = sd->compute_first_stage(work_ctx, init_img, false);
+        init_latent          = sd->get_first_stage_encoding(work_ctx, moments);
     } else {
         init_latent = sd->compute_first_stage(work_ctx, init_img, false);
     }
