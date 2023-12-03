@@ -52,7 +52,7 @@ if (SD_HIPBLAS)
             ${CMAKE_SOURCE_DIR}/ggml/src/ggml-backend.c
             ${CMAKE_SOURCE_DIR}/ggml/include/ggml/ggml.h
             ${CMAKE_SOURCE_DIR}/ggml/include/ggml/ggml-alloc.h
-            ${CMAKE_SOURCE_DIR}/ggml/src/ggml-backend.h
+            ${CMAKE_SOURCE_DIR}/ggml/include/ggml/ggml-backend.h
     )
 else ()
     add_subdirectory(ggml)
@@ -79,17 +79,20 @@ if (SD_HIPBLAS)
     if (${hipblas_FOUND} AND ${hip_FOUND})
         message(STATUS "HIP and hipBLAS found")
         add_compile_definitions(GGML_USE_HIPBLAS GGML_USE_CUBLAS)
-        add_library(ggml-rocm OBJECT ggml-cuda.cu ggml-cuda.h)
+        add_library(ggml-rocm OBJECT
+                ${CMAKE_SOURCE_DIR}/ggml/src/ggml-cuda.cu
+                ${CMAKE_SOURCE_DIR}/ggml/src/ggml-cuda.h)
         if (BUILD_SHARED_LIBS)
             set_target_properties(ggml-rocm PROPERTIES POSITION_INDEPENDENT_CODE ON)
         endif()
-        set_source_files_properties(ggml-cuda.cu PROPERTIES LANGUAGE CXX)
+        target_include_directories(ggml-rocm PUBLIC ${CMAKE_SOURCE_DIR}/ggml/include)
+        set_source_files_properties(${CMAKE_SOURCE_DIR}/ggml/src/ggml-cuda.cu PROPERTIES LANGUAGE CXX)
         target_link_libraries(ggml-rocm PRIVATE hip::device PUBLIC hip::host roc::rocblas roc::hipblas)
 
         if (LLAMA_STATIC)
             message(FATAL_ERROR "Static linking not supported for HIP/ROCm")
         endif()
-        set(LLAMA_EXTRA_LIBS ${SD_EXTRA_LIBS} ggml-rocm)
+        set(SD_EXTRA_LIBS ${SD_EXTRA_LIBS} ggml-rocm)
     else()
         message(WARNING "hipBLAS or HIP not found. Try setting CMAKE_PREFIX_PATH=/opt/rocm")
     endif()
