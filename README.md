@@ -10,13 +10,15 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
 - Super lightweight and without external dependencies.
+- SD1.x and SD2.x support
 - 16-bit, 32-bit float support
 - 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- SD1.x and SD2.x support
 - Full CUDA backend for GPU acceleration, for now just for float16 and float32 models. There are some issues with quantized models and CUDA; it will be fixed in the future.
+- Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models.
+    - No need to convert to `.ggml` or `.gguf` anymore!
 - Flash Attention for memory usage optimization (only cpu for now).
 - Original `txt2img` and `img2img` mode
 - Negative prompt
@@ -68,7 +70,7 @@ git submodule init
 git submodule update
 ```
 
-### Convert weights
+### Download weights
 
 - download original weights(.ckpt or .safetensors). For example
     - Stable Diffusion v1.4 from https://huggingface.co/CompVis/stable-diffusion-v-1-4-original
@@ -80,22 +82,6 @@ git submodule update
     # curl -L -O https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
     # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-2-1/blob/main/v2-1_768-nonema-pruned.safetensors
     ```
-
-- convert weights to gguf model format
-
-    ```shell
-    ./bin/convert sd-v1-4.ckpt -t f16
-    ```
-
-### Quantization
-
-You can specify the output model format using the `--type` or `-t` parameter
-
-- `f16` for 16-bit floating-point
-- `f32` for 32-bit floating-point
-- `q8_0` for 8-bit integer quantization
-- `q5_0` or `q5_1` for 5-bit integer quantization
-- `q4_0` or `q4_1` for 4-bit integer quantization
 
 ### Build
 
@@ -144,9 +130,11 @@ arguments:
   -t, --threads N                    number of threads to use during computation (default: -1).
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
   -m, --model [MODEL]                path to model
-  --lora-model-dir [DIR]             lora model directory
+  --vae [VAE]                        path to vae
+  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
+                                     If not specified, the default is the type of the weight file.  --lora-model-dir [DIR]             lora model directory  
   -i, --init-img [IMAGE]             path to the input image, required by img2img
-  -o, --output OUTPUT                path to write result image to (default: .\output.png)
+  -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
   --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)
@@ -164,10 +152,21 @@ arguments:
   -v, --verbose                      print extra info
 ```
 
+#### Quantization
+
+You can specify the model weight type using the `--type` parameter. The weights are automatically converted when loading the model.
+
+- `f16` for 16-bit floating-point
+- `f32` for 32-bit floating-point
+- `q8_0` for 8-bit integer quantization
+- `q5_0` or `q5_1` for 5-bit integer quantization
+- `q4_0` or `q4_1` for 4-bit integer quantization
+
 #### txt2img example
 
-```
-./bin/sd -m ../sd-v1-4-f16.gguf -p "a lovely cat"
+```sh
+./bin/sd -m ../models/sd-v1-4.ckpt -p "a lovely cat"
+# ./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 ```
 
 Using formats of different precisions will yield results of varying quality.
@@ -182,7 +181,7 @@ Using formats of different precisions will yield results of varying quality.
 
 
 ```
-./bin/sd --mode img2img -m ../models/sd-v1-4-f16.gguf -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
+./bin/sd --mode img2img -m ../models/sd-v1-4.ckpt -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
 ```
 
 <p align="center">
@@ -191,13 +190,6 @@ Using formats of different precisions will yield results of varying quality.
 
 #### with LoRA
 
-- convert lora weights to gguf model format
-
-    ```shell
-    bin/convert [lora path] -t f16
-    # For example,  bin/convert marblesh.safetensors -t f16
-    ```
-
 - You can specify the directory where the lora weights are stored via `--lora-model-dir`. If not specified, the default is the current working directory.
 
 - LoRA is specified via prompt, just like [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora).
@@ -205,10 +197,10 @@ Using formats of different precisions will yield results of varying quality.
 Here's a simple example:
 
 ```
-./bin/sd -m ../models/v1-5-pruned-emaonly-f16.gguf -p "a lovely cat<lora:marblesh:1>" --lora-model-dir ../models
+./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat<lora:marblesh:1>" --lora-model-dir ../models
 ```
 
-`../models/marblesh.gguf` will be applied to the model
+`../models/marblesh.safetensors` or `../models/marblesh.ckpt` will be applied to the model
 
 #### LCM/LCM-LoRA
 
@@ -219,7 +211,7 @@ Here's a simple example:
 Here's a simple example:
 
 ```
-./bin/sd -m ../models/v1-5-pruned-emaonly-f16.gguf -p "a lovely cat<lora:lcm-lora-sdv1-5:1>" --steps 4 --lora-model-dir ../models -v --cfg-scale 1
+./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat<lora:lcm-lora-sdv1-5:1>" --steps 4 --lora-model-dir ../models -v --cfg-scale 1
 ```
 
 | without LCM-LoRA (--cfg-scale 7)  | with LCM-LoRA (--cfg-scale 1)  |
@@ -240,14 +232,13 @@ docker build -t sd .
 ```shell
 docker run -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
 # For example
-# docker run -v ./models:/models -v ./build:/output sd -m /models/sd-v1-4-f16.gguf -p "a lovely cat" -v -o /output/output.png
+# docker run -v ./models:/models -v ./build:/output sd -m /models/sd-v1-4.ckpt -p "a lovely cat" -v -o /output/output.png
 ```
 
-## Memory/Disk Requirements
+## Memory Requirements
 
 | precision | f32  | f16  |q8_0  |q5_0  |q5_1  |q4_0  |q4_1  |
 | ----         | ----  |----  |----  |----  |----  |----  |----  |
-|  **Disk**        | 2.7G | 2.0G | 1.7G | 1.6G | 1.6G | 1.5G | 1.5G |
 |  **Memory** (txt2img - 512 x 512) | ~2.8G | ~2.3G | ~2.1G | ~2.0G | ~2.0G | ~2.0G | ~2.0G |
 |  **Memory** (txt2img - 512 x 512) *with Flash Attention* | ~2.4G | ~1.9G | ~1.6G | ~1.5G | ~1.5G | ~1.5G | ~1.5G |
 

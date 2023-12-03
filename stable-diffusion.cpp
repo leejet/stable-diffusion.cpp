@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <inttypes.h>
+#include <stdarg.h>
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -22,61 +23,24 @@
 #include "ggml-cuda.h"
 #endif
 
+#include "model.h"
 #include "rng.h"
 #include "rng_philox.h"
 #include "stable-diffusion.h"
+#include "util.h"
 
 #define EPS 1e-05f
-
-static SDLogLevel log_level = SDLogLevel::INFO;
 
 #define UNET_GRAPH_SIZE 3328
 #define LORA_GRAPH_SIZE 4096
 
-#define __FILENAME__ "stable-diffusion.cpp"
-#define SD_LOG(level, format, ...)                                                                    \
-    do {                                                                                              \
-        if (level < log_level) {                                                                      \
-            break;                                                                                    \
-        }                                                                                             \
-        if (level == SDLogLevel::DEBUG) {                                                             \
-            printf("[DEBUG] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
-            fflush(stdout);                                                                           \
-        } else if (level == SDLogLevel::INFO) {                                                       \
-            printf("[INFO]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__);          \
-            fflush(stdout);                                                                           \
-        } else if (level == SDLogLevel::WARN) {                                                       \
-            fprintf(stderr, "[WARN]  %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
-            fflush(stdout);                                                                           \
-        } else if (level == SDLogLevel::ERROR) {                                                      \
-            fprintf(stderr, "[ERROR] %s:%-4d - " format "\n", __FILENAME__, __LINE__, ##__VA_ARGS__); \
-            fflush(stdout);                                                                           \
-        }                                                                                             \
-    } while (0)
-
-#define LOG_DEBUG(format, ...) SD_LOG(SDLogLevel::DEBUG, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...) SD_LOG(SDLogLevel::INFO, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...) SD_LOG(SDLogLevel::WARN, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) SD_LOG(SDLogLevel::ERROR, format, ##__VA_ARGS__)
-
 #define TIMESTEPS 1000
-
-enum SDVersion {
-    VERSION_1_x,
-    VERSION_2_x,
-    VERSION_XL,
-    VERSION_COUNT,
-};
 
 const char* model_version_to_str[] = {
     "1.x",
     "2.x",
-    "XL"};
-
-const char* lora_type_to_str[] = {
-    "regular",
-    "diffusers",
-    "transformers"};
+    "XL",
+};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -86,13 +50,10 @@ const char* sampling_methods_str[] = {
     "DPM++ (2s)",
     "DPM++ (2M)",
     "modified DPM++ (2M)",
-    "LCM"};
+    "LCM",
+};
 
 /*================================================== Helper Functions ================================================*/
-
-void set_sd_log_level(SDLogLevel level) {
-    log_level = level;
-}
 
 std::string sd_get_system_info() {
     std::stringstream ss;
@@ -188,7 +149,7 @@ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false) {
     if (shape_only) {
         return;
     }
-    int range = 3;
+    int range = 1000;
     for (int i = 0; i < tensor->ne[3]; i++) {
         if (i >= range && i + range < tensor->ne[3]) {
             continue;
@@ -277,15 +238,46 @@ void sd_fread(void* ptr, size_t size, size_t count, FILE* stream) {
     }
 }
 
-void copy_ggml_tensor(
-    struct ggml_tensor* dst,
-    const struct ggml_tensor* src) {
-    dst->nb[0] = src->nb[0];
-    dst->nb[1] = src->nb[1];
-    dst->nb[2] = src->nb[2];
-    dst->nb[3] = src->nb[3];
+void copy_ggml_tensor(struct ggml_tensor* dst, struct ggml_tensor* src) {
+    if (dst->type == src->type) {
+        dst->nb[0] = src->nb[0];
+        dst->nb[1] = src->nb[1];
+        dst->nb[2] = src->nb[2];
+        dst->nb[3] = src->nb[3];
 
-    memcpy(((char*)dst->data), ((char*)src->data), ggml_nbytes(dst));
+        memcpy(((char*)dst->data), ((char*)src->data), ggml_nbytes(dst));
+        return;
+    }
+    struct ggml_init_params params;
+    params.mem_size          = 10 * 1024 * 1024;  // for padding
+    params.mem_buffer        = NULL;
+    params.no_alloc          = false;
+    struct ggml_context* ctx = ggml_init(params);
+    if (!ctx) {
+        LOG_ERROR("ggml_init() failed");
+        return;
+    }
+    ggml_tensor* final = ggml_cpy_inplace(ctx, src, dst);
+
+    struct ggml_cgraph* graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, final);
+    ggml_graph_compute_with_ctx(ctx, graph, 1);
+    ggml_free(ctx);
+}
+
+void calculate_alphas_cumprod(float* alphas_cumprod,
+                              float linear_start = 0.00085f,
+                              float linear_end   = 0.0120,
+                              int timesteps      = TIMESTEPS) {
+    float ls_sqrt = sqrtf(linear_start);
+    float le_sqrt = sqrtf(linear_end);
+    float amount  = le_sqrt - ls_sqrt;
+    float product = 1.0f;
+    for (int i = 0; i < timesteps; i++) {
+        float beta = ls_sqrt + amount * ((float)i / (timesteps - 1));
+        product *= 1.0f - powf(beta, 2.0f);
+        alphas_cumprod[i] = product;
+    }
 }
 
 // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
@@ -394,22 +386,6 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
     }
 
     return std::make_pair(filename2multiplier, text);
-}
-
-bool ends_with(const std::string& str, const std::string& ending) {
-    if (str.length() >= ending.length()) {
-        return (str.compare(str.length() - ending.length(), ending.length(), ending) == 0);
-    } else {
-        return false;
-    }
-}
-
-void replace_all_chars(std::string& str, char target, char replacement) {
-    for (size_t i = 0; i < str.length(); ++i) {
-        if (str[i] == target) {
-            str[i] = replacement;
-        }
-    }
 }
 
 /*================================================== CLIPTokenizer ===================================================*/
@@ -3244,7 +3220,7 @@ struct AutoEncoderKL {
         struct ggml_cgraph* gf = build_graph(x, decode);
 
         // compute the required memory
-        size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf);
+        size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf) + 10 * 1024 * 1024;
 
         // recreate the allocator with the required memory
         ggml_allocr_free(compute_alloc);
@@ -3281,9 +3257,21 @@ struct AutoEncoderKL {
     }
 };
 
+float ggml_backend_tensor_get_f32(ggml_tensor* tensor) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16);
+    float value;
+    if (tensor->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(tensor, &value, 0, sizeof(value));
+    } else {  // GGML_TYPE_F16
+        ggml_fp16_t f16_value;
+        ggml_backend_tensor_get(tensor, &f16_value, 0, sizeof(f16_value));
+        value = ggml_fp16_to_fp32(f16_value);
+    }
+    return value;
+}
+
 struct LoraModel {
-    float strength = 1.0f;
-    std::map<std::string, float> lora_alphas;
+    float multiplier = 1.0f;
     std::map<std::string, struct ggml_tensor*> lora_tensors;
 
     struct ggml_context* ctx;
@@ -3293,37 +3281,15 @@ struct LoraModel {
     bool load(ggml_backend_t backend_, std::string file_path) {
         backend = backend_;
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
-        ggml_context* ctx_meta = NULL;
-        gguf_context* ctx_gguf = gguf_init_from_file(file_path.c_str(), {true, &ctx_meta});
+        std::shared_ptr<ModelLoader> model_loader = std::shared_ptr<ModelLoader>(init_model_loader_from_file(file_path));
 
-        if (!ctx_gguf) {
-            LOG_ERROR("failed to open '%s'", file_path.c_str());
+        if (!model_loader) {
+            LOG_ERROR("init lora model loader from file failed: '%s'", file_path.c_str());
             return false;
         }
 
-        FILE* fp = std::fopen(file_path.c_str(), "rb");
-
-        SDVersion version = VERSION_COUNT;
-
-        int n_kv      = gguf_get_n_kv(ctx_gguf);
-        int n_tensors = gguf_get_n_tensors(ctx_gguf);
-
-        for (int i = 0; i < n_kv; i++) {
-            const char* name          = gguf_get_key(ctx_gguf, i);
-            const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
-            LOG_DEBUG("%s: - kv %3d: %42s %-8s", __func__, i, name, gguf_type_name(type));
-        }
-
-        {
-            int nidx = gguf_find_key(ctx_gguf, "sd.lora.name");
-            int tidx = gguf_find_key(ctx_gguf, "sd.lora.type");
-            if (tidx >= 0 && nidx >= 0) {
-                LOG_INFO("LoRA Type: %s | %s", lora_type_to_str[gguf_get_val_i32(ctx_gguf, tidx) - 1], gguf_get_val_str(ctx_gguf, nidx));
-            }
-        }
-
         struct ggml_init_params params;
-        params.mem_size   = static_cast<size_t>(n_tensors * ggml_tensor_overhead());
+        params.mem_size   = static_cast<size_t>(1024 * ggml_tensor_overhead());
         params.mem_buffer = NULL;
         params.no_alloc   = true;
 
@@ -3333,82 +3299,28 @@ struct LoraModel {
             return false;
         }
 
-        ggml_type wtype = GGML_TYPE_COUNT;
-        {
-            int idx = gguf_find_key(ctx_gguf, "sd.lora.dtype");
-            if (idx >= 0) {
-                wtype = (ggml_type)gguf_get_val_i32(ctx_gguf, idx);
-                LOG_INFO("LoRA data type: %s", ggml_type_name(wtype));
-            }
-        }
+        ggml_type wtype = model_loader->get_sd_wtype();
 
         LOG_DEBUG("calculating buffer size");
-        int memory_buffer_size = 0;
-
-        for (int i = 0; i < n_tensors; i++) {
-            std::string name          = gguf_get_tensor_name(ctx_gguf, i);
-            struct ggml_tensor* dummy = ggml_get_tensor(ctx_meta, name.c_str());
-            memory_buffer_size += (int)ggml_nbytes(dummy);
-        }
+        int64_t memory_buffer_size = model_loader->cal_mem_size();
         LOG_DEBUG("lora params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
 
         params_buffer_lora = ggml_backend_alloc_buffer(backend, memory_buffer_size);
-
-        LOG_DEBUG("loading alphas");
-        {
-            int kidx     = gguf_find_key(ctx_gguf, "sd.lora.alphas_k");
-            int vidx     = gguf_find_key(ctx_gguf, "sd.lora.alphas_v");
-            int n_alphas = gguf_get_arr_n(ctx_gguf, kidx);
-            if (n_alphas * 2 != n_tensors) {
-                LOG_ERROR("lora alphas expected: %i, got %i", n_tensors, n_alphas * 2);
-                return false;
-            }
-            float* alphas_values = (float*)gguf_get_arr_data(ctx_gguf, vidx);
-            for (int i = 0; i < n_alphas; i++) {
-                std::string alpha_name  = gguf_get_arr_str(ctx_gguf, kidx, i);
-                lora_alphas[alpha_name] = alphas_values[i];
-            }
-        }
-
         ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer_lora);
 
-        size_t data_offset = gguf_get_data_offset(ctx_gguf);
-        std::vector<char> read_buf;
-        for (int i = 0; i < n_tensors; i++) {
-            std::string name          = gguf_get_tensor_name(ctx_gguf, i);
-            struct ggml_tensor* dummy = ggml_get_tensor(ctx_meta, name.c_str());
-            size_t offset             = data_offset + gguf_get_tensor_offset(ctx_gguf, i);
+        auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+            const std::string& name = tensor_storage.name;
 
-#ifdef _WIN32
-            int ret = _fseeki64(fp, (__int64)offset, SEEK_SET);
-#else
-            int ret = std::fseek(fp, (long)offset, SEEK_SET);
-#endif
-            if (ret == -1) {
-                return false;
-            }
-
-            struct ggml_tensor* real = ggml_dup_tensor(ctx, dummy);
+            struct ggml_tensor* real = ggml_new_tensor(ctx, tensor_storage.type, tensor_storage.n_dims, tensor_storage.ne);
             ggml_allocr_alloc(alloc, real);
 
-            int num_bytes = (int)ggml_nbytes(dummy);
-
-            if (ggml_backend_is_cpu(backend)) {
-                // for the CPU and Metal backend, we can read directly into the tensor
-                sd_fread(real->data, 1, num_bytes, fp);
-            } else {
-                // read into a temporary buffer first, then copy to device memory
-                read_buf.resize(num_bytes);
-                sd_fread(read_buf.data(), 1, num_bytes, fp);
-                ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
-            }
+            *dst_tensor = real;
 
             lora_tensors[name] = real;
-        }
-        read_buf.clear();
-        std::fclose(fp);
-        gguf_free(ctx_gguf);
-        ggml_free(ctx_meta);
+            return true;
+        };
+
+        model_loader->load_tensors(on_new_tensor_cb);
 
         LOG_DEBUG("finished loaded lora");
         ggml_allocr_free(alloc);
@@ -3428,54 +3340,94 @@ struct LoraModel {
         };
 
         struct ggml_context* ctx0 = ggml_init(params);
+        struct ggml_cgraph* gf    = ggml_new_graph_custom(ctx0, LORA_GRAPH_SIZE, false);
 
-        struct ggml_cgraph* gf = ggml_new_graph_custom(ctx0, LORA_GRAPH_SIZE, false);
+        std::set<std::string> applied_lora_tensors;
         for (auto it : model_tensors) {
-            std::string k_tensor = it.first;
+            std::string k_tensor       = it.first;
+            struct ggml_tensor* weight = model_tensors[it.first];
 
             size_t k_pos = k_tensor.find(".weight");
             if (k_pos == std::string::npos) {
                 continue;
             }
-            k_tensor                    = k_tensor.substr(0, k_pos);
-            std::string lora_up_name    = "lora." + k_tensor + ".lora_up.weight";
-            std::string lora_down_name  = "lora." + k_tensor + ".lora_down.weight";
-            std::string lora_alpha_name = "lora." + k_tensor + ".alpha";
-            if (
-                lora_tensors.find(lora_up_name) != lora_tensors.end() &&
-                lora_tensors.find(lora_down_name) != lora_tensors.end() &&
-                lora_alphas.find(lora_alpha_name) != lora_alphas.end()) {
-                struct ggml_tensor* loraA  = lora_tensors[lora_up_name];
-                struct ggml_tensor* loraB  = lora_tensors[lora_down_name];
-                struct ggml_tensor* weight = model_tensors[it.first];
+            k_tensor = k_tensor.substr(0, k_pos);
+            replace_all_chars(k_tensor, '.', '_');
+            std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
+            std::string lora_down_name = "lora." + k_tensor + ".lora_down.weight";
+            std::string alpha_name     = "lora." + k_tensor + ".alpha";
+            std::string scale_name     = "lora." + k_tensor + ".scale";
 
-                float scale = strength;
-                scale *= (lora_alphas[lora_alpha_name] / loraB->ne[loraB->n_dims - 1]);
-                ggml_tensor* lora_scale = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+            ggml_tensor* lora_up   = NULL;
+            ggml_tensor* lora_down = NULL;
 
-                ggml_allocr_alloc(compute_alloc, lora_scale);
-                if (!ggml_allocr_is_measure(compute_alloc)) {
-                    ggml_backend_tensor_set(lora_scale, &scale, 0, ggml_nbytes(lora_scale));
-                }
+            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
+                lora_up = lora_tensors[lora_up_name];
+            }
 
-                // flat lora tensors to multiply it
-                int64_t loraA_rows = loraA->ne[loraA->n_dims - 1];
-                loraA              = ggml_reshape_2d(ctx0, loraA, ggml_nelements(loraA) / loraA_rows, loraA_rows);
-                int64_t loraB_rows = loraB->ne[loraB->n_dims - 1];
-                loraB              = ggml_reshape_2d(ctx0, loraB, ggml_nelements(loraB) / loraB_rows, loraB_rows);
+            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
+                lora_down = lora_tensors[lora_down_name];
+            }
 
-                // ggml_mul_mat requires tensor b transposed
-                loraB                      = ggml_cont(ctx0, ggml_transpose(ctx0, loraB));
-                struct ggml_tensor* loraBA = ggml_mul_mat(ctx0, loraA, loraB);
-                loraBA                     = ggml_cont(ctx0, ggml_transpose(ctx0, loraBA));
-                loraBA                     = ggml_reshape(ctx0, loraBA, weight);
-                GGML_ASSERT(ggml_nelements(loraBA) == ggml_nelements(weight));
-                loraBA = ggml_scale_inplace(ctx0, loraBA, lora_scale);
-                ggml_tensor* final_weight;
-                final_weight = ggml_add_inplace(ctx0, weight, loraBA);  // apply directly
-                ggml_build_forward_expand(gf, final_weight);
+            if (lora_up == NULL || lora_down == NULL) {
+                continue;
+            }
+
+            applied_lora_tensors.insert(lora_up_name);
+            applied_lora_tensors.insert(lora_down_name);
+            applied_lora_tensors.insert(alpha_name);
+            applied_lora_tensors.insert(scale_name);
+
+            // calc_cale
+            int64_t dim       = lora_down->ne[lora_down->n_dims - 1];
+            float scale_value = 1.0f;
+            if (lora_tensors.find(scale_name) != lora_tensors.end()) {
+                scale_value = ggml_backend_tensor_get_f32(lora_tensors[scale_name]);
+            } else if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
+                float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
+                scale_value = alpha / dim;
+            }
+            scale_value *= multiplier;
+
+            ggml_tensor* lora_scale = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+
+            ggml_allocr_alloc(compute_alloc, lora_scale);
+            if (!ggml_allocr_is_measure(compute_alloc)) {
+                ggml_backend_tensor_set(lora_scale, &scale_value, 0, ggml_nbytes(lora_scale));
+            }
+
+            // flat lora tensors to multiply it
+            int64_t lora_up_rows   = lora_up->ne[lora_up->n_dims - 1];
+            lora_up                = ggml_reshape_2d(ctx0, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
+            int64_t lora_down_rows = lora_down->ne[lora_down->n_dims - 1];
+            lora_down              = ggml_reshape_2d(ctx0, lora_down, ggml_nelements(lora_down) / lora_down_rows, lora_down_rows);
+
+            // ggml_mul_mat requires tensor b transposed
+            lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
+            struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_up, lora_down);
+            updown                     = ggml_cont(ctx0, ggml_transpose(ctx0, updown));
+            updown                     = ggml_reshape(ctx0, updown, weight);
+            GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
+            updown = ggml_scale_inplace(ctx0, updown, lora_scale);
+            ggml_tensor* final_weight;
+            // if (weight->type != GGML_TYPE_F32 && weight->type != GGML_TYPE_F16) {
+            //     final_weight = ggml_new_tensor(ctx0, GGML_TYPE_F32, weight->n_dims, weight->ne);
+            //     final_weight = ggml_cpy_inplace(ctx0, weight, final_weight);
+            //     final_weight = ggml_add_inplace(ctx0, final_weight, updown);
+            //     final_weight = ggml_cpy_inplace(ctx0, final_weight, weight);
+            // } else {
+            //     final_weight = ggml_add_inplace(ctx0, weight, updown);
+            // }
+            final_weight = ggml_add_inplace(ctx0, weight, updown);  // apply directly
+            ggml_build_forward_expand(gf, final_weight);
+        }
+
+        for (auto& kv : lora_tensors) {
+            if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
+                LOG_WARN("unused lora tensor %s", kv.first.c_str());
             }
         }
+
         return gf;
     }
 
@@ -3683,11 +3635,7 @@ public:
         } else if (rng_type == CUDA_RNG) {
             rng = std::make_shared<PhiloxRNG>();
         }
-        if (lora_model_dir.size() > 0) {
-            if (lora_model_dir[lora_model_dir.size() - 1] != '/' && lora_model_dir[lora_model_dir.size() - 1] != '\\') {
-                this->lora_model_dir = lora_model_dir + "/";
-            }
-        }
+        this->lora_model_dir = lora_model_dir;
     }
 
     ~StableDiffusionGGML() {
@@ -3696,7 +3644,10 @@ public:
         first_stage_model.destroy();
     }
 
-    bool load_from_file(const std::string& file_path, Schedule schedule) {
+    bool load_from_file(const std::string& model_path,
+                        const std::string& vae_path,
+                        ggml_type wtype,
+                        Schedule schedule) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init();
@@ -3712,59 +3663,44 @@ public:
         LOG_INFO("Flash Attention enabled");
 #endif
 #endif
-        LOG_INFO("loading model from '%s'", file_path.c_str());
-        ggml_context* ctx_meta = NULL;
-        gguf_context* ctx_gguf = gguf_init_from_file(file_path.c_str(), {true, &ctx_meta});
-        if (!ctx_gguf) {
-            LOG_ERROR("failed to open '%s'", file_path.c_str());
+        LOG_INFO("loading model from '%s'", model_path.c_str());
+        std::shared_ptr<ModelLoader> model_loader = std::shared_ptr<ModelLoader>(init_model_loader_from_file(model_path));
+
+        if (!model_loader) {
+            LOG_ERROR("init model loader from file failed: '%s'", model_path.c_str());
             return false;
         }
 
-        FILE* fp = std::fopen(file_path.c_str(), "rb");
-
-        SDVersion version = VERSION_COUNT;
-
-        int n_kv      = gguf_get_n_kv(ctx_gguf);
-        int n_tensors = gguf_get_n_tensors(ctx_gguf);
-
-        for (int i = 0; i < n_kv; i++) {
-            const char* name          = gguf_get_key(ctx_gguf, i);
-            const enum gguf_type type = gguf_get_kv_type(ctx_gguf, i);
-            LOG_DEBUG("%s: - kv %3d: %42s %-8s", __func__, i, name, gguf_type_name(type));
-        }
-
-        {
-            int nidx = gguf_find_key(ctx_gguf, "sd.model.name");
-            int vidx = gguf_find_key(ctx_gguf, "sd.model.version");
-            if (vidx >= 0 && nidx >= 0) {
-                version          = (SDVersion)gguf_get_val_i8(ctx_gguf, vidx);
-                cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
-                diffusion_model  = UNetModel(version);
-                LOG_INFO("Stable Diffusion %s | %s", model_version_to_str[version], gguf_get_val_str(ctx_gguf, nidx));
+        if (vae_path.size() > 0) {
+            LOG_INFO("loading vae from '%s'", vae_path.c_str());
+            if (!model_loader->init_from_file(vae_path, "vae.")) {
+                LOG_WARN("loading vae from '%s' failed", vae_path.c_str());
             }
         }
 
-        {
-            int idx = gguf_find_key(ctx_gguf, "sd.model.dtype");
-            if (idx >= 0) {
-                model_data_type = (ggml_type)gguf_get_val_i32(ctx_gguf, idx);
-                LOG_INFO("model data type: %s", ggml_type_name(model_data_type));
-            }
+        SDVersion version = model_loader->get_sd_version();
+        if (version == VERSION_COUNT) {
+            LOG_ERROR("get sd version from file failed: '%s'", model_path.c_str());
+            return false;
         }
+        cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
+        diffusion_model  = UNetModel(version);
+        LOG_INFO("Stable Diffusion %s ", model_version_to_str[version]);
+        if (wtype == GGML_TYPE_COUNT) {
+            model_data_type = model_loader->get_sd_wtype();
+        } else {
+            model_data_type = wtype;
+        }
+        LOG_INFO("Stable Diffusion weight type: %s", ggml_type_name(model_data_type));
 
         LOG_DEBUG("loading vocab");
-
-        // load vocab
-        {
-            int tidx = gguf_find_key(ctx_gguf, "sd.vocab.tokens");
-            if (tidx == -1) {
-                LOG_ERROR("vocab not found");
-                return false;
-            }
-            int n_vocab = gguf_get_arr_n(ctx_gguf, tidx);
-            for (int i = 0; i < n_vocab; i++) {
-                cond_stage_model.tokenizer.add_token(gguf_get_arr_str(ctx_gguf, tidx, i), i);
-            }
+        auto add_token = [&](const std::string& token, int32_t token_id) {
+            cond_stage_model.tokenizer.add_token(token, token_id);
+        };
+        bool success = model_loader->load_vocab(add_token);
+        if (!success) {
+            LOG_ERROR("get vocab from file failed: '%s'", model_path.c_str());
+            return false;
         }
 
         // create the ggml context for network params
@@ -3793,34 +3729,33 @@ public:
             first_stage_model.map_by_name(tensors, "first_stage_model.");
         }
 
-        std::set<std::string> tensor_names_in_file;
-        int64_t t0 = ggml_time_ms();
-        LOG_DEBUG("loading weights");
+        struct ggml_init_params params;
+        params.mem_size          = static_cast<size_t>(10 * 1024) * 1024;  // 10M
+        params.mem_buffer        = NULL;
+        params.no_alloc          = false;
+        struct ggml_context* ctx = ggml_init(params);  // for  alphas_cumprod and is_using_v_parameterization check
+        if (!ctx) {
+            LOG_ERROR("ggml_init() failed");
+            return false;
+        }
+        ggml_tensor* alphas_cumprod_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, TIMESTEPS);
+        calculate_alphas_cumprod((float*)alphas_cumprod_tensor->data);
 
         // load weights
-        float alphas_cumprod[TIMESTEPS];
+        LOG_DEBUG("loading weights");
+        std::set<std::string> tensor_names_in_file;
+        int64_t t0 = ggml_time_ms();
 
+        size_t total_size = 0;
         std::vector<char> read_buf;
-        size_t total_size  = 0;
-        size_t data_offset = gguf_get_data_offset(ctx_gguf);
-        for (int i = 0; i < n_tensors; i++) {
-            std::string name          = gguf_get_tensor_name(ctx_gguf, i);
-            struct ggml_tensor* dummy = ggml_get_tensor(ctx_meta, name.c_str());
-            size_t offset             = data_offset + gguf_get_tensor_offset(ctx_gguf, i);
+
+        auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+            const std::string& name = tensor_storage.name;
             tensor_names_in_file.insert(name);
 
-#ifdef _WIN32
-            int ret = _fseeki64(fp, (__int64)offset, SEEK_SET);
-#else
-            int ret = std::fseek(fp, (long)offset, SEEK_SET);
-#endif
-            if (ret == -1) {
-                return false;
-            }
-
             if (name == "alphas_cumprod") {
-                sd_fread(alphas_cumprod, 1, ggml_nbytes(dummy), fp);
-                continue;
+                *dst_tensor = alphas_cumprod_tensor;
+                return true;
             }
 
             struct ggml_tensor* real;
@@ -3832,54 +3767,46 @@ public:
                 } else {
                     if (!vae_decode_only) {
                         LOG_WARN("unknown tensor '%s' in model file", name.data());
-                        return false;
                     }
                 }
-                continue;
+                return true;
             }
 
             if (
-                real->ne[0] != dummy->ne[0] ||
-                real->ne[1] != dummy->ne[1] ||
-                real->ne[2] != dummy->ne[2] ||
-                real->ne[3] != dummy->ne[3]) {
+                real->ne[0] != tensor_storage.ne[0] ||
+                real->ne[1] != tensor_storage.ne[1] ||
+                real->ne[2] != tensor_storage.ne[2] ||
+                real->ne[3] != tensor_storage.ne[3]) {
                 LOG_ERROR(
                     "tensor '%s' has wrong shape in model file: "
                     "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
                     name.c_str(),
-                    (int)dummy->ne[0], (int)dummy->ne[1], (int)dummy->ne[2], (int)dummy->ne[3],
+                    (int)tensor_storage.ne[0], (int)tensor_storage.ne[1], (int)tensor_storage.ne[2], (int)tensor_storage.ne[3],
                     (int)real->ne[0], (int)real->ne[1], (int)real->ne[2], (int)real->ne[3]);
                 return false;
             }
 
-            if (real->type != dummy->type) {
-                LOG_ERROR("tensor '%s' has wrong type in model file: got %s, expect %s",
-                          name.c_str(), ggml_type_name(dummy->type), ggml_type_name(real->type));
-                return false;
-            }
+            *dst_tensor = real;
 
-            int num_bytes = (int)ggml_nbytes(dummy);
+            total_size += ggml_nbytes(real);
+            return true;
+        };
 
-            if (ggml_backend_is_cpu(backend)) {
-                // for the CPU and Metal backend, we can read directly into the tensor
-                sd_fread(real->data, 1, num_bytes, fp);
-            } else {
-                // read into a temporary buffer first, then copy to device memory
-                read_buf.resize(num_bytes);
-                sd_fread(read_buf.data(), 1, num_bytes, fp);
-                ggml_backend_tensor_set(real, read_buf.data(), 0, num_bytes);
-            }
+        // print_ggml_tensor(alphas_cumprod_tensor);
 
-            total_size += ggml_nbytes(dummy);
+        success = model_loader->load_tensors(on_new_tensor_cb);
+        if (!success) {
+            LOG_ERROR("load tensors from file failed");
+            ggml_free(ctx);
+            return false;
         }
 
-        gguf_free(ctx_gguf);
-        ggml_free(ctx_meta);
+        // print_ggml_tensor(alphas_cumprod_tensor);
 
-        std::fclose(fp);
-        read_buf.clear();
+        // calculate_alphas_cumprod((float*)alphas_cumprod_tensor->data);
 
         bool some_tensor_not_init = false;
+
         for (auto pair : tensors) {
             if (pair.first.find("cond_stage_model.transformer.text_model.encoder.layers.23") != std::string::npos) {
                 continue;
@@ -3891,12 +3818,8 @@ public:
             }
         }
 
-        if (tensor_names_in_file.find("alphas_cumprod") == tensor_names_in_file.end()) {
-            LOG_ERROR("tensor alphas_cumprod not in model file");
-            some_tensor_not_init = true;
-        }
-
         if (some_tensor_not_init) {
+            ggml_free(ctx);
             return false;
         }
 
@@ -3912,24 +3835,14 @@ public:
                  diffusion_model.memory_buffer_size / 1024.0 / 1024.0,
                  first_stage_model.memory_buffer_size / 1024.0 / 1024.0);
         int64_t t1 = ggml_time_ms();
-        LOG_INFO("loading model from '%s' completed, taking %.2fs", file_path.c_str(), (t1 - t0) * 1.0f / 1000);
+        LOG_INFO("loading model from '%s' completed, taking %.2fs", model_path.c_str(), (t1 - t0) * 1.0f / 1000);
 
         // check is_using_v_parameterization_for_sd2
         bool is_using_v_parameterization = false;
         if (version == VERSION_2_x) {
-            struct ggml_init_params params;
-            params.mem_size          = static_cast<size_t>(10 * 1024) * 1024;  // 10M
-            params.mem_buffer        = NULL;
-            params.no_alloc          = false;
-            struct ggml_context* ctx = ggml_init(params);
-            if (!ctx) {
-                LOG_ERROR("ggml_init() failed");
-                return false;
-            }
             if (is_using_v_parameterization_for_sd2(ctx)) {
                 is_using_v_parameterization = true;
             }
-            ggml_free(ctx);
         }
 
         if (is_using_v_parameterization) {
@@ -3959,11 +3872,12 @@ public:
         }
 
         for (int i = 0; i < TIMESTEPS; i++) {
-            denoiser->schedule->alphas_cumprod[i] = alphas_cumprod[i];
+            denoiser->schedule->alphas_cumprod[i] = ((float*)alphas_cumprod_tensor->data)[i];
             denoiser->schedule->sigmas[i]         = std::sqrt((1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
             denoiser->schedule->log_sigmas[i]     = std::log(denoiser->schedule->sigmas[i]);
         }
         LOG_DEBUG("finished loaded file");
+        ggml_free(ctx);
         return true;
     }
 
@@ -4005,13 +3919,26 @@ public:
     void apply_lora(const std::string& lora_name, float multiplier) {
         int64_t t0 = ggml_time_ms();
         LoraModel lora;
-        std::string file_path = lora_model_dir + lora_name + ".gguf";
-        if (lora.load(backend, file_path)) {
-            lora.strength = multiplier;
-            lora.apply(tensors, n_threads);
-            loras[lora_name] = lora;
-            lora.release();
+        std::string st_file_path   = path_join(lora_model_dir, lora_name + ".safetensors");
+        std::string ckpt_file_path = path_join(lora_model_dir, lora_name + ".ckpt");
+        std::string file_path;
+        if (file_exists(st_file_path)) {
+            file_path = st_file_path;
+        } else if (file_exists(ckpt_file_path)) {
+            file_path = ckpt_file_path;
+        } else {
+            LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
+            return;
         }
+        if (!lora.load(backend, file_path)) {
+            LOG_WARN("load lora tensors from %s failed", file_path.c_str());
+            return;
+        }
+
+        lora.multiplier = multiplier;
+        lora.apply(tensors, n_threads);
+        loras[lora_name] = lora;
+        lora.release();
 
         int64_t t1 = ggml_time_ms();
 
@@ -4621,8 +4548,11 @@ StableDiffusion::StableDiffusion(int n_threads,
                                                rng_type);
 }
 
-bool StableDiffusion::load_from_file(const std::string& file_path, Schedule s) {
-    return sd->load_from_file(file_path, s);
+bool StableDiffusion::load_from_file(const std::string& model_path,
+                                     const std::string& vae_path,
+                                     ggml_type wtype,
+                                     Schedule s) {
+    return sd->load_from_file(model_path, vae_path, wtype, s);
 }
 
 std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
