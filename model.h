@@ -98,29 +98,6 @@ protected:
     std::vector<std::string> file_paths_;
     std::vector<TensorStorage> tensor_storages;
 
-public:
-    virtual bool init_from_file(const std::string& file_path, const std::string& prefix = "");
-    virtual bool init_from_files(const std::vector<std::string>& file_paths);
-    virtual SDVersion get_sd_version();
-    virtual ggml_type get_sd_wtype();
-    virtual bool load_vocab(on_new_token_cb_t on_new_token_cb);
-    virtual bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb);
-    virtual int64_t cal_mem_size();
-    virtual ~ModelLoader() = default;
-};
-
-class GGUFModelLoader : public ModelLoader {
-public:
-    bool init_from_file(const std::string& file_path, const std::string& prefix = "");
-};
-
-class SafeTensorsModelLoader : public ModelLoader {
-public:
-    bool init_from_file(const std::string& file_path, const std::string& prefix = "");
-};
-
-class CkptModelLoader : public ModelLoader {
-private:
     bool parse_data_pkl(uint8_t* buffer,
                         size_t buffer_size,
                         zip_t* zip,
@@ -128,15 +105,18 @@ private:
                         size_t file_index,
                         const std::string& prefix);
 
+    bool init_from_gguf_file(const std::string& file_path, const std::string& prefix = "");
+    bool init_from_safetensors_file(const std::string& file_path, const std::string& prefix = "");
+    bool init_from_ckpt_file(const std::string& file_path, const std::string& prefix = "");
+    bool init_from_diffusers_file(const std::string& file_path, const std::string& prefix = "");
+
 public:
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
+    SDVersion get_sd_version();
+    ggml_type get_sd_wtype();
+    bool load_vocab(on_new_token_cb_t on_new_token_cb);
+    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb);
+    int64_t cal_mem_size();
+    ~ModelLoader() = default;
 };
-
-class DiffusersModelLoader : public SafeTensorsModelLoader {
-public:
-    bool init_from_file(const std::string& file_path, const std::string& prefix = "");
-};
-
-ModelLoader* init_model_loader_from_file(const std::string& file_path);
-
 #endif  // __MODEL_H__
