@@ -4016,7 +4016,7 @@ struct LoraModel {
         ggml_type wtype = model_loader.get_sd_wtype();
 
         LOG_DEBUG("calculating buffer size");
-        int64_t memory_buffer_size = model_loader.cal_mem_size();
+        int64_t memory_buffer_size = model_loader.cal_mem_size(backend);
         LOG_DEBUG("lora params backend buffer size = % 6.2f MB", memory_buffer_size / (1024.0 * 1024.0));
 
         params_buffer_lora = ggml_backend_alloc_buffer(backend, memory_buffer_size);
