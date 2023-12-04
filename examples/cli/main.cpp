@@ -116,7 +116,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
-    printf("                                     If not specified, the default is the type of the weight file.");
+    printf("                                     If not specified, the default is the type of the weight file.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");

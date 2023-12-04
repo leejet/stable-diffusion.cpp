@@ -124,7 +124,7 @@ cmake --build . --config Release
 ### Run
 
 ```
-usage: ./bin/sd [arguments]
+usage: sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
@@ -133,8 +133,10 @@ arguments:
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
   -m, --model [MODEL]                path to model
   --vae [VAE]                        path to vae
+  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
-                                     If not specified, the default is the type of the weight file.  --lora-model-dir [DIR]             lora model directory  
+                                     If not specified, the default is the type of the weight file.
+  --lora-model-dir [DIR]             lora model directory
   -i, --init-img [IMAGE]             path to the input image, required by img2img
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
@@ -151,7 +153,6 @@ arguments:
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate.
   --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)
-  --taesd TAESD_PATH                 path of taesd-model.gguf. use Tiny AutoEncoder for fast decoding (low quality)
   -v, --verbose                      print extra info
 ```
 
@@ -221,6 +222,23 @@ Here's a simple example:
 | ----  |----    |
 | ![](./assets/without_lcm.png) |![](./assets/with_lcm.png)  |
 
+## Using TAESD to faster decoding
+
+You can use TAESD to accelerate the decoding of latent images by following these steps:
+
+- Download the model [weights](https://huggingface.co/madebyollin/taesd/blob/main/diffusion_pytorch_model.safetensors).
+
+Or curl
+
+```bash
+curl -L -O https://huggingface.co/madebyollin/taesd/blob/main/diffusion_pytorch_model.safetensors
+```
+
+- Specify the model path using the `--taesd PATH` parameter. example:
+
+```bash
+sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --taesd ../models/diffusion_pytorch_model.safetensors
+```
 
 ### Docker
 

@@ -3244,7 +3244,7 @@ struct AutoEncoderKL {
         struct ggml_cgraph* gf = build_graph(x, decode);
 
         // compute the required memory
-        size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf) + 10 * 1024 * 1024;
+        size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf);
 
         // recreate the allocator with the required memory
         ggml_allocr_free(compute_alloc);
@@ -3842,7 +3842,7 @@ struct TinyAutoEncoder {
             if (taesd_tensors.find(name) != taesd_tensors.end()) {
                 real = taesd_tensors[name];
             } else {
-                if (name.find(".encoder.") != std::string::npos && decode_only) {
+                if (name.find("encoder.") != std::string::npos && decode_only) {
                     return true;
                 }
                 LOG_ERROR("unknown tensor '%s' in model file", name.data());
