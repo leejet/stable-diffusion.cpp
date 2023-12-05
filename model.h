@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ggml/ggml.h"
+#include "ggml/ggml-backend.h"
 #include "json.hpp"
 #include "zip.h"
 
@@ -116,7 +117,7 @@ public:
     ggml_type get_sd_wtype();
     bool load_vocab(on_new_token_cb_t on_new_token_cb);
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb);
-    int64_t cal_mem_size();
+    int64_t cal_mem_size(ggml_backend_t backend);
     ~ModelLoader() = default;
 };
 #endif  // __MODEL_H__

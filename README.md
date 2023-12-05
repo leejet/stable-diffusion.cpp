@@ -9,22 +9,23 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 ## Features
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
-- Super lightweight and without external dependencies.
+- Super lightweight and without external dependencies
 - SD1.x and SD2.x support
 - 16-bit, 32-bit float support
 - 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA backend for GPU acceleration, for now just for float16 and float32 models. There are some issues with quantized models and CUDA; it will be fixed in the future.
-- Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models.
+- Full CUDA backend for GPU acceleration.
+- Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
-- Flash Attention for memory usage optimization (only cpu for now).
+- Flash Attention for memory usage optimization (only cpu for now)
 - Original `txt2img` and `img2img` mode
 - Negative prompt
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
 - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
 - Latent Consistency Models support (LCM/LCM-LoRA)
+- Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -47,9 +48,10 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] More sampling methods
 - [ ] Make inference faster
     - The current implementation of ggml_conv_2d is slow and has high memory usage
+    - Implement Winograd Convolution 2D for 3x3 kernel filtering
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
 - [ ] Implement BPE Tokenizer
-- [ ] Add [TAESD](https://github.com/madebyollin/taesd) for faster VAE decoding
+- [ ] Implement [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN/tree/master) upscaler
 - [ ] k-quants support
 
 ## Usage
@@ -122,7 +124,7 @@ cmake --build . --config Release
 ### Run
 
 ```
-usage: ./bin/sd [arguments]
+usage: sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
@@ -131,8 +133,10 @@ arguments:
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
   -m, --model [MODEL]                path to model
   --vae [VAE]                        path to vae
+  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
-                                     If not specified, the default is the type of the weight file.  --lora-model-dir [DIR]             lora model directory  
+                                     If not specified, the default is the type of the weight file.
+  --lora-model-dir [DIR]             lora model directory
   -i, --init-img [IMAGE]             path to the input image, required by img2img
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
@@ -218,6 +222,23 @@ Here's a simple example:
 | ----  |----    |
 | ![](./assets/without_lcm.png) |![](./assets/with_lcm.png)  |
 
+## Using TAESD to faster decoding
+
+You can use TAESD to accelerate the decoding of latent images by following these steps:
+
+- Download the model [weights](https://huggingface.co/madebyollin/taesd/blob/main/diffusion_pytorch_model.safetensors).
+
+Or curl
+
+```bash
+curl -L -O https://huggingface.co/madebyollin/taesd/blob/main/diffusion_pytorch_model.safetensors
+```
+
+- Specify the model path using the `--taesd PATH` parameter. example:
+
+```bash
+sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --taesd ../models/diffusion_pytorch_model.safetensors
+```
 
 ### Docker
 

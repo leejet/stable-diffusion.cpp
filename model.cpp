@@ -1296,7 +1296,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
             if (backend == NULL || ggml_backend_is_cpu(backend)) {
                 // for the CPU and Metal backend, we can copy directly into the tensor
                 if (tensor_storage.type == dst_tensor->type) {
-                    GGML_ASSERT(ggml_nbytes(dst_tensor) == nbytes_to_read);
+                    GGML_ASSERT(ggml_nbytes(dst_tensor) == tensor_storage.nbytes());
                     read_data(tensor_storage, (char*)dst_tensor->data, nbytes_to_read);
 
                     if (tensor_storage.is_bf16) {
@@ -1349,16 +1349,23 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
     return success;
 }
 
-int64_t ModelLoader::cal_mem_size() {
+int64_t ModelLoader::cal_mem_size(ggml_backend_t backend) {
+    size_t alignment = 128;
+    if (backend != NULL) {
+        alignment = ggml_backend_get_alignment(backend);
+    }
     int64_t mem_size = 0;
+    std::vector<TensorStorage> processed_tensor_storages;
     for (auto& tensor_storage : tensor_storages) {
         if (is_unused_tensor(tensor_storage.name)) {
             continue;
         }
-
-        mem_size += tensor_storage.nbytes();
-        mem_size += GGML_MEM_ALIGN * 2;  // for lora alphas
+        preprocess_tensor(tensor_storage, processed_tensor_storages);
     }
 
-    return mem_size + 10 * 1024 * 1024;
+    for (auto& tensor_storage : processed_tensor_storages) {
+        mem_size += tensor_storage.nbytes() + alignment;
+    }
+
+    return mem_size;
 }

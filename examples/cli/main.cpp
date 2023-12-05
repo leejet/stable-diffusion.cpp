@@ -58,6 +58,7 @@ struct SDParams {
 
     std::string model_path;
     std::string vae_path;
+    std::string taesd_path;
     ggml_type wtype = GGML_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
@@ -86,6 +87,7 @@ void print_params(SDParams params) {
     printf("    model_path:        %s\n", params.model_path.c_str());
     printf("    wtype:             %s\n", params.wtype < GGML_TYPE_COUNT ? ggml_type_name(params.wtype) : "unspecified");
     printf("    vae_path:          %s\n", params.vae_path.c_str());
+    printf("    taesd_path:        %s\n", params.taesd_path.c_str());
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    prompt:            %s\n", params.prompt.c_str());
@@ -112,8 +114,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to model\n");
     printf("  --vae [VAE]                        path to vae\n");
+    printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
-    printf("                                     If not specified, the default is the type of the weight file.");
+    printf("                                     If not specified, the default is the type of the weight file.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
@@ -176,6 +179,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.vae_path = argv[i];
+        } else if (arg == "--taesd") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.taesd_path = argv[i];
         } else if (arg == "--type") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -449,7 +458,8 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    StableDiffusion sd(params.n_threads, vae_decode_only, true, params.lora_model_dir, params.rng_type);
+    StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_path, true, params.lora_model_dir, params.rng_type);
+
     if (!sd.load_from_file(params.model_path, params.vae_path, params.wtype, params.schedule)) {
         return 1;
     }
