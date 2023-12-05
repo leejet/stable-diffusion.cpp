@@ -26,6 +26,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
 - Latent Consistency Models support (LCM/LCM-LoRA)
 - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
+- Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -51,7 +52,6 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - Implement Winograd Convolution 2D for 3x3 kernel filtering
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
 - [ ] Implement BPE Tokenizer
-- [ ] Implement [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN/tree/master) upscaler
 - [ ] k-quants support
 
 ## Usage
@@ -134,6 +134,7 @@ arguments:
   -m, --model [MODEL]                path to model
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
+  -um, --upscale-model [ESRGAN_PATH] path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.
   --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
                                      If not specified, the default is the type of the weight file.
   --lora-model-dir [DIR]             lora model directory

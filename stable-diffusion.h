@@ -39,6 +39,7 @@ public:
     StableDiffusion(int n_threads                = -1,
                     bool vae_decode_only         = false,
                     std::string taesd_path       = "",
+                    std::string esrgan_path      = "",
                     bool free_params_immediately = false,
                     std::string lora_model_dir   = "",
                     RNGType rng_type             = STD_DEFAULT_RNG);
