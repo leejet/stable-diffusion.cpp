@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "ggml/ggml.h"
 
 enum RNGType {
     STD_DEFAULT_RNG,

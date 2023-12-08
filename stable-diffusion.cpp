@@ -341,7 +341,7 @@ void sd_split_chunk(struct ggml_tensor* input,
     int64_t width       = output->ne[0];
     int64_t height      = output->ne[1];
     int64_t channels    = output->ne[2];
-    GGML_ASSERT(channels == 3 && output->type == GGML_TYPE_F32);
+    GGML_ASSERT(input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32);
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
@@ -357,7 +357,7 @@ void sd_merge_chunk(struct ggml_tensor* input,
     int64_t width       = input->ne[0];
     int64_t height      = input->ne[1];
     int64_t channels    = input->ne[2];
-    GGML_ASSERT(channels == 3 && input->type == GGML_TYPE_F32);
+    GGML_ASSERT(input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32);
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
@@ -412,6 +412,58 @@ void sd_convert_output(struct ggml_tensor* src) {
     for (int i = 0; i < nelements; i++) {
         float val = data[i];
         data[i]   = (val + 1.0f) * 0.5f;
+    }
+}
+
+typedef std::function<void(ggml_tensor*, ggml_tensor*,bool)> on_tile_process;
+
+// Tiling
+void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, on_tile_process proc_tile) {
+    int input_width = input->ne[0];
+    int input_height = input->ne[1];
+    int output_width = output->ne[0];
+    int output_height = output->ne[1];
+    GGML_ASSERT(input_width % 2 == 0 && input_height % 2 == 0 && output_width % 2 == 0 && output_height % 2 == 0); // should be multiple of 2
+
+    int tile_width = (input_width < tile_size) ? input_width : tile_size;
+    int tile_height = (input_height < tile_size) ? input_height : tile_size;
+    LOG_DEBUG("tile size(%ix%i)", tile_width, tile_height);
+
+    struct ggml_init_params params = {};
+    params.mem_size += tile_width * tile_height * input->ne[2] * sizeof(float); // input chunk
+    params.mem_size += (tile_width * scale) * (tile_height * scale) * output->ne[2] * sizeof(float); // output chunk
+    params.mem_size += 3 * ggml_tensor_overhead();
+    params.mem_buffer = NULL;
+    params.no_alloc   = false;
+
+    LOG_DEBUG("tile work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
+
+    // draft context
+    struct ggml_context* tiles_ctx = ggml_init(params);
+    if (!tiles_ctx) {
+        LOG_ERROR("ggml_init() failed");
+        return;
+    }
+
+    // tiling
+    int tiles_x = (input_width + tile_size - 1) / tile_size;
+    int tiles_y = (input_height + tile_size - 1) / tile_size;
+    ggml_tensor* input_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_width, tile_height, input->ne[2], 1);
+    ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_width * scale, tile_height * scale, output->ne[2], 1);
+    proc_tile(input_tile, NULL, true);
+
+    int num_tiles = tiles_x * tiles_y;
+    LOG_INFO("processing %i tiles", num_tiles);
+    pretty_progress(1, num_tiles, 0.0f);
+    for(int y = 0; y < tiles_y; y ++) {
+        for(int x = 0; x < tiles_x; x++) {
+            int64_t t1 = ggml_time_ms();
+            sd_split_chunk(input, input_tile, x, y);
+            proc_tile(input_tile, output_tile, false);
+            sd_merge_chunk(output_tile, output, x, y);
+            int64_t t2 = ggml_time_ms();
+            pretty_progress(x + y * tiles_x + 1, num_tiles, (t2 - t1) / 1000.0f);
+        }
     }
 }
 
@@ -3901,7 +3953,7 @@ struct TinyAutoEncoder {
             return true;
         };
 
-        bool success = model_loader.load_tensors(on_new_tensor_cb);
+        bool success = model_loader.load_tensors(on_new_tensor_cb, backend);
 
         bool some_tensor_not_init = false;
 
@@ -4362,7 +4414,7 @@ struct ESRGAN {
             return true;
         };
 
-        bool success = model_loader.load_tensors(on_new_tensor_cb);
+        bool success = model_loader.load_tensors(on_new_tensor_cb, backend);
 
         bool some_tensor_not_init = false;
 
@@ -4600,7 +4652,7 @@ struct LoraModel {
             return true;
         };
 
-        model_loader.load_tensors(on_new_tensor_cb);
+        model_loader.load_tensors(on_new_tensor_cb, backend);
 
         LOG_DEBUG("finished loaded lora");
         ggml_allocr_free(alloc);
@@ -4941,7 +4993,7 @@ public:
                         Schedule schedule) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
-        backend = ggml_backend_cuda_init();
+        backend = ggml_backend_cuda_init(0);
 #endif
         if (!backend) {
             LOG_DEBUG("Using CPU backend");
@@ -5093,7 +5145,7 @@ public:
 
         // print_ggml_tensor(alphas_cumprod_tensor);
 
-        success = model_loader.load_tensors(on_new_tensor_cb);
+        success = model_loader.load_tensors(on_new_tensor_cb, backend);
         if (!success) {
             LOG_ERROR("load tensors from file failed");
             ggml_free(ctx);
@@ -5839,6 +5891,14 @@ public:
             } else {
                 sd_convert_input(x);
             }
+            // auto tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+            //     if(init) {
+            //         first_stage_model.begin(in, decode);
+            //     } else {
+            //         first_stage_model.compute(out, n_threads, in, decode);
+            //     }
+            // };
+            // sd_tiling(x, result, 8, 32, tiling);
             first_stage_model.begin(x, decode);
             first_stage_model.compute(result, n_threads, x, decode);
             first_stage_model.end();
@@ -5846,6 +5906,14 @@ public:
                 sd_convert_output(result);
             }
         } else {
+            // auto tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+            //     if(init) {
+            //         tae_first_stage.begin(in, decode);
+            //     } else {
+            //         tae_first_stage.compute(out, n_threads, in, decode);
+            //     }
+            // };
+            // sd_tiling(x, result, 8, 32, tiling);
             tae_first_stage.begin(x, decode);
             tae_first_stage.compute(result, n_threads, x, decode);
             tae_first_stage.end();
@@ -5859,57 +5927,34 @@ public:
     }
 
     uint8_t* upscale(ggml_tensor* image) {
-        int input_width = image->ne[0];
-        int input_height = image->ne[1];
-        int scale = esrgan_upscaler.scale;
-        int tile_size = esrgan_upscaler.tile_size;
-        GGML_ASSERT(input_width % 2 == 0 && input_height % 2 == 0); // should be multiple of 2
-        int output_width = input_width * scale;
-        int output_height = input_height * scale;
-        int tile_width = (input_width < tile_size) ? input_width : tile_size;
-        int tile_height = (input_height < tile_size) ? input_height : tile_size;
-
+        int output_width = image->ne[0] * esrgan_upscaler.scale;
+        int output_height = image->ne[1] * esrgan_upscaler.scale;
+        LOG_INFO("upscaling from (%i x %i) to (%i x %i)", image->ne[0], image->ne[1], output_width, output_height);
         struct ggml_init_params params;
         params.mem_size = output_width * output_height * 3 * sizeof(float); // upscaled
-        params.mem_size += tile_width * tile_height * 3 * sizeof(float); // input chunk
-        params.mem_size += (tile_width * scale) * (tile_height * scale) * 3 * sizeof(float); // output chunk
-        params.mem_size += 4 * ggml_tensor_overhead();
+        params.mem_size += 1 * ggml_tensor_overhead();
         params.mem_buffer = NULL;
         params.no_alloc   = false;
-
         // draft context
         struct ggml_context* upscale_ctx = ggml_init(params);
         if (!upscale_ctx) {
             LOG_ERROR("ggml_init() failed");
             return NULL;
         }
-
-        LOG_DEBUG("upscaling from (%i x %i) to (%i x %i)", input_width, input_height, output_width, output_height);
         LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
-        // tiling
-        int tiles_x = (input_width + tile_size - 1) / tile_size;
-        int tiles_y = (input_height + tile_size - 1) / tile_size;
-        ggml_tensor* input_chunk = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, tile_width, tile_height, image->ne[2], 1);
-        ggml_tensor* output_chunk = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, tile_width * scale, tile_height * scale, image->ne[2], 1);
-        ggml_tensor* upscaled_image = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, image->ne[2], 1);
-        esrgan_upscaler.begin(input_chunk);
-        int num_tiles = tiles_x * tiles_y;
-        LOG_INFO("processing %i tiles", num_tiles);
-        pretty_progress(1, num_tiles, 0.0f);
-        int64_t t0 = ggml_time_ms();
-        for(int y = 0; y < tiles_y; y ++) {
-            for(int x = 0; x < tiles_x; x++) {
-                int64_t t1 = ggml_time_ms();
-                sd_split_chunk(image, input_chunk, x, y);
-                esrgan_upscaler.compute(output_chunk, n_threads, input_chunk);
-                sd_merge_chunk(output_chunk, upscaled_image, x, y);
-                int64_t t2 = ggml_time_ms();
-                pretty_progress(x + y * tiles_x + 1, num_tiles, (t2 - t1) / 1000.0f);
+        ggml_tensor* upscaled = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, image->ne[2], 1);
+        auto tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+            if(init) {
+                esrgan_upscaler.begin(in);
+            } else {
+                esrgan_upscaler.compute(out, n_threads, in);
             }
-        }
+        };
+        int64_t t0 = ggml_time_ms();
+        sd_tiling(image, upscaled, esrgan_upscaler.scale, esrgan_upscaler.tile_size, tiling);
         esrgan_upscaler.end();
-        sd_clamp(upscaled_image, 0.f, 1.f);
-        uint8_t* upscaled_data = sd_tensor_to_image(upscaled_image);
+        sd_clamp(upscaled, 0.f, 1.f);
+        uint8_t* upscaled_data = sd_tensor_to_image(upscaled);
         ggml_free(upscale_ctx);
         int64_t t3 = ggml_time_ms();
         LOG_INFO("image upscaled, taking %.2fs", (t3 - t0) / 1000.0f);

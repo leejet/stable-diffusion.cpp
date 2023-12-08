@@ -1201,7 +1201,7 @@ bool ModelLoader::load_vocab(on_new_token_cb_t on_new_token_cb) {
     return true;
 }
 
-bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
+bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend) {
     bool success = true;
     for (size_t file_index = 0; file_index < file_paths_.size(); file_index++) {
         std::string file_path = file_paths_[file_index];
@@ -1289,11 +1289,9 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
                 continue;
             }
 
-            ggml_backend_t backend = ggml_get_backend(dst_tensor);
-
             size_t nbytes_to_read = tensor_storage.nbytes_to_read();
 
-            if (backend == NULL || ggml_backend_is_cpu(backend)) {
+            if (dst_tensor->buffer == NULL || ggml_backend_is_cpu(backend)) {
                 // for the CPU and Metal backend, we can copy directly into the tensor
                 if (tensor_storage.type == dst_tensor->type) {
                     GGML_ASSERT(ggml_nbytes(dst_tensor) == tensor_storage.nbytes());
