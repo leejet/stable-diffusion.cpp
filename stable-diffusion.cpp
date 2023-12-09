@@ -1124,6 +1124,7 @@ struct CLIPTextModel {
         ggml_backend_buffer_free(compute_buffer);
         compute_alloc              = NULL;
         compute_memory_buffer_size = -1;
+        work_output                = NULL;
     }
 };
 
