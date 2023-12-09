@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "ggml/ggml.h"
 #include "ggml/ggml-backend.h"
+#include "ggml/ggml.h"
 #include "json.hpp"
 #include "zip.h"
 

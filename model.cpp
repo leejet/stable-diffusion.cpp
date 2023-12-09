@@ -1102,6 +1102,7 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                         reader.tensor_storage.file_index = file_index;
                         reader.tensor_storage.name       = prefix + reader.tensor_storage.name;
                         tensor_storages.push_back(reader.tensor_storage);
+                        // LOG_DEBUG("%s", reader.tensor_storage.name.c_str());
                         // reset
                         reader = PickleTensorReader();
                     }
@@ -1139,7 +1140,7 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
                 size_t pkl_size;
                 zip_entry_read(zip, &pkl_data, &pkl_size);
 
-                LOG_DEBUG("%lld", pkl_size);
+                // LOG_DEBUG("%lld", pkl_size);
 
                 parse_data_pkl((uint8_t*)pkl_data, pkl_size, zip, dir, file_index, prefix);
 
