@@ -131,7 +131,7 @@ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false) {
     if (shape_only) {
         return;
     }
-    int range = 1000;
+    int range = 3;
     for (int i = 0; i < tensor->ne[3]; i++) {
         if (i >= range && i + range < tensor->ne[3]) {
             continue;
@@ -335,7 +335,7 @@ void sd_image_to_tensor(const uint8_t* image_data,
     }
 }
 
-float sd_mean(struct ggml_tensor* src) {
+float ggml_tensor_mean(struct ggml_tensor* src) {
     float mean        = 0.0f;
     int64_t nelements = ggml_nelements(src);
     float* data       = (float*)src->data;
@@ -345,7 +345,18 @@ float sd_mean(struct ggml_tensor* src) {
     return mean;
 }
 
-void sd_scale(struct ggml_tensor* src, float scale) {
+// a = a+b
+void ggml_tensor_add(struct ggml_tensor* a, struct ggml_tensor* b) {
+    GGML_ASSERT(ggml_nelements(a) == ggml_nelements(b));
+    int64_t nelements = ggml_nelements(a);
+    float* vec_a      = (float*)a->data;
+    float* vec_b      = (float*)b->data;
+    for (int i = 0; i < nelements; i++) {
+        vec_a[i] = vec_a[i] + vec_b[i];
+    }
+}
+
+void ggml_tensor_scale(struct ggml_tensor* src, float scale) {
     int64_t nelements = ggml_nelements(src);
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
@@ -353,7 +364,7 @@ void sd_scale(struct ggml_tensor* src, float scale) {
     }
 }
 
-void sd_clamp(struct ggml_tensor* src, float min, float max) {
+void ggml_tensor_clamp(struct ggml_tensor* src, float min, float max) {
     int64_t nelements = ggml_nelements(src);
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
@@ -363,7 +374,7 @@ void sd_clamp(struct ggml_tensor* src, float min, float max) {
 }
 
 // convert values from [0, 1] to [-1, 1]
-void sd_convert_input(struct ggml_tensor* src) {
+void ggml_tensor_scale_input(struct ggml_tensor* src) {
     int64_t nelements = ggml_nelements(src);
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
@@ -373,7 +384,7 @@ void sd_convert_input(struct ggml_tensor* src) {
 }
 
 // convert values from [-1, 1] to [0, 1]
-void sd_convert_output(struct ggml_tensor* src) {
+void ggml_tensor_scale_output(struct ggml_tensor* src) {
     int64_t nelements = ggml_nelements(src);
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
@@ -4724,7 +4735,7 @@ public:
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
         ggml_tensor* result = ggml_dup_tensor(work_ctx, hidden_states);
         {
-            float original_mean = sd_mean(hidden_states);
+            float original_mean = ggml_tensor_mean(hidden_states);
             for (int i2 = 0; i2 < hidden_states->ne[2]; i2++) {
                 for (int i1 = 0; i1 < hidden_states->ne[1]; i1++) {
                     for (int i0 = 0; i0 < hidden_states->ne[0]; i0++) {
@@ -4734,16 +4745,17 @@ public:
                     }
                 }
             }
-            float new_mean = sd_mean(result);
-            sd_scale(result, (original_mean / new_mean));
+            float new_mean = ggml_tensor_mean(result);
+            ggml_tensor_scale(result, (original_mean / new_mean));
         }
         return result;  // [1, 77, 768]
     }
 
     ggml_tensor* sample(ggml_context* work_ctx,
                         ggml_tensor* x_t,
-                        ggml_tensor* positive,
-                        ggml_tensor* negative,
+                        ggml_tensor* noise,
+                        ggml_tensor* c,
+                        ggml_tensor* uc,
                         float cfg_scale,
                         SampleMethod method,
                         const std::vector<float>& sigmas) {
@@ -4756,12 +4768,18 @@ public:
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x_t);
         struct ggml_tensor* timesteps    = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);                                     // [N, ]
         struct ggml_tensor* t_emb        = new_timestep_embedding(work_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
-        diffusion_model.begin(noised_input, positive, t_emb);
+        diffusion_model.begin(noised_input, c, t_emb);
 
-        bool has_unconditioned = cfg_scale != 1.0 && negative != NULL;
+        bool has_unconditioned = cfg_scale != 1.0 && uc != NULL;
 
-        // x = x * sigmas[0]
-        sd_scale(x, sigmas[0]);
+        if (noise == NULL) {
+            // x = x * sigmas[0]
+            ggml_tensor_scale(x, sigmas[0]);
+        } else {
+            // xi = x + noise * sigma_sched[0]
+            ggml_tensor_scale(noise, sigmas[0]);
+            ggml_tensor_add(x, noise);
+        }
 
         // denoise wrapper
         struct ggml_tensor* out_cond   = ggml_dup_tensor(work_ctx, x);
@@ -4797,15 +4815,15 @@ public:
 
             copy_ggml_tensor(noised_input, input);
             // noised_input = noised_input * c_in
-            sd_scale(noised_input, c_in);
+            ggml_tensor_scale(noised_input, c_in);
 
             // cond
-            diffusion_model.compute(out_cond, n_threads, noised_input, NULL, positive, t_emb);
+            diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, t_emb);
 
             float* negative_data = NULL;
             if (has_unconditioned) {
                 // uncond
-                diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, negative, t_emb);
+                diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, uc, t_emb);
                 negative_data = (float*)out_uncond->data;
             }
             float* vec_denoised  = (float*)denoised->data;
@@ -5260,15 +5278,15 @@ public:
         int64_t t0          = ggml_time_ms();
         if (!use_tiny_autoencoder) {
             if (decode) {
-                sd_scale(x, 1.0f / scale_factor);
+                ggml_tensor_scale(x, 1.0f / scale_factor);
             } else {
-                sd_convert_input(x);
+                ggml_tensor_scale_input(x);
             }
             first_stage_model.begin(x, decode);
             first_stage_model.compute(result, n_threads, x, decode);
             first_stage_model.end();
             if (decode) {
-                sd_convert_output(result);
+                ggml_tensor_scale_output(result);
             }
         } else {
             tae_first_stage.begin(x, decode);
@@ -5278,9 +5296,17 @@ public:
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing vae [mode: %s] graph completed, taking %.2fs", decode ? "DECODE" : "ENCODE", (t1 - t0) * 1.0f / 1000);
         if (decode) {
-            sd_clamp(result, 0.0f, 1.0f);
+            ggml_tensor_clamp(result, 0.0f, 1.0f);
         }
         return result;
+    }
+
+    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x) {
+        return compute_first_stage(work_ctx, x, false);
+    }
+
+    ggml_tensor* decode_first_stage(ggml_context* work_ctx, ggml_tensor* x) {
+        return compute_first_stage(work_ctx, x, true);
     }
 };
 
@@ -5358,11 +5384,11 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
         seed = rand();
     }
 
-    t0                           = ggml_time_ms();
-    ggml_tensor* postive         = sd->get_learned_condition(work_ctx, prompt);
-    struct ggml_tensor* negative = NULL;
+    t0                     = ggml_time_ms();
+    ggml_tensor* c         = sd->get_learned_condition(work_ctx, prompt);
+    struct ggml_tensor* uc = NULL;
     if (cfg_scale != 1.0) {
-        negative = sd->get_learned_condition(work_ctx, negative_prompt);
+        uc = sd->get_learned_condition(work_ctx, negative_prompt);
     }
     t1 = ggml_time_ms();
     LOG_INFO("get_learned_condition completed, taking %" PRId64 " ms", t1 - t0);
@@ -5387,7 +5413,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
 
         std::vector<float> sigmas = sd->denoiser->schedule->get_sigmas(sample_steps);
 
-        struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, postive, negative, cfg_scale, sample_method, sigmas);
+        struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, NULL, c, uc, cfg_scale, sample_method, sigmas);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -5404,7 +5430,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     LOG_INFO("decoding %zu latents", final_latents.size());
     for (size_t i = 0; i < final_latents.size(); i++) {
         t1                      = ggml_time_ms();
-        struct ggml_tensor* img = sd->compute_first_stage(work_ctx, final_latents[i] /* x_0 */, true);
+        struct ggml_tensor* img = sd->decode_first_stage(work_ctx, final_latents[i] /* x_0 */);
         if (img != NULL) {
             results.push_back(sd_tensor_to_image(img));
         }
@@ -5483,10 +5509,10 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
     t0                       = ggml_time_ms();
     ggml_tensor* init_latent = NULL;
     if (!sd->use_tiny_autoencoder) {
-        ggml_tensor* moments = sd->compute_first_stage(work_ctx, init_img, false);
+        ggml_tensor* moments = sd->encode_first_stage(work_ctx, init_img);
         init_latent          = sd->get_first_stage_encoding(work_ctx, moments);
     } else {
-        init_latent = sd->compute_first_stage(work_ctx, init_img, false);
+        init_latent = sd->encode_first_stage(work_ctx, init_img);
     }
     // print_ggml_tensor(init_latent);
     t1 = ggml_time_ms();
@@ -5507,8 +5533,12 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
     // requires encode_adm
     // apply set_timestep_embedding with dim 256
 
+    sd->rng->manual_seed(seed);
+    struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, init_latent);
+    ggml_tensor_set_f32_randn(noise, sd->rng);
+
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
-    struct ggml_tensor* x_0 = sd->sample(work_ctx, init_latent, c, uc, cfg_scale, sample_method, sigma_sched);
+    struct ggml_tensor* x_0 = sd->sample(work_ctx, init_latent, noise, c, uc, cfg_scale, sample_method, sigma_sched);
     // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
     // print_ggml_tensor(x_0);
     int64_t t3 = ggml_time_ms();
@@ -5517,7 +5547,7 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
         sd->diffusion_model.destroy();
     }
 
-    struct ggml_tensor* img = sd->compute_first_stage(work_ctx, x_0, true);
+    struct ggml_tensor* img = sd->decode_first_stage(work_ctx, x_0);
     if (img != NULL) {
         result.push_back(sd_tensor_to_image(img));
     }
