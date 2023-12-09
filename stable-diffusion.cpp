@@ -335,7 +335,6 @@ void sd_image_to_tensor(const uint8_t* image_data,
     }
 }
 
-
 void sd_split_chunk(struct ggml_tensor* input,
                 struct ggml_tensor* output, int x, int y) {
     int64_t width       = output->ne[0];
@@ -367,40 +366,6 @@ void sd_merge_chunk(struct ggml_tensor* input,
         }
     }
 }
-
-
-void sd_split_chunk(struct ggml_tensor* input,
-                struct ggml_tensor* output, int x, int y) {
-    int64_t width       = output->ne[0];
-    int64_t height      = output->ne[1];
-    int64_t channels    = output->ne[2];
-    GGML_ASSERT(input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32);
-    for (int iy = 0; iy < height; iy++) {
-        for (int ix = 0; ix < width; ix++) {
-            for (int k = 0; k < channels; k++) {
-                float value = ggml_tensor_get_f32(input, ix + x * width, iy + y * height, k);
-                ggml_tensor_set_f32(output, value, ix, iy, k);
-            }
-        }
-    }
-}
-
-void sd_merge_chunk(struct ggml_tensor* input,
-                struct ggml_tensor* output, int x, int y) {
-    int64_t width       = input->ne[0];
-    int64_t height      = input->ne[1];
-    int64_t channels    = input->ne[2];
-    GGML_ASSERT(input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32);
-    for (int iy = 0; iy < height; iy++) {
-        for (int ix = 0; ix < width; ix++) {
-            for (int k = 0; k < channels; k++) {
-                float value = ggml_tensor_get_f32(input, ix, iy, k);
-                ggml_tensor_set_f32(output, value, ix + x * width, iy + y * height, k);
-            }
-        }
-    }
-}
-
 
 float ggml_tensor_mean(struct ggml_tensor* src) {
     float mean        = 0.0f;
@@ -472,7 +437,6 @@ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const i
 
     int tile_width = (input_width < tile_size) ? input_width : tile_size;
     int tile_height = (input_height < tile_size) ? input_height : tile_size;
-    LOG_DEBUG("tile size(%ix%i)", tile_width, tile_height);
 
     struct ggml_init_params params = {};
     params.mem_size += tile_width * tile_height * input->ne[2] * sizeof(float); // input chunk
@@ -5901,7 +5865,7 @@ public:
         int64_t t0 = ggml_time_ms();
         sd_tiling(image, upscaled, esrgan_upscaler.scale, esrgan_upscaler.tile_size, tiling);
         esrgan_upscaler.end();
-        sd_clamp(upscaled, 0.f, 1.f);
+        ggml_tensor_clamp(upscaled, 0.f, 1.f);
         uint8_t* upscaled_data = sd_tensor_to_image(upscaled);
         ggml_free(upscale_ctx);
         int64_t t3 = ggml_time_ms();
