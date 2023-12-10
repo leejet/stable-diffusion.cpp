@@ -1223,6 +1223,12 @@ struct CLIPTextModel {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
 
+#ifdef SD_USE_METAL
+        if (ggml_backend_is_metal(backend)) {
+            ggml_backend_metal_set_n_cb(backend, n_threads);
+        }
+#endif
+
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
@@ -2494,6 +2500,12 @@ struct UNetModel {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
 
+#ifdef SD_USE_METAL
+        if (ggml_backend_is_metal(backend)) {
+            ggml_backend_metal_set_n_cb(backend, n_threads);
+        }
+#endif
+
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
@@ -3299,6 +3311,12 @@ struct AutoEncoderKL {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
 
+#ifdef SD_USE_METAL
+        if (ggml_backend_is_metal(backend)) {
+            ggml_backend_metal_set_n_cb(backend, n_threads);
+        }
+#endif
+
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
@@ -3976,6 +3994,12 @@ struct TinyAutoEncoder {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
 
+#ifdef SD_USE_METAL
+        if (ggml_backend_is_metal(backend)) {
+            ggml_backend_metal_set_n_cb(backend, n_threads);
+        }
+#endif
+
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
@@ -4507,6 +4531,12 @@ struct ESRGAN {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
 
+#ifdef SD_USE_METAL
+        if (ggml_backend_is_metal(backend)) {
+            ggml_backend_metal_set_n_cb(backend, n_threads);
+        }
+#endif
+
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
@@ -4724,6 +4754,13 @@ struct LoraModel {
         if (ggml_backend_is_cpu(backend)) {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
+
+#ifdef SD_USE_METAL
+        if (ggml_backend_is_metal(backend)) {
+            ggml_backend_metal_set_n_cb(backend, n_threads);
+        }
+#endif
+
         ggml_backend_graph_compute(backend, gf);
         ggml_allocr_free(compute_alloc);
         ggml_backend_buffer_free(buffer_compute_lora);

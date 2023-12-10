@@ -1298,7 +1298,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 
             size_t nbytes_to_read = tensor_storage.nbytes_to_read();
 
-            if (dst_tensor->buffer == NULL || ggml_backend_is_cpu(backend)) {
+            if (dst_tensor->buffer == NULL || ggml_backend_is_cpu(backend)
+#ifdef SD_USE_METAL
+            || ggml_backend_is_metal(model.backend)
+#endif
+            ) {
                 // for the CPU and Metal backend, we can copy directly into the tensor
                 if (tensor_storage.type == dst_tensor->type) {
                     GGML_ASSERT(ggml_nbytes(dst_tensor) == tensor_storage.nbytes());
