@@ -23,6 +23,10 @@
 #include "ggml-cuda.h"
 #endif
 
+#ifdef SD_USE_METAL
+#include "ggml-metal.h"
+#endif
+
 #include "model.h"
 #include "rng.h"
 #include "rng_philox.h"
@@ -1628,7 +1632,7 @@ struct SpatialTransformer {
             {
                 x                     = ggml_reshape_2d(ctx, x, c, h * w * n);        // [N * h * w, in_channels]
                 struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn1_q_w, x);  // [N * h * w, in_channels]
-#if !defined(SD_USE_FLASH_ATTENTION) || defined(SD_USE_CUBLAS)
+#if !defined(SD_USE_FLASH_ATTENTION) || defined(SD_USE_CUBLAS) || defined(SD_USE_METAL)
                 q = ggml_scale_inplace(ctx, q, attn_scale);
 #endif
                 q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
@@ -1645,7 +1649,7 @@ struct SpatialTransformer {
                 v                     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));    // [N, n_head, d_head, h * w]
                 v                     = ggml_reshape_3d(ctx, v, h * w, d_head, n_head * n);  // [N * n_head, d_head, h * w]
 
-#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS)
+#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL)
                 struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, h * w, d_head]
 #else
                 struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, h * w, h * w]
@@ -1676,7 +1680,7 @@ struct SpatialTransformer {
                 x                     = ggml_reshape_2d(ctx, x, c, h * w * n);                                           // [N * h * w, in_channels]
                 context               = ggml_reshape_2d(ctx, context, context->ne[0], context->ne[1] * context->ne[2]);  // [N * max_position, hidden_size]
                 struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn2_q_w, x);                                     // [N * h * w, in_channels]
-#if !defined(SD_USE_FLASH_ATTENTION) || defined(SD_USE_CUBLAS)
+#if !defined(SD_USE_FLASH_ATTENTION) || defined(SD_USE_CUBLAS) || defined(SD_USE_METAL)
                 q = ggml_scale_inplace(ctx, q, attn_scale);
 #endif
                 q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
@@ -1692,7 +1696,7 @@ struct SpatialTransformer {
                 v                     = ggml_reshape_4d(ctx, v, d_head, n_head, max_position, n);   // [N, max_position, n_head, d_head]
                 v                     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));           // [N, n_head, d_head, max_position]
                 v                     = ggml_reshape_3d(ctx, v, max_position, d_head, n_head * n);  // [N * n_head, d_head, max_position]
-#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS)
+#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL)
                 struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, h * w, d_head]
 #else
                 struct ggml_tensor* kq  = ggml_mul_mat(ctx, k, q);   // [N * n_head, h * w, max_position]
@@ -4928,13 +4932,19 @@ public:
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
 #endif
+#ifdef SD_USE_METAL
+        LOG_DEBUG("Using Metal backend");
+        ggml_metal_log_set_callback(ggml_log_callback_default, nullptr);
+        backend = ggml_backend_metal_init();
+#endif
+
         if (!backend) {
             LOG_DEBUG("Using CPU backend");
             backend = ggml_backend_cpu_init();
         }
 #ifdef SD_USE_FLASH_ATTENTION
-#ifdef SD_USE_CUBLAS
-        LOG_WARN("Flash Attention not supported with CUDA");
+#if defined(SD_USE_CUBLAS) || defined(SD_USE_METAL)
+        LOG_WARN("Flash Attention not supported with GPU Backend");
 #else
         LOG_INFO("Flash Attention enabled");
 #endif
