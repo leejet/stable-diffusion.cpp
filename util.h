@@ -2,6 +2,7 @@
 #define __UTIL_H__
 
 #include <string>
+#include <cstdint>
 
 bool ends_with(const std::string& str, const std::string& ending);
 bool starts_with(const std::string& str, const std::string& start);
