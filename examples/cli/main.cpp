@@ -68,6 +68,7 @@ struct SDParams {
     std::string prompt;
     std::string negative_prompt;
     float cfg_scale = 7.0f;
+    int clip_skip_layers = 0;
     int width       = 512;
     int height      = 512;
     int batch_count = 1;
@@ -79,6 +80,7 @@ struct SDParams {
     RNGType rng_type           = CUDA_RNG;
     int64_t seed               = 42;
     bool verbose               = false;
+    bool vae_tiling            = false;
 };
 
 void print_params(SDParams params) {
@@ -136,6 +138,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate.\n");
     printf("  --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)\n");
+    printf("  -cs, --clip-skip N                 number of layers to skip of clip model (default: 0)\n");
+    printf("  -vt, --vae-tiling                  process vae in tiles to reduce memory usage\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -278,6 +282,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.sample_steps = std::stoi(argv[i]);
+        } else if (arg == "-cs" || arg == "--clip-skip") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.clip_skip_layers = std::stoi(argv[i]);
+        } else if (arg == "-vt" || arg == "--vae-tiling") {
+            params.vae_tiling = true;
         } else if (arg == "-b" || arg == "--batch-count") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -466,9 +478,9 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_path, params.esrgan_path, true, params.lora_model_dir, params.rng_type);
+    StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_path, params.esrgan_path, true, params.vae_tiling, params.lora_model_dir, params.rng_type);
 
-    if (!sd.load_from_file(params.model_path, params.vae_path, params.wtype, params.schedule)) {
+    if (!sd.load_from_file(params.model_path, params.vae_path, params.wtype, params.schedule, params.clip_skip_layers)) {
         return 1;
     }
 
@@ -497,6 +509,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if(params.esrgan_path.size() > 0) {
+        // TODO: support more ESRGAN models, making it easier to set up ESRGAN models.
         /*  hardcoded scale factor because just RealESRGAN_x4plus_anime_6B is compatible
             See also: https://github.com/xinntao/Real-ESRGAN/blob/master/inference_realesrgan.py
 

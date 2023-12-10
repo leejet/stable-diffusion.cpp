@@ -335,7 +335,7 @@ void sd_image_to_tensor(const uint8_t* image_data,
     }
 }
 
-void sd_split_chunk(struct ggml_tensor* input,
+void ggml_split_tensor_2d(struct ggml_tensor* input,
                 struct ggml_tensor* output, int x, int y) {
     int64_t width       = output->ne[0];
     int64_t height      = output->ne[1];
@@ -344,15 +344,15 @@ void sd_split_chunk(struct ggml_tensor* input,
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                float value = ggml_tensor_get_f32(input, ix + x * width, iy + y * height, k);
+                float value = ggml_tensor_get_f32(input, ix + x, iy + y, k);
                 ggml_tensor_set_f32(output, value, ix, iy, k);
             }
         }
     }
 }
 
-void sd_merge_chunk(struct ggml_tensor* input,
-                struct ggml_tensor* output, int x, int y) {
+void ggml_merge_tensor_2d(struct ggml_tensor* input,
+                struct ggml_tensor* output, int x, int y, int overlap) {
     int64_t width       = input->ne[0];
     int64_t height      = input->ne[1];
     int64_t channels    = input->ne[2];
@@ -360,8 +360,19 @@ void sd_merge_chunk(struct ggml_tensor* input,
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                float value = ggml_tensor_get_f32(input, ix, iy, k);
-                ggml_tensor_set_f32(output, value, ix + x * width, iy + y * height, k);
+                float new_value = ggml_tensor_get_f32(input, ix, iy, k);
+                if(overlap > 0) { // blend colors in overlapped area
+                    float old_value = ggml_tensor_get_f32(output, x + ix, y + iy, k);
+                    if(x > 0 && ix < overlap) { // in overlapped horizontal
+                        ggml_tensor_set_f32(output, old_value + (new_value - old_value) * (ix / (1.0f * overlap)), x + ix,y + iy, k);
+                        continue;
+                    }
+                    if(y > 0 && iy < overlap) { // in overlapped vertical
+                        ggml_tensor_set_f32(output, old_value + (new_value - old_value) * (iy / (1.0f * overlap)), x + ix,y + iy, k);
+                        continue;
+                    }
+                }
+                ggml_tensor_set_f32(output, new_value, x + ix, y + iy, k);
             }
         }
     }
@@ -428,19 +439,19 @@ void ggml_tensor_scale_output(struct ggml_tensor* src) {
 typedef std::function<void(ggml_tensor*, ggml_tensor*,bool)> on_tile_process;
 
 // Tiling
-void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, on_tile_process proc_tile) {
+void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
     int input_width = input->ne[0];
     int input_height = input->ne[1];
     int output_width = output->ne[0];
     int output_height = output->ne[1];
     GGML_ASSERT(input_width % 2 == 0 && input_height % 2 == 0 && output_width % 2 == 0 && output_height % 2 == 0); // should be multiple of 2
 
-    int tile_width = (input_width < tile_size) ? input_width : tile_size;
-    int tile_height = (input_height < tile_size) ? input_height : tile_size;
+    int tile_overlap = (int32_t)(tile_size * tile_overlap_factor);
+    int non_tile_overlap = tile_size - tile_overlap;
 
     struct ggml_init_params params = {};
-    params.mem_size += tile_width * tile_height * input->ne[2] * sizeof(float); // input chunk
-    params.mem_size += (tile_width * scale) * (tile_height * scale) * output->ne[2] * sizeof(float); // output chunk
+    params.mem_size += tile_size * tile_size * input->ne[2] * sizeof(float); // input chunk
+    params.mem_size += (tile_size * scale) * (tile_size * scale) * output->ne[2] * sizeof(float); // output chunk
     params.mem_size += 3 * ggml_tensor_overhead();
     params.mem_buffer = NULL;
     params.no_alloc   = false;
@@ -455,24 +466,38 @@ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const i
     }
 
     // tiling
-    int tiles_x = (input_width + tile_size - 1) / tile_size;
-    int tiles_y = (input_height + tile_size - 1) / tile_size;
-    ggml_tensor* input_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_width, tile_height, input->ne[2], 1);
-    ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_width * scale, tile_height * scale, output->ne[2], 1);
-    proc_tile(input_tile, NULL, true);
-
-    int num_tiles = tiles_x * tiles_y;
+    ggml_tensor* input_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_size, tile_size, input->ne[2], 1);
+    ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_size * scale, tile_size * scale, output->ne[2], 1);
+    on_processing(input_tile, NULL, true);
+    int num_tiles = (input_width * input_height) / (non_tile_overlap * non_tile_overlap);
     LOG_INFO("processing %i tiles", num_tiles);
     pretty_progress(1, num_tiles, 0.0f);
-    for(int y = 0; y < tiles_y; y ++) {
-        for(int x = 0; x < tiles_x; x++) {
-            int64_t t1 = ggml_time_ms();
-            sd_split_chunk(input, input_tile, x, y);
-            proc_tile(input_tile, output_tile, false);
-            sd_merge_chunk(output_tile, output, x, y);
-            int64_t t2 = ggml_time_ms();
-            pretty_progress(x + y * tiles_x + 1, num_tiles, (t2 - t1) / 1000.0f);
+    int tile_count = 1;
+    bool last_y = false, last_x = false;
+    float last_time = 0.0f;
+    for(int y = 0; y < input_height && !last_y; y += non_tile_overlap) {
+        if (y + tile_size >= input_height) {
+            y = input_height - tile_size;
+            last_y = true;
         }
+        for(int x = 0; x < input_width && !last_x; x += non_tile_overlap) {
+            if (x + tile_size >= input_width) {
+                x = input_width - tile_size;
+                last_x = true;
+            }
+            int64_t t1 = ggml_time_ms();
+            ggml_split_tensor_2d(input, input_tile, x, y);
+            on_processing(input_tile, output_tile, false);
+            ggml_merge_tensor_2d(output_tile, output, x * scale, y * scale, tile_overlap * scale);
+            int64_t t2 = ggml_time_ms();
+            last_time = (t2 - t1) / 1000.0f;
+            pretty_progress(tile_count, num_tiles, last_time);
+            tile_count++;
+        }
+        last_x = false;
+    }
+    if(tile_count < num_tiles) {
+        pretty_progress(num_tiles, num_tiles, last_time);
     }
 }
 
@@ -962,6 +987,7 @@ struct CLIPTextModel {
     int32_t intermediate_size       = 3072;  // 4096 for SD 2.x
     int32_t n_head                  = 12;    // num_attention_heads, 16 for SD 2.x
     int32_t num_hidden_layers       = 12;    // 24 for SD 2.x
+    int32_t skip_layers              = 0;
 
     // embeddings
     struct ggml_tensor* position_ids;
@@ -1121,7 +1147,7 @@ struct CLIPTextModel {
 
         // transformer
         for (int i = 0; i < num_hidden_layers; i++) {
-            if (version == VERSION_2_x && i == num_hidden_layers - 1) {  // layer: "penultimate"
+            if (version == VERSION_2_x && i == num_hidden_layers - 1 || i > (num_hidden_layers - skip_layers - 1)) {  // layer: "penultimate"
                 break;
             }
             x = resblocks[i].forward(ctx0, x);  // [N, n_token, hidden_size]
@@ -1207,6 +1233,7 @@ struct CLIPTextModel {
         ggml_backend_buffer_free(compute_buffer);
         compute_alloc              = NULL;
         compute_memory_buffer_size = -1;
+        work_output                = NULL;
     }
 };
 
@@ -4844,6 +4871,7 @@ public:
     UNetModel diffusion_model;
     AutoEncoderKL first_stage_model;
     bool use_tiny_autoencoder = false;
+    bool vae_tiling = false;
 
     std::map<std::string, struct ggml_tensor*> tensors;
 
@@ -4895,7 +4923,7 @@ public:
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
                         ggml_type wtype,
-                        Schedule schedule) {
+                        Schedule schedule, int clip_skip_layers) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
@@ -4932,6 +4960,7 @@ public:
             return false;
         }
         cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
+        cond_stage_model.text_model.skip_layers = clip_skip_layers;
         diffusion_model  = UNetModel(version);
         LOG_INFO("Stable Diffusion %s ", model_version_to_str[version]);
         if (wtype == GGML_TYPE_COUNT) {
@@ -5803,31 +5832,39 @@ public:
             } else {
                 ggml_tensor_scale_input(x);
             }
-            // auto tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-            //     if(init) {
-            //         first_stage_model.begin(in, decode);
-            //     } else {
-            //         first_stage_model.compute(out, n_threads, in, decode);
-            //     }
-            // };
-            // sd_tiling(x, result, 8, 32, tiling);
-            first_stage_model.begin(x, decode);
-            first_stage_model.compute(result, n_threads, x, decode);
+            if(vae_tiling && decode) { // TODO: support tiling vae encode
+                // split latent in 32x32 tiles and compute in several steps
+                auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+                    if(init) {
+                        first_stage_model.begin(in, decode);
+                    } else {
+                        first_stage_model.compute(out, n_threads, in, decode);
+                    }
+                };
+                sd_tiling(x, result, 8, 32, 0.5f, on_tiling);
+            } else {
+                first_stage_model.begin(x, decode);
+                first_stage_model.compute(result, n_threads, x, decode);
+            }
             first_stage_model.end();
             if (decode) {
                 ggml_tensor_scale_output(result);
             }
         } else {
-            // auto tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-            //     if(init) {
-            //         tae_first_stage.begin(in, decode);
-            //     } else {
-            //         tae_first_stage.compute(out, n_threads, in, decode);
-            //     }
-            // };
-            // sd_tiling(x, result, 8, 32, tiling);
-            tae_first_stage.begin(x, decode);
-            tae_first_stage.compute(result, n_threads, x, decode);
+            if(vae_tiling && decode) { // TODO: support tiling vae encode
+                // split latent in 64x64 tiles and compute in several steps
+                auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+                    if(init) {
+                        tae_first_stage.begin(in, decode);
+                    } else {
+                        tae_first_stage.compute(out, n_threads, in, decode);
+                    }
+                };
+                sd_tiling(x, result, 8, 64, 0.5f, on_tiling);
+            } else {
+                tae_first_stage.begin(x, decode);
+                tae_first_stage.compute(result, n_threads, x, decode);
+            }
             tae_first_stage.end();
         }
         int64_t t1 = ggml_time_ms();
@@ -5855,7 +5892,7 @@ public:
         }
         LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
         ggml_tensor* upscaled = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, image->ne[2], 1);
-        auto tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+        auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
             if(init) {
                 esrgan_upscaler.begin(in);
             } else {
@@ -5863,7 +5900,7 @@ public:
             }
         };
         int64_t t0 = ggml_time_ms();
-        sd_tiling(image, upscaled, esrgan_upscaler.scale, esrgan_upscaler.tile_size, tiling);
+        sd_tiling(image, upscaled, esrgan_upscaler.scale, esrgan_upscaler.tile_size, 0.25f, on_tiling);
         esrgan_upscaler.end();
         ggml_tensor_clamp(upscaled, 0.f, 1.f);
         uint8_t* upscaled_data = sd_tensor_to_image(upscaled);
@@ -5889,6 +5926,7 @@ StableDiffusion::StableDiffusion(int n_threads,
                                  std::string taesd_path,
                                  std::string esrgan_path,
                                  bool free_params_immediately,
+                                 bool vae_tiling,
                                  std::string lora_model_dir,
                                  RNGType rng_type) {
     sd                       = std::make_shared<StableDiffusionGGML>(n_threads,
@@ -5900,13 +5938,15 @@ StableDiffusion::StableDiffusion(int n_threads,
     sd->taesd_path           = taesd_path;
     sd->upscale_output       = esrgan_path.size() > 0;
     sd->esrgan_path          = esrgan_path;
+    sd->vae_tiling           = vae_tiling;
 }
 
 bool StableDiffusion::load_from_file(const std::string& model_path,
                                      const std::string& vae_path,
                                      ggml_type wtype,
-                                     Schedule s) {
-    return sd->load_from_file(model_path, vae_path, wtype, s);
+                                     Schedule s,
+                                     int clip_skip_layers) {
+    return sd->load_from_file(model_path, vae_path, wtype, s, clip_skip_layers);
 }
 
 std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
