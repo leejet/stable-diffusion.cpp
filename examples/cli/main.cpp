@@ -478,7 +478,7 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_path, params.esrgan_path, true, params.vae_tiling, params.lora_model_dir, params.rng_type);
+    StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_path, params.esrgan_path, false, params.vae_tiling, params.lora_model_dir, params.rng_type);
 
     if (!sd.load_from_file(params.model_path, params.vae_path, params.wtype, params.schedule, params.clip_skip_layers)) {
         return 1;

@@ -1304,7 +1304,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 
             if (dst_tensor->buffer == NULL || ggml_backend_is_cpu(backend)
 #ifdef SD_USE_METAL
-            || ggml_backend_is_metal(model.backend)
+            || ggml_backend_is_metal(backend)
 #endif
             ) {
                 // for the CPU and Metal backend, we can copy directly into the tensor

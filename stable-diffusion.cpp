@@ -79,6 +79,13 @@ std::string sd_get_system_info() {
     return ss.str();
 }
 
+static void ggml_log_callback_default(ggml_log_level level, const char * text, void * user_data) {
+    (void) level;
+    (void) user_data;
+    fputs(text, stderr);
+    fflush(stderr);
+}
+
 void ggml_tensor_set_f32_randn(struct ggml_tensor* tensor, std::shared_ptr<RNG> rng) {
     uint32_t n                        = (uint32_t)ggml_nelements(tensor);
     std::vector<float> random_numbers = rng->randn(n);
