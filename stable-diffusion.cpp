@@ -5334,6 +5334,7 @@ public:
         int64_t t0                  = ggml_time_ms();
         cond_stage_model.text_model.begin(work_ctx, (int)tokens.size());
         struct ggml_tensor* hidden_states = cond_stage_model.text_model.compute(n_threads, tokens);  // [N, n_token, hidden_size]
+        print_ggml_tensor(hidden_states);
         cond_stage_model.text_model.end();
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
