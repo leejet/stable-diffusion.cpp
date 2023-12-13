@@ -74,8 +74,9 @@ const char* unused_tensors[] = {
     "cond_stage_model.transformer.text_model.embeddings.position_ids",
     "cond_stage_model.model.logit_scale",
     "cond_stage_model.model.text_projection",
+    "conditioner.embedders.0.transformer.text_model.embeddings.position_ids",
     "conditioner.embedders.0.model.logit_scale",
-    "conditioner.embedders.0.model.text_projection",
+    "conditioner.embedders.1.model.logit_scale",
     "model.diffusion_model.time_embedding.cond_proj.weight",
     "unet.time_embedding.cond_proj.weight",
     "model_ema.decay",
@@ -96,11 +97,10 @@ bool is_unused_tensor(std::string name) {
 }
 
 std::unordered_map<std::string, std::string> open_clip_to_hf_clip_model = {
-    {"cond_stage_model.model.ln_final.bias", "cond_stage_model.transformer.text_model.final_layer_norm.bias"},
-    {"cond_stage_model.model.ln_final.weight", "cond_stage_model.transformer.text_model.final_layer_norm.weight"},
-    {"cond_stage_model.model.positional_embedding", "cond_stage_model.transformer.text_model.embeddings.position_embedding.weight"},
-    {"cond_stage_model.model.token_embedding.weight", "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"},
-
+    {"model.ln_final.bias", "transformer.text_model.final_layer_norm.bias"},
+    {"model.ln_final.weight", "transformer.text_model.final_layer_norm.weight"},
+    {"model.positional_embedding", "transformer.text_model.embeddings.position_embedding.weight"},
+    {"model.token_embedding.weight", "transformer.text_model.embeddings.token_embedding.weight"},
 };
 
 std::unordered_map<std::string, std::string> open_clip_to_hk_clip_resblock = {
@@ -129,11 +129,21 @@ std::unordered_map<std::string, std::string> vae_decoder_name_map = {
 
 std::string convert_open_clip_to_hf_clip(const std::string& name) {
     std::string new_name = name;
+    std::string prefix;
     if (starts_with(new_name, "conditioner.embedders.0.")) {
-        new_name = "cond_stage_model." + new_name.substr(strlen("conditioner.embedders.0."));
+        prefix   = "cond_stage_model.";
+        new_name = new_name.substr(strlen("conditioner.embedders.0."));
+    } else if (starts_with(new_name, "conditioner.embedders.1.")) {
+        prefix   = "cond_stage_model.1.";
+        new_name = new_name.substr(strlen("conditioner.embedders.0."));
+    } else if (starts_with(new_name, "cond_stage_model.")) {
+        prefix   = "cond_stage_model.";
+        new_name = new_name.substr(strlen("cond_stage_model."));
+    } else {
+        return new_name;
     }
-    std::string open_clip_resblock_prefix = "cond_stage_model.model.transformer.resblocks.";
-    std::string hf_clip_resblock_prefix   = "cond_stage_model.transformer.text_model.encoder.layers.";
+    std::string open_clip_resblock_prefix = "model.transformer.resblocks.";
+    std::string hf_clip_resblock_prefix   = "transformer.text_model.encoder.layers.";
 
     if (open_clip_to_hf_clip_model.find(new_name) != open_clip_to_hf_clip_model.end()) {
         new_name = open_clip_to_hf_clip_model[new_name];
@@ -152,7 +162,7 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
         }
     }
 
-    return new_name;
+    return prefix + new_name;
 }
 
 std::string convert_vae_decoder_name(const std::string& name) {
@@ -354,7 +364,7 @@ std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) 
 
 std::string convert_tensor_name(const std::string& name) {
     std::string new_name;
-    if (starts_with(name, "cond_stage_model.model") || starts_with(name, "conditioner.embedders.0.model")) {
+    if (starts_with(name, "cond_stage_model.") || starts_with(name, "conditioner.embedders.")) {
         new_name = convert_open_clip_to_hf_clip(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
         new_name = convert_vae_decoder_name(name);
@@ -415,7 +425,7 @@ void preprocess_tensor(TensorStorage tensor_storage,
 
     tensor_storage.name = new_name;
 
-    if (starts_with(new_name, "cond_stage_model.transformer.text_model.encoder.layers.") &&
+    if (new_name.find("transformer.text_model.encoder.layers.") != std::string::npos &&
         ends_with(new_name, "attn.in_proj_weight")) {
         size_t prefix_size = new_name.find("attn.in_proj_weight");
         std::string prefix = new_name.substr(0, prefix_size);
@@ -427,7 +437,7 @@ void preprocess_tensor(TensorStorage tensor_storage,
 
         processed_tensor_storages.insert(processed_tensor_storages.end(), chunks.begin(), chunks.end());
 
-    } else if (starts_with(new_name, "cond_stage_model.transformer.text_model.encoder.layers.") &&
+    } else if (new_name.find("transformer.text_model.encoder.layers.") != std::string::npos &&
                ends_with(new_name, "attn.in_proj_bias")) {
         size_t prefix_size = new_name.find("attn.in_proj_bias");
         std::string prefix = new_name.substr(0, prefix_size);
@@ -1159,15 +1169,20 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
 }
 
 SDVersion ModelLoader::get_sd_version() {
+    // return VERSION_1_x;
     TensorStorage token_embedding_weight;
     for (auto& tensor_storage : tensor_storages) {
+        if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos) {
+            return VERSION_XL;
+        }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||
             tensor_storage.name == "text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "te.text_model.embeddings.token_embedding.weight" ||
-            tensor_storage.name == "conditioner.embedders.0.model.token_embedding.weight") {
+            tensor_storage.name == "conditioner.embedders.0.model.token_embedding.weight" ||
+            tensor_storage.name == "conditioner.embedders.0.transformer.text_model.embeddings.token_embedding.weight") {
             token_embedding_weight = tensor_storage;
-            break;
+            // break;
         }
     }
     if (token_embedding_weight.ne[0] == 768) {
@@ -1282,7 +1297,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
         }
 
         for (auto& tensor_storage : processed_tensor_storages) {
-            // LOG_DEBUG("%s", name.c_str());
+            // LOG_DEBUG("%s", tensor_storage.name.c_str());
 
             ggml_tensor* dst_tensor = NULL;
 

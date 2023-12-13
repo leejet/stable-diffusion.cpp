@@ -10,8 +10,8 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
 - Super lightweight and without external dependencies
-- SD1.x and SD2.x support
-- [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) support
+- SD1.x, SD2.x and SDXL support
+- [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) and [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo) support
 - 16-bit, 32-bit float support
 - 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
@@ -278,3 +278,4 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
 - [k-diffusion](https://github.com/crowsonkb/k-diffusion)
 - [latent-consistency-model](https://github.com/luosiallen/latent-consistency-model)
+- [generative-models](https://github.com/Stability-AI/generative-models/)
