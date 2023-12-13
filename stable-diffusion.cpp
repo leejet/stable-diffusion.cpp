@@ -5334,7 +5334,6 @@ public:
         int64_t t0                  = ggml_time_ms();
         cond_stage_model.text_model.begin(work_ctx, (int)tokens.size());
         struct ggml_tensor* hidden_states = cond_stage_model.text_model.compute(n_threads, tokens);  // [N, n_token, hidden_size]
-        print_ggml_tensor(hidden_states);
         cond_stage_model.text_model.end();
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
@@ -6098,15 +6097,12 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
 
     LOG_INFO("decoding %zu latents", final_latents.size());
+    std::vector<struct ggml_tensor*> decoded_images; // collect decoded images
     for (size_t i = 0; i < final_latents.size(); i++) {
         t1                      = ggml_time_ms();
         struct ggml_tensor* img = sd->decode_first_stage(work_ctx, final_latents[i] /* x_0 */);
         if (img != NULL) {
-            if(sd->upscale_output) {
-                results.push_back(sd->upscale(img));
-            } else {
-                results.push_back(sd_tensor_to_image(img));
-            }
+            decoded_images.push_back(img);
         }
         int64_t t2 = ggml_time_ms();
         LOG_INFO("latent %" PRId64 " decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
@@ -6116,6 +6112,16 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
     if (sd->free_params_immediately && !sd->use_tiny_autoencoder) {
         sd->first_stage_model.destroy();
+    }
+    if(sd->upscale_output) {
+        LOG_INFO("upscaling %" PRId64 " images", decoded_images.size());
+    }
+    for (size_t i = 0; i < decoded_images.size(); i++) {
+        if(sd->upscale_output) {
+            results.push_back(sd->upscale(decoded_images[i]));
+        } else {
+            results.push_back(sd_tensor_to_image(decoded_images[i]));
+        }
     }
     ggml_free(work_ctx);
     LOG_INFO(

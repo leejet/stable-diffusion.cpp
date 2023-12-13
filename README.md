@@ -118,7 +118,7 @@ cmake --build . --config Release
 
 ##### Using Metal
 
-On MacOS, Metal is enabled by default. Using Metal makes the computation run on the GPU. Currently, there are some issues with Metal when performing operations on very large matrices, making it highly inefficient at the moment. Performance improvements are expected in the near future.
+Using Metal makes the computation run on the GPU. Currently, there are some issues with Metal when performing operations on very large matrices, making it highly inefficient at the moment. Performance improvements are expected in the near future.
 
 ```
 cmake .. -DSD_METAL=ON
@@ -137,7 +137,7 @@ cmake --build . --config Release
 ### Run
 
 ```
-usage: sd.exe [arguments]
+usage: sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
