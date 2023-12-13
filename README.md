@@ -17,7 +17,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA backend for GPU acceleration.
+- Full CUDA and Metal backend for GPU acceleration.
 - Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
 - Flash Attention for memory usage optimization (only cpu for now)
@@ -28,6 +28,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Latent Consistency Models support (LCM/LCM-LoRA)
 - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
 - Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
+- VAE tiling processing for reduce memory usage
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -115,6 +116,15 @@ cmake .. -DSD_CUBLAS=ON
 cmake --build . --config Release
 ```
 
+##### Using Metal
+
+On MacOS, Metal is enabled by default. Using Metal makes the computation run on the GPU. Currently, there are some issues with Metal when performing operations on very large matrices, making it highly inefficient at the moment. Performance improvements are expected in the near future.
+
+```
+cmake .. -DSD_METAL=ON
+cmake --build . --config Release
+```
+
 ### Using Flash Attention
 
 Enabling flash attention reduces memory usage by at least 400 MB. At the moment, it is not supported when CUBLAS is enabled because the kernel implementation is missing.
@@ -127,7 +137,7 @@ cmake --build . --config Release
 ### Run
 
 ```
-usage: sd [arguments]
+usage: sd.exe [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
@@ -157,6 +167,8 @@ arguments:
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate.
   --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)
+  -cs, --clip-skip N                 number of layers to skip of clip model (default: 0)
+  -vt, --vae-tiling                  process vae in tiles to reduce memory usage
   -v, --verbose                      print extra info
 ```
 
@@ -242,6 +254,16 @@ curl -L -O https://huggingface.co/madebyollin/taesd/blob/main/diffusion_pytorch_
 
 ```bash
 sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --taesd ../models/diffusion_pytorch_model.safetensors
+```
+
+## Using ESRGAN to upscale results
+
+You can use ESRGAN to upscale the generated images. At the moment, only the [RealESRGAN_x4plus_anime_6B.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth) model is supported. Support for more models of this architecture will be added soon.
+
+- Specify the model path using the `--upscale-model PATH` parameter. example:
+
+```bash
+sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --upscale-model ../models/RealESRGAN_x4plus_anime_6B.pth
 ```
 
 ### Docker
