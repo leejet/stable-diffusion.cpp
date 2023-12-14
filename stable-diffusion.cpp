@@ -4117,32 +4117,27 @@ struct ResidualDenseBlock {
 
     ggml_tensor* forward(ggml_context* ctx, ggml_tensor* out_scale, ggml_tensor* x /* feat */) {
         // x1 = self.lrelu(self.conv1(x))
-        ggml_tensor* x1 = ggml_conv_2d(ctx, conv1_w, x, 1, 1, 1, 1, 1, 1);
-        x1              = ggml_add(ctx, x1, ggml_reshape_4d(ctx, conv1_b, 1, 1, conv1_b->ne[0], 1));
+        ggml_tensor* x1 = ggml_nn_conv_2d(ctx, x, conv1_w, conv1_b, 1, 1, 1, 1);
         x1              = ggml_leaky_relu(ctx, x1, 0.2f, true);
 
         // x2 = self.lrelu(self.conv2(torch.cat((x, x1), 1)))
         ggml_tensor* x_cat = ggml_concat(ctx, x, x1);
-        ggml_tensor* x2    = ggml_conv_2d(ctx, conv2_w, x_cat, 1, 1, 1, 1, 1, 1);
-        x2                 = ggml_add(ctx, x2, ggml_reshape_4d(ctx, conv2_b, 1, 1, conv2_b->ne[0], 1));
+        ggml_tensor* x2    = ggml_nn_conv_2d(ctx, x_cat, conv2_w, conv2_b, 1, 1, 1, 1);
         x2                 = ggml_leaky_relu(ctx, x2, 0.2f, true);
 
         // x3 = self.lrelu(self.conv3(torch.cat((x, x1, x2), 1)))
         x_cat           = ggml_concat(ctx, x_cat, x2);
-        ggml_tensor* x3 = ggml_conv_2d(ctx, conv3_w, x_cat, 1, 1, 1, 1, 1, 1);
-        x3              = ggml_add(ctx, x3, ggml_reshape_4d(ctx, conv3_b, 1, 1, conv3_b->ne[0], 1));
+        ggml_tensor* x3 = ggml_nn_conv_2d(ctx, x_cat, conv3_w, conv3_b, 1, 1, 1, 1);
         x3              = ggml_leaky_relu(ctx, x3, 0.2f, true);
 
         // x4 = self.lrelu(self.conv4(torch.cat((x, x1, x2, x3), 1)))
         x_cat           = ggml_concat(ctx, x_cat, x3);
-        ggml_tensor* x4 = ggml_conv_2d(ctx, conv4_w, x_cat, 1, 1, 1, 1, 1, 1);
-        x4              = ggml_add(ctx, x4, ggml_reshape_4d(ctx, conv4_b, 1, 1, conv4_b->ne[0], 1));
+        ggml_tensor* x4 = ggml_nn_conv_2d(ctx, x_cat, conv4_w, conv4_b, 1, 1, 1, 1);
         x4              = ggml_leaky_relu(ctx, x4, 0.2f, true);
 
         // self.conv5(torch.cat((x, x1, x2, x3, x4), 1))
         x_cat           = ggml_concat(ctx, x_cat, x4);
-        ggml_tensor* x5 = ggml_conv_2d(ctx, conv5_w, x_cat, 1, 1, 1, 1, 1, 1);
-        x5              = ggml_add(ctx, x5, ggml_reshape_4d(ctx, conv5_b, 1, 1, conv5_b->ne[0], 1));
+        ggml_tensor* x5 = ggml_nn_conv_2d(ctx, x_cat, conv5_w, conv5_b, 1, 1, 1, 1);
 
         // return x5 * 0.2 + x
         x5 = ggml_add(ctx, ggml_scale(ctx, x5, out_scale), x);
@@ -4427,8 +4422,7 @@ struct ESRGAN {
 
     ggml_tensor* forward(ggml_context* ctx0, ggml_tensor* out_scale, ggml_tensor* x /* feat */) {
         // feat = self.conv_first(feat)
-        auto h = ggml_conv_2d(ctx0, conv_first_w, x, 1, 1, 1, 1, 1, 1);
-        h      = ggml_add(ctx0, h, ggml_reshape_4d(ctx0, conv_first_b, 1, 1, conv_first_b->ne[0], 1));
+        auto h = ggml_nn_conv_2d(ctx0, x, conv_first_w, conv_first_b, 1, 1, 1, 1);
 
         auto body_h = h;
         // self.body(feat)
@@ -4437,8 +4431,7 @@ struct ESRGAN {
         }
 
         // body_feat = self.conv_body(self.body(feat))
-        body_h = ggml_conv_2d(ctx0, conv_body_w, body_h, 1, 1, 1, 1, 1, 1);
-        body_h = ggml_add(ctx0, body_h, ggml_reshape_4d(ctx0, conv_body_b, 1, 1, conv_body_b->ne[0], 1));
+        body_h = ggml_nn_conv_2d(ctx0, body_h, conv_body_w, conv_body_b, 1, 1, 1, 1);
 
         // feat = feat + body_feat
         h = ggml_add(ctx0, h, body_h);
@@ -4446,24 +4439,19 @@ struct ESRGAN {
         // upsample
         // feat = self.lrelu(self.conv_up1(F.interpolate(feat, scale_factor=2, mode='nearest')))
         h = ggml_upscale(ctx0, h, 2);
-        h = ggml_conv_2d(ctx0, conv_up1_w, h, 1, 1, 1, 1, 1, 1);
-        h = ggml_add(ctx0, h, ggml_reshape_4d(ctx0, conv_up1_b, 1, 1, conv_up1_b->ne[0], 1));
+        h = ggml_nn_conv_2d(ctx0, h, conv_up1_w, conv_up1_b, 1, 1, 1, 1);
         h = ggml_leaky_relu(ctx0, h, 0.2f, true);
 
         // feat = self.lrelu(self.conv_up2(F.interpolate(feat, scale_factor=2, mode='nearest')))
         h = ggml_upscale(ctx0, h, 2);
-        h = ggml_conv_2d(ctx0, conv_up2_w, h, 1, 1, 1, 1, 1, 1);
-        h = ggml_add(ctx0, h, ggml_reshape_4d(ctx0, conv_up2_b, 1, 1, conv_up2_b->ne[0], 1));
-        h = ggml_leaky_relu(ctx0, h, 0.2f, true);
-
-        // self.lrelu(self.conv_hr(feat))
-        h = ggml_conv_2d(ctx0, conv_hr_w, h, 1, 1, 1, 1, 1, 1);
-        h = ggml_add(ctx0, h, ggml_reshape_4d(ctx0, conv_hr_b, 1, 1, conv_hr_b->ne[0], 1));
+        h = ggml_nn_conv_2d(ctx0, h, conv_up2_w, conv_up2_b, 1, 1, 1, 1);
         h = ggml_leaky_relu(ctx0, h, 0.2f, true);
 
         // out = self.conv_last(self.lrelu(self.conv_hr(feat)))
-        h = ggml_conv_2d(ctx0, conv_last_w, h, 1, 1, 1, 1, 1, 1);
-        h = ggml_add(ctx0, h, ggml_reshape_4d(ctx0, conv_last_b, 1, 1, conv_last_b->ne[0], 1));
+        h = ggml_nn_conv_2d(ctx0, h, conv_hr_w, conv_hr_b, 1, 1, 1, 1);
+        h = ggml_leaky_relu(ctx0, h, 0.2f, true);
+
+        h = ggml_nn_conv_2d(ctx0, h, conv_last_w, conv_last_b, 1, 1, 1, 1);
         return h;
     }
 
