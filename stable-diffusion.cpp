@@ -79,9 +79,9 @@ std::string sd_get_system_info() {
     return ss.str();
 }
 
-static void ggml_log_callback_default(ggml_log_level level, const char * text, void * user_data) {
-    (void) level;
-    (void) user_data;
+static void ggml_log_callback_default(ggml_log_level level, const char* text, void* user_data) {
+    (void)level;
+    (void)user_data;
     fputs(text, stderr);
     fflush(stderr);
 }
@@ -347,10 +347,12 @@ void sd_image_to_tensor(const uint8_t* image_data,
 }
 
 void ggml_split_tensor_2d(struct ggml_tensor* input,
-                struct ggml_tensor* output, int x, int y) {
-    int64_t width       = output->ne[0];
-    int64_t height      = output->ne[1];
-    int64_t channels    = output->ne[2];
+                          struct ggml_tensor* output,
+                          int x,
+                          int y) {
+    int64_t width    = output->ne[0];
+    int64_t height   = output->ne[1];
+    int64_t channels = output->ne[2];
     GGML_ASSERT(input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32);
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
@@ -363,23 +365,26 @@ void ggml_split_tensor_2d(struct ggml_tensor* input,
 }
 
 void ggml_merge_tensor_2d(struct ggml_tensor* input,
-                struct ggml_tensor* output, int x, int y, int overlap) {
-    int64_t width       = input->ne[0];
-    int64_t height      = input->ne[1];
-    int64_t channels    = input->ne[2];
+                          struct ggml_tensor* output,
+                          int x,
+                          int y,
+                          int overlap) {
+    int64_t width    = input->ne[0];
+    int64_t height   = input->ne[1];
+    int64_t channels = input->ne[2];
     GGML_ASSERT(input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32);
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
                 float new_value = ggml_tensor_get_f32(input, ix, iy, k);
-                if(overlap > 0) { // blend colors in overlapped area
+                if (overlap > 0) {  // blend colors in overlapped area
                     float old_value = ggml_tensor_get_f32(output, x + ix, y + iy, k);
-                    if(x > 0 && ix < overlap) { // in overlapped horizontal
-                        ggml_tensor_set_f32(output, old_value + (new_value - old_value) * (ix / (1.0f * overlap)), x + ix,y + iy, k);
+                    if (x > 0 && ix < overlap) {  // in overlapped horizontal
+                        ggml_tensor_set_f32(output, old_value + (new_value - old_value) * (ix / (1.0f * overlap)), x + ix, y + iy, k);
                         continue;
                     }
-                    if(y > 0 && iy < overlap) { // in overlapped vertical
-                        ggml_tensor_set_f32(output, old_value + (new_value - old_value) * (iy / (1.0f * overlap)), x + ix,y + iy, k);
+                    if (y > 0 && iy < overlap) {  // in overlapped vertical
+                        ggml_tensor_set_f32(output, old_value + (new_value - old_value) * (iy / (1.0f * overlap)), x + ix, y + iy, k);
                         continue;
                     }
                 }
@@ -447,22 +452,22 @@ void ggml_tensor_scale_output(struct ggml_tensor* src) {
     }
 }
 
-typedef std::function<void(ggml_tensor*, ggml_tensor*,bool)> on_tile_process;
+typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
 // Tiling
 void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
-    int input_width = input->ne[0];
-    int input_height = input->ne[1];
-    int output_width = output->ne[0];
+    int input_width   = input->ne[0];
+    int input_height  = input->ne[1];
+    int output_width  = output->ne[0];
     int output_height = output->ne[1];
-    GGML_ASSERT(input_width % 2 == 0 && input_height % 2 == 0 && output_width % 2 == 0 && output_height % 2 == 0); // should be multiple of 2
+    GGML_ASSERT(input_width % 2 == 0 && input_height % 2 == 0 && output_width % 2 == 0 && output_height % 2 == 0);  // should be multiple of 2
 
-    int tile_overlap = (int32_t)(tile_size * tile_overlap_factor);
+    int tile_overlap     = (int32_t)(tile_size * tile_overlap_factor);
     int non_tile_overlap = tile_size - tile_overlap;
 
     struct ggml_init_params params = {};
-    params.mem_size += tile_size * tile_size * input->ne[2] * sizeof(float); // input chunk
-    params.mem_size += (tile_size * scale) * (tile_size * scale) * output->ne[2] * sizeof(float); // output chunk
+    params.mem_size += tile_size * tile_size * input->ne[2] * sizeof(float);                       // input chunk
+    params.mem_size += (tile_size * scale) * (tile_size * scale) * output->ne[2] * sizeof(float);  // output chunk
     params.mem_size += 3 * ggml_tensor_overhead();
     params.mem_buffer = NULL;
     params.no_alloc   = false;
@@ -477,7 +482,7 @@ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const i
     }
 
     // tiling
-    ggml_tensor* input_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_size, tile_size, input->ne[2], 1);
+    ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_size, tile_size, input->ne[2], 1);
     ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_size * scale, tile_size * scale, output->ne[2], 1);
     on_processing(input_tile, NULL, true);
     int num_tiles = (input_width * input_height) / (non_tile_overlap * non_tile_overlap);
@@ -486,14 +491,14 @@ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const i
     int tile_count = 1;
     bool last_y = false, last_x = false;
     float last_time = 0.0f;
-    for(int y = 0; y < input_height && !last_y; y += non_tile_overlap) {
+    for (int y = 0; y < input_height && !last_y; y += non_tile_overlap) {
         if (y + tile_size >= input_height) {
-            y = input_height - tile_size;
+            y      = input_height - tile_size;
             last_y = true;
         }
-        for(int x = 0; x < input_width && !last_x; x += non_tile_overlap) {
+        for (int x = 0; x < input_width && !last_x; x += non_tile_overlap) {
             if (x + tile_size >= input_width) {
-                x = input_width - tile_size;
+                x      = input_width - tile_size;
                 last_x = true;
             }
             int64_t t1 = ggml_time_ms();
@@ -501,13 +506,13 @@ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const i
             on_processing(input_tile, output_tile, false);
             ggml_merge_tensor_2d(output_tile, output, x * scale, y * scale, tile_overlap * scale);
             int64_t t2 = ggml_time_ms();
-            last_time = (t2 - t1) / 1000.0f;
+            last_time  = (t2 - t1) / 1000.0f;
             pretty_progress(tile_count, num_tiles, last_time);
             tile_count++;
         }
         last_x = false;
     }
-    if(tile_count < num_tiles) {
+    if (tile_count < num_tiles) {
         pretty_progress(num_tiles, num_tiles, last_time);
     }
 }
@@ -998,7 +1003,7 @@ struct CLIPTextModel {
     int32_t intermediate_size       = 3072;  // 4096 for SD 2.x
     int32_t n_head                  = 12;    // num_attention_heads, 16 for SD 2.x
     int32_t num_hidden_layers       = 12;    // 24 for SD 2.x
-    int32_t skip_layers              = 0;
+    int32_t skip_layers             = 0;
 
     // embeddings
     struct ggml_tensor* position_ids;
@@ -4034,43 +4039,43 @@ struct TinyAutoEncoder {
 struct ResidualDenseBlock {
     int num_features;
     int num_grow_ch;
-    ggml_tensor* conv1_w; // [num_grow_ch, num_features, 3, 3]
-    ggml_tensor* conv1_b; // [num_grow_ch]
+    ggml_tensor* conv1_w;  // [num_grow_ch, num_features, 3, 3]
+    ggml_tensor* conv1_b;  // [num_grow_ch]
 
-    ggml_tensor* conv2_w; // [num_grow_ch, num_features + num_grow_ch, 3, 3]
-    ggml_tensor* conv2_b; // [num_grow_ch]
+    ggml_tensor* conv2_w;  // [num_grow_ch, num_features + num_grow_ch, 3, 3]
+    ggml_tensor* conv2_b;  // [num_grow_ch]
 
-    ggml_tensor* conv3_w; // [num_grow_ch, num_features + 2 * num_grow_ch, 3, 3]
-    ggml_tensor* conv3_b; // [num_grow_ch]
+    ggml_tensor* conv3_w;  // [num_grow_ch, num_features + 2 * num_grow_ch, 3, 3]
+    ggml_tensor* conv3_b;  // [num_grow_ch]
 
-    ggml_tensor* conv4_w; // [num_grow_ch, num_features + 3 * num_grow_ch, 3, 3]
-    ggml_tensor* conv4_b; // [num_grow_ch]
+    ggml_tensor* conv4_w;  // [num_grow_ch, num_features + 3 * num_grow_ch, 3, 3]
+    ggml_tensor* conv4_b;  // [num_grow_ch]
 
-    ggml_tensor* conv5_w; // [num_features, num_features + 4 * num_grow_ch, 3, 3]
-    ggml_tensor* conv5_b; // [num_features]
+    ggml_tensor* conv5_w;  // [num_features, num_features + 4 * num_grow_ch, 3, 3]
+    ggml_tensor* conv5_b;  // [num_features]
 
     ResidualDenseBlock() {}
 
     ResidualDenseBlock(int num_feat, int n_grow_ch) {
         num_features = num_feat;
-        num_grow_ch = n_grow_ch;
+        num_grow_ch  = n_grow_ch;
     }
 
     size_t calculate_mem_size() {
-        size_t mem_size = num_features * num_grow_ch * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv1_w
-        mem_size += num_grow_ch * ggml_type_size(GGML_TYPE_F32); // conv1_b
+        size_t mem_size = num_features * num_grow_ch * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv1_w
+        mem_size += num_grow_ch * ggml_type_size(GGML_TYPE_F32);                               // conv1_b
 
-        mem_size += (num_features + num_grow_ch) * num_grow_ch * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv2_w
-        mem_size += num_grow_ch * ggml_type_size(GGML_TYPE_F32); // conv2_b
+        mem_size += (num_features + num_grow_ch) * num_grow_ch * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv2_w
+        mem_size += num_grow_ch * ggml_type_size(GGML_TYPE_F32);                                         // conv2_b
 
-        mem_size += (num_features + 2*num_grow_ch) * num_grow_ch * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv3_w
-        mem_size += num_grow_ch * ggml_type_size(GGML_TYPE_F32); // conv3_w
+        mem_size += (num_features + 2 * num_grow_ch) * num_grow_ch * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv3_w
+        mem_size += num_grow_ch * ggml_type_size(GGML_TYPE_F32);                                             // conv3_w
 
-        mem_size += (num_features + 3*num_grow_ch) * num_grow_ch * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv4_w
-        mem_size += num_grow_ch * ggml_type_size(GGML_TYPE_F32); // conv4_w
+        mem_size += (num_features + 3 * num_grow_ch) * num_grow_ch * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv4_w
+        mem_size += num_grow_ch * ggml_type_size(GGML_TYPE_F32);                                             // conv4_w
 
-        mem_size += (num_features + 4*num_grow_ch) * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv5_w
-        mem_size += num_features * ggml_type_size(GGML_TYPE_F32); // conv5_w
+        mem_size += (num_features + 4 * num_grow_ch) * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv5_w
+        mem_size += num_features * ggml_type_size(GGML_TYPE_F32);                                             // conv5_w
 
         return mem_size;
     }
@@ -4091,54 +4096,53 @@ struct ResidualDenseBlock {
         conv4_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_grow_ch);
         conv5_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features + 4 * num_grow_ch, num_features);
         conv5_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
-        
     }
 
-    void map_by_name(std::map<std::string, ggml_tensor*> & tensors, std::string prefix) {
+    void map_by_name(std::map<std::string, ggml_tensor*>& tensors, std::string prefix) {
         tensors[prefix + "conv1.weight"] = conv1_w;
-        tensors[prefix + "conv1.bias"] = conv1_b;
+        tensors[prefix + "conv1.bias"]   = conv1_b;
 
         tensors[prefix + "conv2.weight"] = conv2_w;
-        tensors[prefix + "conv2.bias"] = conv2_b;
+        tensors[prefix + "conv2.bias"]   = conv2_b;
 
         tensors[prefix + "conv3.weight"] = conv3_w;
-        tensors[prefix + "conv3.bias"] = conv3_b;
+        tensors[prefix + "conv3.bias"]   = conv3_b;
 
         tensors[prefix + "conv4.weight"] = conv4_w;
-        tensors[prefix + "conv4.bias"] = conv4_b;
+        tensors[prefix + "conv4.bias"]   = conv4_b;
 
         tensors[prefix + "conv5.weight"] = conv5_w;
-        tensors[prefix + "conv5.bias"] = conv5_b;
+        tensors[prefix + "conv5.bias"]   = conv5_b;
     }
 
-    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* out_scale,  ggml_tensor* x /* feat */) {
+    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* out_scale, ggml_tensor* x /* feat */) {
         // x1 = self.lrelu(self.conv1(x))
         ggml_tensor* x1 = ggml_conv_2d(ctx, conv1_w, x, 1, 1, 1, 1, 1, 1);
-        x1 = ggml_add(ctx, x1, ggml_reshape_4d(ctx, conv1_b, 1, 1, conv1_b->ne[0], 1));
-        x1 = ggml_leaky_relu(ctx, x1, 0.2f, true);
+        x1              = ggml_add(ctx, x1, ggml_reshape_4d(ctx, conv1_b, 1, 1, conv1_b->ne[0], 1));
+        x1              = ggml_leaky_relu(ctx, x1, 0.2f, true);
 
         // x2 = self.lrelu(self.conv2(torch.cat((x, x1), 1)))
         ggml_tensor* x_cat = ggml_concat(ctx, x, x1);
-        ggml_tensor* x2 = ggml_conv_2d(ctx, conv2_w, x_cat, 1, 1, 1, 1, 1, 1);
-        x2 = ggml_add(ctx, x2, ggml_reshape_4d(ctx, conv2_b, 1, 1, conv2_b->ne[0], 1));
-        x2 = ggml_leaky_relu(ctx, x2, 0.2f, true);
+        ggml_tensor* x2    = ggml_conv_2d(ctx, conv2_w, x_cat, 1, 1, 1, 1, 1, 1);
+        x2                 = ggml_add(ctx, x2, ggml_reshape_4d(ctx, conv2_b, 1, 1, conv2_b->ne[0], 1));
+        x2                 = ggml_leaky_relu(ctx, x2, 0.2f, true);
 
         // x3 = self.lrelu(self.conv3(torch.cat((x, x1, x2), 1)))
-        x_cat = ggml_concat(ctx, x_cat, x2);
+        x_cat           = ggml_concat(ctx, x_cat, x2);
         ggml_tensor* x3 = ggml_conv_2d(ctx, conv3_w, x_cat, 1, 1, 1, 1, 1, 1);
-        x3 = ggml_add(ctx, x3, ggml_reshape_4d(ctx, conv3_b, 1, 1, conv3_b->ne[0], 1));
-        x3 = ggml_leaky_relu(ctx, x3, 0.2f, true);
+        x3              = ggml_add(ctx, x3, ggml_reshape_4d(ctx, conv3_b, 1, 1, conv3_b->ne[0], 1));
+        x3              = ggml_leaky_relu(ctx, x3, 0.2f, true);
 
         // x4 = self.lrelu(self.conv4(torch.cat((x, x1, x2, x3), 1)))
-        x_cat = ggml_concat(ctx, x_cat, x3);
+        x_cat           = ggml_concat(ctx, x_cat, x3);
         ggml_tensor* x4 = ggml_conv_2d(ctx, conv4_w, x_cat, 1, 1, 1, 1, 1, 1);
-        x4 = ggml_add(ctx, x4, ggml_reshape_4d(ctx, conv4_b, 1, 1, conv4_b->ne[0], 1));
-        x4 = ggml_leaky_relu(ctx, x4, 0.2f, true);
+        x4              = ggml_add(ctx, x4, ggml_reshape_4d(ctx, conv4_b, 1, 1, conv4_b->ne[0], 1));
+        x4              = ggml_leaky_relu(ctx, x4, 0.2f, true);
 
         // self.conv5(torch.cat((x, x1, x2, x3, x4), 1))
-        x_cat = ggml_concat(ctx, x_cat, x4);
+        x_cat           = ggml_concat(ctx, x_cat, x4);
         ggml_tensor* x5 = ggml_conv_2d(ctx, conv5_w, x_cat, 1, 1, 1, 1, 1, 1);
-        x5 = ggml_add(ctx, x5, ggml_reshape_4d(ctx, conv5_b, 1, 1, conv5_b->ne[0], 1));
+        x5              = ggml_add(ctx, x5, ggml_reshape_4d(ctx, conv5_b, 1, 1, conv5_b->ne[0], 1));
 
         // return x5 * 0.2 + x
         x5 = ggml_add(ctx, ggml_scale(ctx, x5, out_scale), x);
@@ -4153,14 +4157,14 @@ struct EsrganBlock {
     EsrganBlock() {}
 
     EsrganBlock(int num_feat, int num_grow_ch) {
-        for(int i = 0; i < num_residual_blocks; i++) {
+        for (int i = 0; i < num_residual_blocks; i++) {
             rd_blocks[i] = ResidualDenseBlock(num_feat, num_grow_ch);
         }
     }
 
     int get_num_tensors() {
         int num_tensors = 0;
-        for(int i = 0; i < num_residual_blocks; i++) {
+        for (int i = 0; i < num_residual_blocks; i++) {
             num_tensors += rd_blocks[i].get_num_tensors();
         }
         return num_tensors;
@@ -4168,28 +4172,27 @@ struct EsrganBlock {
 
     size_t calculate_mem_size() {
         size_t mem_size = 0;
-        for(int i = 0; i < num_residual_blocks; i++) {
+        for (int i = 0; i < num_residual_blocks; i++) {
             mem_size += rd_blocks[i].calculate_mem_size();
         }
         return mem_size;
     }
 
-
     void init_params(ggml_context* ctx) {
-        for(int i = 0; i < num_residual_blocks; i++) {
+        for (int i = 0; i < num_residual_blocks; i++) {
             rd_blocks[i].init_params(ctx);
         }
     }
 
-    void map_by_name(std::map<std::string, ggml_tensor*> & tensors, std::string prefix) {
-        for(int i = 0; i < num_residual_blocks; i++) {
-            rd_blocks[i].map_by_name(tensors, prefix + "rdb" + std::to_string(i + 1) +".");
+    void map_by_name(std::map<std::string, ggml_tensor*>& tensors, std::string prefix) {
+        for (int i = 0; i < num_residual_blocks; i++) {
+            rd_blocks[i].map_by_name(tensors, prefix + "rdb" + std::to_string(i + 1) + ".");
         }
     }
 
-    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* out_scale,  ggml_tensor* x) {
+    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* out_scale, ggml_tensor* x) {
         ggml_tensor* out = x;
-        for(int i = 0; i < num_residual_blocks; i++) {
+        for (int i = 0; i < num_residual_blocks; i++) {
             // out = self.rdb...(x)
             out = rd_blocks[i].forward(ctx, out_scale, out);
         }
@@ -4200,94 +4203,94 @@ struct EsrganBlock {
 };
 
 struct ESRGAN {
-    int scale = 4; // default RealESRGAN_x4plus_anime_6B
-    int num_blocks = 6; // default RealESRGAN_x4plus_anime_6B
-    int in_channels = 3;
+    int scale        = 4;  // default RealESRGAN_x4plus_anime_6B
+    int num_blocks   = 6;  // default RealESRGAN_x4plus_anime_6B
+    int in_channels  = 3;
     int out_channels = 3;
-    int num_features = 64; // default RealESRGAN_x4plus_anime_6B
-    int num_grow_ch = 32; // default RealESRGAN_x4plus_anime_6B
-    int tile_size = 128; // avoid cuda OOM for 4gb VRAM
+    int num_features = 64;   // default RealESRGAN_x4plus_anime_6B
+    int num_grow_ch  = 32;   // default RealESRGAN_x4plus_anime_6B
+    int tile_size    = 128;  // avoid cuda OOM for 4gb VRAM
 
-    ggml_tensor* conv_first_w; // [num_features, in_channels, 3, 3]
-    ggml_tensor* conv_first_b; // [num_features]
+    ggml_tensor* conv_first_w;  // [num_features, in_channels, 3, 3]
+    ggml_tensor* conv_first_b;  // [num_features]
 
     EsrganBlock body_blocks[6];
-    ggml_tensor* conv_body_w; // [num_features, num_features, 3, 3]
-    ggml_tensor* conv_body_b; // [num_features]
+    ggml_tensor* conv_body_w;  // [num_features, num_features, 3, 3]
+    ggml_tensor* conv_body_b;  // [num_features]
 
     // upsample
-    ggml_tensor* conv_up1_w; // [num_features, num_features, 3, 3]
-    ggml_tensor* conv_up1_b; // [num_features]
-    ggml_tensor* conv_up2_w; // [num_features, num_features, 3, 3]
-    ggml_tensor* conv_up2_b; // [num_features]
+    ggml_tensor* conv_up1_w;  // [num_features, num_features, 3, 3]
+    ggml_tensor* conv_up1_b;  // [num_features]
+    ggml_tensor* conv_up2_w;  // [num_features, num_features, 3, 3]
+    ggml_tensor* conv_up2_b;  // [num_features]
 
-    ggml_tensor* conv_hr_w; // [num_features, num_features, 3, 3]
-    ggml_tensor* conv_hr_b; // [num_features]
-    ggml_tensor* conv_last_w; // [out_channels, num_features, 3, 3]
-    ggml_tensor* conv_last_b; // [out_channels]
+    ggml_tensor* conv_hr_w;    // [num_features, num_features, 3, 3]
+    ggml_tensor* conv_hr_b;    // [num_features]
+    ggml_tensor* conv_last_w;  // [out_channels, num_features, 3, 3]
+    ggml_tensor* conv_last_b;  // [out_channels]
 
     ggml_context* ctx;
     bool decode_only = false;
     ggml_backend_buffer_t params_buffer;
-    ggml_backend_buffer_t compute_buffer; // for compute
-    struct ggml_allocr * compute_alloc = NULL;
+    ggml_backend_buffer_t compute_buffer;  // for compute
+    struct ggml_allocr* compute_alloc = NULL;
 
     int memory_buffer_size = 0;
     ggml_type wtype;
     ggml_backend_t backend = NULL;
 
     ESRGAN() {
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             body_blocks[i] = EsrganBlock(num_features, num_grow_ch);
         }
     }
 
     size_t calculate_mem_size() {
-        size_t mem_size = num_features * in_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_first_w
-        mem_size += num_features * ggml_type_size(GGML_TYPE_F32); // conv_first_b
+        size_t mem_size = num_features * in_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_first_w
+        mem_size += num_features * ggml_type_size(GGML_TYPE_F32);                              // conv_first_b
 
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             mem_size += body_blocks[i].calculate_mem_size();
         }
 
-        mem_size += num_features * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_body_w
-        mem_size += num_features * ggml_type_size(GGML_TYPE_F32); // conv_body_w
+        mem_size += num_features * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_body_w
+        mem_size += num_features * ggml_type_size(GGML_TYPE_F32);                         // conv_body_w
 
         // upsample
-        mem_size += num_features * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_up1_w
-        mem_size += num_features * ggml_type_size(GGML_TYPE_F32); // conv_up1_b
+        mem_size += num_features * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_up1_w
+        mem_size += num_features * ggml_type_size(GGML_TYPE_F32);                         // conv_up1_b
 
-        mem_size += num_features * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_up2_w
-        mem_size += num_features * ggml_type_size(GGML_TYPE_F32); // conv_up2_b
+        mem_size += num_features * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_up2_w
+        mem_size += num_features * ggml_type_size(GGML_TYPE_F32);                         // conv_up2_b
 
-        mem_size += num_features * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_hr_w
-        mem_size += num_features * ggml_type_size(GGML_TYPE_F32); // conv_hr_b
+        mem_size += num_features * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_hr_w
+        mem_size += num_features * ggml_type_size(GGML_TYPE_F32);                         // conv_hr_b
 
-        mem_size += out_channels * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16); // conv_last_w
-        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32); // conv_last_b
+        mem_size += out_channels * num_features * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_last_w
+        mem_size += out_channels * ggml_type_size(GGML_TYPE_F32);                         // conv_last_b
         return mem_size;
     }
 
     int get_num_tensors() {
         int num_tensors = 12;
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             num_tensors += body_blocks[i].get_num_tensors();
         }
         return num_tensors;
     }
 
     bool init(ggml_backend_t backend_) {
-        this->backend = backend_;
+        this->backend      = backend_;
         memory_buffer_size = calculate_mem_size();
-        memory_buffer_size += 1024; // overhead
+        memory_buffer_size += 1024;  // overhead
         int num_tensors = get_num_tensors();
 
         LOG_DEBUG("ESRGAN params backend buffer size = % 6.2f MB (%i tensors)", memory_buffer_size / (1024.0 * 1024.0), num_tensors);
 
         struct ggml_init_params params;
-        params.mem_size = static_cast<size_t>(num_tensors * ggml_tensor_overhead());
+        params.mem_size   = static_cast<size_t>(num_tensors * ggml_tensor_overhead());
         params.mem_buffer = NULL;
-        params.no_alloc = true;
+        params.no_alloc   = true;
 
         params_buffer = ggml_backend_alloc_buffer(backend, memory_buffer_size);
 
@@ -4301,26 +4304,26 @@ struct ESRGAN {
 
     void alloc_params() {
         ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
-        conv_first_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, in_channels, num_features);
-        conv_first_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
-        conv_body_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, num_features);
-        conv_body_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
-        conv_up1_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, num_features);
-        conv_up1_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
-        conv_up2_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, num_features);
-        conv_up2_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
-        conv_hr_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, num_features);
-        conv_hr_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
-        conv_last_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, out_channels);
-        conv_last_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
+        conv_first_w       = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, in_channels, num_features);
+        conv_first_b       = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
+        conv_body_w        = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, num_features);
+        conv_body_b        = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
+        conv_up1_w         = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, num_features);
+        conv_up1_b         = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
+        conv_up2_w         = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, num_features);
+        conv_up2_b         = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
+        conv_hr_w          = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, num_features);
+        conv_hr_b          = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_features);
+        conv_last_w        = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 3, 3, num_features, out_channels);
+        conv_last_b        = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
 
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             body_blocks[i].init_params(ctx);
         }
 
         // alloc all tensors linked to this context
-        for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            if(t->data == NULL) {
+        for (struct ggml_tensor* t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->data == NULL) {
                 ggml_allocr_alloc(alloc, t);
             }
         }
@@ -4400,36 +4403,36 @@ struct ESRGAN {
         return success;
     }
 
-    void map_by_name(std::map<std::string, ggml_tensor*> & tensors) {
+    void map_by_name(std::map<std::string, ggml_tensor*>& tensors) {
         tensors["conv_first.weight"] = conv_first_w;
-        tensors["conv_first.bias"] = conv_first_b;
+        tensors["conv_first.bias"]   = conv_first_b;
 
-        for(int i = 0; i < num_blocks; i++) {
-            body_blocks[i].map_by_name(tensors, "body." + std::to_string(i) +".");
+        for (int i = 0; i < num_blocks; i++) {
+            body_blocks[i].map_by_name(tensors, "body." + std::to_string(i) + ".");
         }
 
         tensors["conv_body.weight"] = conv_body_w;
-        tensors["conv_body.bias"] = conv_body_b;
+        tensors["conv_body.bias"]   = conv_body_b;
 
         tensors["conv_up1.weight"] = conv_up1_w;
-        tensors["conv_up1.bias"] = conv_up1_b;
+        tensors["conv_up1.bias"]   = conv_up1_b;
         tensors["conv_up2.weight"] = conv_up2_w;
-        tensors["conv_up2.bias"] = conv_up2_b;
-        tensors["conv_hr.weight"] = conv_hr_w;
-        tensors["conv_hr.bias"] = conv_hr_b;
+        tensors["conv_up2.bias"]   = conv_up2_b;
+        tensors["conv_hr.weight"]  = conv_hr_w;
+        tensors["conv_hr.bias"]    = conv_hr_b;
 
         tensors["conv_last.weight"] = conv_last_w;
-        tensors["conv_last.bias"] = conv_last_b;
+        tensors["conv_last.bias"]   = conv_last_b;
     }
 
     ggml_tensor* forward(ggml_context* ctx0, ggml_tensor* out_scale, ggml_tensor* x /* feat */) {
         // feat = self.conv_first(feat)
         auto h = ggml_conv_2d(ctx0, conv_first_w, x, 1, 1, 1, 1, 1, 1);
-        h = ggml_add(ctx0, h, ggml_reshape_4d(ctx0, conv_first_b, 1, 1, conv_first_b->ne[0], 1));
+        h      = ggml_add(ctx0, h, ggml_reshape_4d(ctx0, conv_first_b, 1, 1, conv_first_b->ne[0], 1));
 
         auto body_h = h;
         // self.body(feat)
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             body_h = body_blocks[i].forward(ctx0, out_scale, body_h);
         }
 
@@ -4464,37 +4467,37 @@ struct ESRGAN {
         return h;
     }
 
-    struct ggml_cgraph * build_graph(struct ggml_tensor* x) {
+    struct ggml_cgraph* build_graph(struct ggml_tensor* x) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
         static size_t buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
 
         struct ggml_init_params params = {
-            /*.mem_size   =*/ buf_size,
-            /*.mem_buffer =*/ buf.data(),
-            /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_allocr_alloc_graph()
+            /*.mem_size   =*/buf_size,
+            /*.mem_buffer =*/buf.data(),
+            /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
         };
 
-        struct ggml_context * ctx0 = ggml_init(params);
+        struct ggml_context* ctx0 = ggml_init(params);
 
-        struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
+        struct ggml_cgraph* gf = ggml_new_graph(ctx0);
 
         struct ggml_tensor* x_ = NULL;
         struct ggml_tensor* os = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
         ggml_allocr_alloc(compute_alloc, os);
-        if(!ggml_allocr_is_measure(compute_alloc)) {
+        if (!ggml_allocr_is_measure(compute_alloc)) {
             float scale = 0.2f;
             ggml_backend_tensor_set(os, &scale, 0, sizeof(scale));
         }
 
-         // it's performing a compute, check if backend isn't cpu
-        if(!ggml_backend_is_cpu(backend)) {
+        // it's performing a compute, check if backend isn't cpu
+        if (!ggml_backend_is_cpu(backend)) {
             // pass input tensors to gpu memory
             x_ = ggml_dup_tensor(ctx0, x);
             ggml_allocr_alloc(compute_alloc, x_);
 
             // pass data to device backend
-            if(!ggml_allocr_is_measure(compute_alloc)) {
+            if (!ggml_allocr_is_measure(compute_alloc)) {
                 ggml_backend_tensor_set(x_, x->data, 0, ggml_nbytes(x));
             }
         } else {
@@ -4514,7 +4517,7 @@ struct ESRGAN {
         // alignment required by the backend
         compute_alloc = ggml_allocr_new_measure_from_backend(backend);
 
-        struct ggml_cgraph * gf = build_graph(x);
+        struct ggml_cgraph* gf = build_graph(x);
 
         // compute the required memory
         size_t compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf);
@@ -4525,13 +4528,13 @@ struct ESRGAN {
         LOG_DEBUG("ESRGAN compute buffer size: %.2f MB", compute_memory_buffer_size / 1024.0 / 1024.0);
 
         compute_buffer = ggml_backend_alloc_buffer(backend, compute_memory_buffer_size);
-        compute_alloc = ggml_allocr_new_from_buffer(compute_buffer);
+        compute_alloc  = ggml_allocr_new_from_buffer(compute_buffer);
     }
 
     void compute(struct ggml_tensor* work_result, const int n_threads, struct ggml_tensor* x) {
         ggml_allocr_reset(compute_alloc);
 
-        struct ggml_cgraph * gf = build_graph(x);
+        struct ggml_cgraph* gf = build_graph(x);
         ggml_allocr_alloc_graph(compute_alloc, gf);
 
         if (ggml_backend_is_cpu(backend)) {
@@ -4559,8 +4562,6 @@ struct ESRGAN {
         compute_alloc = NULL;
     }
 };
-
-
 
 float ggml_backend_tensor_get_f32(ggml_tensor* tensor) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16);
@@ -4919,7 +4920,7 @@ public:
     UNetModel diffusion_model;
     AutoEncoderKL first_stage_model;
     bool use_tiny_autoencoder = false;
-    bool vae_tiling = false;
+    bool vae_tiling           = false;
 
     std::map<std::string, struct ggml_tensor*> tensors;
 
@@ -4971,7 +4972,8 @@ public:
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
                         ggml_type wtype,
-                        Schedule schedule, int clip_skip_layers) {
+                        Schedule schedule,
+                        int clip_skip_layers) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
@@ -5013,9 +5015,9 @@ public:
             LOG_ERROR("get sd version from file failed: '%s'", model_path.c_str());
             return false;
         }
-        cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
+        cond_stage_model                        = FrozenCLIPEmbedderWithCustomWords(version);
         cond_stage_model.text_model.skip_layers = clip_skip_layers;
-        diffusion_model  = UNetModel(version);
+        diffusion_model                         = UNetModel(version);
         LOG_INFO("Stable Diffusion %s ", model_version_to_str[version]);
         if (wtype == GGML_TYPE_COUNT) {
             model_data_type = model_loader.get_sd_wtype();
@@ -5221,8 +5223,8 @@ public:
         }
         LOG_DEBUG("finished loaded file");
         ggml_free(ctx);
-        if(upscale_output) {
-            if(!esrgan_upscaler.load_from_file(esrgan_path, backend)) {
+        if (upscale_output) {
+            if (!esrgan_upscaler.load_from_file(esrgan_path, backend)) {
                 return false;
             }
         }
@@ -5886,10 +5888,10 @@ public:
             } else {
                 ggml_tensor_scale_input(x);
             }
-            if(vae_tiling && decode) { // TODO: support tiling vae encode
+            if (vae_tiling && decode) {  // TODO: support tiling vae encode
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    if(init) {
+                    if (init) {
                         first_stage_model.begin(in, decode);
                     } else {
                         first_stage_model.compute(out, n_threads, in, decode);
@@ -5905,10 +5907,10 @@ public:
                 ggml_tensor_scale_output(result);
             }
         } else {
-            if(vae_tiling && decode) { // TODO: support tiling vae encode
+            if (vae_tiling && decode) {  // TODO: support tiling vae encode
                 // split latent in 64x64 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    if(init) {
+                    if (init) {
                         tae_first_stage.begin(in, decode);
                     } else {
                         tae_first_stage.compute(out, n_threads, in, decode);
@@ -5930,11 +5932,11 @@ public:
     }
 
     uint8_t* upscale(ggml_tensor* image) {
-        int output_width = image->ne[0] * esrgan_upscaler.scale;
+        int output_width  = image->ne[0] * esrgan_upscaler.scale;
         int output_height = image->ne[1] * esrgan_upscaler.scale;
         LOG_INFO("upscaling from (%i x %i) to (%i x %i)", image->ne[0], image->ne[1], output_width, output_height);
         struct ggml_init_params params;
-        params.mem_size = output_width * output_height * 3 * sizeof(float); // upscaled
+        params.mem_size = output_width * output_height * 3 * sizeof(float);  // upscaled
         params.mem_size += 1 * ggml_tensor_overhead();
         params.mem_buffer = NULL;
         params.no_alloc   = false;
@@ -5946,8 +5948,8 @@ public:
         }
         LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
         ggml_tensor* upscaled = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, image->ne[2], 1);
-        auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-            if(init) {
+        auto on_tiling        = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+            if (init) {
                 esrgan_upscaler.begin(in);
             } else {
                 esrgan_upscaler.compute(out, n_threads, in);
@@ -6097,7 +6099,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
 
     LOG_INFO("decoding %zu latents", final_latents.size());
-    std::vector<struct ggml_tensor*> decoded_images; // collect decoded images
+    std::vector<struct ggml_tensor*> decoded_images;  // collect decoded images
     for (size_t i = 0; i < final_latents.size(); i++) {
         t1                      = ggml_time_ms();
         struct ggml_tensor* img = sd->decode_first_stage(work_ctx, final_latents[i] /* x_0 */);
@@ -6113,11 +6115,11 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     if (sd->free_params_immediately && !sd->use_tiny_autoencoder) {
         sd->first_stage_model.destroy();
     }
-    if(sd->upscale_output) {
+    if (sd->upscale_output) {
         LOG_INFO("upscaling %" PRId64 " images", decoded_images.size());
     }
     for (size_t i = 0; i < decoded_images.size(); i++) {
-        if(sd->upscale_output) {
+        if (sd->upscale_output) {
             results.push_back(sd->upscale(decoded_images[i]));
         } else {
             results.push_back(sd_tensor_to_image(decoded_images[i]));
@@ -6229,7 +6231,7 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
 
     struct ggml_tensor* img = sd->decode_first_stage(work_ctx, x_0);
     if (img != NULL) {
-        if(sd->upscale_output) {
+        if (sd->upscale_output) {
             result.push_back(sd->upscale(img));
         } else {
             result.push_back(sd_tensor_to_image(img));

@@ -67,11 +67,11 @@ struct SDParams {
 
     std::string prompt;
     std::string negative_prompt;
-    float cfg_scale = 7.0f;
+    float cfg_scale      = 7.0f;
     int clip_skip_layers = 0;
-    int width       = 512;
-    int height      = 512;
-    int batch_count = 1;
+    int width            = 512;
+    int height           = 512;
+    int batch_count      = 1;
 
     SampleMethod sample_method = EULER_A;
     Schedule schedule          = DEFAULT;
@@ -511,7 +511,7 @@ int main(int argc, const char* argv[]) {
                              params.seed);
     }
 
-    if(params.esrgan_path.size() > 0) {
+    if (params.esrgan_path.size() > 0) {
         // TODO: support more ESRGAN models, making it easier to set up ESRGAN models.
         /*  hardcoded scale factor because just RealESRGAN_x4plus_anime_6B is compatible
             See also: https://github.com/xinntao/Real-ESRGAN/blob/master/inference_realesrgan.py
