@@ -32,7 +32,7 @@
 #define EPS 1e-05f
 
 #define UNET_GRAPH_SIZE 10240
-#define LORA_GRAPH_SIZE 4096
+#define LORA_GRAPH_SIZE 10240
 
 #define TIMESTEPS 1000
 
@@ -4056,7 +4056,7 @@ struct LoraModel {
         }
 
         struct ggml_init_params params;
-        params.mem_size   = static_cast<size_t>(1024 * ggml_tensor_overhead());
+        params.mem_size   = static_cast<size_t>(LORA_GRAPH_SIZE * ggml_tensor_overhead());
         params.mem_buffer = NULL;
         params.no_alloc   = true;
 
