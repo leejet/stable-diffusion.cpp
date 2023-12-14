@@ -91,11 +91,13 @@ void print_params(SDParams params) {
     printf("    wtype:             %s\n", params.wtype < GGML_TYPE_COUNT ? ggml_type_name(params.wtype) : "unspecified");
     printf("    vae_path:          %s\n", params.vae_path.c_str());
     printf("    taesd_path:        %s\n", params.taesd_path.c_str());
+    printf("    esrgan_path:       %s\n", params.esrgan_path.c_str());
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
+    printf("    clip_skip_layers:  %d\n", params.clip_skip_layers);
     printf("    width:             %d\n", params.width);
     printf("    height:            %d\n", params.height);
     printf("    sample_method:     %s\n", sample_method_str[params.sample_method]);
@@ -105,6 +107,7 @@ void print_params(SDParams params) {
     printf("    rng:               %s\n", rng_type_to_str[params.rng_type]);
     printf("    seed:              %ld\n", params.seed);
     printf("    batch_count:       %d\n", params.batch_count);
+    printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -118,7 +121,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -m, --model [MODEL]                path to model\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
-    printf("  -um, --upscale-model [ESRGAN_PATH] path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
+    printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
@@ -138,8 +141,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate.\n");
     printf("  --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)\n");
-    printf("  -cs, --clip-skip N                 number of layers to skip of clip model (default: 0)\n");
-    printf("  -vt, --vae-tiling                  process vae in tiles to reduce memory usage\n");
+    printf("  --clip-skip N                      number of layers to skip of clip model (default: 0)\n");
+    printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -191,7 +194,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.taesd_path = argv[i];
-        } else if (arg == "--upscale-model" || arg == "-um") {
+        } else if (arg == "--upscale-model") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
@@ -282,13 +285,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.sample_steps = std::stoi(argv[i]);
-        } else if (arg == "-cs" || arg == "--clip-skip") {
+        } else if (arg == "--clip-skip") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
             params.clip_skip_layers = std::stoi(argv[i]);
-        } else if (arg == "-vt" || arg == "--vae-tiling") {
+        } else if (arg == "--vae-tiling") {
             params.vae_tiling = true;
         } else if (arg == "-b" || arg == "--batch-count") {
             if (++i >= argc) {

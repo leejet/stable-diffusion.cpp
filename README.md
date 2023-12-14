@@ -137,7 +137,7 @@ cmake --build . --config Release
 ### Run
 
 ```
-usage: sd [arguments]
+usage: ./bin/sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
@@ -147,7 +147,7 @@ arguments:
   -m, --model [MODEL]                path to model
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
-  -um, --upscale-model [ESRGAN_PATH] path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.
+  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.
   --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
                                      If not specified, the default is the type of the weight file.
   --lora-model-dir [DIR]             lora model directory
@@ -167,8 +167,8 @@ arguments:
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate.
   --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)
-  -cs, --clip-skip N                 number of layers to skip of clip model (default: 0)
-  -vt, --vae-tiling                  process vae in tiles to reduce memory usage
+  --clip-skip N                      number of layers to skip of clip model (default: 0)
+  --vae-tiling                       process vae in tiles to reduce memory usage
   -v, --verbose                      print extra info
 ```
 

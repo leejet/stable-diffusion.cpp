@@ -4075,7 +4075,7 @@ struct ResidualDenseBlock {
         return mem_size;
     }
 
-    int getNumTensors() {
+    int get_num_tensors() {
         int num_tensors = 10;
         return num_tensors;
     }
@@ -4158,10 +4158,10 @@ struct EsrganBlock {
         }
     }
 
-    int getNumTensors() {
+    int get_num_tensors() {
         int num_tensors = 0;
         for(int i = 0; i < num_residual_blocks; i++) {
-            num_tensors += rd_blocks[i].getNumTensors();
+            num_tensors += rd_blocks[i].get_num_tensors();
         }
         return num_tensors;
     }
@@ -4268,10 +4268,10 @@ struct ESRGAN {
         return mem_size;
     }
 
-    int getNumTensors() {
+    int get_num_tensors() {
         int num_tensors = 12;
         for(int i = 0; i < num_blocks; i++) {
-            num_tensors += body_blocks[i].getNumTensors();
+            num_tensors += body_blocks[i].get_num_tensors();
         }
         return num_tensors;
     }
@@ -4280,7 +4280,7 @@ struct ESRGAN {
         this->backend = backend_;
         memory_buffer_size = calculate_mem_size();
         memory_buffer_size += 1024; // overhead
-        int num_tensors = getNumTensors();
+        int num_tensors = get_num_tensors();
 
         LOG_DEBUG("ESRGAN params backend buffer size = % 6.2f MB (%i tensors)", memory_buffer_size / (1024.0 * 1024.0), num_tensors);
 
