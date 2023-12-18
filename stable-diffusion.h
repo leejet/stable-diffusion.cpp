@@ -49,7 +49,7 @@ public:
                         const std::string& vae_path,
                         ggml_type wtype,
                         Schedule d = DEFAULT,
-                        int clip_skip_layers          = 0);
+                        int clip_skip = -1);
     std::vector<uint8_t*> txt2img(
         std::string prompt,
         std::string negative_prompt,

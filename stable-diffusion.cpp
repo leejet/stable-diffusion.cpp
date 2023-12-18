@@ -1003,7 +1003,7 @@ struct CLIPTextModel {
     int32_t intermediate_size       = 3072;  // 4096 for SD 2.x
     int32_t n_head                  = 12;    // num_attention_heads, 16 for SD 2.x
     int32_t num_hidden_layers       = 12;    // 24 for SD 2.x
-    int32_t skip_layers             = 0;
+    int32_t clip_skip               = 1;
 
     // embeddings
     struct ggml_tensor* position_ids;
@@ -1162,8 +1162,9 @@ struct CLIPTextModel {
                                    ggml_view_1d(ctx0, position_ids, input_ids->ne[0], 0)));  // [N, n_token, hidden_size]
 
         // transformer
+        int layer_idx = num_hidden_layers - clip_skip;
         for (int i = 0; i < num_hidden_layers; i++) {
-            if (version == VERSION_2_x && i == num_hidden_layers - 1 || i > (num_hidden_layers - skip_layers - 1)) {  // layer: "penultimate"
+            if (i == layer_idx + 1) {
                 break;
             }
             x = resblocks[i].forward(ctx0, x);  // [N, n_token, hidden_size]
@@ -4961,7 +4962,7 @@ public:
                         const std::string& vae_path,
                         ggml_type wtype,
                         Schedule schedule,
-                        int clip_skip_layers) {
+                        int clip_skip) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
@@ -5003,9 +5004,15 @@ public:
             LOG_ERROR("get sd version from file failed: '%s'", model_path.c_str());
             return false;
         }
-        cond_stage_model                        = FrozenCLIPEmbedderWithCustomWords(version);
-        cond_stage_model.text_model.skip_layers = clip_skip_layers;
-        diffusion_model                         = UNetModel(version);
+        if (clip_skip <= 0) {
+            clip_skip = 1;
+            if (version == VERSION_2_x) {
+                clip_skip = 2;
+            }
+        }
+        cond_stage_model                      = FrozenCLIPEmbedderWithCustomWords(version);
+        cond_stage_model.text_model.clip_skip = clip_skip;
+        diffusion_model                       = UNetModel(version);
         LOG_INFO("Stable Diffusion %s ", model_version_to_str[version]);
         if (wtype == GGML_TYPE_COUNT) {
             model_data_type = model_loader.get_sd_wtype();
@@ -5989,8 +5996,8 @@ bool StableDiffusion::load_from_file(const std::string& model_path,
                                      const std::string& vae_path,
                                      ggml_type wtype,
                                      Schedule s,
-                                     int clip_skip_layers) {
-    return sd->load_from_file(model_path, vae_path, wtype, s, clip_skip_layers);
+                                     int clip_skip) {
+    return sd->load_from_file(model_path, vae_path, wtype, s, clip_skip);
 }
 
 std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,

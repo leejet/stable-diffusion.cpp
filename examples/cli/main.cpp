@@ -67,11 +67,11 @@ struct SDParams {
 
     std::string prompt;
     std::string negative_prompt;
-    float cfg_scale      = 7.0f;
-    int clip_skip_layers = 0;
-    int width            = 512;
-    int height           = 512;
-    int batch_count      = 1;
+    float cfg_scale = 7.0f;
+    int clip_skip   = -1;  // <= 0 represents unspecified
+    int width       = 512;
+    int height      = 512;
+    int batch_count = 1;
 
     SampleMethod sample_method = EULER_A;
     Schedule schedule          = DEFAULT;
@@ -97,7 +97,7 @@ void print_params(SDParams params) {
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
-    printf("    clip_skip_layers:  %d\n", params.clip_skip_layers);
+    printf("    clip_skip:         %d\n", params.clip_skip);
     printf("    width:             %d\n", params.width);
     printf("    height:            %d\n", params.height);
     printf("    sample_method:     %s\n", sample_method_str[params.sample_method]);
@@ -141,7 +141,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate.\n");
     printf("  --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)\n");
-    printf("  --clip-skip N                      number of layers to skip of clip model (default: 0)\n");
+    printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
+    printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
     printf("  -v, --verbose                      print extra info\n");
 }
@@ -290,7 +291,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.clip_skip_layers = std::stoi(argv[i]);
+            params.clip_skip = std::stoi(argv[i]);
         } else if (arg == "--vae-tiling") {
             params.vae_tiling = true;
         } else if (arg == "-b" || arg == "--batch-count") {
@@ -483,7 +484,7 @@ int main(int argc, const char* argv[]) {
 
     StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_path, params.esrgan_path, true, params.vae_tiling, params.lora_model_dir, params.rng_type);
 
-    if (!sd.load_from_file(params.model_path, params.vae_path, params.wtype, params.schedule, params.clip_skip_layers)) {
+    if (!sd.load_from_file(params.model_path, params.vae_path, params.wtype, params.schedule, params.clip_skip)) {
         return 1;
     }
 
