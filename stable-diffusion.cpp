@@ -4425,7 +4425,7 @@ public:
                         Schedule schedule) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
-        backend = ggml_backend_cuda_init();
+        backend = ggml_backend_cuda_init(0);
 #endif
         if (!backend) {
             LOG_DEBUG("Using CPU backend");
@@ -5400,10 +5400,10 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
                                                int64_t seed,
                                                int batch_count) {
     std::vector<uint8_t*> results;
-    if (width >= 1024 && height >= 1024) {  // 1024 x 1024 images
-        LOG_WARN("Image too large, try a smaller size.");
-        return results;
-    }
+    // if (width >= 1024 && height >= 1024) {  // 1024 x 1024 images
+    //     LOG_WARN("Image too large, try a smaller size.");
+    //     return results;
+    // }
     // extract and remove lora
     auto result_pair                                = extract_and_remove_lora(prompt);
     std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
