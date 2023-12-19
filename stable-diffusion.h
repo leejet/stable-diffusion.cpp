@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "ggml/ggml.h"
+
 enum RNGType {
     STD_DEFAULT_RNG,
     CUDA_RNG
@@ -36,16 +38,19 @@ private:
     std::shared_ptr<StableDiffusionGGML> sd;
 
 public:
-    StableDiffusion(int n_threads                = -1,
-                    bool vae_decode_only         = false,
-                    std::string taesd_path       = "",
-                    bool free_params_immediately = false,
-                    std::string lora_model_dir   = "",
-                    RNGType rng_type             = STD_DEFAULT_RNG);
+    explicit StableDiffusion(int n_threads                = -1,
+                             bool vae_decode_only         = false,
+                             std::string taesd_path       = "",
+                             bool free_params_immediately = false,
+                             std::string lora_model_dir   = "",
+                             std::string tokenizer_dir    = "",
+                             RNGType rng_type             = STD_DEFAULT_RNG);
+
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
                         ggml_type wtype,
                         Schedule d = DEFAULT);
+
     std::vector<uint8_t*> txt2img(
         std::string prompt,
         std::string negative_prompt,

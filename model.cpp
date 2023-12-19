@@ -1192,6 +1192,7 @@ ggml_type ModelLoader::get_sd_wtype() {
     return GGML_TYPE_COUNT;
 }
 
+
 bool ModelLoader::load_vocab(on_new_token_cb_t on_new_token_cb) {
     char* vocab_buffer          = reinterpret_cast<char*>(vocab_json);
     nlohmann::json vocab        = nlohmann::json::parse(vocab_buffer);
@@ -1204,6 +1205,22 @@ bool ModelLoader::load_vocab(on_new_token_cb_t on_new_token_cb) {
             token += decoder[c];
         }
         on_new_token_cb(token, token_id);
+    }
+    return true;
+}
+
+bool ModelLoader::load_merges(on_new_merges_cb_t on_new_merges_cb) {
+    char* vocab_buffer          = reinterpret_cast<char*>(vocab_json);
+    nlohmann::json vocab        = nlohmann::json::parse(vocab_buffer);
+    std::map<char, int> decoder = unicode_to_byte();
+    for (auto& it : vocab.items()) {
+        int token_id          = it.value();
+        std::string token_str = it.key();
+        std::string token     = "";
+        for (char c : token_str) {
+            token += decoder[c];
+        }
+        on_new_merges_cb();
     }
     return true;
 }

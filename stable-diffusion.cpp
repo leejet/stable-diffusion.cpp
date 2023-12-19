@@ -494,12 +494,12 @@ const int EOS_TOKEN_ID = 49407;
 const int PAD_TOKEN_ID = 49407;
 
 // Ref: https://github.com/openai/CLIP/blob/main/clip/simple_tokenizer.py
-// TODO: implement bpe
 class CLIPTokenizer {
 private:
     SDVersion version = VERSION_1_x;
     std::map<std::string, int32_t> encoder;
     std::regex pat;
+    std::map<std::pair<std::string, std::string>, int32_t> bpe_ranks;
 
     static std::string strip(const std::string& str) {
         std::string::size_type start = str.find_first_not_of(" \t\n\r\v\f");
@@ -519,20 +519,101 @@ private:
         return text;
     }
 
-public:
-    CLIPTokenizer(SDVersion version = VERSION_1_x)
-        : version(version){};
-    std::string bpe(std::string token) {
-        std::string word = token + "</w>";
-        if (encoder.find(word) != encoder.end()) {
-            return word;
-        } else if (encoder.find(token) != encoder.end()) {
-            return token;
+    static std::set<std::pair<std::string, std::string>> get_pairs(const std::vector<std::string>& subwords) {
+        std::set<std::pair<std::string, std::string>> pairs;
+        std::string prev_subword = subwords[0];
+        for (int i = 1; i < (int) subwords.size(); i++) {
+            std::string subword = subwords[i];
+            std::pair<std::string, std::string> pair(prev_subword, subword);
+            pairs.insert(pair);
+            prev_subword = subword;
         }
-        return UNK_TOKEN;
+        return pairs;
     }
 
-    void add_token(std::string token, int32_t token_id) {
+public:
+    explicit CLIPTokenizer(SDVersion version = VERSION_1_x)
+        : version(version){};
+
+    std::string bpe(const std::string& token) {
+        std::vector<std::string> word;
+
+        for (auto &ch :token) {
+            word.emplace_back(1, ch);
+        }
+        word.push_back(token.substr(token.size() - 1) + "</w>");
+
+        std::set<std::pair<std::string, std::string>> pairs = get_pairs(word);
+
+        if (pairs.empty()) {
+            return token + "</w>";
+        }
+
+        while (true) {
+            auto pairs_ite = std::min_element(pairs.begin(), pairs.end(), [&](const std::pair<std::string, std::string>& a, const std::pair<std::string, std::string>& b) {
+                if (bpe_ranks.find(a) == bpe_ranks.end()) {
+                    return false;
+                } else if (bpe_ranks.find(b) == bpe_ranks.end()) {
+                    return true;
+                }
+                return bpe_ranks.at(a) < bpe_ranks.at(b);
+            });
+
+            const std::pair<std::string, std::string>& bigram = *pairs_ite;
+
+            if (bpe_ranks.find(bigram) == bpe_ranks.end()) {
+                break;
+            }
+
+            std::string first = bigram.first;
+            std::string second = bigram.second;
+            std::vector<std::string> new_word;
+            int32_t i = 0;
+
+            while (i <  word.size()) {
+                auto it = std::find(word.begin() + i, word.end(), first);
+                if (it == word.end()) {
+                    new_word.insert(new_word.end(), word.begin() + i, word.end());
+                    break;
+                }
+                new_word.insert(new_word.end(), word.begin() + i, it);
+                i = static_cast<int32_t>(std::distance(word.begin(), it));
+
+                if (word[i] == first && i < static_cast<int32_t>(word.size())  - 1 && word[i + 1] == second) {
+                    new_word.push_back(first + second);
+                    i += 2;
+                } else {
+                    new_word.push_back(word[i]);
+                    i += 1;
+                }
+            }
+
+            word = new_word;
+
+            if(word.size() == 1) {
+                break;
+            }
+            pairs = get_pairs(word);
+        }
+
+        std::string result;
+        for (const auto& w : word) {
+            result += w + " ";
+        }
+        result = result.substr(0, result.size() - 1);
+
+        if (result == "\n  </w>") {
+            result = "\n</w>";
+        }
+
+        return result;
+    }
+
+    void add_merge(const std::pair<std::string, std::string>& p, int32_t i) {
+        bpe_ranks[p] = i;
+    }
+
+    void add_token(const std::string& token, int32_t token_id) {
         encoder[token] = token_id;
     }
 
@@ -4244,17 +4325,21 @@ public:
     TinyAutoEncoder tae_first_stage;
     std::string taesd_path;
 
+    std::string tokenizer_dir;
+
     StableDiffusionGGML() = default;
 
     StableDiffusionGGML(int n_threads,
                         bool vae_decode_only,
                         bool free_params_immediately,
                         std::string lora_model_dir,
+                        std::string tokenizer_dir,
                         RNGType rng_type)
         : n_threads(n_threads),
           vae_decode_only(vae_decode_only),
           free_params_immediately(free_params_immediately),
-          lora_model_dir(lora_model_dir) {
+          lora_model_dir(lora_model_dir),
+          tokenizer_dir(tokenizer_dir){
         first_stage_model.decode_only = vae_decode_only;
         tae_first_stage.decode_only   = vae_decode_only;
         if (rng_type == STD_DEFAULT_RNG) {
@@ -4263,6 +4348,7 @@ public:
             rng = std::make_shared<PhiloxRNG>();
         }
         this->lora_model_dir = lora_model_dir;
+        this->tokenizer_dir = tokenizer_dir;
     }
 
     ~StableDiffusionGGML() {
@@ -4327,6 +4413,16 @@ public:
             cond_stage_model.tokenizer.add_token(token, token_id);
         };
         bool success = model_loader.load_vocab(add_token);
+        if (!success) {
+            LOG_ERROR("get vocab from file failed: '%s'", model_path.c_str());
+            return false;
+        }
+
+        auto add_merge = [&](const std::pair<std::string, std::string>& p, int32_t i) {
+            cond_stage_model.tokenizer.add_merge(p, i);
+        };
+
+        success = model_loader.load_merges(add_merge);
         if (!success) {
             LOG_ERROR("get vocab from file failed: '%s'", model_path.c_str());
             return false;
@@ -5214,11 +5310,13 @@ StableDiffusion::StableDiffusion(int n_threads,
                                  std::string taesd_path,
                                  bool free_params_immediately,
                                  std::string lora_model_dir,
+                                 std::string tokenizer_dir,
                                  RNGType rng_type) {
     sd                       = std::make_shared<StableDiffusionGGML>(n_threads,
                                                vae_decode_only,
                                                free_params_immediately,
                                                lora_model_dir,
+                                               tokenizer_dir,
                                                rng_type);
     sd->use_tiny_autoencoder = taesd_path.size() > 0;
     sd->taesd_path           = taesd_path;
