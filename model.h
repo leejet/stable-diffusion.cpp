@@ -93,7 +93,6 @@ struct TensorStorage {
 
 typedef std::function<bool(const TensorStorage&, ggml_tensor**)> on_new_tensor_cb_t;
 typedef std::function<void(const std::string&, int32_t)> on_new_token_cb_t;
-typedef std::function<void(const std::pair<std::string, std::string>& p, int32_t i)> on_new_merges_cb_t;
 
 class ModelLoader {
 protected:
@@ -116,8 +115,7 @@ public:
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     SDVersion get_sd_version();
     ggml_type get_sd_wtype();
-    bool load_vocab(on_new_token_cb_t on_new_token_cb);
-    bool load_merges(on_new_merges_cb_t on_new_merges_cb);
+    std::string load_merges();
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb);
     int64_t cal_mem_size(ggml_backend_t backend);
     ~ModelLoader() = default;

@@ -1,7 +1,9 @@
 #include "util.h"
 
 #include <stdarg.h>
+#include <codecvt>
 #include <fstream>
+#include <locale>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -117,6 +119,21 @@ int32_t get_num_physical_cores() {
 #endif
     unsigned int n_threads = std::thread::hardware_concurrency();
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
+}
+
+std::u32string utf8_to_utf32(const std::string& utf8_str) {
+    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
+    return converter.from_bytes(utf8_str);
+}
+
+std::string utf32_to_utf8(const std::u32string& utf32_str) {
+    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
+    return converter.to_bytes(utf32_str);
+}
+
+std::u32string unicode_value_to_utf32(int unicode_value) {
+    std::u32string utf32_string = {static_cast<char32_t>(unicode_value)};
+    return utf32_string;
 }
 
 std::string basename(const std::string& path) {
