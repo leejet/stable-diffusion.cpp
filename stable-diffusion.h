@@ -38,12 +38,11 @@ private:
     std::shared_ptr<StableDiffusionGGML> sd;
 
 public:
-    explicit StableDiffusion(int n_threads                = -1,
+    StableDiffusion(int n_threads                         = -1,
                              bool vae_decode_only         = false,
                              std::string taesd_path       = "",
                              bool free_params_immediately = false,
                              std::string lora_model_dir   = "",
-                             std::string tokenizer_dir    = "",
                              RNGType rng_type             = STD_DEFAULT_RNG);
 
     bool load_from_file(const std::string& model_path,

@@ -546,12 +546,12 @@ private:
         return text;
     }
 
-    static std::set<std::pair<std::string, std::string>> get_pairs(const std::vector<std::string>& subwords) {
-        std::set<std::pair<std::string, std::string>> pairs;
-        std::string prev_subword = subwords[0];
+    static std::set<std::pair<std::u32string, std::u32string>> get_pairs(const std::vector<std::u32string>& subwords) {
+        std::set<std::pair<std::u32string, std::u32string>> pairs;
+        std::u32string prev_subword = subwords[0];
         for (int i = 1; i < (int) subwords.size(); i++) {
-            std::string subword = subwords[i];
-            std::pair<std::string, std::string> pair(prev_subword, subword);
+            std::u32string subword = subwords[i];
+            std::pair<std::u32string, std::u32string> pair(prev_subword, subword);
             pairs.insert(pair);
             prev_subword = subword;
         }
@@ -576,7 +576,8 @@ public:
             merges.push_back(merges_utf32_str.substr(start, pos - start));
             start = pos + 1;
         }
-        merges = std::vector<std::u32string>(merges.begin() + 1, merges.begin() + 49152 - 256 - 2 + 1);
+
+        merges = std::vector<std::u32string>(merges.begin() + 1,  merges.begin() + merges.size() - 256 - 2 + 1);
         std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
         for (const auto& merge : merges) {
             size_t space_pos = merge.find(' ');
@@ -607,22 +608,22 @@ public:
         }
     };
 
-    std::string bpe(std::u32string token) {
-        std::vector<std::string> word;
+    std::u32string bpe(const std::u32string& token) {
+        std::vector<std::u32string> word;
 
         for (auto &ch :token) {
             word.emplace_back(1, ch);
         }
-        word.push_back(token.substr(token.size() - 1) + "</w>");
+        word.push_back(token.substr(token.size() - 1) + utf8_to_utf32("</w>"));
 
-        std::set<std::pair<std::string, std::string>> pairs = get_pairs(word);
+        std::set<std::pair<std::u32string, std::u32string>> pairs = get_pairs(word);
 
         if (pairs.empty()) {
-            return token + "</w>";
+            return token + utf8_to_utf32("</w>");
         }
 
         while (true) {
-            auto pairs_ite = std::min_element(pairs.begin(), pairs.end(), [&](const std::pair<std::string, std::string>& a, const std::pair<std::string, std::string>& b) {
+            auto pairs_ite = std::min_element(pairs.begin(), pairs.end(), [&](const std::pair<std::u32string, std::u32string>& a, const std::pair<std::u32string, std::u32string>& b) {
                 if (bpe_ranks.find(a) == bpe_ranks.end()) {
                     return false;
                 } else if (bpe_ranks.find(b) == bpe_ranks.end()) {
@@ -631,15 +632,15 @@ public:
                 return bpe_ranks.at(a) < bpe_ranks.at(b);
             });
 
-            const std::pair<std::string, std::string>& bigram = *pairs_ite;
+            const std::pair<std::u32string, std::u32string>& bigram = *pairs_ite;
 
             if (bpe_ranks.find(bigram) == bpe_ranks.end()) {
                 break;
             }
 
-            std::string first = bigram.first;
-            std::string second = bigram.second;
-            std::vector<std::string> new_word;
+            std::u32string first = bigram.first;
+            std::u32string second = bigram.second;
+            std::vector<std::u32string> new_word;
             int32_t i = 0;
 
             while (i <  word.size()) {
@@ -668,21 +669,17 @@ public:
             pairs = get_pairs(word);
         }
 
-        std::string result;
+        std::u32string result;
         for (const auto& w : word) {
-            result += w + " ";
+            result += w + utf8_to_utf32(" ");
         }
         result = result.substr(0, result.size() - 1);
 
-        if (result == "\n  </w>") {
-            result = "\n</w>";
+        if (result == utf8_to_utf32("\n  </w>")) {
+            result = utf8_to_utf32("\n</w>");
         }
 
         return result;
-    }
-
-    void add_token(std::string token, int32_t token_id) {
-        encoder[token] = token_id;
     }
 
     std::vector<int> tokenize(std::string text, size_t max_length = 0, bool padding = false) {
