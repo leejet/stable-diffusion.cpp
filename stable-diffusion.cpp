@@ -549,7 +549,7 @@ private:
     static std::set<std::pair<std::u32string, std::u32string>> get_pairs(const std::vector<std::u32string>& subwords) {
         std::set<std::pair<std::u32string, std::u32string>> pairs;
         std::u32string prev_subword = subwords[0];
-        for (int i = 1; i < (int) subwords.size(); i++) {
+        for (int i = 1; i < (int)subwords.size(); i++) {
             std::u32string subword = subwords[i];
             std::pair<std::u32string, std::u32string> pair(prev_subword, subword);
             pairs.insert(pair);
@@ -560,7 +560,7 @@ private:
 
 public:
     CLIPTokenizer(SDVersion version = VERSION_1_x)
-            : version(version) {}
+        : version(version) {}
 
     void load_from_merges(const std::string& merges_utf8_str) {
         auto byte_unicode_pairs = bytes_to_unicode();
@@ -576,8 +576,9 @@ public:
             merges.push_back(merges_utf32_str.substr(start, pos - start));
             start = pos + 1;
         }
-
-        merges = std::vector<std::u32string>(merges.begin() + 1,  merges.begin() + merges.size() - 256 - 2 + 1);
+        // LOG_DEBUG("merges size %llu", merges.size());
+        GGML_ASSERT(merges.size() == 48895);
+        merges = std::vector<std::u32string>(merges.begin() + 1, merges.end());
         std::vector<std::pair<std::u32string, std::u32string>> merge_pairs;
         for (const auto& merge : merges) {
             size_t space_pos = merge.find(' ');
@@ -611,7 +612,7 @@ public:
     std::u32string bpe(const std::u32string& token) {
         std::vector<std::u32string> word;
 
-        for (int i = 0; i <  token.size() - 1; i++) {
+        for (int i = 0; i < token.size() - 1; i++) {
             word.emplace_back(1, token[i]);
         }
         word.push_back(token.substr(token.size() - 1) + utf8_to_utf32("</w>"));
@@ -638,12 +639,12 @@ public:
                 break;
             }
 
-            std::u32string first = bigram.first;
+            std::u32string first  = bigram.first;
             std::u32string second = bigram.second;
             std::vector<std::u32string> new_word;
             int32_t i = 0;
 
-            while (i <  word.size()) {
+            while (i < word.size()) {
                 auto it = std::find(word.begin() + i, word.end(), first);
                 if (it == word.end()) {
                     new_word.insert(new_word.end(), word.begin() + i, word.end());
@@ -652,7 +653,7 @@ public:
                 new_word.insert(new_word.end(), word.begin() + i, it);
                 i = static_cast<int32_t>(std::distance(word.begin(), it));
 
-                if (word[i] == first && i < static_cast<int32_t>(word.size())  - 1 && word[i + 1] == second) {
+                if (word[i] == first && i < static_cast<int32_t>(word.size()) - 1 && word[i + 1] == second) {
                     new_word.push_back(first + second);
                     i += 2;
                 } else {
@@ -663,7 +664,7 @@ public:
 
             word = new_word;
 
-            if(word.size() == 1) {
+            if (word.size() == 1) {
                 break;
             }
             pairs = get_pairs(word);
