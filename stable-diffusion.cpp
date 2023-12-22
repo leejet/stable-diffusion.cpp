@@ -611,8 +611,8 @@ public:
     std::u32string bpe(const std::u32string& token) {
         std::vector<std::u32string> word;
 
-        for (auto &ch :token) {
-            word.emplace_back(1, ch);
+        for (int i = 0; i <  token.size() - 1; i++) {
+            word.emplace_back(1, token[i]);
         }
         word.push_back(token.substr(token.size() - 1) + utf8_to_utf32("</w>"));
 
