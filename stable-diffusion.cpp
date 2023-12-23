@@ -605,6 +605,11 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
     return std::make_pair(filename2multiplier, text);
 }
 
+void ggml_backend_tensor_get_and_sync(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    ggml_backend_tensor_get(tensor, data, offset, size);
+    ggml_backend_synchronize(backend);
+}
+
 /*================================================== CLIPTokenizer ===================================================*/
 
 const std::string UNK_TOKEN = "<|endoftext|>";
@@ -1410,7 +1415,7 @@ struct CLIPTextModel {
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
-        ggml_backend_tensor_get(gf->nodes[gf->n_nodes - 1], work_output->data, 0, ggml_nbytes(work_output));
+        ggml_backend_tensor_get_and_sync(backend, gf->nodes[gf->n_nodes - 1], work_output->data, 0, ggml_nbytes(work_output));
         return work_output;
     }
 
@@ -2688,7 +2693,7 @@ struct UNetModel {
         ggml_graph_print(gf);
 #endif
 
-        ggml_backend_tensor_get(gf->nodes[gf->n_nodes - 1], work_latent->data, 0, ggml_nbytes(work_latent));
+        ggml_backend_tensor_get_and_sync(backend, gf->nodes[gf->n_nodes - 1], work_latent->data, 0, ggml_nbytes(work_latent));
     }
 
     void end() {
@@ -3499,7 +3504,7 @@ struct AutoEncoderKL {
         ggml_graph_print(gf);
 #endif
 
-        ggml_backend_tensor_get(gf->nodes[gf->n_nodes - 1], work_result->data, 0, ggml_nbytes(work_result));
+        ggml_backend_tensor_get_and_sync(backend, gf->nodes[gf->n_nodes - 1], work_result->data, 0, ggml_nbytes(work_result));
     }
 
     void end() {
@@ -4182,7 +4187,7 @@ struct TinyAutoEncoder {
         ggml_graph_print(gf);
 #endif
 
-        ggml_backend_tensor_get(gf->nodes[gf->n_nodes - 1], work_result->data, 0, ggml_nbytes(work_result));
+        ggml_backend_tensor_get_and_sync(backend, gf->nodes[gf->n_nodes - 1], work_result->data, 0, ggml_nbytes(work_result));
     }
 
     void end() {
@@ -4705,7 +4710,7 @@ struct ESRGAN {
         ggml_graph_print(gf);
 #endif
         ggml_tensor* out = gf->nodes[gf->n_nodes - 1];
-        ggml_backend_tensor_get(out, work_result->data, 0, ggml_nbytes(out));
+        ggml_backend_tensor_get_and_sync(backend, out, work_result->data, 0, ggml_nbytes(out));
     }
 
     void end() {
