@@ -7,7 +7,7 @@ IndentCaseLabels: false
 ColumnLimit: 0
 AccessModifierOffset: -4
 NamespaceIndentation: All
-FixNamespaceComments: false 
+FixNamespaceComments: false
 AlignAfterOpenBracket: true
 AlignConsecutiveAssignments: true
 IndentCaseLabels: true

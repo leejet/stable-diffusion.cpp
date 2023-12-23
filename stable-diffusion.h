@@ -6,6 +6,8 @@
 #include <vector>
 #include "ggml/ggml.h"
 
+#include "ggml/ggml.h"
+
 enum RNGType {
     STD_DEFAULT_RNG,
     CUDA_RNG
@@ -45,11 +47,13 @@ public:
                     bool vae_tiling              = false,
                     std::string lora_model_dir   = "",
                     RNGType rng_type             = STD_DEFAULT_RNG);
+
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
                         ggml_type wtype,
                         Schedule d = DEFAULT,
                         int clip_skip = -1);
+
     std::vector<uint8_t*> txt2img(
         std::string prompt,
         std::string negative_prompt,

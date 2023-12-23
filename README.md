@@ -53,7 +53,6 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - The current implementation of ggml_conv_2d is slow and has high memory usage
     - Implement Winograd Convolution 2D for 3x3 kernel filtering
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
-- [ ] Implement BPE Tokenizer
 - [ ] Implement Textual Inversion (embeddings)
 - [ ] Implement Inpainting support
 - [ ] k-quants support
