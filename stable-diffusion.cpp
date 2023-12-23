@@ -606,8 +606,12 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
 }
 
 void ggml_backend_tensor_get_and_sync(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    ggml_backend_tensor_get(tensor, data, offset, size);
-    ggml_backend_synchronize(backend);
+    #ifdef SD_USE_CUBLAS
+        ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
+        ggml_backend_synchronize(backend);
+    #else
+        ggml_backend_tensor_get(tensor, data, offset, size);
+    #endif
 }
 
 /*================================================== CLIPTokenizer ===================================================*/
