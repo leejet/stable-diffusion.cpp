@@ -2,6 +2,7 @@
 #define __UTIL_H__
 
 #include <string>
+#include <cstdint>
 
 bool ends_with(const std::string& str, const std::string& ending);
 bool starts_with(const std::string& str, const std::string& start);
@@ -12,6 +13,10 @@ void replace_all_chars(std::string& str, char target, char replacement);
 
 bool file_exists(const std::string& filename);
 bool is_directory(const std::string& path);
+
+std::u32string utf8_to_utf32(const std::string& utf8_str);
+std::string utf32_to_utf8(const std::u32string& utf32_str);
+std::u32string unicode_value_to_utf32(int unicode_value);
 
 std::string basename(const std::string& path);
 

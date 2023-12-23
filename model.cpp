@@ -1207,20 +1207,9 @@ ggml_type ModelLoader::get_sd_wtype() {
     return GGML_TYPE_COUNT;
 }
 
-bool ModelLoader::load_vocab(on_new_token_cb_t on_new_token_cb) {
-    char* vocab_buffer          = reinterpret_cast<char*>(vocab_json);
-    nlohmann::json vocab        = nlohmann::json::parse(vocab_buffer);
-    std::map<char, int> decoder = unicode_to_byte();
-    for (auto& it : vocab.items()) {
-        int token_id          = it.value();
-        std::string token_str = it.key();
-        std::string token     = "";
-        for (char c : token_str) {
-            token += decoder[c];
-        }
-        on_new_token_cb(token, token_id);
-    }
-    return true;
+std::string ModelLoader::load_merges() {
+    std::string merges_utf8_str(reinterpret_cast<const char*>(merges_utf8_c_str), sizeof(merges_utf8_c_str));
+    return merges_utf8_str;
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
