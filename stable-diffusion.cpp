@@ -548,8 +548,11 @@ private:
 
     static std::set<std::pair<std::u32string, std::u32string>> get_pairs(const std::vector<std::u32string>& subwords) {
         std::set<std::pair<std::u32string, std::u32string>> pairs;
+        if (subwords.size() == 0) {
+            return pairs;
+        }
         std::u32string prev_subword = subwords[0];
-        for (int i = 1; i < (int)subwords.size(); i++) {
+        for (int i = 1; i < subwords.size(); i++) {
             std::u32string subword = subwords[i];
             std::pair<std::u32string, std::u32string> pair(prev_subword, subword);
             pairs.insert(pair);
@@ -624,16 +627,19 @@ public:
         }
 
         while (true) {
-            auto pairs_ite = std::min_element(pairs.begin(), pairs.end(), [&](const std::pair<std::u32string, std::u32string>& a, const std::pair<std::u32string, std::u32string>& b) {
-                if (bpe_ranks.find(a) == bpe_ranks.end()) {
-                    return false;
-                } else if (bpe_ranks.find(b) == bpe_ranks.end()) {
-                    return true;
-                }
-                return bpe_ranks.at(a) < bpe_ranks.at(b);
-            });
+            auto min_pair_iter = std::min_element(pairs.begin(),
+                                                  pairs.end(),
+                                                  [&](const std::pair<std::u32string, std::u32string>& a,
+                                                      const std::pair<std::u32string, std::u32string>& b) {
+                                                      if (bpe_ranks.find(a) == bpe_ranks.end()) {
+                                                          return false;
+                                                      } else if (bpe_ranks.find(b) == bpe_ranks.end()) {
+                                                          return true;
+                                                      }
+                                                      return bpe_ranks.at(a) < bpe_ranks.at(b);
+                                                  });
 
-            const std::pair<std::u32string, std::u32string>& bigram = *pairs_ite;
+            const std::pair<std::u32string, std::u32string>& bigram = *min_pair_iter;
 
             if (bpe_ranks.find(bigram) == bpe_ranks.end()) {
                 break;
@@ -671,13 +677,11 @@ public:
         }
 
         std::u32string result;
-        for (const auto& w : word) {
-            result += w + utf8_to_utf32(" ");
-        }
-        result = result.substr(0, result.size() - 1);
-
-        if (result == utf8_to_utf32("\n  </w>")) {
-            result = utf8_to_utf32("\n</w>");
+        for (int i = 0; i < word.size(); i++) {
+            result += word[i];
+            if (i != word.size() - 1) {
+                result += utf8_to_utf32(" ");
+            }
         }
 
         return result;
