@@ -97,12 +97,11 @@ void pretty_progress(int step, int steps, float time) {
         }
     }
     progress += "|";
-    printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it" : "\r%s %i/%i - %.2fit/s",
-           progress.c_str(), step, steps,
-           time > 1.0f || time == 0 ? time : (1.0f / time));
-    fflush(stdout);  // for linux
+    LOG_DEFAULT(time > 1.0f ? "\r%s %i/%i - %.2fs/it" : "\r%s %i/%i - %.2fit/s",
+                progress.c_str(), step, steps,
+                time > 1.0f || time == 0 ? time : (1.0f / time));
     if (step == steps) {
-        printf("\n");
+        LOG_DEFAULT("\n");
     }
 }
 
@@ -1749,7 +1748,7 @@ struct SpatialTransformer {
 #if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS)
                 struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, h * w, d_head]
 #else
-                struct ggml_tensor* kq  = ggml_mul_mat(ctx, k, q);   // [N * n_head, h * w, max_position]
+                struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, h * w, max_position]
                 // kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
                 kq = ggml_soft_max_inplace(ctx, kq);
 

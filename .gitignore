@@ -3,7 +3,6 @@ test/
 .vscode/
 .cache/
 *.swp
-.vscode/
 *.bat
 *.bin
 *.exe

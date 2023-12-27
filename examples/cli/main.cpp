@@ -1,6 +1,7 @@
-#include <stdio.h>
+#include <cstdio>
 #include <ctime>
 #include <random>
+
 #include "ggml/ggml.h"
 #include "stable-diffusion.h"
 #include "util.h"

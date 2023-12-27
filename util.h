@@ -1,8 +1,9 @@
 #ifndef __UTIL_H__
 #define __UTIL_H__
 
-#include <string>
 #include <cstdint>
+#include <functional>
+#include <string>
 
 bool ends_with(const std::string& str, const std::string& ending);
 bool starts_with(const std::string& str, const std::string& start);
@@ -33,10 +34,15 @@ enum SDLogLevel {
 
 void set_sd_log_level(SDLogLevel level);
 
-void log_printf(SDLogLevel level, const char* file, int line, const char* format, ...);
+void log_printf(SDLogLevel level, bool enable_log_tag, const char* file, int line, const char* format, ...);
 
-#define LOG_DEBUG(format, ...) log_printf(SDLogLevel::DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...) log_printf(SDLogLevel::INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...) log_printf(SDLogLevel::WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) log_printf(SDLogLevel::ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
+typedef std::function<void(SDLogLevel level, const char* text)> sd_logger_function_t;
+
+void set_sd_logger(const sd_logger_function_t& sd_logger_function);
+
+#define LOG_DEFAULT(format, ...) log_printf(SDLogLevel::INFO, false, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_DEBUG(format, ...) log_printf(SDLogLevel::DEBUG, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_INFO(format, ...) log_printf(SDLogLevel::INFO, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_WARN(format, ...) log_printf(SDLogLevel::WARN, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_ERROR(format, ...) log_printf(SDLogLevel::ERROR, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #endif  // __UTIL_H__

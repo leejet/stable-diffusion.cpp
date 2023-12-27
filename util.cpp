@@ -1,7 +1,7 @@
 #include "util.h"
 
-#include <stdarg.h>
 #include <codecvt>
+#include <cstdarg>
 #include <fstream>
 #include <locale>
 #include <thread>
@@ -170,34 +170,72 @@ void set_sd_log_level(SDLogLevel level) {
     log_level = level;
 }
 
-void log_printf(SDLogLevel level, const char* file, int line, const char* format, ...) {
+void default_sd_logger(SDLogLevel level, const char* text) {
+    if (level == SDLogLevel::ERROR) {
+        fputs(text, stderr);
+        fflush(stderr);
+    } else {
+        fputs(text, stdout);
+        fflush(stdout);
+    }
+}
+
+static sd_logger_function_t sd_logger = &default_sd_logger;
+
+std::string log_prefix(SDLogLevel level, const char* file, int line) {
+    const char* format = nullptr;
+    switch (level) {
+        case SDLogLevel::DEBUG: {
+            format = "[DEBUG] %s:%-4d - ";
+        } break;
+        case SDLogLevel::INFO: {
+            format = "[INFO]  %s:%-4d - ";
+        } break;
+        case SDLogLevel::WARN: {
+            format = "[WARN]  %s:%-4d - ";
+        } break;
+        case SDLogLevel::ERROR: {
+            format = "[ERROR] %s:%-4d - ";
+        } break;
+    }
+
+    char buffer[128];
+    const int len = std::snprintf(buffer, sizeof(buffer), format, basename(file).c_str(), line);
+    if (len >= sizeof(buffer)) {
+        std::string buffer2(len + 1, '\0');
+        std::snprintf(&buffer2[0], len + 1, format, basename(file).c_str(), line);
+        return buffer2;
+    }
+    return buffer;
+}
+
+void log_printf(SDLogLevel level, bool enable_log_tag, const char* file, int line, const char* format, ...) {
     if (level < log_level) {
         return;
     }
+
     va_list args;
     va_start(args, format);
-
-    if (level == SDLogLevel::DEBUG) {
-        printf("[DEBUG] %s:%-4d - ", basename(file).c_str(), line);
-        vprintf(format, args);
-        printf("\n");
-        fflush(stdout);
-    } else if (level == SDLogLevel::INFO) {
-        printf("[INFO]  %s:%-4d - ", basename(file).c_str(), line);
-        vprintf(format, args);
-        printf("\n");
-        fflush(stdout);
-    } else if (level == SDLogLevel::WARN) {
-        fprintf(stdout, "[WARN]  %s:%-4d - ", basename(file).c_str(), line);
-        vfprintf(stdout, format, args);
-        fprintf(stdout, "\n");
-        fflush(stdout);
-    } else {
-        fprintf(stderr, "[ERROR] %s:%-4d - ", basename(file).c_str(), line);
-        vfprintf(stderr, format, args);
-        fprintf(stderr, "\n");
-        fflush(stderr);
+    const char* log_prefix_str = "";
+    if (enable_log_tag) {
+        log_prefix_str = log_prefix(level, file, line).c_str();
     }
-
+    char buffer[128];
+    const int len = std::vsnprintf(buffer, sizeof(buffer), format, args);
+    if (len < sizeof(buffer)) {
+        const std::string log_message = log_prefix_str + std::string(buffer);
+        sd_logger(level, log_message.c_str());
+    } else {
+        char* buffer2 = new char[len + 2];
+        std::vsnprintf(buffer2, len + 1, format, args);
+        buffer2[len + 1]              = 0;
+        const std::string log_message = log_prefix_str + std::string(buffer2);
+        sd_logger(level, log_message.c_str());
+        delete[] buffer2;
+    }
     va_end(args);
+}
+
+void set_sd_logger(const sd_logger_function_t& sd_logger_function) {
+    sd_logger = sd_logger_function;
 }
