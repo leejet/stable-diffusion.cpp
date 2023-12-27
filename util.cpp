@@ -182,6 +182,16 @@ void default_sd_logger(SDLogLevel level, const char* text) {
 
 static sd_logger_function_t sd_logger = &default_sd_logger;
 
+// Ref: https://stackoverflow.com/questions/2342162/stdstring-formatting-like-sprintf
+template <typename... Args>
+std::string string_format(const std::string& format, Args... args) {
+    int size_s = std::snprintf(nullptr, 0, format.c_str(), args...) + 1;  // Extra space for '\0'
+    auto size  = static_cast<size_t>(size_s);
+    std::unique_ptr<char[]> buf(new char[size]);
+    std::snprintf(buf.get(), size, format.c_str(), args...);
+    return {buf.get(), buf.get() + size - 1};  // We don't want the '\0' inside
+}
+
 std::string log_prefix(SDLogLevel level, const char* file, int line) {
     const char* format = nullptr;
     switch (level) {
@@ -198,38 +208,37 @@ std::string log_prefix(SDLogLevel level, const char* file, int line) {
             format = "[ERROR] %s:%-4d - ";
         } break;
     }
-
-    char buffer[128];
-    const int len = std::snprintf(buffer, sizeof(buffer), format, basename(file).c_str(), line);
-    if (len >= sizeof(buffer)) {
-        std::string buffer2(len + 1, '\0');
-        std::snprintf(&buffer2[0], len + 1, format, basename(file).c_str(), line);
-        return buffer2;
-    }
-    return buffer;
+    return string_format(format, basename(file).c_str(), line);
 }
 
-void log_printf(SDLogLevel level, bool enable_log_tag, const char* file, int line, const char* format, ...) {
+void log_printf(SDLogLevel level, bool enable_log_tag, bool enable_log_newline, const char* file, int line, const char* format, ...) {
     if (level < log_level) {
         return;
     }
 
     va_list args;
     va_start(args, format);
-    const char* log_prefix_str = "";
+    std::string log_prefix_str;
     if (enable_log_tag) {
-        log_prefix_str = log_prefix(level, file, line).c_str();
+        log_prefix_str = log_prefix(level, file, line);
     }
+
     char buffer[128];
     const int len = std::vsnprintf(buffer, sizeof(buffer), format, args);
     if (len < sizeof(buffer)) {
-        const std::string log_message = log_prefix_str + std::string(buffer);
+        std::string log_message = log_prefix_str + std::string(buffer);
+        if (enable_log_newline) {
+            log_message += "\n";
+        }
         sd_logger(level, log_message.c_str());
     } else {
         char* buffer2 = new char[len + 2];
         std::vsnprintf(buffer2, len + 1, format, args);
-        buffer2[len + 1]              = 0;
-        const std::string log_message = log_prefix_str + std::string(buffer2);
+        buffer2[len + 1]        = 0;
+        std::string log_message = log_prefix_str + std::string(buffer2);
+        if (enable_log_newline) {
+            log_message += "\n";
+        }
         sd_logger(level, log_message.c_str());
         delete[] buffer2;
     }
