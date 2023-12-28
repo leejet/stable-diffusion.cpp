@@ -17,7 +17,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA backend for GPU acceleration.
+- Full CUDA and Metal backend for GPU acceleration.
 - Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
 - Flash Attention for memory usage optimization (only cpu for now)
@@ -27,6 +27,8 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
 - Latent Consistency Models support (LCM/LCM-LoRA)
 - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
+- Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
+- VAE tiling processing for reduce memory usage
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -51,7 +53,8 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - The current implementation of ggml_conv_2d is slow and has high memory usage
     - Implement Winograd Convolution 2D for 3x3 kernel filtering
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
-- [ ] Implement [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN/tree/master) upscaler
+- [ ] Implement Textual Inversion (embeddings)
+- [ ] Implement Inpainting support
 - [ ] k-quants support
 
 ## Usage
@@ -112,6 +115,15 @@ cmake .. -DSD_CUBLAS=ON
 cmake --build . --config Release
 ```
 
+##### Using Metal
+
+Using Metal makes the computation run on the GPU. Currently, there are some issues with Metal when performing operations on very large matrices, making it highly inefficient at the moment. Performance improvements are expected in the near future.
+
+```
+cmake .. -DSD_METAL=ON
+cmake --build . --config Release
+```
+
 ### Using Flash Attention
 
 Enabling flash attention reduces memory usage by at least 400 MB. At the moment, it is not supported when CUBLAS is enabled because the kernel implementation is missing.
@@ -124,7 +136,7 @@ cmake --build . --config Release
 ### Run
 
 ```
-usage: sd [arguments]
+usage: ./bin/sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
@@ -134,6 +146,7 @@ arguments:
   -m, --model [MODEL]                path to model
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
+  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.
   --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
                                      If not specified, the default is the type of the weight file.
   --lora-model-dir [DIR]             lora model directory
@@ -153,6 +166,8 @@ arguments:
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate.
   --schedule {discrete, karras}      Denoiser sigma schedule (default: discrete)
+  --clip-skip N                      number of layers to skip of clip model (default: 0)
+  --vae-tiling                       process vae in tiles to reduce memory usage
   -v, --verbose                      print extra info
 ```
 
@@ -238,6 +253,16 @@ curl -L -O https://huggingface.co/madebyollin/taesd/blob/main/diffusion_pytorch_
 
 ```bash
 sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --taesd ../models/diffusion_pytorch_model.safetensors
+```
+
+## Using ESRGAN to upscale results
+
+You can use ESRGAN to upscale the generated images. At the moment, only the [RealESRGAN_x4plus_anime_6B.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth) model is supported. Support for more models of this architecture will be added soon.
+
+- Specify the model path using the `--upscale-model PATH` parameter. example:
+
+```bash
+sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --upscale-model ../models/RealESRGAN_x4plus_anime_6B.pth
 ```
 
 ### Docker

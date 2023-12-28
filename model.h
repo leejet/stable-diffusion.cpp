@@ -116,7 +116,7 @@ public:
     SDVersion get_sd_version();
     ggml_type get_sd_wtype();
     std::string load_merges();
-    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb);
+    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend);
     int64_t cal_mem_size(ggml_backend_t backend);
     ~ModelLoader() = default;
 };
