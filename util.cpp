@@ -195,16 +195,16 @@ std::string string_format(const std::string& format, Args... args) {
 std::string log_prefix(SDLogLevel level, const char* file, int line) {
     std::string format;
     switch (level) {
-        case SDLogLevel::DEBUG:
+        case SDLogLevel::SD_LOG_LEVEL_DEBUG:
             format = "[DEBUG] %s:%-4d - ";
             break;
-        case SDLogLevel::INFO:
+        case SDLogLevel::SD_LOG_LEVEL_INFO:
             format = "[INFO]  %s:%-4d - ";
             break;
-        case SDLogLevel::WARN:
+        case SDLogLevel::SD_LOG_LEVEL_WARN:
             format = "[WARN]  %s:%-4d - ";
             break;
-        case SDLogLevel::ERROR:
+        case SDLogLevel::SD_LOG_LEVEL_ERROR:
             format = "[ERROR] %s:%-4d - ";
             break;
     }
