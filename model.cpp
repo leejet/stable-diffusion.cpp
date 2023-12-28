@@ -101,6 +101,7 @@ std::unordered_map<std::string, std::string> open_clip_to_hf_clip_model = {
     {"model.ln_final.weight", "transformer.text_model.final_layer_norm.weight"},
     {"model.positional_embedding", "transformer.text_model.embeddings.position_embedding.weight"},
     {"model.token_embedding.weight", "transformer.text_model.embeddings.token_embedding.weight"},
+    {"model.text_projection", "transformer.text_model.text_projection"},
 };
 
 std::unordered_map<std::string, std::string> open_clip_to_hk_clip_resblock = {
