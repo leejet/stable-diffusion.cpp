@@ -428,7 +428,7 @@ int main(int argc, const char* argv[]) {
     if (params.verbose) {
         print_params(params);
         printf("%s", sd_get_system_info().c_str());
-        set_sd_log_level(SDLogLevel::DEBUG);
+        set_sd_log_level(SDLogLevel::SD_LOG_LEVEL_DEBUG);
     }
 
     bool vae_decode_only        = true;

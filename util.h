@@ -26,10 +26,10 @@ std::string path_join(const std::string& p1, const std::string& p2);
 int32_t get_num_physical_cores();
 
 enum SDLogLevel {
-    DEBUG,
-    INFO,
-    WARN,
-    ERROR
+    SD_LOG_LEVEL_DEBUG,
+    SD_LOG_LEVEL_INFO,
+    SD_LOG_LEVEL_WARN,
+    SD_LOG_LEVEL_ERROR
 };
 
 void set_sd_log_level(SDLogLevel level);
@@ -40,9 +40,9 @@ typedef std::function<void(SDLogLevel level, const char* text)> sd_logger_functi
 
 void set_sd_logger(const sd_logger_function_t& sd_logger_function);
 
-#define LOG_DEFAULT(format, ...) log_printf(SDLogLevel::INFO, false, false, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_DEBUG(format, ...) log_printf(SDLogLevel::DEBUG, true, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...) log_printf(SDLogLevel::INFO, true, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...) log_printf(SDLogLevel::WARN, true, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) log_printf(SDLogLevel::ERROR, true, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_DEFAULT(format, ...) log_printf(SDLogLevel::SD_LOG_LEVEL_INFO, false, false, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_DEBUG(format, ...) log_printf(SDLogLevel::SD_LOG_LEVEL_DEBUG, true, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_INFO(format, ...) log_printf(SDLogLevel::SD_LOG_LEVEL_INFO, true, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_WARN(format, ...) log_printf(SDLogLevel::SD_LOG_LEVEL_WARN, true, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_ERROR(format, ...) log_printf(SDLogLevel::SD_LOG_LEVEL_ERROR, true, true, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #endif  // __UTIL_H__

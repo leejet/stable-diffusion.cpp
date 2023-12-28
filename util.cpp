@@ -164,14 +164,14 @@ std::string path_join(const std::string& p1, const std::string& p2) {
     return p1 + "/" + p2;
 }
 
-static SDLogLevel log_level = SDLogLevel::INFO;
+static SDLogLevel log_level = SDLogLevel::SD_LOG_LEVEL_INFO;
 
 void set_sd_log_level(SDLogLevel level) {
     log_level = level;
 }
 
 void default_sd_logger(SDLogLevel level, const char* text) {
-    if (level == SDLogLevel::ERROR) {
+    if (level == SDLogLevel::SD_LOG_LEVEL_ERROR) {
         fputs(text, stderr);
         fflush(stderr);
     } else {
