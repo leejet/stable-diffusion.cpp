@@ -608,6 +608,15 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
     return std::make_pair(filename2multiplier, text);
 }
 
+void ggml_backend_tensor_set_and_sync(ggml_backend_t backend, struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    #ifdef SD_USE_CUBLAS
+        ggml_backend_tensor_set_async(backend, tensor, data, offset, size);
+        ggml_backend_synchronize(backend);
+    #else
+        ggml_backend_tensor_set(tensor, data, offset, size);
+    #endif
+}
+
 void ggml_backend_tensor_get_and_sync(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     #ifdef SD_USE_CUBLAS
         ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
@@ -1148,7 +1157,7 @@ struct CLIPTextModel {
             for (int i = 0; i < max_position_embeddings; i++) {
                 pos_temp.push_back(i);
             }
-            ggml_backend_tensor_set(position_ids, pos_temp.data(), 0, ggml_nbytes(position_ids));
+            ggml_backend_tensor_set_and_sync(backend, position_ids, pos_temp.data(), 0, ggml_nbytes(position_ids));
         }
     }
 };
@@ -1626,7 +1635,7 @@ struct FrozenCLIPEmbedderWithCustomWords {
         ggml_allocr_alloc(allocr, input_ids);
 
         if (!ggml_allocr_is_measure(allocr)) {
-            ggml_backend_tensor_set(input_ids, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids));
+            ggml_backend_tensor_set_and_sync(backend, input_ids, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids));
         }
 
         struct ggml_tensor* input_ids2 = NULL;
@@ -1648,7 +1657,7 @@ struct FrozenCLIPEmbedderWithCustomWords {
             // printf("\n");
 
             if (!ggml_allocr_is_measure(allocr)) {
-                ggml_backend_tensor_set(input_ids2, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids2));
+                ggml_backend_tensor_set_and_sync(backend, input_ids2, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids2));
             }
         }
         struct ggml_tensor* embeddings = NULL;
@@ -1660,13 +1669,13 @@ struct FrozenCLIPEmbedderWithCustomWords {
             if (!ggml_allocr_is_measure(allocr)) {
                 // really bad, there is memory inflexibility (this is for host<->device memory conflicts)
                 void* freeze_data = malloc(ggml_nbytes(text_model.token_embed_weight));
-                ggml_backend_tensor_get(text_model.token_embed_weight, freeze_data, 0, ggml_nbytes(text_model.token_embed_weight));
-                ggml_backend_tensor_set(embeddings, freeze_data, 0, ggml_nbytes(text_model.token_embed_weight));
+                ggml_backend_tensor_get_and_sync(backend, text_model.token_embed_weight, freeze_data, 0, ggml_nbytes(text_model.token_embed_weight));
+                ggml_backend_tensor_set_and_sync(backend, embeddings, freeze_data, 0, ggml_nbytes(text_model.token_embed_weight));
                 free(freeze_data);
                 // concatenate custom embeddings
                 void* custom_data = malloc(ggml_nbytes(text_model.token_embed_custom));
-                ggml_backend_tensor_get(text_model.token_embed_custom, custom_data, 0, ggml_nbytes(text_model.token_embed_custom));
-                ggml_backend_tensor_set(embeddings, custom_data, ggml_nbytes(text_model.token_embed_weight), text_model.num_custom_embeddings * text_model.hidden_size * ggml_type_size(wtype));
+                ggml_backend_tensor_get_and_sync(backend, text_model.token_embed_custom, custom_data, 0, ggml_nbytes(text_model.token_embed_custom));
+                ggml_backend_tensor_set_and_sync(backend, embeddings, custom_data, ggml_nbytes(text_model.token_embed_weight), text_model.num_custom_embeddings * text_model.hidden_size * ggml_type_size(wtype));
                 free(custom_data);
             }
         }
@@ -2918,16 +2927,16 @@ struct UNetModel {
             }
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_alloc)) {
-                ggml_backend_tensor_set(x_t, x->data, 0, ggml_nbytes(x));
-                ggml_backend_tensor_set(context_t, context->data, 0, ggml_nbytes(context));
+                ggml_backend_tensor_set_and_sync(backend, x_t, x->data, 0, ggml_nbytes(x));
+                ggml_backend_tensor_set_and_sync(backend, context_t, context->data, 0, ggml_nbytes(context));
                 if (timesteps_t != NULL) {
-                    ggml_backend_tensor_set(timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps));
+                    ggml_backend_tensor_set_and_sync(backend, timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps));
                 }
                 if (t_emb_t != NULL) {
-                    ggml_backend_tensor_set(t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
+                    ggml_backend_tensor_set_and_sync(backend, t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
                 }
                 if (y != NULL) {
-                    ggml_backend_tensor_set(y_t, y->data, 0, ggml_nbytes(y));
+                    ggml_backend_tensor_set_and_sync(backend, y_t, y->data, 0, ggml_nbytes(y));
                 }
             }
         } else {
@@ -3758,7 +3767,7 @@ struct AutoEncoderKL {
 
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_alloc)) {
-                ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
+                ggml_backend_tensor_set_and_sync(backend, z_, z->data, 0, ggml_nbytes(z));
             }
         } else {
             z_ = z;
@@ -4443,7 +4452,7 @@ struct TinyAutoEncoder {
 
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_alloc)) {
-                ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
+                ggml_backend_tensor_set_and_sync(backend, z_, z->data, 0, ggml_nbytes(z));
             }
         } else {
             z_ = z;
@@ -4955,7 +4964,7 @@ struct ESRGAN {
         ggml_allocr_alloc(compute_alloc, os);
         if (!ggml_allocr_is_measure(compute_alloc)) {
             float scale = 0.2f;
-            ggml_backend_tensor_set(os, &scale, 0, sizeof(scale));
+            ggml_backend_tensor_set_and_sync(backend, os, &scale, 0, sizeof(scale));
         }
 
         // it's performing a compute, check if backend isn't cpu
@@ -4966,7 +4975,7 @@ struct ESRGAN {
 
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_alloc)) {
-                ggml_backend_tensor_set(x_, x->data, 0, ggml_nbytes(x));
+                ggml_backend_tensor_set_and_sync(backend, x_, x->data, 0, ggml_nbytes(x));
             }
         } else {
             x_ = x;
@@ -5169,7 +5178,7 @@ struct LoraModel {
 
             ggml_allocr_alloc(compute_alloc, lora_scale);
             if (!ggml_allocr_is_measure(compute_alloc)) {
-                ggml_backend_tensor_set(lora_scale, &scale_value, 0, ggml_nbytes(lora_scale));
+                ggml_backend_tensor_set_and_sync(backend, lora_scale, &scale_value, 0, ggml_nbytes(lora_scale));
             }
 
             // flat lora tensors to multiply it
