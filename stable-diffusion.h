@@ -63,7 +63,8 @@ public:
         SampleMethod sample_method,
         int sample_steps,
         int64_t seed,
-        int batch_count);
+        int batch_count,
+        const uint8_t* control_cond);
 
     std::vector<uint8_t*> img2img(
         const uint8_t* init_img_data,

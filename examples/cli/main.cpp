@@ -490,6 +490,8 @@ int main(int argc, const char* argv[]) {
 
     std::vector<uint8_t*> results;
     if (params.mode == TXT2IMG) {
+        int c              = 0;
+        input_image_buffer = stbi_load("assets/control.png", &params.width, &params.height, &c, 3);
         results = sd.txt2img(params.prompt,
                              params.negative_prompt,
                              params.cfg_scale,
@@ -498,7 +500,8 @@ int main(int argc, const char* argv[]) {
                              params.sample_method,
                              params.sample_steps,
                              params.seed,
-                             params.batch_count);
+                             params.batch_count,
+                             input_image_buffer);
     } else {
         results = sd.img2img(input_image_buffer,
                              params.prompt,

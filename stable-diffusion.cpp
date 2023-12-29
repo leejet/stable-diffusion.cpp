@@ -2699,6 +2699,7 @@ struct UNetModel {
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* timesteps,
                                 struct ggml_tensor* context,
+                                std::vector<struct ggml_tensor*> control,
                                 struct ggml_tensor* t_emb = NULL,
                                 struct ggml_tensor* y     = NULL) {
         // x: [N, in_channels, h, w]
@@ -2755,12 +2756,20 @@ struct UNetModel {
         h = middle_block_0.forward(ctx0, h, emb);      // [N, 4*model_channels, h/8, w/8]
         h = middle_block_1.forward(ctx0, h, context);  // [N, 4*model_channels, h/8, w/8]
         h = middle_block_2.forward(ctx0, h, emb);      // [N, 4*model_channels, h/8, w/8]
+        if(control.size() > 0) {
+            h = ggml_add(ctx0, h, control[control.size() - 1]); // middle control
+        }
 
+        int control_offset = control.size() - 2;
         // output_blocks
         for (int i = len_mults - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
                 auto h_skip = hs.back();
                 hs.pop_back();
+                if(control.size() > 0) {
+                    h_skip = ggml_add(ctx0, h_skip, control[control_offset]); // control net condition
+                    control_offset--;
+                }
 
                 h = ggml_concat(ctx0, h, h_skip);
                 h = output_res_blocks[i][j].forward(ctx0, h, emb);
@@ -2790,6 +2799,7 @@ struct UNetModel {
     struct ggml_cgraph* build_graph(struct ggml_tensor* x,
                                     struct ggml_tensor* timesteps,
                                     struct ggml_tensor* context,
+                                    std::vector<struct ggml_tensor*> control,
                                     struct ggml_tensor* t_emb = NULL,
                                     struct ggml_tensor* y     = NULL) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
@@ -2856,7 +2866,7 @@ struct UNetModel {
             y_t         = y;
         }
 
-        struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, t_emb_t, y_t);
+        struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, control, t_emb_t, y_t);
 
         ggml_build_forward_expand(gf, out);
         ggml_free(ctx0);
@@ -2866,13 +2876,14 @@ struct UNetModel {
 
     void begin(struct ggml_tensor* x,
                struct ggml_tensor* context,
+               std::vector<struct ggml_tensor*> control,
                struct ggml_tensor* t_emb = NULL,
                struct ggml_tensor* y     = NULL) {
         if (compute_memory_buffer_size == -1) {
             // alignment required by the backend
             compute_alloc = ggml_allocr_new_measure_from_backend(backend);
 
-            struct ggml_cgraph* gf = build_graph(x, NULL, context, t_emb, y);
+            struct ggml_cgraph* gf = build_graph(x, NULL, context, control, t_emb, y);
 
             // compute the required memory
             compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf);
@@ -2892,12 +2903,13 @@ struct UNetModel {
                  struct ggml_tensor* x,
                  struct ggml_tensor* timesteps,
                  struct ggml_tensor* context,
+                 std::vector<struct ggml_tensor*> control,
                  struct ggml_tensor* t_emb = NULL,
                  struct ggml_tensor* y     = NULL) {
         ggml_allocr_reset(compute_alloc);
 
         // compute
-        struct ggml_cgraph* gf = build_graph(x, timesteps, context, t_emb, y);
+        struct ggml_cgraph* gf = build_graph(x, timesteps, context, control, t_emb, y);
 
         ggml_allocr_alloc_graph(compute_alloc, gf);
 
@@ -5019,22 +5031,21 @@ struct CNHintBlock {
         tensors[prefix + "input_hint_block.14.bias"]   = conv_final_b;
     }
 
-    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* x) {
-        ggml_tensor* h;
-        h = ggml_nn_conv_2d(ctx, x, conv_first_w, conv_first_b, 1, 1, 1, 1);
+     struct ggml_tensor* forward(ggml_context* ctx, struct ggml_tensor* x) {
+        auto h = ggml_nn_conv_2d(ctx, x, conv_first_w, conv_first_b, 1, 1, 1, 1);
         h = ggml_silu_inplace(ctx, h);
 
+        auto body_h = h;
         for(int i = 0; i < num_blocks; i++) {
             // operations.conv_nd(dims, 16, 16, 3, padding=1)
-            h = ggml_nn_conv_2d(ctx, h, blocks[i].conv_0_w, blocks[i].conv_0_b, 1, 1, 1, 1);
-            h = ggml_silu_inplace(ctx, h);
-
+            body_h = ggml_nn_conv_2d(ctx, body_h, blocks[i].conv_0_w, blocks[i].conv_0_b, 1, 1, 1, 1);
+            body_h = ggml_silu_inplace(ctx, body_h);
             // operations.conv_nd(dims, 16, 32, 3, padding=1, stride=2)
-            h = ggml_nn_conv_2d(ctx, h, blocks[i].conv_1_w, blocks[i].conv_1_b, 2, 2, 1, 1);
-            h = ggml_silu_inplace(ctx, h);
+            body_h = ggml_nn_conv_2d(ctx, body_h, blocks[i].conv_1_w, blocks[i].conv_1_b, 2, 2, 1, 1);
+            body_h = ggml_silu_inplace(ctx, body_h);
         }
 
-        h = ggml_nn_conv_2d(ctx, h, conv_final_w, conv_final_b, 1, 1, 1, 1);
+        h = ggml_nn_conv_2d(ctx, body_h, conv_final_w, conv_final_b, 1, 1, 1, 1);
         h = ggml_silu_inplace(ctx, h);
         return h;
     }
@@ -5435,7 +5446,8 @@ struct ControlNet {
         tensors[prefix + "middle_block_out.0.bias"]   = middle_block_out_b;
     }
 
-    struct std::vector<struct ggml_tensor*> forward(struct ggml_cgraph* gf, struct ggml_context* ctx0,
+    struct ggml_tensor* forward(std::vector<struct ggml_tensor*> &outs,
+                                struct ggml_context* ctx0,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* hint,
                                 struct ggml_tensor* timesteps,
@@ -5458,13 +5470,12 @@ struct ControlNet {
         auto guided_hint = input_hint_block.forward(ctx0, hint);
 
         // input_blocks
-        std::vector<struct ggml_tensor*> outs;
         int zero_conv_offset = 0;
 
         // input block 0
         struct ggml_tensor* h = ggml_nn_conv_2d(ctx0, x, input_block_0_w, input_block_0_b, 1, 1, 1, 1);  // [N, model_channels, h, w]
-        h = ggml_add(ctx0, h, guided_hint);
-        h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
+        // h = ggml_add(ctx0, h, guided_hint);
+        // h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
         zero_conv_offset++;
         outs.push_back(h);
 
@@ -5478,15 +5489,15 @@ struct ControlNet {
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     h = input_transformers[i][j].forward(ctx0, h, context);  // [N, mult*model_channels, h, w]
                 }
-                h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
-                zero_conv_offset++;
+                // h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
+                // zero_conv_offset++;
                 outs.push_back(h);
             }
             if (i != len_mults - 1) {
                 ds *= 2;
                 h = input_down_samples[i].forward(ctx0, h);  // [N, mult*model_channels, h/(2^(i+1)), w/(2^(i+1))]
-                h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
-                zero_conv_offset++;
+                // h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
+                // zero_conv_offset++;
                 outs.push_back(h);
             }
         }
@@ -5497,17 +5508,17 @@ struct ControlNet {
         h = middle_block_1.forward(ctx0, h, context);  // [N, 4*model_channels, h/8, w/8]
         h = middle_block_2.forward(ctx0, h, emb);      // [N, 4*model_channels, h/8, w/8]
 
-        h = ggml_nn_conv_2d(ctx0, h, middle_block_out_w, middle_block_out_b);
+        // h = ggml_nn_conv_2d(ctx0, h, middle_block_out_w, middle_block_out_b);
         outs.push_back(h);
-        ggml_build_forward_expand(gf, h);
-        return outs;
+        return h;
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_tensor* x,
+    std::pair<struct ggml_cgraph*, std::vector<struct ggml_tensor*>>
+                                build_graph(struct ggml_tensor* x,
+                                    struct ggml_tensor* hint,
                                     struct ggml_tensor* timesteps,
                                     struct ggml_tensor* context,
-                                    struct ggml_tensor* t_emb = NULL,
-                                    struct ggml_tensor* y     = NULL) {
+                                    struct ggml_tensor* t_emb = NULL) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
         static size_t buf_size = ggml_tensor_overhead() * UNET_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
@@ -5525,42 +5536,38 @@ struct ControlNet {
 
         // temporal tensors for transfer tensors from cpu to gpu if needed
         struct ggml_tensor* x_t         = NULL;
+        struct ggml_tensor* hint_t      = NULL;
         struct ggml_tensor* timesteps_t = NULL;
         struct ggml_tensor* context_t   = NULL;
         struct ggml_tensor* t_emb_t     = NULL;
-        struct ggml_tensor* y_t         = NULL;
 
         // it's performing a compute, check if backend isn't cpu
         if (!ggml_backend_is_cpu(backend)) {
             // pass input tensors to gpu memory
             x_t       = ggml_dup_tensor(ctx0, x);
             context_t = ggml_dup_tensor(ctx0, context);
+            hint_t = ggml_dup_tensor(ctx0, hint);
             ggml_allocr_alloc(compute_alloc, x_t);
             if (timesteps != NULL) {
                 timesteps_t = ggml_dup_tensor(ctx0, timesteps);
                 ggml_allocr_alloc(compute_alloc, timesteps_t);
             }
             ggml_allocr_alloc(compute_alloc, context_t);
+            ggml_allocr_alloc(compute_alloc, hint_t);
             if (t_emb != NULL) {
                 t_emb_t = ggml_dup_tensor(ctx0, t_emb);
                 ggml_allocr_alloc(compute_alloc, t_emb_t);
-            }
-            if (y != NULL) {
-                y_t = ggml_dup_tensor(ctx0, y);
-                ggml_allocr_alloc(compute_alloc, y_t);
             }
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_alloc)) {
                 ggml_backend_tensor_set(x_t, x->data, 0, ggml_nbytes(x));
                 ggml_backend_tensor_set(context_t, context->data, 0, ggml_nbytes(context));
+                ggml_backend_tensor_set(hint_t, hint->data, 0, ggml_nbytes(hint));
                 if (timesteps_t != NULL) {
                     ggml_backend_tensor_set(timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps));
                 }
                 if (t_emb_t != NULL) {
                     ggml_backend_tensor_set(t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
-                }
-                if (y != NULL) {
-                    ggml_backend_tensor_set(y_t, y->data, 0, ggml_nbytes(y));
                 }
             }
         } else {
@@ -5569,25 +5576,30 @@ struct ControlNet {
             timesteps_t = timesteps;
             context_t   = context;
             t_emb_t     = t_emb;
-            y_t         = y;
+            hint_t      = hint;
         }
 
-        struct std::vector<struct ggml_tensor*> outs = forward(gf, ctx0, x_t, timesteps_t, context_t, t_emb_t, y_t);
+        std::vector<struct ggml_tensor*> outputs;
+        struct ggml_tensor* out = forward(outputs, ctx0, x_t, hint_t, timesteps_t, context_t, t_emb_t);
 
+        ggml_build_forward_expand(gf, out);
         ggml_free(ctx0);
 
-        return gf;
+        return std::make_pair(gf, outputs);
     }
 
-    void begin(struct ggml_tensor* x,
+    void begin(ggml_context* draft, std::vector<struct ggml_tensor*> &controls,
+                struct ggml_tensor* x,
+                struct ggml_tensor* hint,
                struct ggml_tensor* context,
-               struct ggml_tensor* t_emb = NULL,
-               struct ggml_tensor* y     = NULL) {
+               struct ggml_tensor* t_emb = NULL) {
         if (compute_memory_buffer_size == -1) {
             // alignment required by the backend
             compute_alloc = ggml_allocr_new_measure_from_backend(backend);
 
-            struct ggml_cgraph* gf = build_graph(x, NULL, context, t_emb, y);
+            auto res = build_graph(x, hint, NULL, context, t_emb);
+            struct ggml_cgraph* gf = res.first;
+            std::vector<struct ggml_tensor*> outs = res.second;
 
             // compute the required memory
             compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf);
@@ -5595,24 +5607,30 @@ struct ControlNet {
             // recreate the allocator with the required memory
             ggml_allocr_free(compute_alloc);
 
-            LOG_DEBUG("diffusion compute buffer size: %.2f MB", compute_memory_buffer_size / 1024.0 / 1024.0);
+            for(int i = 0; i < outs.size(); i++) {
+                controls.push_back(ggml_dup_tensor(draft, outs[i]));
+            }
+
+            LOG_DEBUG("controlnet compute buffer size: %.2f MB -> %zu control output tensors", compute_memory_buffer_size / 1024.0 / 1024.0, res.second.size());
         }
 
         compute_buffer = ggml_backend_alloc_buffer(backend, compute_memory_buffer_size);
         compute_alloc  = ggml_allocr_new_from_buffer(compute_buffer);
     }
 
-    void compute(struct ggml_tensor* work_latent,
+    void compute(std::vector<struct ggml_tensor*> &controls,
                  int n_threads,
                  struct ggml_tensor* x,
+                 struct ggml_tensor* hint,
                  struct ggml_tensor* timesteps,
                  struct ggml_tensor* context,
-                 struct ggml_tensor* t_emb = NULL,
-                 struct ggml_tensor* y     = NULL) {
+                 struct ggml_tensor* t_emb = NULL) {
         ggml_allocr_reset(compute_alloc);
 
         // compute
-        struct ggml_cgraph* gf = build_graph(x, timesteps, context, t_emb, y);
+        auto res = build_graph(x, hint, NULL, context, t_emb);
+        struct ggml_cgraph* gf = res.first;
+        std::vector<struct ggml_tensor*> outs = res.second;
 
         ggml_allocr_alloc_graph(compute_alloc, gf);
 
@@ -5631,8 +5649,11 @@ struct ControlNet {
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
-
-        ggml_backend_tensor_get_and_sync(backend, gf->nodes[gf->n_nodes - 1], work_latent->data, 0, ggml_nbytes(work_latent));
+        
+        // extract the tensors from the graph
+        for(int i = 0; i < outs.size(); i++) {
+            ggml_backend_tensor_get_and_sync(backend, outs[i], controls[i]->data, 0, ggml_nbytes(controls[i]));
+        }
     }
 
     void end() {
@@ -6021,7 +6042,7 @@ public:
 
     ESRGAN esrgan_upscaler;
     std::string esrgan_path;
-    ControlNet control;
+    ControlNet control_net;
     bool upscale_output = false;
 
     StableDiffusionGGML() = default;
@@ -6323,7 +6344,7 @@ public:
         if (use_tiny_autoencoder) {
             return tae_first_stage.load_from_file(taesd_path, backend);
         }
-        control.load_from_file("models/control_openpose-fp16.safetensors", backend, wtype);
+        control_net.load_from_file("models/control_openpose-fp16.safetensors", backend, wtype);
         return true;
     }
 
@@ -6336,13 +6357,13 @@ public:
         struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);                                     // [N, ]
         struct ggml_tensor* t_emb     = new_timestep_embedding(work_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
 
-        diffusion_model.begin(x_t, c, t_emb);
+        diffusion_model.begin(x_t, c, std::vector<struct ggml_tensor*>(), t_emb);
 
         int64_t t0 = ggml_time_ms();
         ggml_set_f32(timesteps, 999);
         set_timestep_embedding(timesteps, t_emb, diffusion_model.model_channels);
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model.compute(out, n_threads, x_t, NULL, c, t_emb);
+        diffusion_model.compute(out, n_threads, x_t, NULL, c, std::vector<struct ggml_tensor*>(), t_emb);
         diffusion_model.end();
 
         double result = 0.f;
@@ -6509,6 +6530,7 @@ public:
                         ggml_tensor* c_vector,
                         ggml_tensor* uc,
                         ggml_tensor* uc_vector,
+                        ggml_tensor* control_hint,
                         float cfg_scale,
                         SampleMethod method,
                         const std::vector<float>& sigmas) {
@@ -6521,7 +6543,14 @@ public:
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x_t);
         struct ggml_tensor* timesteps    = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);                                     // [N, ]
         struct ggml_tensor* t_emb        = new_timestep_embedding(work_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
-        diffusion_model.begin(noised_input, c, t_emb, c_vector);
+        
+        std::vector<struct ggml_tensor*> controls;
+
+        if(control_hint != NULL) {
+            control_net.begin(work_ctx, controls, noised_input, control_hint, c, t_emb);
+        }
+
+        diffusion_model.begin(noised_input, c, controls, t_emb, c_vector);
 
         bool has_unconditioned = cfg_scale != 1.0 && uc != NULL;
 
@@ -6571,12 +6600,20 @@ public:
             ggml_tensor_scale(noised_input, c_in);
 
             // cond
-            diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, t_emb, c_vector);
+            if(control_hint != NULL) {
+                LOG_DEBUG("control net start");
+                control_net.compute(controls, n_threads, noised_input, control_hint, NULL, c, t_emb);
+                LOG_DEBUG("control net end");
+            }
+            diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, controls, t_emb, c_vector);
 
             float* negative_data = NULL;
             if (has_unconditioned) {
                 // uncond
-                diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, uc, t_emb, uc_vector);
+                if(control_hint != NULL) {
+                    control_net.compute(controls, n_threads, noised_input, control_hint, NULL, uc, t_emb);
+                }
+                diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, uc, controls, t_emb, uc_vector);
                 negative_data = (float*)out_uncond->data;
             }
             float* vec_denoised  = (float*)denoised->data;
@@ -7160,7 +7197,8 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
                                                SampleMethod sample_method,
                                                int sample_steps,
                                                int64_t seed,
-                                               int batch_count) {
+                                               int batch_count,
+                                               const uint8_t* control_cond) {
     std::vector<uint8_t*> results;
     // if (width >= 1024 && height >= 1024) {  // 1024 x 1024 images
     //     LOG_WARN("Image too large, try a smaller size.");
@@ -7182,7 +7220,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     int64_t t1 = ggml_time_ms();
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
+    params.mem_size = static_cast<size_t>(80 * 1024 * 1024);  // 10 MB
     params.mem_size += width * height * 3 * sizeof(float);
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;
@@ -7225,6 +7263,12 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
         sd->cond_stage_model.destroy();
     }
 
+    struct ggml_tensor* image_hint = NULL;
+    if(control_cond != NULL) {
+        image_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+        sd_image_to_tensor(control_cond, image_hint);
+    }
+
     std::vector<struct ggml_tensor*> final_latents;  // collect latents to decode
     int C = 4;
     int W = width / 8;
@@ -7241,7 +7285,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
 
         std::vector<float> sigmas = sd->denoiser->schedule->get_sigmas(sample_steps);
 
-        struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, NULL, c, c_vector, uc, uc_vector, cfg_scale, sample_method, sigmas);
+        struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, NULL, c, c_vector, uc, uc_vector, image_hint, cfg_scale, sample_method, sigmas);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -7388,7 +7432,7 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
     ggml_tensor_set_f32_randn(noise, sd->rng);
 
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
-    struct ggml_tensor* x_0 = sd->sample(work_ctx, init_latent, noise, c, c_vector, uc, uc_vector, cfg_scale, sample_method, sigma_sched);
+    struct ggml_tensor* x_0 = sd->sample(work_ctx, init_latent, noise, c, c_vector, uc, uc_vector, NULL, cfg_scale, sample_method, sigma_sched);
     // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
     // print_ggml_tensor(x_0);
     int64_t t3 = ggml_time_ms();
