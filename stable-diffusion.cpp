@@ -5474,8 +5474,8 @@ struct ControlNet {
 
         // input block 0
         struct ggml_tensor* h = ggml_nn_conv_2d(ctx0, x, input_block_0_w, input_block_0_b, 1, 1, 1, 1);  // [N, model_channels, h, w]
-        // h = ggml_add(ctx0, h, guided_hint);
-        // h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
+        h = ggml_add(ctx0, h, guided_hint);
+        h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
         zero_conv_offset++;
         outs.push_back(h);
 
@@ -5489,15 +5489,17 @@ struct ControlNet {
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     h = input_transformers[i][j].forward(ctx0, h, context);  // [N, mult*model_channels, h, w]
                 }
-                // h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
-                // zero_conv_offset++;
+
+                h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
+                zero_conv_offset++;
                 outs.push_back(h);
             }
             if (i != len_mults - 1) {
                 ds *= 2;
                 h = input_down_samples[i].forward(ctx0, h);  // [N, mult*model_channels, h/(2^(i+1)), w/(2^(i+1))]
-                // h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
-                // zero_conv_offset++;
+                h = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
+
+                zero_conv_offset++;
                 outs.push_back(h);
             }
         }
@@ -5508,7 +5510,7 @@ struct ControlNet {
         h = middle_block_1.forward(ctx0, h, context);  // [N, 4*model_channels, h/8, w/8]
         h = middle_block_2.forward(ctx0, h, emb);      // [N, 4*model_channels, h/8, w/8]
 
-        // h = ggml_nn_conv_2d(ctx0, h, middle_block_out_w, middle_block_out_b);
+        h = ggml_nn_conv_2d(ctx0, h, middle_block_out_w, middle_block_out_b);
         outs.push_back(h);
         return h;
     }
