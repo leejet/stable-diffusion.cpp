@@ -5330,7 +5330,7 @@ struct ControlNet {
         ggml_allocr_free(alloc);
     }
 
-    bool load_from_file(const std::string& file_path, ggml_backend_t backend, ggml_type wtype) {
+    bool load_from_file(const std::string& file_path, ggml_backend_t backend, ggml_type wtype__) {
         LOG_INFO("loading control net from '%s'", file_path.c_str());
 
         std::map<std::string, ggml_tensor*> control_tensors;
@@ -5341,7 +5341,7 @@ struct ControlNet {
             return false;
         }
 
-        if (!init(backend, wtype)) {
+        if (!init(backend, wtype__)) {
             return false;
         }
 
@@ -6346,7 +6346,7 @@ public:
         if (use_tiny_autoencoder) {
             return tae_first_stage.load_from_file(taesd_path, backend);
         }
-        control_net.load_from_file("models/control_openpose-fp16.safetensors", backend, wtype);
+        control_net.load_from_file("models/control_openpose-fp16.safetensors", backend, GGML_TYPE_F16 /* just f16 controlnet models */);
         return true;
     }
 
@@ -6603,9 +6603,7 @@ public:
 
             // cond
             if(control_hint != NULL) {
-                LOG_DEBUG("control net start");
                 control_net.compute(controls, n_threads, noised_input, control_hint, NULL, c, t_emb);
-                LOG_DEBUG("control net end");
             }
             diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, controls, t_emb, c_vector);
 
