@@ -966,7 +966,7 @@ struct CLIPTextModel {
     struct ggml_tensor* final_ln_b;
 
     struct ggml_tensor* text_projection;
-    std::string embeddings_directory = "models/embeddings/";
+    std::string embd_dir;
     int32_t num_custom_embeddings = 0;
     std::vector<std::string> readed_embeddings;
 
@@ -1020,12 +1020,12 @@ struct CLIPTextModel {
 
     void load_embedding(std::string embd_file, std::vector<int32_t> &bpe_tokens) {
         // the order matters
-        std::string embd_path = embeddings_directory + embd_file + ".pt";
+        std::string embd_path = path_join(embd_dir, embd_file + ".pt");
         if(!file_exists(embd_path)) {
-            embd_path = embeddings_directory + embd_file + ".ckpt";
+            embd_path = path_join(embd_dir, embd_file + ".ckpt");
         }
         if(!file_exists(embd_path)) {
-            embd_path = embeddings_directory + embd_file + ".safetensors";
+            embd_path = path_join(embd_dir, embd_file + ".safetensors");
         }
         ModelLoader model_loader;
         if(!model_loader.init_from_file(embd_path)) {
@@ -5442,6 +5442,7 @@ public:
 
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
+                        std::string embeddings_path,
                         ggml_type wtype,
                         Schedule schedule,
                         int clip_skip) {
@@ -5517,6 +5518,8 @@ public:
             !diffusion_model.initialize(backend, model_data_type)) {
             return false;
         }
+
+        cond_stage_model.text_model.embd_dir = embeddings_path;
 
         ggml_type vae_type = model_data_type;
         if (version == VERSION_XL) {
@@ -6532,10 +6535,11 @@ StableDiffusion::StableDiffusion(int n_threads,
 
 bool StableDiffusion::load_from_file(const std::string& model_path,
                                      const std::string& vae_path,
+                                     std::string embeddings_path,
                                      ggml_type wtype,
                                      Schedule s,
                                      int clip_skip) {
-    return sd->load_from_file(model_path, vae_path, wtype, s, clip_skip);
+    return sd->load_from_file(model_path, vae_path, embeddings_path, wtype, s, clip_skip);
 }
 
 std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,

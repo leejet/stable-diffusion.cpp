@@ -29,6 +29,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
 - Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
 - VAE tiling processing for reduce memory usage
+- VAE tiling processing for reduce memory usage
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -51,9 +52,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] More sampling methods
 - [ ] Make inference faster
     - The current implementation of ggml_conv_2d is slow and has high memory usage
-    - Implement Winograd Convolution 2D for 3x3 kernel filtering
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
-- [ ] Implement Textual Inversion (embeddings)
 - [ ] Implement Inpainting support
 - [ ] k-quants support
 

@@ -50,6 +50,7 @@ public:
 
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
+                        std::string embeddings_path,
                         ggml_type wtype,
                         Schedule d = DEFAULT,
                         int clip_skip = -1);

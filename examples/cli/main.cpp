@@ -60,6 +60,7 @@ struct SDParams {
     std::string vae_path;
     std::string taesd_path;
     std::string esrgan_path;
+    std::string embeddings_path;
     ggml_type wtype = GGML_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
@@ -121,6 +122,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -m, --model [MODEL]                path to model\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
+    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
@@ -201,6 +203,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.esrgan_path = argv[i];
+        } else if (arg == "--embd-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.embeddings_path = argv[i];
         } else if (arg == "--type") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -484,7 +492,7 @@ int main(int argc, const char* argv[]) {
 
     StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_path, params.esrgan_path, true, params.vae_tiling, params.lora_model_dir, params.rng_type);
 
-    if (!sd.load_from_file(params.model_path, params.vae_path, params.wtype, params.schedule, params.clip_skip)) {
+    if (!sd.load_from_file(params.model_path, params.vae_path, params.embeddings_path, params.wtype, params.schedule, params.clip_skip)) {
         return 1;
     }
 
