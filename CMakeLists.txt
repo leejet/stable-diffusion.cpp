@@ -25,6 +25,9 @@ endif()
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_CUBLAS                     "sd: cuda backend" OFF)
+option(SD_METAL                      "sd: metal backend" OFF)
+option(SD_FLASH_ATTN                 "sd: use flash attention for x4 less memory usage" OFF)
+option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_FLASH_ATTN            "sd: use flash attention for x4 less memory usage" OFF)
 option(BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
@@ -34,6 +37,15 @@ if(SD_CUBLAS)
 	message("Use CUBLAS as backend stable-diffusion")
     set(GGML_CUBLAS ON)
     add_definitions(-DSD_USE_CUBLAS)
+    if(SD_FAST_SOFTMAX)
+        set(GGML_CUDA_FAST_SOFTMAX ON)
+    endif()
+endif()
+
+if(SD_METAL)
+	message("Use Metal as backend stable-diffusion")
+    set(GGML_METAL ON)
+    add_definitions(-DSD_USE_METAL)
 endif()
 
 if(SD_FLASH_ATTN)
@@ -45,68 +57,17 @@ endif()
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
 # deps
-if (SD_HIPBLAS)
-    add_library(ggml OBJECT
-            ${CMAKE_SOURCE_DIR}/ggml/src/ggml.c
-            ${CMAKE_SOURCE_DIR}/ggml/src/ggml-alloc.c
-            ${CMAKE_SOURCE_DIR}/ggml/src/ggml-backend.c
-            ${CMAKE_SOURCE_DIR}/ggml/include/ggml/ggml.h
-            ${CMAKE_SOURCE_DIR}/ggml/include/ggml/ggml-alloc.h
-            ${CMAKE_SOURCE_DIR}/ggml/include/ggml/ggml-backend.h
-    )
-else ()
-    add_subdirectory(ggml)
-endif ()
+add_subdirectory(ggml)
 
-if (SD_HIPBLAS)
-    message("Use HIPBLAS as backend stable-diffusion")
-    add_definitions(-DSD_USE_HIPBLAS)
-    add_definitions(-DSD_USE_CUBLAS)
-
-    list(APPEND CMAKE_PREFIX_PATH /opt/rocm)
-
-    if (NOT ${CMAKE_C_COMPILER_ID} MATCHES "Clang")
-        message(WARNING "Only LLVM is supported for HIP, hint: CC=/opt/rocm/llvm/bin/clang")
-    endif()
-    if (NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
-        message(WARNING "Only LLVM is supported for HIP, hint: CXX=/opt/rocm/llvm/bin/clang++")
-    endif()
-
-    find_package(hip)
-    find_package(hipblas)
-    find_package(rocblas)
-
-    if (${hipblas_FOUND} AND ${hip_FOUND})
-        message(STATUS "HIP and hipBLAS found")
-        add_compile_definitions(GGML_USE_HIPBLAS GGML_USE_CUBLAS)
-        add_library(ggml-rocm OBJECT
-                ${CMAKE_SOURCE_DIR}/ggml/src/ggml-cuda.cu
-                ${CMAKE_SOURCE_DIR}/ggml/src/ggml-cuda.h)
-        if (BUILD_SHARED_LIBS)
-            set_target_properties(ggml-rocm PROPERTIES POSITION_INDEPENDENT_CODE ON)
-        endif()
-        target_include_directories(ggml-rocm PUBLIC ${CMAKE_SOURCE_DIR}/ggml/include)
-        set_source_files_properties(${CMAKE_SOURCE_DIR}/ggml/src/ggml-cuda.cu PROPERTIES LANGUAGE CXX)
-        target_link_libraries(ggml-rocm PRIVATE hip::device PUBLIC hip::host roc::rocblas roc::hipblas)
-
-        if (LLAMA_STATIC)
-            message(FATAL_ERROR "Static linking not supported for HIP/ROCm")
-        endif()
-        set(SD_EXTRA_LIBS ${SD_EXTRA_LIBS} ggml-rocm)
-    else()
-        message(WARNING "hipBLAS or HIP not found. Try setting CMAKE_PREFIX_PATH=/opt/rocm")
-    endif()
-endif()
-
+add_subdirectory(thirdparty)
 
 set(SD_LIB stable-diffusion)
 
-add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp)
-target_link_libraries(${SD_LIB} PUBLIC ggml ${SD_EXTRA_LIBS})
-target_include_directories(${SD_LIB} PUBLIC .)
+add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp model.h model.cpp util.h util.cpp)
+target_link_libraries(${SD_LIB} PUBLIC ggml zip)
+target_include_directories(${SD_LIB} PUBLIC . thirdparty)
 target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
 
-add_subdirectory(common)
 
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
