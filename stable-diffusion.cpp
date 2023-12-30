@@ -19,7 +19,7 @@
 #include "ggml/ggml-backend.h"
 #include "ggml/ggml.h"
 
-#ifdef SD_USE_CUBLAS || SD_USE_HIPBLAS
+#if defined(SD_USE_CUBLAS) || defined(SD_USE_HIPBLAS)
 #include "ggml-cuda.h"
 #endif
 
