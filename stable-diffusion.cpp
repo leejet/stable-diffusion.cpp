@@ -1360,9 +1360,9 @@ struct FrozenCLIPEmbedderWithCustomWords {
     CLIPTextModel text_model2;
 
     // context and memory buffers
-    struct ggml_context* ctx;
-    ggml_backend_buffer_t params_buffer;
-    ggml_backend_buffer_t compute_buffer;  // for compute
+    struct ggml_context* ctx  = NULL;
+    ggml_backend_buffer_t params_buffer = NULL;
+    ggml_backend_buffer_t compute_buffer  = NULL;;  // for compute
     struct ggml_allocr* compute_alloc = NULL;
     size_t compute_memory_buffer_size = -1;
 
@@ -3512,9 +3512,9 @@ struct AutoEncoderKL {
     Encoder encoder;
     Decoder decoder;
 
-    struct ggml_context* ctx;
-    ggml_backend_buffer_t params_buffer;
-    ggml_backend_buffer_t compute_buffer;  // for compute
+    struct ggml_context* ctx  = NULL;
+    ggml_backend_buffer_t params_buffer  = NULL;
+    ggml_backend_buffer_t compute_buffer  = NULL;  // for compute
     struct ggml_allocr* compute_alloc = NULL;
 
     int memory_buffer_size = 0;
@@ -4182,10 +4182,10 @@ struct TinyAutoEncoder {
     TinyEncoder encoder;
     TinyDecoder decoder;
 
-    ggml_context* ctx;
+    ggml_context* ctx  = NULL;
     bool decode_only = false;
-    ggml_backend_buffer_t params_buffer;
-    ggml_backend_buffer_t compute_buffer;  // for compute
+    ggml_backend_buffer_t params_buffer = NULL;
+    ggml_backend_buffer_t compute_buffer = NULL;  // for compute
     struct ggml_allocr* compute_alloc = NULL;
 
     int memory_buffer_size = 0;
@@ -4621,10 +4621,10 @@ struct ESRGAN {
     ggml_tensor* conv_last_w;  // [out_channels, num_features, 3, 3]
     ggml_tensor* conv_last_b;  // [out_channels]
 
-    ggml_context* ctx;
+    ggml_context* ctx = NULL;
     bool decode_only = false;
-    ggml_backend_buffer_t params_buffer;
-    ggml_backend_buffer_t compute_buffer;  // for compute
+    ggml_backend_buffer_t params_buffer = NULL;
+    ggml_backend_buffer_t compute_buffer = NULL;  // for compute
     struct ggml_allocr* compute_alloc = NULL;
 
     int memory_buffer_size = 0;
@@ -4965,8 +4965,8 @@ struct LoraModel {
     float multiplier = 1.0f;
     std::map<std::string, struct ggml_tensor*> lora_tensors;
 
-    struct ggml_context* ctx;
-    ggml_backend_buffer_t params_buffer_lora;
+    struct ggml_context* ctx = NULL;
+    ggml_backend_buffer_t params_buffer_lora = NULL;
     ggml_backend_t backend = NULL;
 
     bool load(ggml_backend_t backend_, std::string file_path) {
