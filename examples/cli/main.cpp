@@ -81,7 +81,7 @@ struct SDParams {
     bool vae_tiling               = false;
 };
 
-static std::string basename(const std::string& path) {
+static std::string sd_basename(const std::string& path) {
     size_t pos = path.find_last_of('/');
     if (pos != std::string::npos) {
         return path.substr(pos + 1);
@@ -443,7 +443,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
-    parameter_string += "Model: " + basename(params.model_path) + ", ";
+    parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(rng_type_to_str[params.rng_type]) + ", ";
     parameter_string += "Sampler: " + std::string(sample_method_str[params.sample_method]);
     if (params.schedule == KARRAS) {

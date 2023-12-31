@@ -79,10 +79,18 @@ enum sd_type_t {
 
 SD_API const char* sd_type_name(enum sd_type_t type);
 
+enum sd_log_level_t {
+    SD_LOG_DEBUG,
+    SD_LOG_INFO,
+    SD_LOG_WARN,
+    SD_LOG_ERROR
+};
+
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API int32_t get_num_physical_cores();
+SD_API const char* sd_get_system_info();
 
 typedef struct {
     uint32_t width;
@@ -132,15 +140,6 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            float strength,
                            int64_t seed,
                            int batch_count);
-
-SD_API const char* sd_get_system_info();
-
-enum sd_log_level_t {
-    SD_LOG_DEBUG,
-    SD_LOG_INFO,
-    SD_LOG_WARN,
-    SD_LOG_ERROR
-};
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

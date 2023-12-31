@@ -5,6 +5,7 @@
 #include <fstream>
 #include <locale>
 #include <sstream>
+#include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -140,7 +141,7 @@ std::u32string unicode_value_to_utf32(int unicode_value) {
     return utf32_string;
 }
 
-std::string basename(const std::string& path) {
+std::string sd_basename(const std::string& path) {
     size_t pos = path.find_last_of('/');
     if (pos != std::string::npos) {
         return path.substr(pos + 1);
@@ -211,7 +212,7 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
 
     static char log_buffer[LOG_BUFFER_SIZE];
 
-    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "[%s] %s:%-4d - ", level_str, basename(file).c_str(), line);
+    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "[%s] %s:%-4d - ", level_str, sd_basename(file).c_str(), line);
 
     if (written >= 0 && written < LOG_BUFFER_SIZE) {
         vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
