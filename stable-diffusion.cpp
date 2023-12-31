@@ -2914,9 +2914,9 @@ struct UNetModel {
                  struct ggml_tensor* timesteps,
                  struct ggml_tensor* context,
                  std::vector<struct ggml_tensor*> control,
+                 float control_net_strength,
                  struct ggml_tensor* t_emb = NULL,
-                 struct ggml_tensor* y     = NULL,
-                 float control_net_strength) {
+                 struct ggml_tensor* y     = NULL) {
         ggml_allocr_reset(compute_alloc);
 
         // compute
@@ -6384,7 +6384,7 @@ public:
         ggml_set_f32(timesteps, 999);
         set_timestep_embedding(timesteps, t_emb, diffusion_model.model_channels);
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model.compute(out, n_threads, x_t, NULL, c, std::vector<struct ggml_tensor*>(), t_emb);
+        diffusion_model.compute(out, n_threads, x_t, NULL, c, std::vector<struct ggml_tensor*>(), 1.0f, t_emb);
         diffusion_model.end();
 
         double result = 0.f;
@@ -6623,7 +6623,7 @@ public:
             if(control_hint != NULL) {
                 control_net.compute(n_threads, noised_input, control_hint, c, t_emb);
             }
-            diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, t_emb, c_vector, control_strength);
+            diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
 
             float* negative_data = NULL;
             if (has_unconditioned) {
@@ -6632,7 +6632,7 @@ public:
                     control_net.compute(n_threads, noised_input, control_hint, uc, t_emb);
                 }
 
-                diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, uc, control_net.controls, t_emb, uc_vector, control_strength);
+                diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, uc, control_net.controls, control_strength, t_emb, uc_vector);
                 negative_data = (float*)out_uncond->data;
             }
             float* vec_denoised  = (float*)denoised->data;
