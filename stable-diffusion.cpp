@@ -79,11 +79,22 @@ std::string sd_get_system_info() {
     return ss.str();
 }
 
-static void ggml_log_callback_default(ggml_log_level level, const char* text, void* user_data) {
-    (void)level;
-    (void)user_data;
-    fputs(text, stderr);
-    fflush(stderr);
+std::string ltrim(const std::string& s) {
+    auto it = std::find_if(s.begin(), s.end(), [](int ch) {
+        return !std::isspace(ch);
+    });
+    return std::string(it, s.end());
+}
+
+std::string rtrim(const std::string& s) {
+    auto it = std::find_if(s.rbegin(), s.rend(), [](int ch) {
+        return !std::isspace(ch);
+    });
+    return std::string(s.begin(), it.base());
+}
+
+std::string trim(const std::string& s) {
+    return rtrim(ltrim(s));
 }
 
 void ggml_tensor_set_f32_randn(struct ggml_tensor* tensor, std::shared_ptr<RNG> rng) {
@@ -1027,19 +1038,12 @@ struct CLIPTextModel {
         return static_cast<size_t>(mem_size);
     }
 
-    void load_embedding(std::string embd_file, std::vector<int32_t> &bpe_tokens) {
+    bool load_embedding(std::string embd_name, std::string embd_path, std::vector<int32_t> &bpe_tokens) {
         // the order matters
-        std::string embd_path = path_join(embd_dir, embd_file + ".pt");
-        if(!file_exists(embd_path)) {
-            embd_path = path_join(embd_dir, embd_file + ".ckpt");
-        }
-        if(!file_exists(embd_path)) {
-            embd_path = path_join(embd_dir, embd_file + ".safetensors");
-        }
         ModelLoader model_loader;
         if(!model_loader.init_from_file(embd_path)) {
-            LOG_ERROR("embedding '%s' not found", embd_file.c_str());
-            return;
+            LOG_ERROR("embedding '%s' failed", embd_name.c_str());
+            return false;
         }
         struct ggml_init_params params;
         params.mem_size = 32 * 1024; // max for custom embeddings 32 KB
@@ -1058,12 +1062,13 @@ struct CLIPTextModel {
         };
         model_loader.load_tensors(on_load, NULL);
         ggml_backend_tensor_set(token_embed_custom, embd->data, num_custom_embeddings * hidden_size * ggml_type_size(token_embed_custom->type), ggml_nbytes(embd));
-        readed_embeddings.push_back(embd_file);
+        readed_embeddings.push_back(embd_name);
         for(int i = 0; i < embd->ne[1]; i++) {
             bpe_tokens.push_back(vocab_size + num_custom_embeddings);
             // LOG_DEBUG("new custom token: %i", vocab_size + num_custom_embeddings);
             num_custom_embeddings++;
         }
+        return true;
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -1366,15 +1371,23 @@ public:
         std::string str = text;
         std::vector<std::string> token_strs;
         while (std::regex_search(str, matches, pat)) {
-            int embedding_idx = str.find(" embd:");
-            if(embedding_idx == 0) {
-                size_t end_name = str.find(",", 6);
-                end_name = end_name == std::string::npos ? str.length() : (end_name - 6);
-                std::string embedding_file = str.substr(6, end_name);
-                str = end_name == str.length() ? "" : str.substr(end_name + 6);
-                //LOG_DEBUG("Embedding: '%s' \"%s\"", embedding_file.c_str(), str.c_str());
-                text_model.load_embedding(embedding_file, bpe_tokens);
-                continue;
+            size_t word_end = str.find(",");
+            std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
+            embd_name = trim(embd_name);
+            std::string embd_path = path_join(text_model.embd_dir, embd_name + ".pt");
+            if(!file_exists(embd_path)) {
+                embd_path = path_join(text_model.embd_dir, embd_name + ".ckpt");
+            }
+            if(!file_exists(embd_path)) {
+                embd_path = path_join(text_model.embd_dir, embd_name + ".safetensors");
+            }
+            if(file_exists(embd_path)) {
+                if(text_model.load_embedding(embd_name, embd_path, bpe_tokens)) {
+                    if(word_end != std::string::npos) {
+                        str = str.substr(word_end);
+                    }
+                    continue;
+                }
             }
             for (auto& token : matches) {
                 std::string token_str = token.str();
@@ -5461,7 +5474,6 @@ public:
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
-        ggml_metal_log_set_callback(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
 
