@@ -79,6 +79,7 @@ struct SDParams {
     Schedule schedule          = DEFAULT;
     int sample_steps           = 20;
     float strength             = 0.75f;
+    float control_strength     = 0.9f;
     RNGType rng_type           = CUDA_RNG;
     int64_t seed               = 42;
     bool verbose               = false;
@@ -135,6 +136,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
+    printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
@@ -284,6 +286,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.strength = std::stof(argv[i]);
+        } else if (arg == "--control-strength") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.control_strength = std::stof(argv[i]);
         } else if (arg == "-H" || arg == "--height") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -523,7 +531,8 @@ int main(int argc, const char* argv[]) {
                              params.sample_steps,
                              params.seed,
                              params.batch_count,
-                             input_image_buffer);
+                             input_image_buffer,
+                             params.control_strength);
     } else {
         results = sd.img2img(input_image_buffer,
                              params.prompt,

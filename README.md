@@ -31,6 +31,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
 - Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
 - VAE tiling processing for reduce memory usage
+- Control Net support with SD 1.5
 - Sampling method
     - `Euler A`
     - `Euler`

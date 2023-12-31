@@ -2700,6 +2700,7 @@ struct UNetModel {
                                 struct ggml_tensor* timesteps,
                                 struct ggml_tensor* context,
                                 std::vector<struct ggml_tensor*> control,
+                                struct ggml_tensor* control_strength,
                                 struct ggml_tensor* t_emb = NULL,
                                 struct ggml_tensor* y     = NULL) {
         // x: [N, in_channels, h, w]
@@ -2757,7 +2758,8 @@ struct UNetModel {
         h = middle_block_1.forward(ctx0, h, context);  // [N, 4*model_channels, h/8, w/8]
         h = middle_block_2.forward(ctx0, h, emb);      // [N, 4*model_channels, h/8, w/8]
         if(control.size() > 0) {
-            h = ggml_add(ctx0, h, control[control.size() - 1]); // middle control
+            auto cs = ggml_scale_inplace(ctx0, control[control.size() - 1], control_strength);
+            h = ggml_add(ctx0, h, cs); // middle control
         }
 
         int control_offset = control.size() - 2;
@@ -2767,7 +2769,8 @@ struct UNetModel {
                 auto h_skip = hs.back();
                 hs.pop_back();
                 if(control.size() > 0) {
-                    h_skip = ggml_add(ctx0, h_skip, control[control_offset]); // control net condition
+                    auto cs = ggml_scale_inplace(ctx0,  control[control_offset], control_strength);
+                    h_skip = ggml_add(ctx0, h_skip, cs); // control net condition
                     control_offset--;
                 }
 
@@ -2801,7 +2804,8 @@ struct UNetModel {
                                     struct ggml_tensor* context,
                                     std::vector<struct ggml_tensor*> control,
                                     struct ggml_tensor* t_emb = NULL,
-                                    struct ggml_tensor* y     = NULL) {
+                                    struct ggml_tensor* y     = NULL,
+                                    float control_net_strength = 1.0) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
         static size_t buf_size = ggml_tensor_overhead() * UNET_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
@@ -2823,6 +2827,7 @@ struct UNetModel {
         struct ggml_tensor* context_t   = NULL;
         struct ggml_tensor* t_emb_t     = NULL;
         struct ggml_tensor* y_t         = NULL;
+        struct ggml_tensor* control_strength = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
 
         // it's performing a compute, check if backend isn't cpu
         if (!ggml_backend_is_cpu(backend)) {
@@ -2866,7 +2871,12 @@ struct UNetModel {
             y_t         = y;
         }
 
-        struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, control, t_emb_t, y_t);
+        ggml_allocr_alloc(compute_alloc, control_strength);
+        if(!ggml_allocr_is_measure(compute_alloc)) {
+            ggml_backend_tensor_set(control_strength, &control_net_strength, 0, sizeof(float));
+        }
+
+        struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, control, control_strength, t_emb_t, y_t);
 
         ggml_build_forward_expand(gf, out);
         ggml_free(ctx0);
@@ -2883,7 +2893,7 @@ struct UNetModel {
             // alignment required by the backend
             compute_alloc = ggml_allocr_new_measure_from_backend(backend);
 
-            struct ggml_cgraph* gf = build_graph(x, NULL, context, control, t_emb, y);
+            struct ggml_cgraph* gf = build_graph(x, NULL, context, control, t_emb, y, 1.0f);
 
             // compute the required memory
             compute_memory_buffer_size = ggml_allocr_alloc_graph(compute_alloc, gf);
@@ -2905,11 +2915,12 @@ struct UNetModel {
                  struct ggml_tensor* context,
                  std::vector<struct ggml_tensor*> control,
                  struct ggml_tensor* t_emb = NULL,
-                 struct ggml_tensor* y     = NULL) {
+                 struct ggml_tensor* y     = NULL,
+                 float control_net_strength) {
         ggml_allocr_reset(compute_alloc);
 
         // compute
-        struct ggml_cgraph* gf = build_graph(x, timesteps, context, control, t_emb, y);
+        struct ggml_cgraph* gf = build_graph(x, timesteps, context, control, t_emb, y, control_net_strength);
 
         ggml_allocr_alloc_graph(compute_alloc, gf);
 
@@ -6543,7 +6554,8 @@ public:
                         ggml_tensor* control_hint,
                         float cfg_scale,
                         SampleMethod method,
-                        const std::vector<float>& sigmas) {
+                        const std::vector<float>& sigmas,
+                        float control_strength) {
         size_t steps = sigmas.size() - 1;
         // x_t = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(x_t);
@@ -6611,7 +6623,7 @@ public:
             if(control_hint != NULL) {
                 control_net.compute(n_threads, noised_input, control_hint, c, t_emb);
             }
-            diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, t_emb, c_vector);
+            diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, t_emb, c_vector, control_strength);
 
             float* negative_data = NULL;
             if (has_unconditioned) {
@@ -6620,7 +6632,7 @@ public:
                     control_net.compute(n_threads, noised_input, control_hint, uc, t_emb);
                 }
 
-                diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, uc, control_net.controls, t_emb, uc_vector);
+                diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, uc, control_net.controls, t_emb, uc_vector, control_strength);
                 negative_data = (float*)out_uncond->data;
             }
             float* vec_denoised  = (float*)denoised->data;
@@ -7206,7 +7218,8 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
                                                int sample_steps,
                                                int64_t seed,
                                                int batch_count,
-                                               const uint8_t* control_cond) {
+                                               const uint8_t* control_cond,
+                                               float control_strength) {
     std::vector<uint8_t*> results;
     // if (width >= 1024 && height >= 1024) {  // 1024 x 1024 images
     //     LOG_WARN("Image too large, try a smaller size.");
@@ -7293,7 +7306,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
 
         std::vector<float> sigmas = sd->denoiser->schedule->get_sigmas(sample_steps);
 
-        struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, NULL, c, c_vector, uc, uc_vector, image_hint, cfg_scale, sample_method, sigmas);
+        struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, NULL, c, c_vector, uc, uc_vector, image_hint, cfg_scale, sample_method, sigmas, control_strength);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -7440,7 +7453,7 @@ std::vector<uint8_t*> StableDiffusion::img2img(const uint8_t* init_img_data,
     ggml_tensor_set_f32_randn(noise, sd->rng);
 
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
-    struct ggml_tensor* x_0 = sd->sample(work_ctx, init_latent, noise, c, c_vector, uc, uc_vector, NULL, cfg_scale, sample_method, sigma_sched);
+    struct ggml_tensor* x_0 = sd->sample(work_ctx, init_latent, noise, c, c_vector, uc, uc_vector, NULL, cfg_scale, sample_method, sigma_sched, 1.0f);
     // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
     // print_ggml_tensor(x_0);
     int64_t t3 = ggml_time_ms();
