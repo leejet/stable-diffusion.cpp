@@ -6080,6 +6080,7 @@ public:
 
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
+                        const std::string control_net_path,
                         ggml_type wtype,
                         Schedule schedule,
                         int clip_skip) {
@@ -6338,6 +6339,7 @@ public:
             denoiser->schedule->sigmas[i]         = std::sqrt((1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
             denoiser->schedule->log_sigmas[i]     = std::log(denoiser->schedule->sigmas[i]);
         }
+
         LOG_DEBUG("finished loaded file");
         ggml_free(ctx);
         if (upscale_output) {
@@ -6345,10 +6347,14 @@ public:
                 return false;
             }
         }
+
         if (use_tiny_autoencoder) {
             return tae_first_stage.load_from_file(taesd_path, backend);
         }
-        control_net.load_from_file("models/control_openpose-fp16.safetensors", backend, GGML_TYPE_F16 /* just f16 controlnet models */);
+
+        if(control_net_path.size() > 0) {
+            return control_net.load_from_file(control_net_path, backend, GGML_TYPE_F16 /* just f16 controlnet models */);
+        }
         return true;
     }
 
@@ -7184,10 +7190,11 @@ StableDiffusion::StableDiffusion(int n_threads,
 
 bool StableDiffusion::load_from_file(const std::string& model_path,
                                      const std::string& vae_path,
+                                     const std::string control_net_path,
                                      ggml_type wtype,
                                      Schedule s,
                                      int clip_skip) {
-    return sd->load_from_file(model_path, vae_path, wtype, s, clip_skip);
+    return sd->load_from_file(model_path, vae_path, control_net_path, wtype, s, clip_skip);
 }
 
 std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
@@ -7221,7 +7228,7 @@ std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,
     int64_t t1 = ggml_time_ms();
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(35 * 1024 * 1024);  // 10 MB
+    params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     params.mem_size += width * height * 3 * sizeof(float);
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;

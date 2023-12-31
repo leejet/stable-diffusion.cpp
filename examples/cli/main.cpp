@@ -60,10 +60,12 @@ struct SDParams {
     std::string vae_path;
     std::string taesd_path;
     std::string esrgan_path;
+    std::string controlnet_path;
     ggml_type wtype = GGML_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
     std::string input_path;
+    std::string control_image_path;
 
     std::string prompt;
     std::string negative_prompt;
@@ -121,11 +123,13 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -m, --model [MODEL]                path to model\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
+    printf("  --control-net [CONTROL_PATH]       path to control net model\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
+    printf("  --control-image [IMAGE]            path to image condition, control net\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
@@ -195,6 +199,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.taesd_path = argv[i];
+        } else if (arg == "--control-net") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.controlnet_path = argv[i];
         } else if (arg == "--upscale-model") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -238,6 +248,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.input_path = argv[i];
+        } else if (arg == "--control-image") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.control_image_path = argv[i];
         } else if (arg == "-o" || arg == "--output") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -484,14 +500,20 @@ int main(int argc, const char* argv[]) {
 
     StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_path, params.esrgan_path, true, params.vae_tiling, params.lora_model_dir, params.rng_type);
 
-    if (!sd.load_from_file(params.model_path, params.vae_path, params.wtype, params.schedule, params.clip_skip)) {
+    if (!sd.load_from_file(params.model_path, params.vae_path, params.controlnet_path, params.wtype, params.schedule, params.clip_skip)) {
         return 1;
     }
 
     std::vector<uint8_t*> results;
     if (params.mode == TXT2IMG) {
-        int c              = 0;
-        input_image_buffer = stbi_load("assets/control.png", &params.width, &params.height, &c, 3);
+        if(params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
+            int c = 0;
+            input_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
+            if(input_image_buffer == NULL) {
+                fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
+                return 1;
+            }
+        }
         results = sd.txt2img(params.prompt,
                              params.negative_prompt,
                              params.cfg_scale,

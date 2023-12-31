@@ -50,6 +50,7 @@ public:
 
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
+                        const std::string control_net_path,
                         ggml_type wtype,
                         Schedule d = DEFAULT,
                         int clip_skip = -1);
