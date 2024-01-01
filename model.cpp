@@ -403,6 +403,11 @@ std::string convert_tensor_name(const std::string& name) {
         } else {
             new_name = name;
         }
+    } else if (starts_with(name, "control_model")) {
+        size_t pos = name.find('.');
+        if (pos != std::string::npos) {
+            new_name = name.substr(pos + 1);
+        }
     } else {
         new_name = name;
     }
@@ -968,7 +973,6 @@ struct PickleTensorReader {
     }
 
     void read_string(const std::string& str, struct zip_t* zip, std::string dir) {
-        printf("%s\n", str.c_str());
         if (str == "storage") {
             read_global_type = true;
         } else if (str != "state_dict") {
