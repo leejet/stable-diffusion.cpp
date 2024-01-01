@@ -86,7 +86,6 @@ const char* unused_tensors[] = {
     "model_ema.decay",
     "model_ema.num_updates",
     "model_ema.diffusion_model",
-    "control_model",
     "embedding_manager",
     "denoiser.sigmas",
 };
@@ -373,6 +372,11 @@ std::string convert_tensor_name(const std::string& name) {
         new_name = convert_open_clip_to_hf_clip(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
         new_name = convert_vae_decoder_name(name);
+    } else if (starts_with(name, "control_model.")) { // for controlnet pth models
+        size_t pos = name.find('.');
+        if (pos != std::string::npos) {
+            new_name = name.substr(pos + 1);
+        }
     } else if (starts_with(name, "lora_")) {  // for lora
         size_t pos = name.find('.');
         if (pos != std::string::npos) {
@@ -402,12 +406,6 @@ std::string convert_tensor_name(const std::string& name) {
             }
         } else {
             new_name = name;
-        }
-    } else if (starts_with(name, "control_model.")) {
-        size_t pos = name.find('.');
-        if (pos != std::string::npos) {
-            new_name = name.substr(pos + 1);
-            printf("controlnet tensor: %s\n", new_name.c_str());
         }
     } else {
         new_name = name;
