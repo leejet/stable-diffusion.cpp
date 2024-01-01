@@ -560,6 +560,7 @@ int main(int argc, const char* argv[]) {
 
     if (results == NULL) {
         printf("generate failed\n");
+        free_sd_ctx(sd_ctx);
         return 1;
     }
 
@@ -600,6 +601,8 @@ int main(int argc, const char* argv[]) {
         free(results[i].data);
         results[i].data = NULL;
     }
+    free(results);
+    free_sd_ctx(sd_ctx);
 
     return 0;
 }
