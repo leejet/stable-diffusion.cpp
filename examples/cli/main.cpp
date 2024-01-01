@@ -460,13 +460,13 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
         return;
     }
     if (level <= SD_LOG_INFO) {
-        fprintf(stdout, log);
+        fputs(log, stdout);
         fflush(stdout);
     } else {
-        fprintf(stderr, log);
+        fputs(log, stderr);
         fflush(stderr);
     }
-};
+}
 
 int main(int argc, const char* argv[]) {
     SDParams params;
