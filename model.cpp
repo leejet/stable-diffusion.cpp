@@ -1418,6 +1418,10 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
             continue;
         }
 
+        if (pair.first.find("alphas_cumprod") != std::string::npos) {
+            continue;
+        }
+
         if (tensor_names_in_file.find(pair.first) == tensor_names_in_file.end()) {
             LOG_ERROR("tensor '%s' not in model file", pair.first.c_str());
             some_tensor_not_init = true;
