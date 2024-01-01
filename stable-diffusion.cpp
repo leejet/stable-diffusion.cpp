@@ -101,6 +101,7 @@ public:
     }
 
     ~StableDiffusionGGML() {
+        ggml_backend_free(backend);
     }
 
     bool load_from_file(const std::string& model_path,
