@@ -968,6 +968,7 @@ struct PickleTensorReader {
     }
 
     void read_string(const std::string& str, struct zip_t* zip, std::string dir) {
+        printf("%s\n", str.c_str());
         if (str == "storage") {
             read_global_type = true;
         } else if (str != "state_dict") {
