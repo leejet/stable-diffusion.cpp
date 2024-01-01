@@ -403,10 +403,11 @@ std::string convert_tensor_name(const std::string& name) {
         } else {
             new_name = name;
         }
-    } else if (starts_with(name, "control_model")) {
+    } else if (starts_with(name, "control_model.")) {
         size_t pos = name.find('.');
         if (pos != std::string::npos) {
             new_name = name.substr(pos + 1);
+            printf("controlnet tensor: %s\n", new_name.c_str());
         }
     } else {
         new_name = name;
