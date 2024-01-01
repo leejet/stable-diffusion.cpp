@@ -2828,6 +2828,7 @@ struct UNetModel {
         struct ggml_tensor* t_emb_t     = NULL;
         struct ggml_tensor* y_t         = NULL;
         struct ggml_tensor* control_strength = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+        std::vector<struct ggml_tensor*> control_t;
 
         // it's performing a compute, check if backend isn't cpu
         if (!ggml_backend_is_cpu(backend)) {
@@ -2871,12 +2872,27 @@ struct UNetModel {
             y_t         = y;
         }
 
+        // offload all controls tensors to gpu
+        if(control.size() > 0 && !ggml_backend_is_cpu(backend) && control[0]->backend != GGML_BACKEND_GPU) {
+            for(int i = 0; i < control.size(); i++) {
+                ggml_tensor* cntl_t = ggml_dup_tensor(ctx0, control[i]);
+                control_t.push_back(cntl_t);
+                ggml_allocr_alloc(compute_alloc, cntl_t);
+                if(!ggml_allocr_is_measure(compute_alloc)) {
+                    ggml_backend_tensor_copy(control[i], control_t[i]);
+                    ggml_backend_synchronize(backend);
+                }
+            }
+        } else {
+            control_t = control;
+        }
+
         ggml_allocr_alloc(compute_alloc, control_strength);
         if(!ggml_allocr_is_measure(compute_alloc)) {
             ggml_backend_tensor_set(control_strength, &control_net_strength, 0, sizeof(float));
         }
 
-        struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, control, control_strength, t_emb_t, y_t);
+        struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, control_t, control_strength, t_emb_t, y_t);
 
         ggml_build_forward_expand(gf, out);
         ggml_free(ctx0);
@@ -5345,7 +5361,7 @@ struct ControlNet {
         ggml_allocr_free(alloc);
     }
 
-    bool load_from_file(const std::string& file_path, ggml_backend_t backend, ggml_type wtype__) {
+    bool load_from_file(const std::string& file_path, ggml_backend_t backend_, ggml_type wtype_) {
         LOG_INFO("loading control net from '%s'", file_path.c_str());
 
         std::map<std::string, ggml_tensor*> control_tensors;
@@ -5356,7 +5372,7 @@ struct ControlNet {
             return false;
         }
 
-        if (!init(backend, wtype__)) {
+        if (!init(backend_, wtype_)) {
             return false;
         }
 
@@ -6094,7 +6110,8 @@ public:
                         const std::string control_net_path,
                         ggml_type wtype,
                         Schedule schedule,
-                        int clip_skip) {
+                        int clip_skip,
+                        bool control_net_cpu) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
@@ -6364,7 +6381,14 @@ public:
         }
 
         if(control_net_path.size() > 0) {
-            return control_net.load_from_file(control_net_path, backend, GGML_TYPE_F16 /* just f16 controlnet models */);
+            ggml_backend_t cn_backend = NULL;
+            if(control_net_cpu && !ggml_backend_is_cpu(backend)) {
+                LOG_DEBUG("ControlNet: Using CPU backend");
+                cn_backend = ggml_backend_cpu_init();
+            } else {
+                cn_backend = backend;
+            }
+            return control_net.load_from_file(control_net_path, cn_backend, GGML_TYPE_F16 /* just f16 controlnet models */);
         }
         return true;
     }
@@ -7205,8 +7229,9 @@ bool StableDiffusion::load_from_file(const std::string& model_path,
                                      const std::string control_net_path,
                                      ggml_type wtype,
                                      Schedule s,
-                                     int clip_skip) {
-    return sd->load_from_file(model_path, vae_path, control_net_path, wtype, s, clip_skip);
+                                     int clip_skip,
+                                     bool control_net_cpu) {
+    return sd->load_from_file(model_path, vae_path, control_net_path, wtype, s, clip_skip, control_net_cpu);
 }
 
 std::vector<uint8_t*> StableDiffusion::txt2img(std::string prompt,

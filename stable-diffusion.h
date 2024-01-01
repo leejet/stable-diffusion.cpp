@@ -53,7 +53,8 @@ public:
                         const std::string control_net_path,
                         ggml_type wtype,
                         Schedule d = DEFAULT,
-                        int clip_skip = -1);
+                        int clip_skip = -1,
+                        bool control_net_cpu = false);
 
     std::vector<uint8_t*> txt2img(
         std::string prompt,

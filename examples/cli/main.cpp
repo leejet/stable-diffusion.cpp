@@ -84,6 +84,7 @@ struct SDParams {
     int64_t seed               = 42;
     bool verbose               = false;
     bool vae_tiling            = false;
+    bool control_net_cpu       = false;
 };
 
 void print_params(SDParams params) {
@@ -150,6 +151,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
+    printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -318,6 +320,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.clip_skip = std::stoi(argv[i]);
         } else if (arg == "--vae-tiling") {
             params.vae_tiling = true;
+        } else if (arg == "--control-net-cpu") {
+            params.control_net_cpu = true;
         } else if (arg == "-b" || arg == "--batch-count") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -508,7 +512,7 @@ int main(int argc, const char* argv[]) {
 
     StableDiffusion sd(params.n_threads, vae_decode_only, params.taesd_path, params.esrgan_path, true, params.vae_tiling, params.lora_model_dir, params.rng_type);
 
-    if (!sd.load_from_file(params.model_path, params.vae_path, params.controlnet_path, params.wtype, params.schedule, params.clip_skip)) {
+    if (!sd.load_from_file(params.model_path, params.vae_path, params.controlnet_path, params.wtype, params.schedule, params.clip_skip, params.control_net_cpu)) {
         return 1;
     }
 
