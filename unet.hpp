@@ -900,6 +900,8 @@ struct UNetModel : public GGMLModule {
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* timesteps,
                                 struct ggml_tensor* context,
+                                std::vector<struct ggml_tensor*> control,
+                                struct ggml_tensor* control_strength,
                                 struct ggml_tensor* t_emb = NULL,
                                 struct ggml_tensor* y     = NULL) {
         // x: [N, in_channels, h, w]
@@ -957,11 +959,23 @@ struct UNetModel : public GGMLModule {
         h = middle_block_1.forward(ctx0, h, context);  // [N, 4*model_channels, h/8, w/8]
         h = middle_block_2.forward(ctx0, h, emb);      // [N, 4*model_channels, h/8, w/8]
 
+        if(control.size() > 0) {
+            auto cs = ggml_scale_inplace(ctx0, control[control.size() - 1], control_strength);
+            h = ggml_add(ctx0, h, cs); // middle control
+        }
+
+        int control_offset = control.size() - 2;
         // output_blocks
         for (int i = (int)len_mults - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
                 auto h_skip = hs.back();
                 hs.pop_back();
+
+                if(control.size() > 0) {
+                    auto cs = ggml_scale_inplace(ctx0,  control[control_offset], control_strength);
+                    h_skip = ggml_add(ctx0, h_skip, cs); // control net condition
+                    control_offset--;
+                }
 
                 h = ggml_concat(ctx0, h, h_skip);
                 h = output_res_blocks[i][j].forward(ctx0, h, emb);
@@ -991,8 +1005,10 @@ struct UNetModel : public GGMLModule {
     struct ggml_cgraph* build_graph(struct ggml_tensor* x,
                                     struct ggml_tensor* timesteps,
                                     struct ggml_tensor* context,
+                                    std::vector<struct ggml_tensor*> control,
                                     struct ggml_tensor* t_emb = NULL,
-                                    struct ggml_tensor* y     = NULL) {
+                                    struct ggml_tensor* y     = NULL,
+                                    float control_net_strength = 1.0) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
         static size_t buf_size = ggml_tensor_overhead() * UNET_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
@@ -1014,6 +1030,8 @@ struct UNetModel : public GGMLModule {
         struct ggml_tensor* context_t   = NULL;
         struct ggml_tensor* t_emb_t     = NULL;
         struct ggml_tensor* y_t         = NULL;
+        struct ggml_tensor* control_strength = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+        std::vector<struct ggml_tensor*> control_t;
 
         // it's performing a compute, check if backend isn't cpu
         if (!ggml_backend_is_cpu(backend)) {
@@ -1057,7 +1075,27 @@ struct UNetModel : public GGMLModule {
             y_t         = y;
         }
 
-        struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, t_emb_t, y_t);
+        // offload all controls tensors to gpu
+        if(control.size() > 0 && !ggml_backend_is_cpu(backend) && control[0]->backend != GGML_BACKEND_GPU) {
+            for(int i = 0; i < control.size(); i++) {
+                ggml_tensor* cntl_t = ggml_dup_tensor(ctx0, control[i]);
+                control_t.push_back(cntl_t);
+                ggml_allocr_alloc(compute_allocr, cntl_t);
+                if(!ggml_allocr_is_measure(compute_allocr)) {
+                    ggml_backend_tensor_copy(control[i], control_t[i]);
+                    ggml_backend_synchronize(backend);
+                }
+            }
+        } else {
+            control_t = control;
+        }
+
+        ggml_allocr_alloc(compute_allocr, control_strength);
+        if(!ggml_allocr_is_measure(compute_allocr)) {
+            ggml_backend_tensor_set(control_strength, &control_net_strength, 0, sizeof(float));
+        }
+
+        struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, control_t, control_strength, t_emb_t, y_t);
 
         ggml_build_forward_expand(gf, out);
         ggml_free(ctx0);
@@ -1067,10 +1105,12 @@ struct UNetModel : public GGMLModule {
 
     void alloc_compute_buffer(struct ggml_tensor* x,
                               struct ggml_tensor* context,
+                              std::vector<struct ggml_tensor*> control,
                               struct ggml_tensor* t_emb = NULL,
-                              struct ggml_tensor* y     = NULL) {
+                              struct ggml_tensor* y     = NULL,
+                              float control_net_strength = 1.0) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(x, NULL, context, t_emb, y);
+            return build_graph(x, NULL, context, control, t_emb, y, control_net_strength);
         };
         GGMLModule::alloc_compute_buffer(get_graph);
     }
@@ -1080,10 +1120,12 @@ struct UNetModel : public GGMLModule {
                  struct ggml_tensor* x,
                  struct ggml_tensor* timesteps,
                  struct ggml_tensor* context,
+                 std::vector<struct ggml_tensor*> control,
+                 float control_net_strength,
                  struct ggml_tensor* t_emb = NULL,
                  struct ggml_tensor* y     = NULL) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(x, timesteps, context, t_emb, y);
+            return build_graph(x, NULL, context, control, t_emb, y, control_net_strength);
         };
 
         GGMLModule::compute(get_graph, n_threads, work_latent);

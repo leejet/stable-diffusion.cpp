@@ -544,7 +544,7 @@ struct GGMLModule {
     bool alloc_params_buffer(ggml_backend_t backend_, ggml_type wtype_ = GGML_TYPE_F32) {
         backend            = backend_;
         wtype              = wtype_;
-        params_buffer_size = 10 * 1024 * 1024;  // 10 MB, for padding
+        params_buffer_size = 4 * 1024 * 1024;  // 10 MB, for padding
         params_buffer_size += calculate_mem_size();
         size_t num_tensors = get_num_tensors();
 

@@ -538,6 +538,7 @@ int main(int argc, const char* argv[]) {
     sd_ctx_t* sd_ctx = new_sd_ctx(params.model_path.c_str(),
                                   params.vae_path.c_str(),
                                   params.taesd_path.c_str(),
+                                  params.controlnet_path.c_str(),
                                   params.lora_model_dir.c_str(),
                                   vae_decode_only,
                                   params.vae_tiling,
@@ -545,7 +546,8 @@ int main(int argc, const char* argv[]) {
                                   params.n_threads,
                                   params.wtype,
                                   params.rng_type,
-                                  params.schedule);
+                                  params.schedule,
+                                  params.control_net_cpu);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
@@ -554,6 +556,7 @@ int main(int argc, const char* argv[]) {
 
     sd_image_t* results;
     if (params.mode == TXT2IMG) {
+        sd_image_t* control_image = NULL;
         if(params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
             int c = 0;
             input_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
@@ -561,6 +564,10 @@ int main(int argc, const char* argv[]) {
                 fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
                 return 1;
             }
+             control_image = new sd_image_t{(uint32_t)params.width,
+                                            (uint32_t)params.height,
+                                            3,
+                                            input_image_buffer};
         }
         results = txt2img(sd_ctx,
                           params.prompt.c_str(),
@@ -573,8 +580,8 @@ int main(int argc, const char* argv[]) {
                           params.sample_steps,
                           params.seed,
                           params.batch_count,
-                             input_image_buffer,
-                             params.control_strength);
+                          control_image,
+                          params.control_strength);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,

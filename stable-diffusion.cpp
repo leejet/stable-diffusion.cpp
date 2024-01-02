@@ -8,6 +8,7 @@
 
 #include "clip.hpp"
 #include "denoiser.hpp"
+#include "control.hpp"
 #include "esrgan.hpp"
 #include "lora.hpp"
 #include "tae.hpp"
@@ -80,6 +81,8 @@ public:
     TinyAutoEncoder tae_first_stage;
     std::string taesd_path;
 
+    ControlNet control_net;
+
     StableDiffusionGGML() = default;
 
     StableDiffusionGGML(int n_threads,
@@ -110,8 +113,7 @@ public:
                         const std::string& taesd_path,
                         bool vae_tiling,
                         ggml_type wtype,
-                        Schedule schedule,
-                        int clip_skip,
+                        schedule_t schedule,
                         bool control_net_cpu) {
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
@@ -338,14 +340,13 @@ public:
         struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);                                     // [N, ]
         struct ggml_tensor* t_emb     = new_timestep_embedding(work_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
 
-        diffusion_model.begin(x_t, c, std::vector<struct ggml_tensor*>(), t_emb);
-
         int64_t t0 = ggml_time_ms();
         ggml_set_f32(timesteps, 999);
         set_timestep_embedding(timesteps, t_emb, diffusion_model.model_channels);
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model.alloc_compute_buffer(x_t, c, t_emb);
-        diffusion_model.compute(out, n_threads, x_t, NULL, c, t_emb);
+        std::vector<struct ggml_tensor*> controls;
+        diffusion_model.alloc_compute_buffer(x_t, c, controls, t_emb);
+        diffusion_model.compute(out, n_threads, x_t, NULL, c, controls, 1.0f, t_emb);
         diffusion_model.free_compute_buffer();
 
         double result = 0.f;
@@ -528,7 +529,7 @@ public:
                         ggml_tensor* uc_vector,
                         ggml_tensor* control_hint,
                         float cfg_scale,
-                        SampleMethod method,
+                        sample_method_t method,
                         const std::vector<float>& sigmas,
                         float control_strength) {
         size_t steps = sigmas.size() - 1;
@@ -542,10 +543,10 @@ public:
         struct ggml_tensor* t_emb        = new_timestep_embedding(work_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
 
         if(control_hint != NULL) {
-            control_net.begin(noised_input, control_hint, c, t_emb);
+            control_net.alloc_compute_buffer(noised_input, control_hint, c, t_emb);
         }
 
-        diffusion_model.begin(noised_input, c, control_net.controls, t_emb, c_vector);
+        diffusion_model.alloc_compute_buffer(noised_input, c, control_net.controls, t_emb, c_vector);
 
         bool has_unconditioned = cfg_scale != 1.0 && uc != NULL;
 
@@ -1127,6 +1128,7 @@ struct sd_ctx_t {
 sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      const char* vae_path_c_str,
                      const char* taesd_path_c_str,
+                     const char* control_net_path_c_str,
                      const char* lora_model_dir_c_str,
                      bool vae_decode_only,
                      bool vae_tiling,
@@ -1134,7 +1136,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      int n_threads,
                      enum sd_type_t wtype,
                      enum rng_type_t rng_type,
-                     enum schedule_t s) {
+                     enum schedule_t s,
+                     bool keep_control_net_cpu) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == NULL) {
         return NULL;
@@ -1142,6 +1145,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
     std::string model_path(model_path_c_str);
     std::string vae_path(vae_path_c_str);
     std::string taesd_path(taesd_path_c_str);
+    std::string control_net_path(control_net_path_c_str);
     std::string lora_model_dir(lora_model_dir_c_str);
 
     sd_ctx->sd = new StableDiffusionGGML(n_threads,
@@ -1155,10 +1159,12 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
 
     if (!sd_ctx->sd->load_from_file(model_path,
                                     vae_path,
+                                    control_net_path,
                                     taesd_path,
                                     vae_tiling,
                                     (ggml_type)wtype,
-                                    s)) {
+                                    s,
+                                    keep_control_net_cpu)) {
         delete sd_ctx->sd;
         sd_ctx->sd = NULL;
         free(sd_ctx);
@@ -1185,7 +1191,9 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     enum sample_method_t sample_method,
                     int sample_steps,
                     int64_t seed,
-                    int batch_count) {
+                    int batch_count,
+                    const sd_image_t* control_cond,
+                    float control_strength) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1256,13 +1264,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     struct ggml_tensor* image_hint = NULL;
     if(control_cond != NULL) {
         image_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-        sd_image_to_tensor(control_cond, image_hint);
-    }
-
-    struct ggml_tensor* image_hint = NULL;
-    if(control_cond != NULL) {
-        image_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-        sd_image_to_tensor(control_cond, image_hint);
+        sd_image_to_tensor(control_cond->data, image_hint);
     }
 
     std::vector<struct ggml_tensor*> final_latents;  // collect latents to decode
@@ -1281,7 +1283,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         std::vector<float> sigmas = sd_ctx->sd->denoiser->schedule->get_sigmas(sample_steps);
 
-        struct ggml_tensor* x_0 = sd->sample(work_ctx, x_t, NULL, c, c_vector, uc, uc_vector, image_hint, cfg_scale, sample_method, sigmas, control_strength);
+        struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, x_t, NULL, c, c_vector, uc, uc_vector, image_hint, cfg_scale, sample_method, sigmas, control_strength);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -1434,8 +1436,8 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
 
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
-    struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, init_latent, noise, c, c_vector, uc, uc_vector,
-                                                 cfg_scale, sample_method, sigma_sched);
+    struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, init_latent, noise, c, c_vector, uc,
+                                    uc_vector, NULL, cfg_scale, sample_method, sigma_sched, 1.0f);
     // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
     // print_ggml_tensor(x_0);
     int64_t t3 = ggml_time_ms();
