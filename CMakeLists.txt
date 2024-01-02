@@ -51,10 +51,15 @@ if(SD_FLASH_ATTN)
     add_definitions(-DSD_USE_FLASH_ATTENTION)
 endif()
 
+set(SD_LIB stable-diffusion)
+
+add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp model.h model.cpp util.h util.cpp upscaler.cpp
+             ggml_extend.hpp clip.hpp common.hpp unet.hpp tae.hpp esrgan.hpp lora.hpp denoiser.hpp rng.hpp rng_philox.hpp)
+
 if(BUILD_SHARED_LIBS)
     message("Build shared library")
     add_definitions(-DSD_BUILD_SHARED_LIB)
-    add_definitions(-DSD_BUILD_DLL)
+    target_compile_definitions(${SD_LIB} PRIVATE -DSD_BUILD_DLL)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
     message("Build static library")
@@ -67,10 +72,6 @@ add_subdirectory(ggml)
 
 add_subdirectory(thirdparty)
 
-set(SD_LIB stable-diffusion)
-
-add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp model.h model.cpp util.h util.cpp upscaler.cpp
-             ggml_extend.hpp clip.hpp common.hpp unet.hpp tae.hpp esrgan.hpp lora.hpp denoiser.hpp rng.hpp rng_philox.hpp)
 target_link_libraries(${SD_LIB} PUBLIC ggml zip)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
 target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
