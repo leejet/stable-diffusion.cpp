@@ -1054,16 +1054,16 @@ struct UNetModel : public GGMLModule {
             }
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_allocr)) {
-                ggml_backend_tensor_set(x_t, x->data, 0, ggml_nbytes(x));
-                ggml_backend_tensor_set(context_t, context->data, 0, ggml_nbytes(context));
+                ggml_backend_tensor_set_and_sync(backend, x_t, x->data, 0, ggml_nbytes(x));
+                ggml_backend_tensor_set_and_sync(backend, context_t, context->data, 0, ggml_nbytes(context));
                 if (timesteps_t != NULL) {
-                    ggml_backend_tensor_set(timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps));
+                    ggml_backend_tensor_set_and_sync(backend, timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps));
                 }
                 if (t_emb_t != NULL) {
-                    ggml_backend_tensor_set(t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
+                    ggml_backend_tensor_set_and_sync(backend, t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
                 }
                 if (y != NULL) {
-                    ggml_backend_tensor_set(y_t, y->data, 0, ggml_nbytes(y));
+                    ggml_backend_tensor_set_and_sync(backend, y_t, y->data, 0, ggml_nbytes(y));
                 }
             }
         } else {
@@ -1092,7 +1092,7 @@ struct UNetModel : public GGMLModule {
 
         ggml_allocr_alloc(compute_allocr, control_strength);
         if(!ggml_allocr_is_measure(compute_allocr)) {
-            ggml_backend_tensor_set(control_strength, &control_net_strength, 0, sizeof(float));
+            ggml_backend_tensor_set_and_sync(backend, control_strength, &control_net_strength, 0, sizeof(float));
         }
 
         struct ggml_tensor* out = forward(ctx0, x_t, timesteps_t, context_t, control_t, control_strength, t_emb_t, y_t);

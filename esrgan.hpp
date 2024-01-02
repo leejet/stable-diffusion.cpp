@@ -391,7 +391,7 @@ struct ESRGAN : public GGMLModule {
 
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_allocr)) {
-                ggml_backend_tensor_set(x_, x->data, 0, ggml_nbytes(x));
+                ggml_backend_tensor_set_and_sync(backend, x_, x->data, 0, ggml_nbytes(x));
             }
         } else {
             x_ = x;

@@ -999,7 +999,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         ggml_allocr_alloc(allocr, input_ids);
 
         if (!ggml_allocr_is_measure(allocr)) {
-            ggml_backend_tensor_set(input_ids, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids));
+            ggml_backend_tensor_set_and_sync(backend, input_ids, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids));
         }
 
         struct ggml_tensor* input_ids2 = NULL;
@@ -1021,7 +1021,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             // printf("\n");
 
             if (!ggml_allocr_is_measure(allocr)) {
-                ggml_backend_tensor_set(input_ids2, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids2));
+                ggml_backend_tensor_set_and_sync(backend, input_ids2, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids2));
             }
         }
 

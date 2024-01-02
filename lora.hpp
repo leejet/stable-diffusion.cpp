@@ -127,7 +127,7 @@ struct LoraModel : public GGMLModule {
 
             ggml_allocr_alloc(compute_allocr, lora_scale);
             if (!ggml_allocr_is_measure(compute_allocr)) {
-                ggml_backend_tensor_set(lora_scale, &scale_value, 0, ggml_nbytes(lora_scale));
+                ggml_backend_tensor_set_and_sync(backend, lora_scale, &scale_value, 0, ggml_nbytes(lora_scale));
             }
 
             // flat lora tensors to multiply it

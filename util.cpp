@@ -1,5 +1,5 @@
 #include "util.h"
-
+#include <algorithm>
 #include <stdarg.h>
 #include <codecvt>
 #include <fstream>
