@@ -59,6 +59,7 @@ struct SDParams {
     std::string taesd_path;
     std::string esrgan_path;
     std::string controlnet_path;
+    std::string embeddings_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
@@ -136,6 +137,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
+    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
@@ -225,7 +227,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.esrgan_path = argv[i];
-        } else if (arg == "--type") {
+        } else if (arg == "--embd-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.embeddings_path = argv[i];
+        }  else if (arg == "--type") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
@@ -540,6 +548,7 @@ int main(int argc, const char* argv[]) {
                                   params.taesd_path.c_str(),
                                   params.controlnet_path.c_str(),
                                   params.lora_model_dir.c_str(),
+                                  params.embeddings_path.c_str(),
                                   vae_decode_only,
                                   params.vae_tiling,
                                   true,

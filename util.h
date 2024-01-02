@@ -28,6 +28,8 @@ void pretty_progress(int step, int steps, float time);
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 
+std::string trim(const std::string& s);
+
 #define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)

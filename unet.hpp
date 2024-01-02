@@ -1125,7 +1125,7 @@ struct UNetModel : public GGMLModule {
                  struct ggml_tensor* t_emb = NULL,
                  struct ggml_tensor* y     = NULL) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(x, NULL, context, control, t_emb, y, control_net_strength);
+            return build_graph(x, timesteps, context, control, t_emb, y, control_net_strength);
         };
 
         GGMLModule::compute(get_graph, n_threads, work_latent);

@@ -110,6 +110,7 @@ public:
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
                         const std::string control_net_path,
+                        const std::string embeddings_path,
                         const std::string& taesd_path,
                         bool vae_tiling,
                         ggml_type wtype,
@@ -187,6 +188,8 @@ public:
             !diffusion_model.alloc_params_buffer(backend, model_data_type)) {
             return false;
         }
+
+        cond_stage_model.text_model.embd_dir = embeddings_path;
 
         ggml_type vae_type = model_data_type;
         if (version == VERSION_XL) {
@@ -1130,6 +1133,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      const char* taesd_path_c_str,
                      const char* control_net_path_c_str,
                      const char* lora_model_dir_c_str,
+                     const char* embed_dir_c_str,
                      bool vae_decode_only,
                      bool vae_tiling,
                      bool free_params_immediately,
@@ -1146,6 +1150,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
     std::string vae_path(vae_path_c_str);
     std::string taesd_path(taesd_path_c_str);
     std::string control_net_path(control_net_path_c_str);
+    std::string embd_path(embed_dir_c_str);
     std::string lora_model_dir(lora_model_dir_c_str);
 
     sd_ctx->sd = new StableDiffusionGGML(n_threads,
@@ -1160,6 +1165,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
     if (!sd_ctx->sd->load_from_file(model_path,
                                     vae_path,
                                     control_net_path,
+                                    embd_path,
                                     taesd_path,
                                     vae_tiling,
                                     (ggml_type)wtype,
