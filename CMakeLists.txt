@@ -51,6 +51,15 @@ if(SD_FLASH_ATTN)
     add_definitions(-DSD_USE_FLASH_ATTENTION)
 endif()
 
+if(BUILD_SHARED_LIBS)
+    message("Build shared library")
+    add_definitions(-DSD_BUILD_SHARED_LIB)
+    add_definitions(-DSD_BUILD_DLL)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+else()
+    message("Build static library")
+endif()
+
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 # deps
