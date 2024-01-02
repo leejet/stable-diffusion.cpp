@@ -107,8 +107,13 @@ void print_params(SDParams params) {
     printf("    vae_path:          %s\n", params.vae_path.c_str());
     printf("    taesd_path:        %s\n", params.taesd_path.c_str());
     printf("    esrgan_path:       %s\n", params.esrgan_path.c_str());
+    printf("    controlnet_path:   %s\n", params.controlnet_path.c_str());
+    printf("    embeddings_path:   %s\n", params.embeddings_path.c_str());
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
+    printf("    control_image:     %s\n", params.control_image_path.c_str());
+    printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
+    printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
