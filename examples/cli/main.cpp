@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "stable-diffusion.h"
+#include "preprocessing.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -83,7 +84,8 @@ struct SDParams {
     int64_t seed                  = 42;
     bool verbose                  = false;
     bool vae_tiling               = false;
-    bool control_net_cpu       = false;
+    bool control_net_cpu          = false;
+    bool canny_preprocess         = false;
 };
 
 static std::string sd_basename(const std::string& path) {
@@ -169,6 +171,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
+    printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -345,6 +348,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.vae_tiling = true;
         } else if (arg == "--control-net-cpu") {
             params.control_net_cpu = true;
+        }  else if (arg == "--canny") {
+            params.canny_preprocess = true;
         } else if (arg == "-b" || arg == "--batch-count") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -578,10 +583,14 @@ int main(int argc, const char* argv[]) {
                 fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
                 return 1;
             }
-             control_image = new sd_image_t{(uint32_t)params.width,
+            control_image = new sd_image_t{(uint32_t)params.width,
                                             (uint32_t)params.height,
                                             3,
                                             input_image_buffer};
+            if(params.canny_preprocess)  { // apply preprocessor
+                LOG_INFO("Applying canny preprocessor");
+                control_image->data = preprocess_canny(control_image->data, control_image->width, control_image->height);
+            }
         }
         results = txt2img(sd_ctx,
                           params.prompt.c_str(),

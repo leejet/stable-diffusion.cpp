@@ -219,7 +219,7 @@ __STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                float value = *(image_data + iy * width * channels + ix * channels + k);
+                int value = *(image_data + iy * width * channels + ix * channels + k);
                 ggml_tensor_set_f32(output, value / 255.0f, ix, iy, k);
             }
         }
