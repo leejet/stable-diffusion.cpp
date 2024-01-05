@@ -4,6 +4,8 @@
 #include <codecvt>
 #include <fstream>
 #include <locale>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -17,6 +19,9 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #endif
+
+#include "ggml/ggml.h"
+#include "stable-diffusion.h"
 
 bool ends_with(const std::string& str, const std::string& ending) {
     if (str.length() >= ending.length()) {
@@ -136,7 +141,7 @@ std::u32string unicode_value_to_utf32(int unicode_value) {
     return utf32_string;
 }
 
-std::string basename(const std::string& path) {
+std::string sd_basename(const std::string& path) {
     size_t pos = path.find_last_of('/');
     if (pos != std::string::npos) {
         return path.substr(pos + 1);
@@ -164,40 +169,90 @@ std::string path_join(const std::string& p1, const std::string& p2) {
     return p1 + "/" + p2;
 }
 
-static SDLogLevel log_level = SDLogLevel::INFO;
-
-void set_sd_log_level(SDLogLevel level) {
-    log_level = level;
+void pretty_progress(int step, int steps, float time) {
+    std::string progress = "  |";
+    int max_progress     = 50;
+    int32_t current      = (int32_t)(step * 1.f * max_progress / steps);
+    for (int i = 0; i < 50; i++) {
+        if (i > current) {
+            progress += " ";
+        } else if (i == current && i != max_progress - 1) {
+            progress += ">";
+        } else {
+            progress += "=";
+        }
+    }
+    progress += "|";
+    printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it" : "\r%s %i/%i - %.2fit/s",
+           progress.c_str(), step, steps,
+           time > 1.0f || time == 0 ? time : (1.0f / time));
+    fflush(stdout);  // for linux
+    if (step == steps) {
+        printf("\n");
+    }
 }
 
-void log_printf(SDLogLevel level, const char* file, int line, const char* format, ...) {
-    if (level < log_level) {
-        return;
-    }
+static sd_log_cb_t sd_log_cb = NULL;
+void* sd_log_cb_data         = NULL;
+
+#define LOG_BUFFER_SIZE 1024
+
+void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
     va_list args;
     va_start(args, format);
 
-    if (level == SDLogLevel::DEBUG) {
-        printf("[DEBUG] %s:%-4d - ", basename(file).c_str(), line);
-        vprintf(format, args);
-        printf("\n");
-        fflush(stdout);
-    } else if (level == SDLogLevel::INFO) {
-        printf("[INFO]  %s:%-4d - ", basename(file).c_str(), line);
-        vprintf(format, args);
-        printf("\n");
-        fflush(stdout);
-    } else if (level == SDLogLevel::WARN) {
-        fprintf(stdout, "[WARN]  %s:%-4d - ", basename(file).c_str(), line);
-        vfprintf(stdout, format, args);
-        fprintf(stdout, "\n");
-        fflush(stdout);
-    } else {
-        fprintf(stderr, "[ERROR] %s:%-4d - ", basename(file).c_str(), line);
-        vfprintf(stderr, format, args);
-        fprintf(stderr, "\n");
-        fflush(stderr);
+    const char* level_str = "DEBUG";
+    if (level == SD_LOG_INFO) {
+        level_str = "INFO ";
+    } else if (level == SD_LOG_WARN) {
+        level_str = "WARN ";
+    } else if (level == SD_LOG_ERROR) {
+        level_str = "ERROR";
+    }
+
+    static char log_buffer[LOG_BUFFER_SIZE];
+
+    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "[%s] %s:%-4d - ", level_str, sd_basename(file).c_str(), line);
+
+    if (written >= 0 && written < LOG_BUFFER_SIZE) {
+        vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
+        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - strlen(log_buffer) - 1);
+    }
+
+    if (sd_log_cb) {
+        sd_log_cb(level, log_buffer, sd_log_cb_data);
     }
 
     va_end(args);
+}
+
+void sd_set_log_callback(sd_log_cb_t cb, void* data) {
+    sd_log_cb      = cb;
+    sd_log_cb_data = data;
+}
+
+const char* sd_get_system_info() {
+    static char buffer[1024];
+    std::stringstream ss;
+    ss << "System Info: \n";
+    ss << "    BLAS = " << ggml_cpu_has_blas() << std::endl;
+    ss << "    SSE3 = " << ggml_cpu_has_sse3() << std::endl;
+    ss << "    AVX = " << ggml_cpu_has_avx() << std::endl;
+    ss << "    AVX2 = " << ggml_cpu_has_avx2() << std::endl;
+    ss << "    AVX512 = " << ggml_cpu_has_avx512() << std::endl;
+    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << std::endl;
+    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << std::endl;
+    ss << "    FMA = " << ggml_cpu_has_fma() << std::endl;
+    ss << "    NEON = " << ggml_cpu_has_neon() << std::endl;
+    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << std::endl;
+    ss << "    F16C = " << ggml_cpu_has_f16c() << std::endl;
+    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << std::endl;
+    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << std::endl;
+    ss << "    VSX = " << ggml_cpu_has_vsx() << std::endl;
+    snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
+    return buffer;
+}
+
+const char* sd_type_name(enum sd_type_t type) {
+    return ggml_type_name((ggml_type)type);
 }

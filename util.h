@@ -1,8 +1,10 @@
 #ifndef __UTIL_H__
 #define __UTIL_H__
 
-#include <string>
 #include <cstdint>
+#include <string>
+
+#include "stable-diffusion.h"
 
 bool ends_with(const std::string& str, const std::string& ending);
 bool starts_with(const std::string& str, const std::string& start);
@@ -18,25 +20,16 @@ std::u32string utf8_to_utf32(const std::string& utf8_str);
 std::string utf32_to_utf8(const std::u32string& utf32_str);
 std::u32string unicode_value_to_utf32(int unicode_value);
 
-std::string basename(const std::string& path);
+std::string sd_basename(const std::string& path);
 
 std::string path_join(const std::string& p1, const std::string& p2);
 
-int32_t get_num_physical_cores();
+void pretty_progress(int step, int steps, float time);
 
-enum SDLogLevel {
-    DEBUG,
-    INFO,
-    WARN,
-    ERROR
-};
+void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 
-void set_sd_log_level(SDLogLevel level);
-
-void log_printf(SDLogLevel level, const char* file, int line, const char* format, ...);
-
-#define LOG_DEBUG(format, ...) log_printf(SDLogLevel::DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...) log_printf(SDLogLevel::INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...) log_printf(SDLogLevel::WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) log_printf(SDLogLevel::ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_ERROR(format, ...) log_printf(SD_LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #endif  // __UTIL_H__
