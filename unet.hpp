@@ -589,16 +589,16 @@ struct UNetModel : public GGMLModule {
             }
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_allocr)) {
-                ggml_backend_tensor_set_and_sync(backend, x_t, x->data, 0, ggml_nbytes(x));
-                ggml_backend_tensor_set_and_sync(backend, context_t, context->data, 0, ggml_nbytes(context));
+                ggml_backend_tensor_set(x_t, x->data, 0, ggml_nbytes(x));
+                ggml_backend_tensor_set(context_t, context->data, 0, ggml_nbytes(context));
                 if (timesteps_t != NULL) {
-                    ggml_backend_tensor_set_and_sync(backend, timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps));
+                    ggml_backend_tensor_set(timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps));
                 }
                 if (t_emb_t != NULL) {
-                    ggml_backend_tensor_set_and_sync(backend, t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
+                    ggml_backend_tensor_set(t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
                 }
                 if (y != NULL) {
-                    ggml_backend_tensor_set_and_sync(backend, y_t, y->data, 0, ggml_nbytes(y));
+                    ggml_backend_tensor_set(y_t, y->data, 0, ggml_nbytes(y));
                 }
             }
         } else {

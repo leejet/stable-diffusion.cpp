@@ -153,6 +153,7 @@ struct ControlNet : public GGMLModule {
     std::vector<struct ggml_tensor*> controls; // (12 input block outputs, 1 middle block output) SD 1.5
 
     ControlNet() {
+        name = "controlnet";
         // input_blocks
         std::vector<int> input_block_chans;
         input_block_chans.push_back(model_channels);
@@ -461,6 +462,51 @@ struct ControlNet : public GGMLModule {
         tensors[prefix + "middle_block_out.0.bias"]   = middle_block_out_b;
     }
 
+    struct ggml_cgraph* build_graph_hint(struct ggml_tensor* hint) {
+        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
+        static size_t buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
+        static std::vector<uint8_t> buf(buf_size);
+
+        struct ggml_init_params params = {
+            /*.mem_size   =*/buf_size,
+            /*.mem_buffer =*/buf.data(),
+            /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
+        };
+
+        struct ggml_context* ctx0 = ggml_init(params);
+        struct ggml_cgraph* gf = ggml_new_graph(ctx0);
+        // temporal tensors for transfer tensors from cpu to gpu if needed
+        struct ggml_tensor* hint_t      = NULL;
+        // it's performing a compute, check if backend isn't cpu
+        if (!ggml_backend_is_cpu(backend)) {
+            // pass input tensors to gpu memory
+            hint_t = ggml_dup_tensor(ctx0, hint);
+            ggml_allocr_alloc(compute_allocr, hint_t);
+            // pass data to device backend
+            if (!ggml_allocr_is_measure(compute_allocr)) {
+                ggml_backend_tensor_set(hint_t, hint->data, 0, ggml_nbytes(hint));
+            }
+        } else {
+            // if it's cpu backend just pass the same tensors
+            hint_t      = hint;
+        }
+        struct ggml_tensor* out = input_hint_block.forward(ctx0, hint_t);
+        ggml_build_forward_expand(gf, out);
+        ggml_free(ctx0);
+        return gf;
+    }
+
+    void process_hint(struct ggml_tensor* output, int n_threads, struct ggml_tensor* hint) {
+        // compute buffer size
+        auto get_graph = [&]() -> struct ggml_cgraph* {
+                return build_graph_hint(hint);
+        };
+        GGMLModule::alloc_compute_buffer(get_graph);
+        // perform computation
+        GGMLModule::compute(get_graph, n_threads, output);
+        GGMLModule::free_compute_buffer();
+    }
+
     void forward(struct ggml_cgraph* gf,
                 struct ggml_context* ctx0,
                 struct ggml_tensor* x,
@@ -481,14 +527,12 @@ struct ControlNet : public GGMLModule {
         emb      = ggml_silu_inplace(ctx0, emb);
         emb      = ggml_nn_linear(ctx0, emb, time_embed_2_w, time_embed_2_b);  // [N, time_embed_dim]
 
-        auto guided_hint = input_hint_block.forward(ctx0, hint);
-
         // input_blocks
         int zero_conv_offset = 0;
 
         // input block 0
         struct ggml_tensor* h = ggml_nn_conv_2d(ctx0, x, input_block_0_w, input_block_0_b, 1, 1, 1, 1);  // [N, model_channels, h, w]
-        h = ggml_add(ctx0, h, guided_hint);
+        h = ggml_add(ctx0, h, hint);
 
         auto h_c = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, h_c, controls[zero_conv_offset]));
@@ -573,14 +617,14 @@ struct ControlNet : public GGMLModule {
             }
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_allocr)) {
-                ggml_backend_tensor_set_and_sync(backend, x_t, x->data, 0, ggml_nbytes(x));
-                ggml_backend_tensor_set_and_sync(backend, context_t, context->data, 0, ggml_nbytes(context));
-                ggml_backend_tensor_set_and_sync(backend, hint_t, hint->data, 0, ggml_nbytes(hint));
+                ggml_backend_tensor_set(x_t, x->data, 0, ggml_nbytes(x));
+                ggml_backend_tensor_set(context_t, context->data, 0, ggml_nbytes(context));
+                ggml_backend_tensor_set(hint_t, hint->data, 0, ggml_nbytes(hint));
                 if (timesteps_t != NULL) {
-                    ggml_backend_tensor_set_and_sync(backend, timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps));
+                    ggml_backend_tensor_set(timesteps_t, timesteps->data, 0, ggml_nbytes(timesteps));
                 }
                 if (t_emb_t != NULL) {
-                    ggml_backend_tensor_set_and_sync(backend, t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
+                    ggml_backend_tensor_set(t_emb_t, t_emb->data, 0, ggml_nbytes(t_emb));
                 }
             }
         } else {
@@ -605,7 +649,7 @@ struct ControlNet : public GGMLModule {
                               struct ggml_tensor* t_emb = NULL) {
         {
             struct ggml_init_params params;
-            params.mem_size   = static_cast<size_t>(13 * ggml_tensor_overhead()) + 256;
+            params.mem_size   = static_cast<size_t>(14 * ggml_tensor_overhead()) + 256;
             params.mem_buffer = NULL;
             params.no_alloc   = true;
             control_ctx = ggml_init(params);
@@ -638,6 +682,13 @@ struct ControlNet : public GGMLModule {
             return build_graph(x, hint, NULL, context, t_emb);
         };
         GGMLModule::compute(get_graph, n_threads, NULL);
+    }
+
+    void end() {
+        GGMLModule::free_compute_buffer();
+        ggml_free(control_ctx);
+        ggml_backend_buffer_free(control_buffer);
+        control_buffer = NULL;
     }
 };
 

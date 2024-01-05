@@ -544,9 +544,11 @@ public:
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x_t);
         struct ggml_tensor* timesteps    = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);                                     // [N, ]
         struct ggml_tensor* t_emb        = new_timestep_embedding(work_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
-
+        struct ggml_tensor* guided_hint   = NULL;
         if(control_hint != NULL) {
-            control_net.alloc_compute_buffer(noised_input, control_hint, c, t_emb);
+            guided_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, noised_input->ne[0], noised_input->ne[1], diffusion_model.model_channels, 1);
+            control_net.process_hint(guided_hint, n_threads, control_hint);
+            control_net.alloc_compute_buffer(noised_input, guided_hint, c, t_emb);
         }
 
         diffusion_model.alloc_compute_buffer(noised_input, c, control_net.controls, t_emb, c_vector);
@@ -600,7 +602,7 @@ public:
 
             // cond
             if(control_hint != NULL) {
-                control_net.compute(n_threads, noised_input, control_hint, c, t_emb);
+                control_net.compute(n_threads, noised_input, guided_hint, c, t_emb);
             }
             diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
 
@@ -608,7 +610,7 @@ public:
             if (has_unconditioned) {
                 // uncond
                 if(control_hint != NULL) {
-                    control_net.compute(n_threads, noised_input, control_hint, uc, t_emb);
+                    control_net.compute(n_threads, noised_input, guided_hint, uc, t_emb);
                 }
 
                 diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, uc, control_net.controls, control_strength, t_emb, uc_vector);

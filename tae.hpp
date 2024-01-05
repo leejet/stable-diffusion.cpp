@@ -549,7 +549,7 @@ struct TinyAutoEncoder : public GGMLModule {
 
             // pass data to device backend
             if (!ggml_allocr_is_measure(compute_allocr)) {
-                ggml_backend_tensor_set_and_sync(backend, z_, z->data, 0, ggml_nbytes(z));
+                ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
             }
         } else {
             z_ = z;

@@ -992,7 +992,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         ggml_allocr_alloc(allocr, input_ids);
 
         if (!ggml_allocr_is_measure(allocr)) {
-            ggml_backend_tensor_set_and_sync(backend, input_ids, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids));
+            ggml_backend_tensor_set(input_ids, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids));
         }
 
         struct ggml_tensor* input_ids2 = NULL;
@@ -1014,7 +1014,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             // printf("\n");
 
             if (!ggml_allocr_is_measure(allocr)) {
-                ggml_backend_tensor_set_and_sync(backend, input_ids2, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids2));
+                ggml_backend_tensor_set(input_ids2, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids2));
             }
         }
 
@@ -1027,12 +1027,12 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
                 // really bad, there is memory inflexibility (this is for host<->device memory conflicts)
                 void* freeze_data = malloc(ggml_nbytes(text_model.token_embed_weight));
                 ggml_backend_tensor_get_and_sync(backend, text_model.token_embed_weight, freeze_data, 0, ggml_nbytes(text_model.token_embed_weight));
-                ggml_backend_tensor_set_and_sync(backend, embeddings, freeze_data, 0, ggml_nbytes(text_model.token_embed_weight));
+                ggml_backend_tensor_set(embeddings, freeze_data, 0, ggml_nbytes(text_model.token_embed_weight));
                 free(freeze_data);
                 // concatenate custom embeddings
                 void* custom_data = malloc(ggml_nbytes(text_model.token_embed_custom));
                 ggml_backend_tensor_get_and_sync(backend, text_model.token_embed_custom, custom_data, 0, ggml_nbytes(text_model.token_embed_custom));
-                ggml_backend_tensor_set_and_sync(backend, embeddings, custom_data, ggml_nbytes(text_model.token_embed_weight), text_model.num_custom_embeddings * text_model.hidden_size * ggml_type_size(wtype));
+                ggml_backend_tensor_set(embeddings, custom_data, ggml_nbytes(text_model.token_embed_weight), text_model.num_custom_embeddings * text_model.hidden_size * ggml_type_size(wtype));
                 free(custom_data);
             }
         }
