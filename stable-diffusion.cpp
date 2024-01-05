@@ -1024,6 +1024,7 @@ public:
                 LOG_ERROR("Attempting to sample with nonexisting sample method %i", method);
                 abort();
         }
+        control_net.end();
         diffusion_model.free_compute_buffer();
         return x;
     }
