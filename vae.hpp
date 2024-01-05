@@ -118,8 +118,6 @@ struct AttnBlock {
     struct ggml_tensor* proj_out_w;  // [in_channels, in_channels, 1, 1]
     struct ggml_tensor* proj_out_b;  // [in_channels,]
 
-    struct ggml_tensor* attn_scale;
-
     size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += 6 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // norm_w/norm_b/q_b/k_v/v_b/proj_out_b
@@ -140,11 +138,6 @@ struct AttnBlock {
 
         proj_out_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
         proj_out_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
-
-        attn_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-        ggml_allocr_alloc(alloc, attn_scale);
-        float scale = 1.0f / sqrt((float)in_channels);
-        ggml_backend_tensor_set(attn_scale, &scale, 0, sizeof(scale));
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -181,7 +174,7 @@ struct AttnBlock {
         k = ggml_reshape_3d(ctx, k, c, h * w, n);              // [N, h * w, in_channels]
 
         auto w_ = ggml_mul_mat(ctx, k, q);  // [N, h * w, h * w]
-        w_      = ggml_scale_inplace(ctx, w_, attn_scale);
+        w_      = ggml_scale_inplace(ctx, w_, 1.0f / sqrt((float)in_channels));
         w_      = ggml_soft_max_inplace(ctx, w_);
 
         v  = ggml_reshape_3d(ctx, v, h * w, c, n);               // [N, in_channels, h * w]

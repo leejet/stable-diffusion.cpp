@@ -182,8 +182,6 @@ struct SpatialTransformer {
 
     std::vector<Transformer> transformers;
 
-    struct ggml_tensor* attn_scale;
-
     // proj_out
     struct ggml_tensor* proj_out_w;  // [in_channels, in_channels, 1, 1]
     struct ggml_tensor* proj_out_b;  // [in_channels,]
@@ -202,7 +200,6 @@ struct SpatialTransformer {
         mem_size += 2 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // norm_w/norm_b
         mem_size += 2 * in_channels * in_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // proj_in_w/proj_out_w
         mem_size += 2 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // proj_in_b/proj_out_b
-        mem_size += 1 * ggml_type_sizef(GGML_TYPE_F32);                                      // attn_scale
 
         // transformer
         for (auto& transformer : transformers) {
@@ -225,11 +222,6 @@ struct SpatialTransformer {
 
         proj_out_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, in_channels, in_channels);
         proj_out_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, in_channels);
-
-        attn_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-        ggml_allocr_alloc(alloc, attn_scale);
-        float scale = 1.0f / sqrt((float)d_head);
-        ggml_backend_tensor_set(attn_scale, &scale, 0, sizeof(scale));
 
         // transformer
         for (auto& transformer : transformers) {
@@ -332,7 +324,7 @@ struct SpatialTransformer {
                 x                     = ggml_reshape_2d(ctx, x, c, h * w * n);        // [N * h * w, in_channels]
                 struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn1_q_w, x);  // [N * h * w, in_channels]
 #if !defined(SD_USE_FLASH_ATTENTION) || defined(SD_USE_CUBLAS) || defined(SD_USE_METAL)
-                q = ggml_scale_inplace(ctx, q, attn_scale);
+                q = ggml_scale_inplace(ctx, q, 1.0f / sqrt((float)d_head));
 #endif
                 q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
                 q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
@@ -380,7 +372,7 @@ struct SpatialTransformer {
                 context               = ggml_reshape_2d(ctx, context, context->ne[0], context->ne[1] * context->ne[2]);  // [N * max_position, hidden_size]
                 struct ggml_tensor* q = ggml_mul_mat(ctx, transformer.attn2_q_w, x);                                     // [N * h * w, in_channels]
 #if !defined(SD_USE_FLASH_ATTENTION) || defined(SD_USE_CUBLAS) || defined(SD_USE_METAL)
-                q = ggml_scale_inplace(ctx, q, attn_scale);
+                q = ggml_scale_inplace(ctx, q, 1.0f / sqrt((float)d_head));
 #endif
                 q = ggml_reshape_4d(ctx, q, d_head, n_head, h * w, n);   // [N, h * w, n_head, d_head]
                 q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));    // [N, n_head, h * w, d_head]
