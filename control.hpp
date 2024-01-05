@@ -2,8 +2,10 @@
 #define __CONTROL_HPP__
 
 #include "ggml_extend.hpp"
-#include "unet.hpp"
+#include "common.hpp"
 #include "model.h"
+
+#define CONTROL_NET_GRAPH_SIZE 1536
 
 /*
     =================================== ControlNet ===================================
@@ -531,7 +533,7 @@ struct ControlNet : public GGMLModule {
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* t_emb = NULL) {
         // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
-        static size_t buf_size = ggml_tensor_overhead() * UNET_GRAPH_SIZE + ggml_graph_overhead();
+        static size_t buf_size = ggml_tensor_overhead() * CONTROL_NET_GRAPH_SIZE + ggml_graph_overhead();
         static std::vector<uint8_t> buf(buf_size);
 
         struct ggml_init_params params = {
@@ -543,7 +545,7 @@ struct ControlNet : public GGMLModule {
 
         struct ggml_context* ctx0 = ggml_init(params);
 
-        struct ggml_cgraph* gf = ggml_new_graph_custom(ctx0, UNET_GRAPH_SIZE, false);
+        struct ggml_cgraph* gf = ggml_new_graph_custom(ctx0, CONTROL_NET_GRAPH_SIZE, false);
 
         // temporal tensors for transfer tensors from cpu to gpu if needed
         struct ggml_tensor* x_t         = NULL;
