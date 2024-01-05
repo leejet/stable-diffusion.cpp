@@ -28,6 +28,8 @@ option(SD_CUBLAS                     "sd: cuda backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
 option(SD_FLASH_ATTN                 "sd: use flash attention for x4 less memory usage" OFF)
 option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
+option(SD_HIPBLAS                    "sd: rocm backend" OFF)
+option(SD_FLASH_ATTN            "sd: use flash attention for x4 less memory usage" OFF)
 option(BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
@@ -45,6 +47,17 @@ if(SD_METAL)
     set(GGML_METAL ON)
     add_definitions(-DSD_USE_METAL)
 endif()
+
+if (SD_HIPBLAS)
+    message("Use HIPBLAS as backend stable-diffusion")
+    set(GGML_HIPBLAS ON)
+    add_definitions(-DGGML_USE_HIPBLAS)
+    add_definitions(-DSD_USE_HIPBLAS)
+    add_definitions(-DSD_USE_CUBLAS)
+    if(SD_FAST_SOFTMAX)
+        set(GGML_CUDA_FAST_SOFTMAX ON)
+    endif()
+endif ()
 
 if(SD_FLASH_ATTN)
     message("Use Flash Attention for memory optimization")
@@ -67,6 +80,7 @@ endif()
 
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+
 # deps
 add_subdirectory(ggml)
 
