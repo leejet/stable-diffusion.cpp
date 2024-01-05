@@ -101,6 +101,7 @@ public:
     }
 
     ~StableDiffusionGGML() {
+        ggml_backend_free(backend);
     }
 
     bool load_from_file(const std::string& model_path,
@@ -626,7 +627,7 @@ public:
 
                     // get_ancestral_step
                     float sigma_up   = std::min(sigmas[i + 1],
-                                              std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
+                                                std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
                     float sigma_down = std::sqrt(sigmas[i + 1] * sigmas[i + 1] - sigma_up * sigma_up);
 
                     // Euler method
@@ -802,7 +803,7 @@ public:
 
                     // get_ancestral_step
                     float sigma_up   = std::min(sigmas[i + 1],
-                                              std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
+                                                std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
                     float sigma_down = std::sqrt(sigmas[i + 1] * sigmas[i + 1] - sigma_up * sigma_up);
                     auto t_fn        = [](float sigma) -> float { return -log(sigma); };
                     auto sigma_fn    = [](float t) -> float { return exp(-t); };
