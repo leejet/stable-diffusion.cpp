@@ -112,7 +112,7 @@ public:
                         const std::string control_net_path,
                         const std::string embeddings_path,
                         const std::string& taesd_path,
-                        bool vae_tiling,
+                        bool vae_tiling_,
                         ggml_type wtype,
                         schedule_t schedule,
                         bool control_net_cpu) {
@@ -139,6 +139,8 @@ public:
 #endif
         LOG_INFO("loading model from '%s'", model_path.c_str());
         ModelLoader model_loader;
+
+        vae_tiling = vae_tiling_;
 
         if (!model_loader.init_from_file(model_path)) {
             LOG_ERROR("init model loader from file failed: '%s'", model_path.c_str());
