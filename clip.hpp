@@ -209,13 +209,13 @@ struct ResidualAttentionBlock {
     struct ggml_tensor* ln2_b;  // [hidden_size, ]
 
     size_t calculate_mem_size(ggml_type wtype) {
-        double mem_size = 0;
-        mem_size += 4 * hidden_size * hidden_size * ggml_type_sizef(wtype);        // q_w/k_w/v_w/out_w
-        mem_size += 8 * hidden_size * ggml_type_sizef(GGML_TYPE_F32);              // q_b/k_b/v_b/out_b/ln1_w/ln1_b/ln2_w/ln2_b
-        mem_size += 2 * hidden_size * intermediate_size * ggml_type_sizef(wtype);  // fc1_w/fc2_w
-        mem_size += intermediate_size * ggml_type_sizef(GGML_TYPE_F32);            // fc1_b
-        mem_size += hidden_size * ggml_type_sizef(GGML_TYPE_F32);                  // fc2_b
-        return static_cast<size_t>(mem_size);
+        size_t mem_size = 0;
+        mem_size += 4 * ggml_row_size(wtype, hidden_size * hidden_size);        // q_w/k_w/v_w/out_w
+        mem_size += 8 * ggml_row_size(GGML_TYPE_F32, hidden_size);              // q_b/k_b/v_b/out_b/ln1_w/ln1_b/ln2_w/ln2_b
+        mem_size += 2 * ggml_row_size(wtype, hidden_size * intermediate_size);  // fc1_w/fc2_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, intermediate_size);            // fc1_b
+        mem_size += ggml_row_size(GGML_TYPE_F32, hidden_size);                  // fc2_b
+        return mem_size;
     }
 
     void init_params(struct ggml_context* ctx, ggml_allocr* alloc, ggml_type wtype) {
@@ -411,21 +411,21 @@ struct CLIPTextModel {
     }
 
     size_t calculate_mem_size(ggml_type wtype) {
-        double mem_size = 0;
-        mem_size += hidden_size * max_position_embeddings * ggml_type_sizef(GGML_TYPE_I32);  // position_ids
-        mem_size += hidden_size * vocab_size * ggml_type_sizef(wtype);                       // token_embed_weight
-        mem_size += hidden_size * max_position_embeddings * ggml_type_sizef(wtype);          // position_embed_weight
+        size_t mem_size = 0;
+        mem_size += ggml_row_size(GGML_TYPE_I32, hidden_size * max_position_embeddings);  // position_ids
+        mem_size += ggml_row_size(wtype, hidden_size * vocab_size);                       // token_embed_weight
+        mem_size += ggml_row_size(wtype, hidden_size * max_position_embeddings);          // position_embed_weight
         if(version == OPENAI_CLIP_VIT_L_14) {
-            mem_size += hidden_size * max_position_embeddings * ggml_type_sizef(wtype);      // token_embed_custom
+            mem_size += ggml_row_size(wtype, hidden_size * max_position_embeddings);      // token_embed_custom
         }
         for (int i = 0; i < num_hidden_layers; i++) {
             mem_size += resblocks[i].calculate_mem_size(wtype);
         }
-        mem_size += 2 * hidden_size * ggml_type_sizef(GGML_TYPE_F32);  // final_ln_w/b
+        mem_size += 2 * ggml_row_size(GGML_TYPE_F32, hidden_size);  // final_ln_w/b
         if (version == OPEN_CLIP_VIT_BIGG_14) {
-            mem_size += hidden_size * projection_dim * ggml_type_sizef(GGML_TYPE_F32);  // text_projection
+            mem_size += ggml_row_size(GGML_TYPE_F32, hidden_size * projection_dim);  // text_projection
         }
-        return static_cast<size_t>(mem_size);
+        return mem_size;
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {

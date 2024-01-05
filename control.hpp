@@ -44,7 +44,7 @@ struct CNHintBlock {
         }
         mem_size += model_channels * feat_channels[3] * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_final_w
         mem_size += model_channels * ggml_type_size(GGML_TYPE_F32);                             // conv_final_b
-        return static_cast<size_t>(mem_size);
+        return mem_size;
     }
 
     void init_params(struct ggml_context* ctx) {
@@ -223,15 +223,15 @@ struct ControlNet : public GGMLModule {
     }
 
     size_t calculate_mem_size() {
-        double mem_size = 0;
+        size_t mem_size = 0;
         mem_size += input_hint_block.calculate_mem_size();
-        mem_size += time_embed_dim * model_channels * ggml_type_sizef(wtype);  // time_embed_0_w
-        mem_size += time_embed_dim * ggml_type_sizef(GGML_TYPE_F32);           // time_embed_0_b
-        mem_size += time_embed_dim * time_embed_dim * ggml_type_sizef(wtype);  // time_embed_2_w
-        mem_size += time_embed_dim * ggml_type_sizef(GGML_TYPE_F32);           // time_embed_2_b
+        mem_size += ggml_row_size(wtype, time_embed_dim * model_channels);  // time_embed_0_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, time_embed_dim);           // time_embed_0_b
+        mem_size += ggml_row_size(wtype, time_embed_dim * time_embed_dim);  // time_embed_2_w
+        mem_size += ggml_row_size(GGML_TYPE_F32,time_embed_dim);           // time_embed_2_b
 
-        mem_size += model_channels * in_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // input_block_0_w
-        mem_size += model_channels * ggml_type_sizef(GGML_TYPE_F32);                        // input_block_0_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, model_channels * in_channels * 3 * 3);  // input_block_0_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, model_channels);                        // input_block_0_b
 
         // input_blocks
         int ds        = 1;
@@ -250,8 +250,8 @@ struct ControlNet : public GGMLModule {
         }
 
         for (int i = 0; i < num_zero_convs; i++) {
-            mem_size += zero_convs[i].channels * zero_convs[i].channels * ggml_type_sizef(GGML_TYPE_F16);
-            mem_size += zero_convs[i].channels * ggml_type_sizef(GGML_TYPE_F32);
+            mem_size += ggml_row_size(GGML_TYPE_F16, zero_convs[i].channels * zero_convs[i].channels);
+            mem_size += ggml_row_size(GGML_TYPE_F32, zero_convs[i].channels);
         }
 
         // middle_block
@@ -259,10 +259,10 @@ struct ControlNet : public GGMLModule {
         mem_size += middle_block_1.calculate_mem_size(wtype);
         mem_size += middle_block_2.calculate_mem_size(wtype);
 
-        mem_size += middle_out_channel * middle_out_channel * ggml_type_sizef(GGML_TYPE_F16);   // middle_block_out_w
-        mem_size += middle_out_channel * ggml_type_sizef(GGML_TYPE_F32);                        // middle_block_out_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, middle_out_channel * middle_out_channel);   // middle_block_out_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, middle_out_channel);                        // middle_block_out_b
 
-        return static_cast<size_t>(mem_size);
+        return mem_size;
     }
 
     size_t get_num_tensors() {

@@ -15,10 +15,10 @@ struct DownSample {
     bool vae_downsample = false;
 
     size_t calculate_mem_size(ggml_type wtype) {
-        double mem_size = 0;
-        mem_size += out_channels * channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // op_w
-        mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                     // op_b
-        return static_cast<size_t>(mem_size);
+        size_t mem_size = 0;
+        mem_size += ggml_row_size(GGML_TYPE_F16, out_channels * channels * 3 * 3);  // op_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, out_channels);                     // op_b
+        return mem_size;
     }
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
@@ -59,10 +59,10 @@ struct UpSample {
     struct ggml_tensor* conv_b;  // [out_channels,]
 
     size_t calculate_mem_size(ggml_type wtype) {
-        double mem_size = 0;
-        mem_size += out_channels * channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // op_w
-        mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                     // op_b
-        return static_cast<size_t>(mem_size);
+        size_t mem_size = 0;
+        mem_size += ggml_row_size(GGML_TYPE_F16, out_channels * channels * 3 * 3);  // op_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, out_channels);                     // op_b
+        return mem_size;
     }
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
@@ -115,18 +115,18 @@ struct ResBlock {
     struct ggml_tensor* skip_b;  // [out_channels, ]
 
     size_t calculate_mem_size(ggml_type wtype) {
-        double mem_size = 0;
-        mem_size += 2 * channels * ggml_type_sizef(GGML_TYPE_F32);                         // in_layer_0_w/b
-        mem_size += out_channels * channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);      // in_layer_2_w
-        mem_size += 5 * out_channels * ggml_type_sizef(GGML_TYPE_F32);                     // in_layer_2_b/emb_layer_1_b/out_layer_0_w/out_layer_0_b/out_layer_3_b
-        mem_size += out_channels * emb_channels * ggml_type_sizef(wtype);                  // emb_layer_1_w
-        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // out_layer_3_w
+        size_t mem_size = 0;
+        mem_size += 2 * ggml_row_size(GGML_TYPE_F32, channels);                         // in_layer_0_w/b
+        mem_size += ggml_row_size(GGML_TYPE_F16, out_channels * channels * 3 * 3);      // in_layer_2_w
+        mem_size += 5 * ggml_row_size(GGML_TYPE_F32, out_channels);                     // in_layer_2_b/emb_layer_1_b/out_layer_0_w/out_layer_0_b/out_layer_3_b
+        mem_size += ggml_row_size(wtype, out_channels * emb_channels);                  // emb_layer_1_w
+        mem_size += ggml_row_size(GGML_TYPE_F16, out_channels * out_channels * 3 * 3);  // out_layer_3_w
 
         if (out_channels != channels) {
-            mem_size += out_channels * channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // skip_w
-            mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                     // skip_b
+            mem_size += ggml_row_size(GGML_TYPE_F16, out_channels * channels * 1 * 1);  // skip_w
+            mem_size += ggml_row_size(GGML_TYPE_F32, out_channels);                     // skip_b
         }
-        return static_cast<size_t>(mem_size);
+        return mem_size;
     }
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
@@ -271,22 +271,22 @@ struct SpatialTransformer {
     }
 
     size_t calculate_mem_size(ggml_type wtype) {
-        double mem_size = 0;
-        mem_size += 2 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // norm_w/norm_b
-        mem_size += 2 * in_channels * in_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // proj_in_w/proj_out_w
-        mem_size += 2 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // proj_in_b/proj_out_b
+        size_t mem_size = 0;
+        mem_size += 2 * ggml_row_size(GGML_TYPE_F32, in_channels);                        // norm_w/norm_b
+        mem_size += 2 * ggml_row_size(GGML_TYPE_F16, in_channels * in_channels * 1 * 1);  // proj_in_w/proj_out_w
+        mem_size += 2 * ggml_row_size(GGML_TYPE_F32, in_channels);                        // proj_in_b/proj_out_b
 
         // transformer
         for (auto& transformer : transformers) {
-            mem_size += 6 * in_channels * ggml_type_sizef(GGML_TYPE_F32);            // norm1-3_w/b
-            mem_size += 6 * in_channels * in_channels * ggml_type_sizef(wtype);      // attn1_q/k/v/out_w attn2_q/out_w
-            mem_size += 2 * in_channels * context_dim * ggml_type_sizef(wtype);      // attn2_k/v_w
-            mem_size += in_channels * 4 * 2 * in_channels * ggml_type_sizef(wtype);  // ff_0_proj_w
-            mem_size += in_channels * 4 * 2 * ggml_type_sizef(GGML_TYPE_F32);        // ff_0_proj_b
-            mem_size += in_channels * 4 * in_channels * ggml_type_sizef(wtype);      // ff_2_w
-            mem_size += in_channels * ggml_type_sizef(GGML_TYPE_F32);                // ff_2_b
+            mem_size += 6 * ggml_row_size(GGML_TYPE_F32, in_channels);            // norm1-3_w/b
+            mem_size += 6 * ggml_row_size(wtype, in_channels * in_channels);      // attn1_q/k/v/out_w attn2_q/out_w
+            mem_size += 2 * ggml_row_size(wtype, in_channels * context_dim);      // attn2_k/v_w
+            mem_size += ggml_row_size(wtype, in_channels * 4 * 2 * in_channels );  // ff_0_proj_w
+            mem_size += ggml_row_size(GGML_TYPE_F32, in_channels * 4 * 2);        // ff_0_proj_b
+            mem_size += ggml_row_size(wtype, in_channels * 4 * in_channels);      // ff_2_w
+            mem_size += ggml_row_size(GGML_TYPE_F32, in_channels);                // ff_2_b
         }
-        return static_cast<size_t>(mem_size);
+        return mem_size;
     }
 
     void init_params(struct ggml_context* ctx, ggml_allocr* alloc, ggml_type wtype) {

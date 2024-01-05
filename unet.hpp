@@ -180,21 +180,21 @@ struct UNetModel : public GGMLModule {
     }
 
     size_t calculate_mem_size() {
-        double mem_size = 0;
-        mem_size += time_embed_dim * model_channels * ggml_type_sizef(wtype);  // time_embed_0_w
-        mem_size += time_embed_dim * ggml_type_sizef(GGML_TYPE_F32);           // time_embed_0_b
-        mem_size += time_embed_dim * time_embed_dim * ggml_type_sizef(wtype);  // time_embed_2_w
-        mem_size += time_embed_dim * ggml_type_sizef(GGML_TYPE_F32);           // time_embed_2_b
+        size_t mem_size = 0;
+        mem_size += ggml_row_size(wtype, time_embed_dim * model_channels);  // time_embed_0_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, time_embed_dim);           // time_embed_0_b
+        mem_size += ggml_row_size(wtype, time_embed_dim * time_embed_dim);  // time_embed_2_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, time_embed_dim);           // time_embed_2_b
 
         if (version == VERSION_XL) {
-            mem_size += time_embed_dim * adm_in_channels * ggml_type_sizef(wtype);  // label_embed_0_w
-            mem_size += time_embed_dim * ggml_type_sizef(GGML_TYPE_F32);            // label_embed_0_b
-            mem_size += time_embed_dim * time_embed_dim * ggml_type_sizef(wtype);   // label_embed_2_w
-            mem_size += time_embed_dim * ggml_type_sizef(GGML_TYPE_F32);            // label_embed_2_b
+            mem_size += ggml_row_size(wtype, time_embed_dim * adm_in_channels);  // label_embed_0_w
+            mem_size += ggml_row_size(GGML_TYPE_F32, time_embed_dim);            // label_embed_0_b
+            mem_size += ggml_row_size(wtype, time_embed_dim * time_embed_dim);   // label_embed_2_w
+            mem_size += ggml_row_size(GGML_TYPE_F32, time_embed_dim);            // label_embed_2_b
         }
 
-        mem_size += model_channels * in_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // input_block_0_w
-        mem_size += model_channels * ggml_type_sizef(GGML_TYPE_F32);                        // input_block_0_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, model_channels * in_channels * 3 * 3);  // input_block_0_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, model_channels);                        // input_block_0_b
 
         // input_blocks
         int ds           = 1;
@@ -235,11 +235,11 @@ struct UNetModel : public GGMLModule {
         }
 
         // out
-        mem_size += 2 * model_channels * ggml_type_sizef(GGML_TYPE_F32);                     // out_0_w/b
-        mem_size += out_channels * model_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // out_2_w
-        mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                           // out_2_b
+        mem_size += 2 * ggml_row_size(GGML_TYPE_F32, model_channels);                     // out_0_w/b
+        mem_size += ggml_row_size(GGML_TYPE_F16, out_channels * model_channels * 3 * 3);  // out_2_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, out_channels);                           // out_2_b
 
-        return static_cast<size_t>(mem_size);
+        return mem_size;
     }
 
     size_t get_num_tensors() {
