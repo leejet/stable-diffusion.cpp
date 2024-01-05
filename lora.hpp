@@ -113,7 +113,7 @@ struct LoraModel : public GGMLModule {
             applied_lora_tensors.insert(scale_name);
 
             // calc_cale
-            int64_t dim       = lora_down->ne[lora_down->n_dims - 1];
+            int64_t dim       = lora_down->ne[ggml_n_dims(lora_down) - 1];
             float scale_value = 1.0f;
             if (lora_tensors.find(scale_name) != lora_tensors.end()) {
                 scale_value = ggml_backend_tensor_get_f32(lora_tensors[scale_name]);
@@ -123,17 +123,10 @@ struct LoraModel : public GGMLModule {
             }
             scale_value *= multiplier;
 
-            ggml_tensor* lora_scale = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
-
-            ggml_allocr_alloc(compute_allocr, lora_scale);
-            if (!ggml_allocr_is_measure(compute_allocr)) {
-                ggml_backend_tensor_set_and_sync(backend, lora_scale, &scale_value, 0, ggml_nbytes(lora_scale));
-            }
-
             // flat lora tensors to multiply it
-            int64_t lora_up_rows   = lora_up->ne[lora_up->n_dims - 1];
+            int64_t lora_up_rows   = lora_up->ne[ggml_n_dims(lora_up) - 1];
             lora_up                = ggml_reshape_2d(ctx0, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
-            int64_t lora_down_rows = lora_down->ne[lora_down->n_dims - 1];
+            int64_t lora_down_rows = lora_down->ne[ggml_n_dims(lora_down) - 1];
             lora_down              = ggml_reshape_2d(ctx0, lora_down, ggml_nelements(lora_down) / lora_down_rows, lora_down_rows);
 
             // ggml_mul_mat requires tensor b transposed
@@ -142,7 +135,7 @@ struct LoraModel : public GGMLModule {
             updown                     = ggml_cont(ctx0, ggml_transpose(ctx0, updown));
             updown                     = ggml_reshape(ctx0, updown, weight);
             GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
-            updown = ggml_scale_inplace(ctx0, updown, lora_scale);
+            updown = ggml_scale_inplace(ctx0, updown, scale_value);
             ggml_tensor* final_weight;
             // if (weight->type != GGML_TYPE_F32 && weight->type != GGML_TYPE_F16) {
             //     final_weight = ggml_new_tensor(ctx0, GGML_TYPE_F32, weight->n_dims, weight->ne);

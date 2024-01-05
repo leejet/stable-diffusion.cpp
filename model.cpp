@@ -677,7 +677,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
 
         // LOG_DEBUG("%s", name.c_str());
 
-        TensorStorage tensor_storage(prefix + name, dummy->type, dummy->ne, dummy->n_dims, file_index, offset);
+        TensorStorage tensor_storage(prefix + name, dummy->type, dummy->ne, ggml_n_dims(dummy), file_index, offset);
 
         GGML_ASSERT(ggml_nbytes(dummy) == tensor_storage.nbytes());
 
@@ -1419,6 +1419,9 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
 
     for (auto pair : tensors) {
         if (pair.first.find("cond_stage_model.transformer.text_model.encoder.layers.23") != std::string::npos) {
+            continue;
+        }
+        if (pair.first.find("alphas_cumprod") != std::string::npos) {
             continue;
         }
 

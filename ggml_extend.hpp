@@ -449,7 +449,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_group_norm(struct ggml_context* ct
                                                          struct ggml_tensor* w,
                                                          struct ggml_tensor* b,
                                                          int num_groups = 32) {
-    if (x->n_dims == 4) {
+    if (ggml_n_dims(x) >= 3) {
         w = ggml_reshape_4d(ctx, w, 1, 1, w->ne[0], 1);
         b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
     }

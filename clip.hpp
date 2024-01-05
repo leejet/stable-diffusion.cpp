@@ -208,8 +208,6 @@ struct ResidualAttentionBlock {
     struct ggml_tensor* ln2_w;  // [hidden_size, ]
     struct ggml_tensor* ln2_b;  // [hidden_size, ]
 
-    struct ggml_tensor* attn_scale;  // [hidden_size, ]
-
     size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += 4 * hidden_size * hidden_size * ggml_type_sizef(wtype);        // q_w/k_w/v_w/out_w
@@ -217,7 +215,6 @@ struct ResidualAttentionBlock {
         mem_size += 2 * hidden_size * intermediate_size * ggml_type_sizef(wtype);  // fc1_w/fc2_w
         mem_size += intermediate_size * ggml_type_sizef(GGML_TYPE_F32);            // fc1_b
         mem_size += hidden_size * ggml_type_sizef(GGML_TYPE_F32);                  // fc2_b
-        mem_size += ggml_type_sizef(GGML_TYPE_F32);                                // attn_scale
         return static_cast<size_t>(mem_size);
     }
 
@@ -244,10 +241,6 @@ struct ResidualAttentionBlock {
         ln2_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
         ln2_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
 
-        attn_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-        ggml_allocr_alloc(alloc, attn_scale);
-        float scale = 1.0f / sqrt((float)d_model);
-        ggml_backend_tensor_set(attn_scale, &scale, 0, sizeof(scale));
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -286,7 +279,7 @@ struct ResidualAttentionBlock {
         // self-attention
         {
             struct ggml_tensor* q = ggml_nn_linear(ctx, x, q_w, q_b);
-            q                     = ggml_scale_inplace(ctx, q, attn_scale);
+            q                     = ggml_scale_inplace(ctx, q, 1.0f / sqrt((float)d_model));
             q                     = ggml_reshape_4d(ctx, q, d_model, n_head, n_token, N);   // [N, n_token, n_head, d_model]
             q                     = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));       // [N, n_head, n_token, d_model]
             q                     = ggml_reshape_3d(ctx, q, d_model, n_token, n_head * N);  // [N * n_head, n_token, d_model]
