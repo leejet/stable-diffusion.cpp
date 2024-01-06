@@ -1,5 +1,5 @@
 #include "util.h"
-
+#include <algorithm>
 #include <stdarg.h>
 #include <codecvt>
 #include <fstream>
@@ -190,6 +190,24 @@ void pretty_progress(int step, int steps, float time) {
     if (step == steps) {
         printf("\n");
     }
+}
+
+std::string ltrim(const std::string& s) {
+    auto it = std::find_if(s.begin(), s.end(), [](int ch) {
+        return !std::isspace(ch);
+    });
+    return std::string(it, s.end());
+}
+
+std::string rtrim(const std::string& s) {
+    auto it = std::find_if(s.rbegin(), s.rend(), [](int ch) {
+        return !std::isspace(ch);
+    });
+    return std::string(s.begin(), it.base());
+}
+
+std::string trim(const std::string& s) {
+    return rtrim(ltrim(s));
 }
 
 static sd_log_cb_t sd_log_cb = NULL;
