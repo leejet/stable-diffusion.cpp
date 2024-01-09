@@ -488,16 +488,18 @@ int main(int argc, const char* argv[]) {
     }
 
     if (params.mode == CONVERT) {
-        bool success = convert(params.model_path.c_str(), params.output_path.c_str(), params.wtype);
+        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype);
         if (!success) {
             fprintf(stderr,
-                    "convert '%s' to '%s' failed\n",
+                    "convert '%s'/'%s' to '%s' failed\n",
                     params.model_path.c_str(),
+                    params.vae_path.c_str(),
                     params.output_path.c_str());
             return 1;
         } else {
-            printf("convert '%s' to '%s' success\n",
+            printf("convert '%s'/'%s' to '%s' success\n",
                    params.model_path.c_str(),
+                   params.vae_path.c_str(),
                    params.output_path.c_str());
             return 0;
         }
