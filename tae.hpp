@@ -278,9 +278,6 @@ struct TinyDecoder {
     ggml_tensor* conv_final_w;  // [output_channels, channels, 3, 3]
     ggml_tensor* conv_final_b;  // [output_channels]
 
-    ggml_tensor* in_scale_1d3;  // [1]
-    ggml_tensor* in_scale_3;    // [1]
-
     TinyDecoder() {
         for (int i = 0; i < num_blocks; i++) {
             input_blocks[i].in_channels  = channels;
@@ -351,16 +348,6 @@ struct TinyDecoder {
         }
 
         final_block.init_params(ctx);
-
-        // initialize constants scales
-        in_scale_1d3 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-        in_scale_3   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-        ggml_allocr_alloc(alloc, in_scale_1d3);
-        float scale_1d3 = 1.0f / 3.0f;
-        ggml_backend_tensor_set(in_scale_1d3, &scale_1d3, 0, sizeof(scale_1d3));
-        ggml_allocr_alloc(alloc, in_scale_3);
-        float scale_3 = 3.0f;
-        ggml_backend_tensor_set(in_scale_3, &scale_3, 0, sizeof(scale_3));
     }
 
     void map_by_name(std::map<std::string, ggml_tensor*>& tensors, std::string prefix) {
@@ -391,9 +378,9 @@ struct TinyDecoder {
 
     ggml_tensor* forward(ggml_context* ctx, ggml_tensor* z) {
         // torch.tanh(x / 3) * 3
-        auto h = ggml_scale(ctx, z, in_scale_1d3);
+        auto h = ggml_scale(ctx, z, 1.0f / 3.0f);
         h      = ggml_tanh_inplace(ctx, h);
-        h      = ggml_scale(ctx, h, in_scale_3);
+        h      = ggml_scale(ctx, h, 3.0f);
 
         // conv(4, 64)
         h = ggml_nn_conv_2d(ctx, h, conv_input_w, conv_input_b, 1, 1, 1, 1);

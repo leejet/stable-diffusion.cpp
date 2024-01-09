@@ -91,7 +91,7 @@ struct ResidualDenseBlock {
         tensors[prefix + "conv5.bias"]   = conv5_b;
     }
 
-    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* out_scale, ggml_tensor* x /* feat */) {
+    ggml_tensor* forward(ggml_context* ctx, float out_scale, ggml_tensor* x /* feat */) {
         // x1 = self.lrelu(self.conv1(x))
         ggml_tensor* x1 = ggml_nn_conv_2d(ctx, x, conv1_w, conv1_b, 1, 1, 1, 1);
         x1              = ggml_leaky_relu(ctx, x1, 0.2f, true);
@@ -161,7 +161,7 @@ struct EsrganBlock {
         }
     }
 
-    ggml_tensor* forward(ggml_context* ctx, ggml_tensor* out_scale, ggml_tensor* x) {
+    ggml_tensor* forward(ggml_context* ctx, float out_scale, ggml_tensor* x) {
         ggml_tensor* out = x;
         for (int i = 0; i < num_residual_blocks; i++) {
             // out = self.rdb...(x)
@@ -325,7 +325,7 @@ struct ESRGAN : public GGMLModule {
         tensors["conv_last.bias"]   = conv_last_b;
     }
 
-    ggml_tensor* forward(ggml_context* ctx0, ggml_tensor* out_scale, ggml_tensor* x /* feat */) {
+    ggml_tensor* forward(ggml_context* ctx0, float out_scale, ggml_tensor* x /* feat */) {
         // feat = self.conv_first(feat)
         auto h = ggml_nn_conv_2d(ctx0, x, conv_first_w, conv_first_b, 1, 1, 1, 1);
 
@@ -376,12 +376,7 @@ struct ESRGAN : public GGMLModule {
         struct ggml_cgraph* gf = ggml_new_graph(ctx0);
 
         struct ggml_tensor* x_ = NULL;
-        struct ggml_tensor* os = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
-        ggml_allocr_alloc(compute_allocr, os);
-        if (!ggml_allocr_is_measure(compute_allocr)) {
-            float scale = 0.2f;
-            ggml_backend_tensor_set(os, &scale, 0, sizeof(scale));
-        }
+        float out_scale = 0.2f;
 
         // it's performing a compute, check if backend isn't cpu
         if (!ggml_backend_is_cpu(backend)) {
@@ -397,7 +392,7 @@ struct ESRGAN : public GGMLModule {
             x_ = x;
         }
 
-        struct ggml_tensor* out = forward(ctx0, os, x);
+        struct ggml_tensor* out = forward(ctx0, out_scale, x);
 
         ggml_build_forward_expand(gf, out);
         ggml_free(ctx0);
