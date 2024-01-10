@@ -80,6 +80,8 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
 # deps
 add_subdirectory(ggml)
+# see https://github.com/ggerganov/ggml/pull/682
+add_definitions(-DGGML_MAX_NAME=128)
 
 add_subdirectory(thirdparty)
 
