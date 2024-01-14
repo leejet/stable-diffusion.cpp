@@ -684,7 +684,7 @@ struct ControlNet : public GGMLModule {
         GGMLModule::compute(get_graph, n_threads, NULL);
     }
 
-    void end() {
+    void free_compute_buffer() {
         GGMLModule::free_compute_buffer();
         ggml_free(control_ctx);
         ggml_backend_buffer_free(control_buffer);
