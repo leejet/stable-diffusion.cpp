@@ -4,9 +4,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
-#include <set>
 
 #include "ggml/ggml-backend.h"
 #include "ggml/ggml.h"
@@ -121,7 +121,8 @@ public:
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       ggml_backend_t backend,
                       std::set<std::string> ignore_tensors = {});
-    int64_t cal_mem_size(ggml_backend_t backend);
+    bool save_to_gguf_file(const std::string& file_path, ggml_type type);
+    int64_t cal_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
     ~ModelLoader() = default;
 };
 #endif  // __MODEL_H__

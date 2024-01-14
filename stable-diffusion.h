@@ -148,7 +148,9 @@ SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
                                         enum sd_type_t wtype);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
-SD_API sd_image_t upscale(upscaler_ctx_t*, sd_image_t input_image, uint32_t upscale_factor);
+SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor);
+
+SD_API bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type);
 
 #ifdef __cplusplus
 }
