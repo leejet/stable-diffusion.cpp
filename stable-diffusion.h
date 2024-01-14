@@ -71,6 +71,7 @@ enum sd_type_t {
     SD_TYPE_Q5_K = 13,
     SD_TYPE_Q6_K = 14,
     SD_TYPE_Q8_K = 15,
+    SD_TYPE_IQ2_XXS = 16,
     SD_TYPE_I8,
     SD_TYPE_I16,
     SD_TYPE_I32,
