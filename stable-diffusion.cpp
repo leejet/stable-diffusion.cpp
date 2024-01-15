@@ -108,6 +108,7 @@ public:
                         const std::string& vae_path,
                         const std::string& taesd_path,
                         bool vae_tiling,
+                        bool use_tiny_autoencoder,
                         ggml_type wtype,
                         schedule_t schedule) {
         this->use_tiny_autoencoder = taesd_path.size() > 0;
@@ -1101,6 +1102,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      const char* lora_model_dir_c_str,
                      bool vae_decode_only,
                      bool vae_tiling,
+                     bool use_tiny_autoencoder,
                      bool free_params_immediately,
                      int n_threads,
                      enum sd_type_t wtype,
