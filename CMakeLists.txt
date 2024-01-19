@@ -77,7 +77,7 @@ if(SD_BUILD_SHARED_LIBS)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
     message("Build static library")
-    add_library(${SD_LIB} SHARED ${SD_LIB_INCLUDE})
+    add_library(${SD_LIB} STATIC ${SD_LIB_INCLUDE})
 endif()
 
 
