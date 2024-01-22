@@ -116,6 +116,7 @@ public:
                         ggml_type wtype,
                         schedule_t schedule,
                         bool control_net_cpu) {
+        use_tiny_autoencoder = taesd_path.size() > 0;
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
@@ -319,10 +320,6 @@ public:
         LOG_DEBUG("finished loaded file");
         ggml_free(ctx);
 
-        if (use_tiny_autoencoder) {
-            return tae_first_stage.load_from_file(taesd_path, backend);
-        }
-
         if(control_net_path.size() > 0) {
             ggml_backend_t cn_backend = NULL;
             if(control_net_cpu && !ggml_backend_is_cpu(backend)) {
@@ -331,7 +328,13 @@ public:
             } else {
                 cn_backend = backend;
             }
-            return control_net.load_from_file(control_net_path, cn_backend, GGML_TYPE_F16 /* just f16 controlnet models */);
+            if(!control_net.load_from_file(control_net_path, cn_backend, GGML_TYPE_F16 /* just f16 controlnet models */)) {
+                return false;
+            }
+        }
+
+        if (use_tiny_autoencoder) {
+            return tae_first_stage.load_from_file(taesd_path, backend);
         }
         return true;
     }
