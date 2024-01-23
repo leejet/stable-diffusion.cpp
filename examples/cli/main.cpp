@@ -17,34 +17,34 @@
 
 #include "stb_image_write.h"
 
-const char *rng_type_to_str[] = {
-        "std_default",
-        "cuda",
+const char* rng_type_to_str[] = {
+    "std_default",
+    "cuda",
 };
 
 // Names of the sampler method, same order as enum sample_method in stable-diffusion.h
-const char *sample_method_str[] = {
-        "euler_a",
-        "euler",
-        "heun",
-        "dpm2",
-        "dpm++2s_a",
-        "dpm++2m",
-        "dpm++2mv2",
-        "lcm",
+const char* sample_method_str[] = {
+    "euler_a",
+    "euler",
+    "heun",
+    "dpm2",
+    "dpm++2s_a",
+    "dpm++2m",
+    "dpm++2mv2",
+    "lcm",
 };
 
 // Names of the sigma schedule overrides, same order as sample_schedule in stable-diffusion.h
-const char *schedule_str[] = {
-        "default",
-        "discrete",
-        "karras",
+const char* schedule_str[] = {
+    "default",
+    "discrete",
+    "karras",
 };
 
-const char *modes_str[] = {
-        "txt2img",
-        "img2img",
-        "convert",
+const char* modes_str[] = {
+    "txt2img",
+    "img2img",
+    "convert",
 };
 
 enum SDMode {
@@ -56,7 +56,7 @@ enum SDMode {
 
 struct SDParams {
     int n_threads = -1;
-    SDMode mode = TXT2IMG;
+    SDMode mode   = TXT2IMG;
 
     std::string model_path;
     std::string vae_path;
@@ -70,22 +70,22 @@ struct SDParams {
     std::string prompt;
     std::string negative_prompt;
     float cfg_scale = 7.0f;
-    int clip_skip = -1;  // <= 0 represents unspecified
-    int width = 512;
-    int height = 512;
+    int clip_skip   = -1;  // <= 0 represents unspecified
+    int width       = 512;
+    int height      = 512;
     int batch_count = 1;
 
     sample_method_t sample_method = EULER_A;
-    schedule_t schedule = DEFAULT;
-    int sample_steps = 20;
-    float strength = 0.75f;
-    rng_type_t rng_type = CUDA_RNG;
-    int64_t seed = 42;
-    bool verbose = false;
-    bool vae_tiling = false;
+    schedule_t schedule           = DEFAULT;
+    int sample_steps              = 20;
+    float strength                = 0.75f;
+    rng_type_t rng_type           = CUDA_RNG;
+    int64_t seed                  = 42;
+    bool verbose                  = false;
+    bool vae_tiling               = false;
 };
 
-static std::string sd_basename(const std::string &path) {
+static std::string sd_basename(const std::string& path) {
     size_t pos = path.find_last_of('/');
     if (pos != std::string::npos) {
         return path.substr(pos + 1);
@@ -124,7 +124,7 @@ void print_params(SDParams params) {
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
 }
 
-void print_usage(int argc, const char *argv[]) {
+void print_usage(int argc, const char* argv[]) {
     printf("usage: %s [arguments]\n", argv[0]);
     printf("\n");
     printf("arguments:\n");
@@ -161,7 +161,7 @@ void print_usage(int argc, const char *argv[]) {
     printf("  -v, --verbose                      print extra info\n");
 }
 
-void parse_args(int argc, const char **argv, SDParams &params) {
+void parse_args(int argc, const char** argv, SDParams& params) {
     bool invalid_arg = false;
     std::string arg;
     for (int i = 1; i < argc; i++) {
@@ -178,8 +178,8 @@ void parse_args(int argc, const char **argv, SDParams &params) {
                 invalid_arg = true;
                 break;
             }
-            const char *mode_selected = argv[i];
-            int mode_found = -1;
+            const char* mode_selected = argv[i];
+            int mode_found            = -1;
             for (int d = 0; d < MODE_COUNT; d++) {
                 if (!strcmp(mode_selected, modes_str[d])) {
                     mode_found = d;
@@ -190,7 +190,7 @@ void parse_args(int argc, const char **argv, SDParams &params) {
                         mode_selected);
                 exit(1);
             }
-            params.mode = (SDMode) mode_found;
+            params.mode = (SDMode)mode_found;
         } else if (arg == "-m" || arg == "--model") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -334,8 +334,8 @@ void parse_args(int argc, const char **argv, SDParams &params) {
                 invalid_arg = true;
                 break;
             }
-            const char *schedule_selected = argv[i];
-            int schedule_found = -1;
+            const char* schedule_selected = argv[i];
+            int schedule_found            = -1;
             for (int d = 0; d < N_SCHEDULES; d++) {
                 if (!strcmp(schedule_selected, schedule_str[d])) {
                     schedule_found = d;
@@ -345,7 +345,7 @@ void parse_args(int argc, const char **argv, SDParams &params) {
                 invalid_arg = true;
                 break;
             }
-            params.schedule = (schedule_t) schedule_found;
+            params.schedule = (schedule_t)schedule_found;
         } else if (arg == "-s" || arg == "--seed") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -357,8 +357,8 @@ void parse_args(int argc, const char **argv, SDParams &params) {
                 invalid_arg = true;
                 break;
             }
-            const char *sample_method_selected = argv[i];
-            int sample_method_found = -1;
+            const char* sample_method_selected = argv[i];
+            int sample_method_found            = -1;
             for (int m = 0; m < N_SAMPLE_METHODS; m++) {
                 if (!strcmp(sample_method_selected, sample_method_str[m])) {
                     sample_method_found = m;
@@ -368,7 +368,7 @@ void parse_args(int argc, const char **argv, SDParams &params) {
                 invalid_arg = true;
                 break;
             }
-            params.sample_method = (sample_method_t) sample_method_found;
+            params.sample_method = (sample_method_t)sample_method_found;
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv);
             exit(0);
@@ -434,7 +434,7 @@ void parse_args(int argc, const char **argv, SDParams &params) {
     }
 
     if (params.seed < 0) {
-        srand((int) time(NULL));
+        srand((int)time(NULL));
         params.seed = rand();
     }
 
@@ -465,8 +465,8 @@ std::string get_image_params(SDParams params, int64_t seed) {
     return parameter_string;
 }
 
-void sd_log_cb(enum sd_log_level_t level, const char *log, void *data) {
-    SDParams *params = (SDParams *) data;
+void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
+    SDParams* params = (SDParams*)data;
     if (!params->verbose && level <= SD_LOG_DEBUG) {
         return;
     }
@@ -479,11 +479,11 @@ void sd_log_cb(enum sd_log_level_t level, const char *log, void *data) {
     }
 }
 
-int main(int argc, const char *argv[]) {
+int main(int argc, const char* argv[]) {
     SDParams params;
     parse_args(argc, argv, params);
 
-    sd_set_log_callback(sd_log_cb, (void *) &params);
+    sd_set_log_callback(sd_log_cb, (void*)&params);
 
     if (params.verbose) {
         print_params(params);
@@ -511,12 +511,12 @@ int main(int argc, const char *argv[]) {
         }
     }
 
-    bool vae_decode_only = true;
-    uint8_t *input_image_buffer = NULL;
+    bool vae_decode_only        = true;
+    uint8_t* input_image_buffer = NULL;
     if (params.mode == IMG2IMG) {
         vae_decode_only = false;
 
-        int c = 0;
+        int c              = 0;
         input_image_buffer = stbi_load(params.input_path.c_str(), &params.width, &params.height, &c, 3);
         if (input_image_buffer == NULL) {
             fprintf(stderr, "load image from '%s' failed\n", params.input_path.c_str());
@@ -539,17 +539,16 @@ int main(int argc, const char *argv[]) {
         }
     }
 
-    sd_ctx_t *sd_ctx = new_sd_ctx(
-            params.n_threads,
-            vae_decode_only,
-            true,
-            params.lora_model_dir.c_str(),
-            params.rng_type,
-            params.vae_tiling,
-            params.wtype,
-            params.schedule,
-            true
-    );
+    sd_ctx_t* sd_ctx = new_sd_ctx(
+        params.n_threads,
+        vae_decode_only,
+        true,
+        params.lora_model_dir.c_str(),
+        params.rng_type,
+        params.vae_tiling,
+        params.wtype,
+        params.schedule,
+        true);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
@@ -577,7 +576,7 @@ int main(int argc, const char *argv[]) {
         }
     }
 
-    sd_image_t *results;
+    sd_image_t* results;
     if (params.mode == TXT2IMG) {
         results = txt2img(sd_ctx,
                           params.prompt.c_str(),
@@ -591,8 +590,8 @@ int main(int argc, const char *argv[]) {
                           params.seed,
                           params.batch_count);
     } else {
-        sd_image_t input_image = {(uint32_t) params.width,
-                                  (uint32_t) params.height,
+        sd_image_t input_image = {(uint32_t)params.width,
+                                  (uint32_t)params.height,
                                   3,
                                   input_image_buffer};
 
@@ -619,7 +618,7 @@ int main(int argc, const char *argv[]) {
 
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (params.esrgan_path.size() > 0) {
-        upscaler_ctx_t *upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
+        upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
                                                         params.n_threads,
                                                         params.wtype);
 
@@ -641,7 +640,7 @@ int main(int argc, const char *argv[]) {
         }
     }
 
-    size_t last = params.output_path.find_last_of(".");
+    size_t last            = params.output_path.find_last_of(".");
     std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
     for (int i = 0; i < params.batch_count; i++) {
         if (results[i].data == NULL) {

@@ -475,7 +475,6 @@ struct ResidualAttentionBlock {
 
         ln2_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
         ln2_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
-
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -822,11 +821,11 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
 
             auto hidden_states2 = text_model2.forward(ctx0, input_ids2);  // [N, n_token, hidden_size2]
             hidden_states2      = ggml_reshape_4d(ctx0,
-                                             hidden_states2,
-                                             hidden_states2->ne[0],
-                                             hidden_states2->ne[1],
-                                             hidden_states2->ne[2],
-                                             hidden_states2->ne[3]);
+                                                  hidden_states2,
+                                                  hidden_states2->ne[0],
+                                                  hidden_states2->ne[1],
+                                                  hidden_states2->ne[2],
+                                                  hidden_states2->ne[3]);
             hidden_states2      = ggml_cont(ctx0, ggml_permute(ctx0, hidden_states2, 2, 0, 1, 3));
 
             hidden_states = ggml_concat(ctx0, hidden_states, hidden_states2);  // [N, n_token, hidden_size + hidden_size2]

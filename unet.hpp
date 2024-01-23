@@ -390,7 +390,7 @@ struct SpatialTransformer {
 #if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL)
                 struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, h * w, d_head]
 #else
-                struct ggml_tensor* kq  = ggml_mul_mat(ctx, k, q);   // [N * n_head, h * w, max_position]
+                struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, h * w, max_position]
                 // kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
                 kq = ggml_soft_max_inplace(ctx, kq);
 
@@ -418,15 +418,15 @@ struct SpatialTransformer {
             {
                 // GEGLU
                 auto x_w    = ggml_view_2d(ctx,
-                                        transformer.ff_0_proj_w,
-                                        transformer.ff_0_proj_w->ne[0],
-                                        transformer.ff_0_proj_w->ne[1] / 2,
-                                        transformer.ff_0_proj_w->nb[1],
-                                        0);  // [in_channels * 4, in_channels]
+                                           transformer.ff_0_proj_w,
+                                           transformer.ff_0_proj_w->ne[0],
+                                           transformer.ff_0_proj_w->ne[1] / 2,
+                                           transformer.ff_0_proj_w->nb[1],
+                                           0);  // [in_channels * 4, in_channels]
                 auto x_b    = ggml_view_1d(ctx,
-                                        transformer.ff_0_proj_b,
-                                        transformer.ff_0_proj_b->ne[0] / 2,
-                                        0);  // [in_channels * 4, in_channels]
+                                           transformer.ff_0_proj_b,
+                                           transformer.ff_0_proj_b->ne[0] / 2,
+                                           0);  // [in_channels * 4, in_channels]
                 auto gate_w = ggml_view_2d(ctx,
                                            transformer.ff_0_proj_w,
                                            transformer.ff_0_proj_w->ne[0],
