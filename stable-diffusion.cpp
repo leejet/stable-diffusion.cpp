@@ -82,6 +82,7 @@ public:
 
     TinyAutoEncoder tae_first_stage;
 
+    std::string model_path;
     std::string clip_path;
     std::string vae_path;
     std::string unet_path;
@@ -156,7 +157,17 @@ public:
                      sd_type_t wtype,
                      schedule_t schedule) {
         this->n_threads = n_threads;
-        bool standalone=vae_path != clip_path && vae_path != unet_path;
+        bool standalone = clip_path != vae_path && vae_path != unet_path;
+
+        std::string model_path;
+        if (!standalone && clip_path == vae_path) {
+            model_path = clip_path;
+        }
+
+        if (!standalone && vae_path == unet_path) {
+            model_path = vae_path;
+        }
+
         if (this->vae_decode_only != vae_decode_only) {
             this->vae_decode_only = vae_decode_only;
             if (!vae_path.empty() && first_stage_model.params_buffer_size > 0) {
@@ -178,12 +189,17 @@ public:
         }
         this->vae_tiling = vae_tiling;
 
-        if (this->wtype !=(ggml_type) wtype) {
+        if (this->wtype != (ggml_type) wtype) {
             this->wtype = (ggml_type) wtype;
-            // TODO: change wtype, need reload model
+            // TODO: can reload weight
+//            if (!standalone) {
+//                free_diffusions_params();
+//                load_diffusions_from_file(model_path);
+//            }
+
         }
 
-        if (this->schedule!=schedule){
+        if (this->schedule != schedule) {
             this->schedule = schedule;
             apply_schedule();
         }

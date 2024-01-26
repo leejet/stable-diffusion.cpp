@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <set>
 
 #include "stable-diffusion.h"
 
@@ -408,67 +409,88 @@ void parse_args(int argc, const char **argv, SDParams &params) {
         print_usage(argc, argv);
         exit(1);
     }
+}
+
+bool check_params(SDParams params) {
+    std::vector<std::string> required_args;
+    std::vector<std::string> invalid_args;
 
     if (params.n_threads <= 0) {
         params.n_threads = get_num_physical_cores();
     }
 
-    if (params.mode != STREAM) {
-        if (params.mode != CONVERT && params.prompt.length() == 0) {
-            fprintf(stderr, "error: the following arguments are required: prompt\n");
-            print_usage(argc, argv);
-            exit(1);
-        }
+    if (params.mode != CONVERT && params.prompt.length() == 0) {
+        required_args.emplace_back("prompt");
+    }
 
-        if (params.model_path.length() == 0) {
-            fprintf(stderr, "error: the following arguments are required: model_path\n");
-            print_usage(argc, argv);
-            exit(1);
-        }
+    if (params.model_path.length() == 0) {
+        required_args.emplace_back("model_path");
+    }
 
-        if (params.mode == IMG2IMG && params.input_path.length() == 0) {
-            fprintf(stderr, "error: when using the img2img mode, the following arguments are required: init-img\n");
-            print_usage(argc, argv);
-            exit(1);
-        }
+    if (params.mode == IMG2IMG && params.input_path.length() == 0) {
+        required_args.emplace_back("init-img");
+    }
 
-        if (params.output_path.length() == 0) {
-            fprintf(stderr, "error: the following arguments are required: output_path\n");
-            print_usage(argc, argv);
-            exit(1);
-        }
+    if (params.output_path.length() == 0) {
+        required_args.emplace_back("output_path");
+    }
 
-        if (params.width <= 0 || params.width % 64 != 0) {
-            fprintf(stderr, "error: the width must be a multiple of 64\n");
-            exit(1);
-        }
+    if (params.width <= 0 || params.width % 64 != 0) {
+        invalid_args.emplace_back("the width must be a multiple of 64");
+    }
 
-        if (params.height <= 0 || params.height % 64 != 0) {
-            fprintf(stderr, "error: the height must be a multiple of 64\n");
-            exit(1);
-        }
+    if (params.height <= 0 || params.height % 64 != 0) {
+        invalid_args.emplace_back("the height must be a multiple of 64");
+    }
 
-        if (params.sample_steps <= 0) {
-            fprintf(stderr, "error: the sample_steps must be greater than 0\n");
-            exit(1);
-        }
+    if (params.sample_steps <= 0) {
+        invalid_args.emplace_back("the sample_steps must be greater than 0");
+    }
 
-        if (params.strength < 0.f || params.strength > 1.f) {
-            fprintf(stderr, "error: can only work with strength in [0.0, 1.0]\n");
-            exit(1);
-        }
+    if (params.strength < 0.f || params.strength > 1.f) {
+        invalid_args.emplace_back("can only work with strength in [0.0, 1.0]");
+    }
 
-        if (params.seed < 0) {
-            srand((int) time(NULL));
-            params.seed = rand();
-        }
+    if (params.seed < 0) {
+        srand((int) time(NULL));
+        params.seed = rand();
+    }
 
-        if (params.mode == CONVERT) {
-            if (params.output_path == "output.png") {
-                params.output_path = "output.gguf";
-            }
+    if (params.mode == CONVERT) {
+        if (params.output_path == "output.png") {
+            params.output_path = "output.gguf";
         }
     }
+
+    if ((!invalid_args.empty()) || (!required_args.empty())) {
+        if (!invalid_args.empty()) {
+            std::ostringstream oss;
+            for (int i = 0; i < invalid_args.size(); i++) {
+                if (i > 0) {
+                    oss << ",\n";
+                }
+                oss << invalid_args[i];
+            }
+            std::string invalid_args_str = oss.str();
+            std::cout << "error: " << invalid_args_str << std::endl;
+        }
+
+        if (!required_args.empty()) {
+            std::ostringstream oss;
+            for (int i = 0; i < required_args.size(); i++) {
+                if (i > 0) {
+                    oss << ",";
+                }
+                oss << required_args[i];
+            }
+            std::string required_args_str = oss.str();
+            std::cout << "require: " << required_args_str << std::endl;
+        }
+
+        return false;
+    }
+
+    return true;
 }
 
 std::string get_image_params(SDParams params, int64_t seed) {
@@ -505,26 +527,166 @@ void sd_log_cb(enum sd_log_level_t level, const char *log, void *data) {
     }
 }
 
-std::vector<std::string> parse_cin(std::string &input, std::vector<std::string> ignore_args) {
+std::vector<std::string> parse_cin(std::string &input, std::set<std::string> ignore_args) {
     std::vector<std::string> inputTokens;
     std::string token;
     std::istringstream iss(input);
 
     std::string word;
+    bool in_stmt = false;
+    std::string stmt;
+    inputTokens.emplace_back("fake run path, no use!");
     while (iss >> word) {
+        if (word[0] == '"') {
+            in_stmt = true;
+        }
+
+        if (word[word.length() - 1] == '"') {
+            stmt += word;
+            word = stmt.substr(1, stmt.length() - 2);
+            stmt = "";
+            in_stmt = false;
+        }
+
+        if (in_stmt) {
+            stmt += word;
+            stmt += " ";
+            continue;
+        }
         inputTokens.push_back(word);
     }
 
     std::vector<std::string> commands;
     for (int i = 0; i < inputTokens.size(); i++) {
-
-        if (std::find(ignore_args.begin(), ignore_args.end(), inputTokens[i]) != ignore_args.end()) {
+        if (ignore_args.find(inputTokens[i]) != ignore_args.end()) {
             i++;
             continue;
         }
         commands.push_back(inputTokens[i]);
     }
     return commands;
+}
+
+SDParams merge_params(SDParams dst, SDParams src) {
+    if (dst.n_threads != src.n_threads) {
+        if (src.n_threads > 0) {
+            dst.n_threads = src.n_threads;
+        }
+    }
+
+    if (dst.mode != src.mode) {
+        if (src.mode == TXT2IMG || src.mode == IMG2IMG) {
+            dst.mode = src.mode;
+            if (dst.mode == IMG2IMG) {
+                dst.vae_decode_only = false;
+            }
+        }
+    }
+
+    if (dst.model_path != src.model_path) {
+        if (!src.model_path.empty()) {
+            dst.model_path = src.model_path;
+        }
+    }
+
+    if (dst.vae_path != src.vae_path) {
+        if (!src.vae_path.empty()) {
+            dst.vae_path = src.vae_path;
+        }
+    }
+
+    if (dst.clip_path != src.clip_path) {
+        if (!src.clip_path.empty()) {
+            dst.clip_path = src.clip_path;
+        }
+    }
+
+    if (dst.unet_path != src.unet_path) {
+        if (!src.unet_path.empty()) {
+            dst.unet_path = src.unet_path;
+        }
+    }
+
+    if (dst.taesd_path != src.taesd_path) {
+        if (!src.taesd_path.empty()) {
+            dst.taesd_path = src.taesd_path;
+        }
+    }
+
+    if (dst.esrgan_path != src.esrgan_path) {
+        if (!src.esrgan_path.empty()) {
+            dst.esrgan_path = src.esrgan_path;
+        }
+    }
+
+    if (dst.wtype != src.wtype) {
+        dst.wtype = src.wtype;
+    }
+
+    if (dst.lora_model_dir != src.lora_model_dir) {
+        if (!src.lora_model_dir.empty()) {
+            dst.lora_model_dir = src.lora_model_dir;
+        }
+    }
+
+    if (dst.output_path != src.output_path) {
+        if (!src.output_path.empty()) {
+            dst.output_path = src.output_path;
+        }
+    }
+
+    if (dst.prompt != src.prompt) {
+        if (!src.prompt.empty()) {
+            dst.prompt = src.prompt;
+        }
+    }
+
+    if (dst.negative_prompt != src.negative_prompt) {
+        if (!src.negative_prompt.empty()) {
+            dst.negative_prompt = src.negative_prompt;
+        }
+    }
+
+    if (dst.cfg_scale != src.cfg_scale) {
+        if (src.cfg_scale >= 0) {
+            dst.cfg_scale = src.cfg_scale;
+        }
+    }
+
+    if (dst.clip_skip != src.clip_skip) {
+        dst.clip_skip = src.clip_skip;
+    }
+
+    if (dst.width != src.width) {
+        if (src.width > 0 || src.width % 64 == 0) {
+            dst.width = src.width;
+        }
+    }
+
+    if (dst.height != src.height) {
+        if (src.height > 0 || src.height % 64 == 0) {
+            dst.height = src.height;
+        }
+    }
+
+    if (dst.sample_steps != src.sample_steps) {
+        if (src.sample_steps > 0) {
+            dst.sample_steps = src.sample_steps;
+        }
+    }
+
+    if (dst.strength != src.strength) {
+        if (src.strength >= 0.f && src.strength <= 1.f) {
+            dst.strength = src.strength;
+        }
+    }
+
+    if (dst.seed != src.seed) {
+        if (src.seed > 0) {
+            dst.seed = src.seed;
+        }
+    }
+    return dst;
 }
 
 class CliInstance {
@@ -548,7 +710,28 @@ public:
                 true);
     }
 
-    //TODO: dynamic load model
+    bool load_from_file(SDParams &params) {
+        // free api always check if the following methods can free, so we can always free the model before load it.
+        free_diffusions_params(sd_ctx);
+        auto load_status = load_diffusions_from_file(sd_ctx, params.model_path.c_str());
+
+        if (load_status && !params.clip_path.empty()) {
+            free_clip_params(sd_ctx);
+            load_status = load_clip_from_file(sd_ctx, params.clip_path.c_str());
+        }
+
+        if (load_status && !params.vae_path.empty()) {
+            free_vae_params(sd_ctx);
+            load_status = load_vae_from_file(sd_ctx, params.vae_path.c_str());
+        }
+
+        if (load_status && !params.unet_path.empty()) {
+            free_unet_params(sd_ctx);
+            load_status = load_unet_from_file(sd_ctx, params.unet_path.c_str());
+        }
+
+        return load_status;
+    }
 
     void txtimg(SDParams &params) {
         set_options(sd_ctx, params.n_threads,
@@ -682,7 +865,12 @@ protected:
 
 int main(int argc, const char *argv[]) {
     SDParams params;
+
     parse_args(argc, argv, params);
+
+    if (params.mode != STREAM && !check_params(params)) {
+        return 1;
+    }
 
     sd_set_log_callback(sd_log_cb, (void *) &params);
 
@@ -713,34 +901,61 @@ int main(int argc, const char *argv[]) {
     }
 
     auto instance = new CliInstance(params);
+
     if (params.mode == STREAM) {
+        std::cout << "you are in stream model, feel free to use txt2img or img2img" << std::endl;
         while (true) {
-            std::cout << "you are in stream model, take free to use txt2img or img2img" << std::endl;
             std::string input;
+            std::cout << "please input args: " << std::endl;
             std::getline(std::cin, input);
-            std::vector<std::string> ignore_cmd = {""};
-            auto args = parse_cin(input, ignore_cmd);
+            //hold an ignore cmd for feature to ignore the cmd not support
+            std::set<std::string> ignore_cmd = {""};
+            std::vector<std::string> args = parse_cin(input, ignore_cmd);
             SDParams stream_params;
             const char **args_c_arr = new const char *[args.size()];
-            for (int i = 0; i < args.size(); ++i) {
-                args_c_arr[i] = args[i].c_str();
+            for (int i = 0; i < args.size(); i++) {
+                std::string arg = args[i];
+                char *c_str = new char[args[i].length() + 1];
+                std::strcpy(c_str, arg.c_str());
+                args_c_arr[i] = c_str;
             }
             parse_args(args.size(), args_c_arr, stream_params);
-            if (stream_params.mode == TXT2IMG) {
-                instance->txtimg(stream_params);
-            } else if (stream_params.mode == IMG2IMG) {
-                instance->imgimg(stream_params);
+            if (params.model_path != stream_params.model_path ||
+                params.clip_path != stream_params.clip_path ||
+                params.vae_path != stream_params.vae_path ||
+                params.unet_path != stream_params.unet_path) {
+                instance->load_from_file(stream_params);
+            }
+            params = merge_params(params, stream_params);
+            if (!check_params(params)) {
+                continue;
+            }
+            if (params.mode == TXT2IMG) {
+                instance->txtimg(params);
+            } else if (params.mode == IMG2IMG) {
+                instance->imgimg(params);
             } else {
-                exit(1);
+                return 1;
             }
         }
     } else {
+        if (!params.model_path.empty()) {
+            if (!instance->load_from_file(params)) {
+                return 1;
+            }
+        } else {
+            if (!params.clip_path.empty() && !params.vae_path.empty() && !params.unet_path.empty()) {
+                if (!instance->load_from_file(params)) {
+                    return 1;
+                }
+            }
+        }
         if (params.mode == TXT2IMG) {
             instance->txtimg(params);
         } else if (params.mode == IMG2IMG) {
             instance->imgimg(params);
         } else {
-            exit(1);
+            return 0;
         }
     }
     return 0;
