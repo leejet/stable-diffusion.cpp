@@ -63,7 +63,7 @@ endif()
 
 set(SD_LIB stable-diffusion)
 
-add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp model.h model.cpp util.h util.cpp upscaler.cpp
+add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp model.h model.cpp util.h util.cpp upscaler.cpp tensor.hpp
              ggml_extend.hpp clip.hpp common.hpp unet.hpp tae.hpp esrgan.hpp lora.hpp denoiser.hpp rng.hpp rng_philox.hpp)
 
 if(BUILD_SHARED_LIBS)

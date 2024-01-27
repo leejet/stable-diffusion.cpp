@@ -22,6 +22,21 @@ std::u32string unicode_value_to_utf32(int unicode_value);
 
 std::string sd_basename(const std::string& path);
 
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+    uint32_t channel;
+    float* data;
+} sd_image_f32_t;
+
+void normalize_sd_image_f32_t(sd_image_f32_t image, float means[3], float stds[3]);
+
+sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image);
+
+sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int target_height);
+
+sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size);
+
 std::string path_join(const std::string& p1, const std::string& p2);
 
 void pretty_progress(int step, int steps, float time);

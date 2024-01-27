@@ -12,32 +12,35 @@ struct LoraModel : public GGMLModule {
     ModelLoader model_loader;
     bool load_failed = false;
 
-    LoraModel(const std::string file_path = "")
-        : file_path(file_path) {
-        name = "lora";
+    LoraModel(ggml_backend_t backend,
+              ggml_type wtype,
+              const std::string file_path = "")
+        : file_path(file_path), GGMLModule(backend, wtype) {
         if (!model_loader.init_from_file(file_path)) {
             load_failed = true;
         }
     }
 
-    size_t get_num_tensors() {
+    std::string get_desc() {
+        return "lora";
+    }
+
+    size_t get_params_num() {
         return LORA_GRAPH_SIZE;
     }
 
-    size_t calculate_mem_size() {
-        return model_loader.cal_mem_size(NULL);
+    size_t get_params_mem_size() {
+        return model_loader.get_params_mem_size(NULL);
     }
 
-    bool load_from_file(ggml_backend_t backend) {
-        if (!alloc_params_buffer(backend)) {
-            return false;
-        }
+    bool load_from_file() {
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
 
         if (load_failed) {
             LOG_ERROR("init lora model loader from file failed: '%s'", file_path.c_str());
             return false;
         }
+        alloc_params_buffer();
 
         ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
 
@@ -61,20 +64,7 @@ struct LoraModel : public GGMLModule {
     }
 
     struct ggml_cgraph* build_graph(std::map<std::string, struct ggml_tensor*> model_tensors) {
-        // make a graph to compute all lora, expected lora and models tensors are in the same backend
-        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
-        static size_t buf_size = ggml_tensor_overhead() * LORA_GRAPH_SIZE + ggml_graph_overhead();
-        static std::vector<uint8_t> buf(buf_size);
-
-        struct ggml_init_params params = {
-            /*.mem_size   =*/buf_size,
-            /*.mem_buffer =*/buf.data(),
-            /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
-        };
-        // LOG_DEBUG("mem_size %u ", params.mem_size);
-
-        struct ggml_context* ctx0 = ggml_init(params);
-        struct ggml_cgraph* gf    = ggml_new_graph_custom(ctx0, LORA_GRAPH_SIZE, false);
+        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, LORA_GRAPH_SIZE, false);
 
         std::set<std::string> applied_lora_tensors;
         for (auto it : model_tensors) {
@@ -125,27 +115,27 @@ struct LoraModel : public GGMLModule {
 
             // flat lora tensors to multiply it
             int64_t lora_up_rows   = lora_up->ne[ggml_n_dims(lora_up) - 1];
-            lora_up                = ggml_reshape_2d(ctx0, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
+            lora_up                = ggml_reshape_2d(compute_ctx, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
             int64_t lora_down_rows = lora_down->ne[ggml_n_dims(lora_down) - 1];
-            lora_down              = ggml_reshape_2d(ctx0, lora_down, ggml_nelements(lora_down) / lora_down_rows, lora_down_rows);
+            lora_down              = ggml_reshape_2d(compute_ctx, lora_down, ggml_nelements(lora_down) / lora_down_rows, lora_down_rows);
 
             // ggml_mul_mat requires tensor b transposed
-            lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
-            struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_up, lora_down);
-            updown                     = ggml_cont(ctx0, ggml_transpose(ctx0, updown));
-            updown                     = ggml_reshape(ctx0, updown, weight);
+            lora_down                  = ggml_cont(compute_ctx, ggml_transpose(compute_ctx, lora_down));
+            struct ggml_tensor* updown = ggml_mul_mat(compute_ctx, lora_up, lora_down);
+            updown                     = ggml_cont(compute_ctx, ggml_transpose(compute_ctx, updown));
+            updown                     = ggml_reshape(compute_ctx, updown, weight);
             GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
-            updown = ggml_scale_inplace(ctx0, updown, scale_value);
+            updown = ggml_scale_inplace(compute_ctx, updown, scale_value);
             ggml_tensor* final_weight;
             // if (weight->type != GGML_TYPE_F32 && weight->type != GGML_TYPE_F16) {
-            //     final_weight = ggml_new_tensor(ctx0, GGML_TYPE_F32, weight->n_dims, weight->ne);
-            //     final_weight = ggml_cpy_inplace(ctx0, weight, final_weight);
-            //     final_weight = ggml_add_inplace(ctx0, final_weight, updown);
-            //     final_weight = ggml_cpy_inplace(ctx0, final_weight, weight);
+            //     final_weight = ggml_new_tensor(compute_ctx, GGML_TYPE_F32, weight->n_dims, weight->ne);
+            //     final_weight = ggml_cpy_inplace(compute_ctx, weight, final_weight);
+            //     final_weight = ggml_add_inplace(compute_ctx, final_weight, updown);
+            //     final_weight = ggml_cpy_inplace(compute_ctx, final_weight, weight);
             // } else {
-            //     final_weight = ggml_add_inplace(ctx0, weight, updown);
+            //     final_weight = ggml_add_inplace(compute_ctx, weight, updown);
             // }
-            final_weight = ggml_add_inplace(ctx0, weight, updown);  // apply directly
+            final_weight = ggml_add_inplace(compute_ctx, weight, updown);  // apply directly
             ggml_build_forward_expand(gf, final_weight);
         }
 
@@ -158,20 +148,11 @@ struct LoraModel : public GGMLModule {
         return gf;
     }
 
-    void alloc_compute_buffer(std::map<std::string, struct ggml_tensor*> model_tensors) {
-        auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(model_tensors);
-        };
-        GGMLModule::alloc_compute_buffer(get_graph);
-    }
-
     void apply(std::map<std::string, struct ggml_tensor*> model_tensors, int n_threads) {
-        alloc_compute_buffer(model_tensors);
-
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(model_tensors);
         };
-        GGMLModule::compute(get_graph, n_threads);
+        GGMLModule::compute(get_graph, n_threads, true);
     }
 };
 
