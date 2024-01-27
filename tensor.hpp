@@ -151,7 +151,7 @@ private:
         return index;
     }
 
-    std::vector<int> flat_index_to_indices(int flat_index, const std::vector<int>& shape) const {
+    static std::vector<int> flat_index_to_indices(int flat_index, const std::vector<int>& shape) {
         std::vector<int> indices(shape.size(), 0);
 
         int remainder = flat_index;
