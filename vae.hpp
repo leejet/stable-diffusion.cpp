@@ -32,14 +32,14 @@ struct ResnetBlock {
 
     size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
-        mem_size += 2 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                      // norm1_w/b
-        mem_size += out_channels * in_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);   // conv1_w
-        mem_size += 4 * out_channels * ggml_type_sizef(GGML_TYPE_F32);                     // conv1_b/norm2_w/norm2_b/conv2_b
-        mem_size += out_channels * out_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv2_w
+        mem_size += 2 * ggml_row_size(GGML_TYPE_F32, in_channels);                      // norm1_w/b
+        mem_size += ggml_row_size(GGML_TYPE_F16, out_channels * in_channels * 3 * 3);   // conv1_w
+        mem_size += 4 * ggml_row_size(GGML_TYPE_F32, out_channels);                     // conv1_b/norm2_w/norm2_b/conv2_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, out_channels * out_channels * 3 * 3);  // conv2_w
 
         if (out_channels != in_channels) {
-            mem_size += out_channels * in_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // nin_shortcut_w
-            mem_size += out_channels * ggml_type_sizef(GGML_TYPE_F32);                        // nin_shortcut_b
+            mem_size += ggml_row_size(GGML_TYPE_F16, out_channels * in_channels * 1 * 1);  // nin_shortcut_w
+            mem_size += ggml_row_size(GGML_TYPE_F32, out_channels);                        // nin_shortcut_b
         }
         return static_cast<size_t>(mem_size);
     }
@@ -120,8 +120,8 @@ struct AttnBlock {
 
     size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
-        mem_size += 6 * in_channels * ggml_type_sizef(GGML_TYPE_F32);                        // norm_w/norm_b/q_b/k_v/v_b/proj_out_b
-        mem_size += 4 * in_channels * in_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // q_w/k_w/v_w/proj_out_w                                            // object overhead
+        mem_size += 6 * ggml_row_size(GGML_TYPE_F32, in_channels);                        // norm_w/norm_b/q_b/k_v/v_b/proj_out_b
+        mem_size += 4 * ggml_row_size(GGML_TYPE_F16,  in_channels * in_channels * 1 * 1);  // q_w/k_w/v_w/proj_out_w                                            // object overhead
         return static_cast<size_t>(mem_size);
     }
 
@@ -269,17 +269,17 @@ struct Encoder {
     }
 
     size_t calculate_mem_size(ggml_type wtype) {
-        double mem_size = 0;
+        size_t mem_size = 0;
         int len_mults   = sizeof(ch_mult) / sizeof(int);
         int block_in    = ch * ch_mult[len_mults - 1];
 
-        mem_size += ch * in_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv_in_w
-        mem_size += ch * ggml_type_sizef(GGML_TYPE_F32);                        // conv_in_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, ch * in_channels * 3 * 3);  // conv_in_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, ch);                        // conv_in_b
 
-        mem_size += 2 * block_in * ggml_type_sizef(GGML_TYPE_F32);  // norm_out_w/b
+        mem_size += 2 * ggml_row_size(GGML_TYPE_F32, block_in);  // norm_out_w/b
 
-        mem_size += z_channels * 2 * block_in * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv_out_w
-        mem_size += z_channels * 2 * ggml_type_sizef(GGML_TYPE_F32);                     // conv_out_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, z_channels * 2 * block_in * 3 * 3);  // conv_out_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, z_channels * 2);                     // conv_out_b
 
         mem_size += mid.block_1.calculate_mem_size(wtype);
         mem_size += mid.attn_1.calculate_mem_size(wtype);
@@ -294,7 +294,7 @@ struct Encoder {
             }
         }
 
-        return static_cast<size_t>(mem_size);
+        return mem_size;
     }
 
     void init_params(struct ggml_context* ctx, ggml_allocr* alloc, ggml_type wtype) {
@@ -436,13 +436,13 @@ struct Decoder {
         int len_mults   = sizeof(ch_mult) / sizeof(int);
         int block_in    = ch * ch_mult[len_mults - 1];
 
-        mem_size += block_in * z_channels * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv_in_w
-        mem_size += block_in * ggml_type_sizef(GGML_TYPE_F32);                       // conv_in_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, block_in * z_channels * 3 * 3);  // conv_in_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, block_in);                       // conv_in_b
 
-        mem_size += 2 * (ch * ch_mult[0]) * ggml_type_sizef(GGML_TYPE_F32);  // norm_out_w/b
+        mem_size += 2 * ggml_row_size(GGML_TYPE_F32, (ch * ch_mult[0]));  // norm_out_w/b
 
-        mem_size += (ch * ch_mult[0]) * out_ch * 3 * 3 * ggml_type_sizef(GGML_TYPE_F16);  // conv_out_w
-        mem_size += out_ch * ggml_type_sizef(GGML_TYPE_F32);                              // conv_out_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, (ch * ch_mult[0]) * out_ch * 3 * 3);  // conv_out_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, out_ch);                              // conv_out_b
 
         mem_size += mid.block_1.calculate_mem_size(wtype);
         mem_size += mid.attn_1.calculate_mem_size(wtype);
@@ -606,19 +606,19 @@ struct AutoEncoderKL : public GGMLModule {
     }
 
     size_t calculate_mem_size() {
-        double mem_size = 0;
+        size_t mem_size = 0;
 
         if (!decode_only) {
-            mem_size += 2 * embed_dim * 2 * dd_config.z_channels * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // quant_conv_w
-            mem_size += 2 * embed_dim * ggml_type_sizef(GGML_TYPE_F32);                                     // quant_conv_b
+            mem_size += ggml_row_size(GGML_TYPE_F16, 2 * embed_dim * 2 * dd_config.z_channels * 1 * 1);  // quant_conv_w
+            mem_size += ggml_row_size(GGML_TYPE_F32, 2 * embed_dim);                                     // quant_conv_b
             mem_size += encoder.calculate_mem_size(wtype);
         }
 
-        mem_size += dd_config.z_channels * embed_dim * 1 * 1 * ggml_type_sizef(GGML_TYPE_F16);  // post_quant_conv_w
-        mem_size += dd_config.z_channels * ggml_type_sizef(GGML_TYPE_F32);                      // post_quant_conv_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, dd_config.z_channels * embed_dim * 1 * 1);  // post_quant_conv_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, dd_config.z_channels);                      // post_quant_conv_b
 
         mem_size += decoder.calculate_mem_size(wtype);
-        return static_cast<size_t>(mem_size);
+        return mem_size;
     }
 
     size_t get_num_tensors() {

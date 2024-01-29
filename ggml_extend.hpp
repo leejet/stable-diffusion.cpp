@@ -219,7 +219,7 @@ __STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                float value = *(image_data + iy * width * channels + ix * channels + k);
+                int value = *(image_data + iy * width * channels + ix * channels + k);
                 ggml_tensor_set_f32(output, value / 255.0f, ix, iy, k);
             }
         }
@@ -462,8 +462,12 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_group_norm(struct ggml_context* ct
 
 __STATIC_INLINE__ void ggml_backend_tensor_get_and_sync(ggml_backend_t backend, const struct ggml_tensor* tensor, void* data, size_t offset, size_t size) {
 #ifdef SD_USE_CUBLAS
-    ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
-    ggml_backend_synchronize(backend);
+    if(!ggml_backend_is_cpu(backend)) {
+        ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
+        ggml_backend_synchronize(backend);
+    } else {
+        ggml_backend_tensor_get(tensor, data, offset, size);
+    }
 #else
     ggml_backend_tensor_get(tensor, data, offset, size);
 #endif
@@ -544,7 +548,7 @@ struct GGMLModule {
     bool alloc_params_buffer(ggml_backend_t backend_, ggml_type wtype_ = GGML_TYPE_F32) {
         backend            = backend_;
         wtype              = wtype_;
-        params_buffer_size = 10 * 1024 * 1024;  // 10 MB, for padding
+        params_buffer_size = 4 * 1024 * 1024;  // 10 MB, for padding
         params_buffer_size += calculate_mem_size();
         size_t num_tensors = get_num_tensors();
 
