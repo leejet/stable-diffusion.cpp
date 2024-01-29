@@ -917,14 +917,14 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             size_t word_end = str.find(",");
             std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
             embd_name = trim(embd_name);
-            std::string embd_path = path_join(text_model.embd_dir, embd_name + ".pt");
-            if(!file_exists(embd_path)) {
-                embd_path = path_join(text_model.embd_dir, embd_name + ".ckpt");
+            std::string embd_path = get_full_path(text_model.embd_dir, embd_name + ".pt");
+            if(embd_path.size() == 0) {
+                embd_path = get_full_path(text_model.embd_dir, embd_name + ".ckpt");
             }
-            if(!file_exists(embd_path)) {
-                embd_path = path_join(text_model.embd_dir, embd_name + ".safetensors");
+            if(embd_path.size() == 0) {
+                embd_path = get_full_path(text_model.embd_dir, embd_name + ".safetensors");
             }
-            if(file_exists(embd_path)) {
+            if(embd_path.size() > 0) {
                 if(text_model.load_embedding(embd_name, embd_path, bpe_tokens)) {
                     if(word_end != std::string::npos) {
                         str = str.substr(word_end);
