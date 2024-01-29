@@ -6,8 +6,8 @@
 #include <string>
 #include <vector>
 
-#include "stable-diffusion.h"
 #include "preprocessing.hpp"
+#include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -81,7 +81,7 @@ struct SDParams {
     schedule_t schedule           = DEFAULT;
     int sample_steps              = 20;
     float strength                = 0.75f;
-    float control_strength     = 0.9f;
+    float control_strength        = 0.9f;
     rng_type_t rng_type           = CUDA_RNG;
     int64_t seed                  = 42;
     bool verbose                  = false;
@@ -231,7 +231,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.embeddings_path = argv[i];
-        }  else if (arg == "--type") {
+        } else if (arg == "--type") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
@@ -338,7 +338,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.vae_tiling = true;
         } else if (arg == "--control-net-cpu") {
             params.control_net_cpu = true;
-        }  else if (arg == "--canny") {
+        } else if (arg == "--canny") {
             params.canny_preprocess = true;
         } else if (arg == "-b" || arg == "--batch-count") {
             if (++i >= argc) {
@@ -590,18 +590,18 @@ int main(int argc, const char* argv[]) {
     sd_image_t* results;
     if (params.mode == TXT2IMG) {
         sd_image_t* control_image = NULL;
-        if(params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
-            int c = 0;
+        if (params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
+            int c              = 0;
             input_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
-            if(input_image_buffer == NULL) {
+            if (input_image_buffer == NULL) {
                 fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
                 return 1;
             }
             control_image = new sd_image_t{(uint32_t)params.width,
-                                            (uint32_t)params.height,
-                                            3,
-                                            input_image_buffer};
-            if(params.canny_preprocess)  { // apply preprocessor
+                                           (uint32_t)params.height,
+                                           3,
+                                           input_image_buffer};
+            if (params.canny_preprocess) {  // apply preprocessor
                 LOG_INFO("Applying canny preprocessor");
                 control_image->data = preprocess_canny(control_image->data, control_image->width, control_image->height);
             }

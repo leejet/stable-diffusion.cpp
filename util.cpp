@@ -1,6 +1,6 @@
 #include "util.h"
-#include <algorithm>
 #include <stdarg.h>
+#include <algorithm>
 #include <codecvt>
 #include <fstream>
 #include <locale>

@@ -281,7 +281,7 @@ struct SpatialTransformer {
             mem_size += 6 * ggml_row_size(GGML_TYPE_F32, in_channels);            // norm1-3_w/b
             mem_size += 6 * ggml_row_size(wtype, in_channels * in_channels);      // attn1_q/k/v/out_w attn2_q/out_w
             mem_size += 2 * ggml_row_size(wtype, in_channels * context_dim);      // attn2_k/v_w
-            mem_size += ggml_row_size(wtype, in_channels * 4 * 2 * in_channels );  // ff_0_proj_w
+            mem_size += ggml_row_size(wtype, in_channels * 4 * 2 * in_channels);  // ff_0_proj_w
             mem_size += ggml_row_size(GGML_TYPE_F32, in_channels * 4 * 2);        // ff_0_proj_b
             mem_size += ggml_row_size(wtype, in_channels * 4 * in_channels);      // ff_2_w
             mem_size += ggml_row_size(GGML_TYPE_F32, in_channels);                // ff_2_b
@@ -493,15 +493,15 @@ struct SpatialTransformer {
             {
                 // GEGLU
                 auto x_w    = ggml_view_2d(ctx,
-                                        transformer.ff_0_proj_w,
-                                        transformer.ff_0_proj_w->ne[0],
-                                        transformer.ff_0_proj_w->ne[1] / 2,
-                                        transformer.ff_0_proj_w->nb[1],
-                                        0);  // [in_channels * 4, in_channels]
+                                           transformer.ff_0_proj_w,
+                                           transformer.ff_0_proj_w->ne[0],
+                                           transformer.ff_0_proj_w->ne[1] / 2,
+                                           transformer.ff_0_proj_w->nb[1],
+                                           0);  // [in_channels * 4, in_channels]
                 auto x_b    = ggml_view_1d(ctx,
-                                        transformer.ff_0_proj_b,
-                                        transformer.ff_0_proj_b->ne[0] / 2,
-                                        0);  // [in_channels * 4, in_channels]
+                                           transformer.ff_0_proj_b,
+                                           transformer.ff_0_proj_b->ne[0] / 2,
+                                           0);  // [in_channels * 4, in_channels]
                 auto gate_w = ggml_view_2d(ctx,
                                            transformer.ff_0_proj_w,
                                            transformer.ff_0_proj_w->ne[0],

@@ -7,8 +7,8 @@
 #include "util.h"
 
 #include "clip.hpp"
-#include "denoiser.hpp"
 #include "control.hpp"
+#include "denoiser.hpp"
 #include "esrgan.hpp"
 #include "lora.hpp"
 #include "tae.hpp"
@@ -320,15 +320,15 @@ public:
         LOG_DEBUG("finished loaded file");
         ggml_free(ctx);
 
-        if(control_net_path.size() > 0) {
+        if (control_net_path.size() > 0) {
             ggml_backend_t cn_backend = NULL;
-            if(control_net_cpu && !ggml_backend_is_cpu(backend)) {
+            if (control_net_cpu && !ggml_backend_is_cpu(backend)) {
                 LOG_DEBUG("ControlNet: Using CPU backend");
                 cn_backend = ggml_backend_cpu_init();
             } else {
                 cn_backend = backend;
             }
-            if(!control_net.load_from_file(control_net_path, cn_backend, GGML_TYPE_F16 /* just f16 controlnet models */)) {
+            if (!control_net.load_from_file(control_net_path, cn_backend, GGML_TYPE_F16 /* just f16 controlnet models */)) {
                 return false;
             }
         }
@@ -549,8 +549,8 @@ public:
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x_t);
         struct ggml_tensor* timesteps    = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);                                     // [N, ]
         struct ggml_tensor* t_emb        = new_timestep_embedding(work_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
-        struct ggml_tensor* guided_hint   = NULL;
-        if(control_hint != NULL) {
+        struct ggml_tensor* guided_hint  = NULL;
+        if (control_hint != NULL) {
             guided_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, noised_input->ne[0], noised_input->ne[1], diffusion_model.model_channels, 1);
             control_net.process_hint(guided_hint, n_threads, control_hint);
             control_net.alloc_compute_buffer(noised_input, guided_hint, c, t_emb);
@@ -606,7 +606,7 @@ public:
             ggml_tensor_scale(noised_input, c_in);
 
             // cond
-            if(control_hint != NULL) {
+            if (control_hint != NULL) {
                 control_net.compute(n_threads, noised_input, guided_hint, c, t_emb);
             }
             diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
@@ -614,7 +614,7 @@ public:
             float* negative_data = NULL;
             if (has_unconditioned) {
                 // uncond
-                if(control_hint != NULL) {
+                if (control_hint != NULL) {
                     control_net.compute(n_threads, noised_input, guided_hint, uc, t_emb);
                 }
 
@@ -1276,7 +1276,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     }
 
     struct ggml_tensor* image_hint = NULL;
-    if(control_cond != NULL) {
+    if (control_cond != NULL) {
         image_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
         sd_image_to_tensor(control_cond->data, image_hint);
     }
@@ -1451,7 +1451,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
 
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, init_latent, noise, c, c_vector, uc,
-                                    uc_vector, NULL, cfg_scale, sample_method, sigma_sched, 1.0f);
+                                                 uc_vector, NULL, cfg_scale, sample_method, sigma_sched, 1.0f);
     // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
     // print_ggml_tensor(x_0);
     int64_t t3 = ggml_time_ms();

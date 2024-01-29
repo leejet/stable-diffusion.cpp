@@ -121,7 +121,7 @@ struct AttnBlock {
     size_t calculate_mem_size(ggml_type wtype) {
         double mem_size = 0;
         mem_size += 6 * ggml_row_size(GGML_TYPE_F32, in_channels);                        // norm_w/norm_b/q_b/k_v/v_b/proj_out_b
-        mem_size += 4 * ggml_row_size(GGML_TYPE_F16,  in_channels * in_channels * 1 * 1);  // q_w/k_w/v_w/proj_out_w                                            // object overhead
+        mem_size += 4 * ggml_row_size(GGML_TYPE_F16, in_channels * in_channels * 1 * 1);  // q_w/k_w/v_w/proj_out_w                                            // object overhead
         return static_cast<size_t>(mem_size);
     }
 

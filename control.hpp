@@ -1,8 +1,8 @@
 #ifndef __CONTROL_HPP__
 #define __CONTROL_HPP__
 
-#include "ggml_extend.hpp"
 #include "common.hpp"
+#include "ggml_extend.hpp"
 #include "model.h"
 
 #define CONTROL_NET_GRAPH_SIZE 1536
@@ -14,33 +14,33 @@
 */
 
 struct CNHintBlock {
-    int hint_channels = 3;
-    int model_channels = 320; // SD 1.5
-    int feat_channels[4] = { 16, 32, 96, 256 };
-    int num_blocks = 3;
+    int hint_channels    = 3;
+    int model_channels   = 320;  // SD 1.5
+    int feat_channels[4] = {16, 32, 96, 256};
+    int num_blocks       = 3;
     ggml_tensor* conv_first_w;  // [feat_channels[0], hint_channels, 3, 3]
-    ggml_tensor* conv_first_b; // [feat_channels[0]]
+    ggml_tensor* conv_first_b;  // [feat_channels[0]]
 
     struct hint_block {
-        ggml_tensor* conv_0_w; // [feat_channels[idx], feat_channels[idx], 3, 3]
-        ggml_tensor* conv_0_b; // [feat_channels[idx]]
+        ggml_tensor* conv_0_w;  // [feat_channels[idx], feat_channels[idx], 3, 3]
+        ggml_tensor* conv_0_b;  // [feat_channels[idx]]
 
-        ggml_tensor* conv_1_w; // [feat_channels[idx + 1], feat_channels[idx], 3, 3]
-        ggml_tensor* conv_1_b; // [feat_channels[idx + 1]]
+        ggml_tensor* conv_1_w;  // [feat_channels[idx + 1], feat_channels[idx], 3, 3]
+        ggml_tensor* conv_1_b;  // [feat_channels[idx + 1]]
     };
 
     hint_block blocks[3];
-    ggml_tensor* conv_final_w; // [model_channels, feat_channels[3], 3, 3]
-    ggml_tensor* conv_final_b; // [model_channels]
+    ggml_tensor* conv_final_w;  // [model_channels, feat_channels[3], 3, 3]
+    ggml_tensor* conv_final_b;  // [model_channels]
 
     size_t calculate_mem_size() {
         size_t mem_size = feat_channels[0] * hint_channels * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_first_w
-        mem_size += feat_channels[0] * ggml_type_size(GGML_TYPE_F32);                              // conv_first_b
+        mem_size += feat_channels[0] * ggml_type_size(GGML_TYPE_F32);                                // conv_first_b
         for (int i = 0; i < num_blocks; i++) {
-            mem_size += feat_channels[i] * feat_channels[i] * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_0_w
-            mem_size += feat_channels[i] * ggml_type_size(GGML_TYPE_F32);                // conv_0_b
+            mem_size += feat_channels[i] * feat_channels[i] * 3 * 3 * ggml_type_size(GGML_TYPE_F16);      // conv_0_w
+            mem_size += feat_channels[i] * ggml_type_size(GGML_TYPE_F32);                                 // conv_0_b
             mem_size += feat_channels[i + 1] * feat_channels[i] * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_1_w
-            mem_size += feat_channels[i + 1] * ggml_type_size(GGML_TYPE_F32);                // conv_1_b
+            mem_size += feat_channels[i + 1] * ggml_type_size(GGML_TYPE_F32);                             // conv_1_b
         }
         mem_size += model_channels * feat_channels[3] * 3 * 3 * ggml_type_size(GGML_TYPE_F16);  // conv_final_w
         mem_size += model_channels * ggml_type_size(GGML_TYPE_F32);                             // conv_final_b
@@ -65,25 +65,25 @@ struct CNHintBlock {
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         tensors[prefix + "input_hint_block.0.weight"] = conv_first_w;
         tensors[prefix + "input_hint_block.0.bias"]   = conv_first_b;
-        int index = 2;
+        int index                                     = 2;
         for (int i = 0; i < num_blocks; i++) {
-            tensors[prefix + "input_hint_block." + std::to_string(index) +".weight"] = blocks[i].conv_0_w;
-            tensors[prefix + "input_hint_block." + std::to_string(index) +".bias"]   = blocks[i].conv_0_b;
+            tensors[prefix + "input_hint_block." + std::to_string(index) + ".weight"] = blocks[i].conv_0_w;
+            tensors[prefix + "input_hint_block." + std::to_string(index) + ".bias"]   = blocks[i].conv_0_b;
             index += 2;
-            tensors[prefix + "input_hint_block." + std::to_string(index) +".weight"] = blocks[i].conv_1_w;
-            tensors[prefix + "input_hint_block." + std::to_string(index) +".bias"]   = blocks[i].conv_1_b;
+            tensors[prefix + "input_hint_block." + std::to_string(index) + ".weight"] = blocks[i].conv_1_w;
+            tensors[prefix + "input_hint_block." + std::to_string(index) + ".bias"]   = blocks[i].conv_1_b;
             index += 2;
         }
         tensors[prefix + "input_hint_block.14.weight"] = conv_final_w;
         tensors[prefix + "input_hint_block.14.bias"]   = conv_final_b;
     }
 
-     struct ggml_tensor* forward(ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(ggml_context* ctx, struct ggml_tensor* x) {
         auto h = ggml_nn_conv_2d(ctx, x, conv_first_w, conv_first_b, 1, 1, 1, 1);
-        h = ggml_silu_inplace(ctx, h);
+        h      = ggml_silu_inplace(ctx, h);
 
         auto body_h = h;
-        for(int i = 0; i < num_blocks; i++) {
+        for (int i = 0; i < num_blocks; i++) {
             // operations.conv_nd(dims, 16, 16, 3, padding=1)
             body_h = ggml_nn_conv_2d(ctx, body_h, blocks[i].conv_0_w, blocks[i].conv_0_b, 1, 1, 1, 1);
             body_h = ggml_silu_inplace(ctx, body_h);
@@ -101,10 +101,10 @@ struct CNHintBlock {
 struct CNZeroConv {
     int channels;
     ggml_tensor* conv_w;  // [channels, channels, 1, 1]
-    ggml_tensor* conv_b; // [channels]
+    ggml_tensor* conv_b;  // [channels]
 
     void init_params(struct ggml_context* ctx) {
-        conv_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, channels,channels);
+        conv_w = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, 1, channels, channels);
         conv_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, channels);
     }
 };
@@ -119,7 +119,7 @@ struct ControlNet : public GGMLModule {
     std::vector<int> transformer_depth     = {1, 1, 1, 1};
     int time_embed_dim                     = 1280;  // model_channels*4
     int num_heads                          = 8;
-    int num_head_channels                  = -1;    // channels // num_heads
+    int num_head_channels                  = -1;  // channels // num_heads
     int context_dim                        = 768;
     int middle_out_channel;
     CNHintBlock input_hint_block;
@@ -146,20 +146,20 @@ struct ControlNet : public GGMLModule {
     SpatialTransformer middle_block_1;
     ResBlock middle_block_2;
 
-    struct ggml_tensor* middle_block_out_w;  // [middle_out_channel, middle_out_channel, 1, 1]
-    struct ggml_tensor* middle_block_out_b;  // [middle_out_channel, ]
-    ggml_backend_buffer_t control_buffer = NULL; // keep control output tensors in backend memory
-    ggml_context* control_ctx = NULL;
-    std::vector<struct ggml_tensor*> controls; // (12 input block outputs, 1 middle block output) SD 1.5
+    struct ggml_tensor* middle_block_out_w;       // [middle_out_channel, middle_out_channel, 1, 1]
+    struct ggml_tensor* middle_block_out_b;       // [middle_out_channel, ]
+    ggml_backend_buffer_t control_buffer = NULL;  // keep control output tensors in backend memory
+    ggml_context* control_ctx            = NULL;
+    std::vector<struct ggml_tensor*> controls;  // (12 input block outputs, 1 middle block output) SD 1.5
 
     ControlNet() {
         name = "controlnet";
         // input_blocks
         std::vector<int> input_block_chans;
         input_block_chans.push_back(model_channels);
-        int ch = model_channels;
+        int ch                 = model_channels;
         zero_convs[0].channels = model_channels;
-        int ds = 1;
+        int ds                 = 1;
 
         int len_mults = channel_mult.size();
         for (int i = 0; i < len_mults; i++) {
@@ -220,7 +220,7 @@ struct ControlNet : public GGMLModule {
         middle_block_2.channels     = ch;
         middle_block_2.emb_channels = time_embed_dim;
         middle_block_2.out_channels = ch;
-        middle_out_channel = ch;
+        middle_out_channel          = ch;
     }
 
     size_t calculate_mem_size() {
@@ -229,7 +229,7 @@ struct ControlNet : public GGMLModule {
         mem_size += ggml_row_size(wtype, time_embed_dim * model_channels);  // time_embed_0_w
         mem_size += ggml_row_size(GGML_TYPE_F32, time_embed_dim);           // time_embed_0_b
         mem_size += ggml_row_size(wtype, time_embed_dim * time_embed_dim);  // time_embed_2_w
-        mem_size += ggml_row_size(GGML_TYPE_F32,time_embed_dim);           // time_embed_2_b
+        mem_size += ggml_row_size(GGML_TYPE_F32, time_embed_dim);           // time_embed_2_b
 
         mem_size += ggml_row_size(GGML_TYPE_F16, model_channels * in_channels * 3 * 3);  // input_block_0_w
         mem_size += ggml_row_size(GGML_TYPE_F32, model_channels);                        // input_block_0_b
@@ -260,8 +260,8 @@ struct ControlNet : public GGMLModule {
         mem_size += middle_block_1.calculate_mem_size(wtype);
         mem_size += middle_block_2.calculate_mem_size(wtype);
 
-        mem_size += ggml_row_size(GGML_TYPE_F16, middle_out_channel * middle_out_channel);   // middle_block_out_w
-        mem_size += ggml_row_size(GGML_TYPE_F32, middle_out_channel);                        // middle_block_out_b
+        mem_size += ggml_row_size(GGML_TYPE_F16, middle_out_channel * middle_out_channel);  // middle_block_out_w
+        mem_size += ggml_row_size(GGML_TYPE_F32, middle_out_channel);                       // middle_block_out_b
 
         return mem_size;
     }
@@ -299,10 +299,10 @@ struct ControlNet : public GGMLModule {
 
         input_hint_block.init_params(params_ctx);
 
-        time_embed_0_w     = ggml_new_tensor_2d(params_ctx, wtype, model_channels, time_embed_dim);
-        time_embed_0_b     = ggml_new_tensor_1d(params_ctx, GGML_TYPE_F32, time_embed_dim);
-        time_embed_2_w     = ggml_new_tensor_2d(params_ctx, wtype, time_embed_dim, time_embed_dim);
-        time_embed_2_b     = ggml_new_tensor_1d(params_ctx, GGML_TYPE_F32, time_embed_dim);
+        time_embed_0_w = ggml_new_tensor_2d(params_ctx, wtype, model_channels, time_embed_dim);
+        time_embed_0_b = ggml_new_tensor_1d(params_ctx, GGML_TYPE_F32, time_embed_dim);
+        time_embed_2_w = ggml_new_tensor_2d(params_ctx, wtype, time_embed_dim, time_embed_dim);
+        time_embed_2_b = ggml_new_tensor_1d(params_ctx, GGML_TYPE_F32, time_embed_dim);
 
         // input_blocks
         input_block_0_w = ggml_new_tensor_4d(params_ctx, GGML_TYPE_F16, 3, 3, in_channels, model_channels);
@@ -449,8 +449,8 @@ struct ControlNet : public GGMLModule {
         }
 
         for (int i = 0; i < num_zero_convs; i++) {
-            tensors[prefix + "zero_convs."+ std::to_string(i) + ".0.weight"] = zero_convs[i].conv_w;
-            tensors[prefix + "zero_convs."+ std::to_string(i) + ".0.bias"]   = zero_convs[i].conv_b;
+            tensors[prefix + "zero_convs." + std::to_string(i) + ".0.weight"] = zero_convs[i].conv_w;
+            tensors[prefix + "zero_convs." + std::to_string(i) + ".0.bias"]   = zero_convs[i].conv_b;
         }
 
         // middle_blocks
@@ -474,9 +474,9 @@ struct ControlNet : public GGMLModule {
         };
 
         struct ggml_context* ctx0 = ggml_init(params);
-        struct ggml_cgraph* gf = ggml_new_graph(ctx0);
+        struct ggml_cgraph* gf    = ggml_new_graph(ctx0);
         // temporal tensors for transfer tensors from cpu to gpu if needed
-        struct ggml_tensor* hint_t      = NULL;
+        struct ggml_tensor* hint_t = NULL;
         // it's performing a compute, check if backend isn't cpu
         if (!ggml_backend_is_cpu(backend)) {
             // pass input tensors to gpu memory
@@ -488,7 +488,7 @@ struct ControlNet : public GGMLModule {
             }
         } else {
             // if it's cpu backend just pass the same tensors
-            hint_t      = hint;
+            hint_t = hint;
         }
         struct ggml_tensor* out = input_hint_block.forward(ctx0, hint_t);
         ggml_build_forward_expand(gf, out);
@@ -499,7 +499,7 @@ struct ControlNet : public GGMLModule {
     void process_hint(struct ggml_tensor* output, int n_threads, struct ggml_tensor* hint) {
         // compute buffer size
         auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph_hint(hint);
+            return build_graph_hint(hint);
         };
         GGMLModule::alloc_compute_buffer(get_graph);
         // perform computation
@@ -508,12 +508,12 @@ struct ControlNet : public GGMLModule {
     }
 
     void forward(struct ggml_cgraph* gf,
-                struct ggml_context* ctx0,
-                struct ggml_tensor* x,
-                struct ggml_tensor* hint,
-                struct ggml_tensor* timesteps,
-                struct ggml_tensor* context,
-                struct ggml_tensor* t_emb = NULL) {
+                 struct ggml_context* ctx0,
+                 struct ggml_tensor* x,
+                 struct ggml_tensor* hint,
+                 struct ggml_tensor* timesteps,
+                 struct ggml_tensor* context,
+                 struct ggml_tensor* t_emb = NULL) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
         // t_emb: [N, model_channels]
@@ -532,7 +532,7 @@ struct ControlNet : public GGMLModule {
 
         // input block 0
         struct ggml_tensor* h = ggml_nn_conv_2d(ctx0, x, input_block_0_w, input_block_0_b, 1, 1, 1, 1);  // [N, model_channels, h, w]
-        h = ggml_add(ctx0, h, hint);
+        h                     = ggml_add(ctx0, h, hint);
 
         auto h_c = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, h_c, controls[zero_conv_offset]));
@@ -554,7 +554,7 @@ struct ControlNet : public GGMLModule {
             }
             if (i != len_mults - 1) {
                 ds *= 2;
-                h = input_down_samples[i].forward(ctx0, h);  // [N, mult*model_channels, h/(2^(i+1)), w/(2^(i+1))]
+                h   = input_down_samples[i].forward(ctx0, h);  // [N, mult*model_channels, h/(2^(i+1)), w/(2^(i+1))]
                 h_c = ggml_nn_conv_2d(ctx0, h, zero_convs[zero_conv_offset].conv_w, zero_convs[zero_conv_offset].conv_b);
                 ggml_build_forward_expand(gf, ggml_cpy(ctx0, h_c, controls[zero_conv_offset]));
                 zero_conv_offset++;
@@ -603,7 +603,7 @@ struct ControlNet : public GGMLModule {
             // pass input tensors to gpu memory
             x_t       = ggml_dup_tensor(ctx0, x);
             context_t = ggml_dup_tensor(ctx0, context);
-            hint_t = ggml_dup_tensor(ctx0, hint);
+            hint_t    = ggml_dup_tensor(ctx0, hint);
             ggml_allocr_alloc(compute_allocr, x_t);
             if (timesteps != NULL) {
                 timesteps_t = ggml_dup_tensor(ctx0, timesteps);
@@ -649,17 +649,19 @@ struct ControlNet : public GGMLModule {
                               struct ggml_tensor* t_emb = NULL) {
         {
             struct ggml_init_params params;
-            params.mem_size   = static_cast<size_t>(14 * ggml_tensor_overhead()) + 256;
-            params.mem_buffer = NULL;
-            params.no_alloc   = true;
-            control_ctx = ggml_init(params);
+            params.mem_size            = static_cast<size_t>(14 * ggml_tensor_overhead()) + 256;
+            params.mem_buffer          = NULL;
+            params.no_alloc            = true;
+            control_ctx                = ggml_init(params);
             size_t control_buffer_size = 0;
             int w = x->ne[0], h = x->ne[1], steps = 0;
-            for(int i = 0; i < (num_zero_convs + 1); i++) {
+            for (int i = 0; i < (num_zero_convs + 1); i++) {
                 bool last = i == num_zero_convs;
-                int c =  last ? middle_out_channel : zero_convs[i].channels;
-                if(!last && steps == 3) {
-                    w /= 2; h /= 2; steps = 0;
+                int c     = last ? middle_out_channel : zero_convs[i].channels;
+                if (!last && steps == 3) {
+                    w /= 2;
+                    h /= 2;
+                    steps = 0;
                 }
                 controls.push_back(ggml_new_tensor_4d(control_ctx, GGML_TYPE_F32, w, h, c, 1));
                 control_buffer_size += ggml_nbytes(controls[i]);
@@ -692,4 +694,4 @@ struct ControlNet : public GGMLModule {
     }
 };
 
-#endif // __CONTROL_HPP__
+#endif  // __CONTROL_HPP__

@@ -375,7 +375,7 @@ std::string convert_tensor_name(const std::string& name) {
         new_name = convert_open_clip_to_hf_clip(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
         new_name = convert_vae_decoder_name(name);
-    } else if (starts_with(name, "control_model.")) { // for controlnet pth models
+    } else if (starts_with(name, "control_model.")) {  // for controlnet pth models
         size_t pos = name.find('.');
         if (pos != std::string::npos) {
             new_name = name.substr(pos + 1);
