@@ -1447,9 +1447,6 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     }
 
     std::vector<struct ggml_tensor*> final_latents;  // collect latents to decode
-    int C = 4;
-    int W = width / 8;
-    int H = height / 8;
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
