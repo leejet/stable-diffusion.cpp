@@ -1379,6 +1379,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10 MB
     params.mem_size += width * height * 3 * sizeof(float) * 2;
+    params.mem_size *= batch_count;
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);
@@ -1445,48 +1446,71 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         sd_ctx->sd->cond_stage_model.free_params_buffer();
     }
 
-    sd_ctx->sd->rng->manual_seed(seed);
-    struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, init_latent);
-    ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
-
+    std::vector<struct ggml_tensor*> final_latents;  // collect latents to decode
+    int C = 4;
+    int W = width / 8;
+    int H = height / 8;
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
-    struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, init_latent, noise, c, c_vector, uc,
-                                                 uc_vector, NULL, cfg_scale, sample_method, sigma_sched, 1.0f);
-    // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
-    // print_ggml_tensor(x_0);
-    int64_t t3 = ggml_time_ms();
-    LOG_INFO("sampling completed, taking %.2fs", (t3 - t2) * 1.0f / 1000);
+    for (int b = 0; b < batch_count; b++) {
+        int64_t sampling_start = ggml_time_ms();
+        int64_t cur_seed       = seed + b;
+        LOG_INFO("generating image: %i/%i - seed %i", b + 1, batch_count, cur_seed);
+
+        sd_ctx->sd->rng->manual_seed(cur_seed);
+        struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, init_latent);
+        ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
+
+        LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
+        struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, init_latent, noise, c, c_vector, uc,
+                                                     uc_vector, NULL, cfg_scale, sample_method, sigma_sched, 1.0f);
+        // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
+        // print_ggml_tensor(x_0);
+        int64_t sampling_end = ggml_time_ms();
+        LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+        final_latents.push_back(x_0);
+    }
+
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->diffusion_model.free_params_buffer();
     }
 
-    struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, x_0);
+    int64_t t3 = ggml_time_ms();
+    LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
+
+    LOG_INFO("decoding %zu latents", final_latents.size());
+    std::vector<struct ggml_tensor*> decoded_images;  // collect decoded images
+    for (size_t i = 0; i < final_latents.size(); i++) {
+        t1                      = ggml_time_ms();
+        struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, final_latents[i] /* x_0 */);
+        // print_ggml_tensor(img);
+        if (img != NULL) {
+            decoded_images.push_back(img);
+        }
+        int64_t t2 = ggml_time_ms();
+        LOG_INFO("latent %" PRId64 " decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
+    }
+
+    int64_t t4 = ggml_time_ms();
+    LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
     if (sd_ctx->sd->free_params_immediately && !sd_ctx->sd->use_tiny_autoencoder) {
         sd_ctx->sd->first_stage_model.free_params_buffer();
     }
-    if (img == NULL) {
-        ggml_free(work_ctx);
-        return NULL;
-    }
-
-    sd_image_t* result_images = (sd_image_t*)calloc(1, sizeof(sd_image_t));
+    sd_image_t* result_images = (sd_image_t*)calloc(batch_count, sizeof(sd_image_t));
     if (result_images == NULL) {
         ggml_free(work_ctx);
         return NULL;
     }
 
-    for (size_t i = 0; i < 1; i++) {
+    for (size_t i = 0; i < decoded_images.size(); i++) {
         result_images[i].width   = width;
         result_images[i].height  = height;
         result_images[i].channel = 3;
-        result_images[i].data    = sd_tensor_to_image(img);
+        result_images[i].data    = sd_tensor_to_image(decoded_images[i]);
     }
     ggml_free(work_ctx);
-
-    int64_t t4 = ggml_time_ms();
-    LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
-
-    LOG_INFO("img2img completed in %.2fs", (t4 - t0) * 1.0f / 1000);
+    LOG_INFO(
+        "img2img completed in %.2fs",
+        (t4 - t0) * 1.0f / 1000);
 
     return result_images;
 }
