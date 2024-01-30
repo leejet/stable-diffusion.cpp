@@ -1505,9 +1505,8 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         result_images[i].data    = sd_tensor_to_image(decoded_images[i]);
     }
     ggml_free(work_ctx);
-    LOG_INFO(
-        "img2img completed in %.2fs",
-        (t4 - t0) * 1.0f / 1000);
+    
+    LOG_INFO("img2img completed in %.2fs", (t4 - t0) * 1.0f / 1000);
 
     return result_images;
 }
