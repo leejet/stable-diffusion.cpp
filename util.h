@@ -15,6 +15,7 @@ void replace_all_chars(std::string& str, char target, char replacement);
 
 bool file_exists(const std::string& filename);
 bool is_directory(const std::string& path);
+std::string get_full_path(const std::string& dir, const std::string& filename);
 
 std::u32string utf8_to_utf32(const std::string& utf8_str);
 std::string utf32_to_utf8(const std::u32string& utf32_str);
@@ -27,6 +28,8 @@ std::string path_join(const std::string& p1, const std::string& p2);
 void pretty_progress(int step, int steps, float time);
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
+
+std::string trim(const std::string& s);
 
 #define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)

@@ -376,7 +376,7 @@ struct ESRGAN : public GGMLModule {
         struct ggml_cgraph* gf = ggml_new_graph(ctx0);
 
         struct ggml_tensor* x_ = NULL;
-        float out_scale = 0.2f;
+        float out_scale        = 0.2f;
 
         // it's performing a compute, check if backend isn't cpu
         if (!ggml_backend_is_cpu(backend)) {

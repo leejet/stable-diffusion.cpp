@@ -1,6 +1,6 @@
 #include "util.h"
-
 #include <stdarg.h>
+#include <algorithm>
 #include <codecvt>
 #include <fstream>
 #include <locale>
@@ -72,6 +72,20 @@ bool is_directory(const std::string& path) {
     return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
+std::string get_full_path(const std::string& dir, const std::string& filename) {
+    std::string full_path = dir + "\\" + filename;
+
+    WIN32_FIND_DATA find_file_data;
+    HANDLE hFind = FindFirstFile(full_path.c_str(), &find_file_data);
+
+    if (hFind != INVALID_HANDLE_VALUE) {
+        FindClose(hFind);
+        return full_path;
+    } else {
+        return "";
+    }
+}
+
 #else  // Unix
 #include <dirent.h>
 #include <sys/stat.h>
@@ -84,6 +98,25 @@ bool file_exists(const std::string& filename) {
 bool is_directory(const std::string& path) {
     struct stat buffer;
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
+}
+
+std::string get_full_path(const std::string& dir, const std::string& filename) {
+    DIR* dp = opendir(dir.c_str());
+
+    if (dp != nullptr) {
+        struct dirent* entry;
+
+        while ((entry = readdir(dp)) != nullptr) {
+            if (strcasecmp(entry->d_name, filename.c_str()) == 0) {
+                closedir(dp);
+                return dir + "/" + entry->d_name;
+            }
+        }
+
+        closedir(dp);
+    }
+
+    return "";
 }
 
 #endif
@@ -190,6 +223,24 @@ void pretty_progress(int step, int steps, float time) {
     if (step == steps) {
         printf("\n");
     }
+}
+
+std::string ltrim(const std::string& s) {
+    auto it = std::find_if(s.begin(), s.end(), [](int ch) {
+        return !std::isspace(ch);
+    });
+    return std::string(it, s.end());
+}
+
+std::string rtrim(const std::string& s) {
+    auto it = std::find_if(s.rbegin(), s.rend(), [](int ch) {
+        return !std::isspace(ch);
+    });
+    return std::string(s.begin(), it.base());
+}
+
+std::string trim(const std::string& s) {
+    return rtrim(ltrim(s));
 }
 
 static sd_log_cb_t sd_log_cb = NULL;
