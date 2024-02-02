@@ -803,6 +803,138 @@ struct CLIPTextModel {
     }
 };
 
+
+struct CLIPVisionModel {
+    CLIPVersion version = OPENAI_CLIP_VIT_L_14;
+    // network hparams   
+    int32_t hidden_size             = 1024;  
+    int32_t intermediate_size       = 4096;   // for OPEN_CLIP_VIT_H_14
+    int32_t n_head                  = 16;    // num_attention_heads, 16 for OPEN_CLIP_VIT_H_14
+    int32_t num_hidden_layers       = 24;    // 24 for OPEN_CLIP_VIT_H_14
+    int32_t patch_size              = 14; 
+    int32_t projection_dim          = 768;  // only for OPEN_CLIP_VIT_BIGG_14
+        
+    // embeddings
+    struct ggml_tensor * class_embedding;  // [hidden_size,]
+    struct ggml_tensor * patch_embeddings; // [patch_size,patch_size,3,hidden_size]
+    struct ggml_tensor * position_embeddings; // [hidden_size, 257]
+
+    // transformer
+    std::vector<ResidualAttentionBlock> resblocks;
+    
+    struct ggml_tensor * pre_ln_w; // [hidden_size,]
+    struct ggml_tensor * pre_ln_b; // [hidden_size,]
+    // std::vector<clip_layer> layers;
+
+    struct ggml_tensor * post_ln_w; // [hidden_size,]
+    struct ggml_tensor * post_ln_b; // [hidden_size,]
+
+    struct ggml_tensor* visual_projection;
+    
+
+    CLIPVisionModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14)
+        : version(version){        
+    
+        resblocks.resize(num_hidden_layers);
+        set_resblocks_hp_params();
+    }    
+
+    void set_resblocks_hp_params() {
+        int d_model = hidden_size / n_head;  // 64 / SDXL is 40 for CLIPTextModelWithProjection
+        for (int i = 0; i < num_hidden_layers; i++) {
+            resblocks[i].d_model           = d_model;
+            resblocks[i].n_head            = n_head;
+            resblocks[i].hidden_size       = hidden_size;
+            resblocks[i].intermediate_size = intermediate_size;
+        }
+    }
+
+    size_t calculate_mem_size(ggml_type wtype) {
+        size_t mem_size = 0;                        
+        for (int i = 0; i < num_hidden_layers; i++) {
+            mem_size += resblocks[i].calculate_mem_size(wtype);
+        }
+        mem_size += 4 * ggml_row_size(wtype, hidden_size);  //
+        mem_size += 1 * ggml_row_size(wtype, hidden_size);  //
+        mem_size += ggml_row_size(wtype, hidden_size*patch_size*patch_size*3);  //
+        mem_size += ggml_row_size(wtype, hidden_size*257);  //
+        mem_size += ggml_row_size(wtype, hidden_size * projection_dim);  // visual_projection
+        
+        return mem_size;
+    }
+
+    void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+        tensors[prefix + "post_layernorm.bias"]                  = post_ln_b;
+        tensors[prefix + "post_layernorm.weight"]                = post_ln_w;
+        tensors[prefix + "pre_layrnorm.bias"]                    = pre_ln_b;
+        tensors[prefix + "pre_layrnorm.weight"]                  = pre_ln_w;
+
+        tensors[prefix + "embeddings.patch_embedding.weight"]    = patch_embeddings;
+        tensors[prefix + "embeddings.position_embedding.weight"] = position_embeddings;
+        tensors[prefix + "embeddings.class_embedding"]           = class_embedding;
+        for (int i = 0; i < num_hidden_layers; i++) {
+            std::string name = prefix + "encoder.layers." + std::to_string(i) + ".";
+            resblocks[i].map_by_name(tensors, prefix + "encoder.layers." + std::to_string(i) + ".");
+        }
+        tensors[prefix + "visual_projection"] = visual_projection;
+    }   
+
+
+    struct ggml_tensor* visual_project(struct ggml_context* ctx0, struct ggml_tensor* input){ 
+        auto h = ggml_mul_mat(ctx0, visual_projection, input); 
+        return h;
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx0, struct ggml_tensor* input_ids, struct ggml_tensor* tkn_embeddings, uint32_t max_token_idx = 0, bool return_pooled = false) {
+        // input_ids: [N, n_token]
+        // GGML_ASSERT(input_ids->ne[0] <= position_ids->ne[0]);
+
+        // token_embedding + position_embedding
+        struct ggml_tensor* x = NULL;
+
+        return x;  // [N, n_token, hidden_size]
+    }
+
+    void init_params(ggml_context* ctx, ggml_backend_t backend, ggml_type wtype, ggml_allocr* alloc) {
+        class_embedding = ggml_new_tensor_1d(ctx, wtype, hidden_size);
+
+        patch_embeddings = ggml_new_tensor_4d(ctx, wtype, patch_size, patch_size, 3, hidden_size);
+
+        position_embeddings = ggml_new_tensor_2d(ctx, wtype, hidden_size, 257);
+
+        for (int i = 0; i < num_hidden_layers; i++) {
+            resblocks[i].init_params(ctx, alloc, wtype);
+        }
+
+        pre_ln_w = ggml_new_tensor_1d(ctx, wtype, hidden_size);
+        pre_ln_b = ggml_new_tensor_1d(ctx, wtype, hidden_size);
+        post_ln_w = ggml_new_tensor_1d(ctx, wtype, hidden_size);
+        post_ln_b = ggml_new_tensor_1d(ctx, wtype, hidden_size);
+
+        visual_projection = ggml_new_tensor_2d(ctx, wtype, projection_dim, hidden_size);
+        
+
+        // alloc all tensors linked to this context
+        for (struct ggml_tensor* t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->data == NULL) {
+                ggml_allocr_alloc(alloc, t);
+            }
+        }
+
+        // if (ggml_backend_is_cpu(backend)) {
+        //     for (int i = 0; i < max_position_embeddings; i++) {
+        //         ggml_set_i32_1d(position_ids, i, i);
+        //     }
+        // } else {
+        //     std::vector<int> pos_temp;
+        //     for (int i = 0; i < max_position_embeddings; i++) {
+        //         pos_temp.push_back(i);
+        //     }
+        //     ggml_backend_tensor_set(position_ids, pos_temp.data(), 0, ggml_nbytes(position_ids));
+        // }
+    }
+};
+
 // ldm.modules.encoders.modules.FrozenCLIPEmbedder
 // Ref: https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/cad87bf4e3e0b0a759afa94e933527c3123d59bc/modules/sd_hijack_clip.py#L283
 struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {

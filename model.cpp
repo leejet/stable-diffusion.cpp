@@ -788,7 +788,6 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         for (int i = 0; i < n_dims; i++) {
             ne[i] = shape[i].get<int64_t>();
         }
-
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
 
         tensor_storage.reverse_ne();
@@ -1127,6 +1126,8 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                     if (reader.phase == PickleTensorReader::READ_DIMENS) {
                         reader.tensor_storage.reverse_ne();
                         reader.tensor_storage.file_index = file_index;
+                        // if(strcmp(prefix.c_str(), "pm") == 0)
+                        printf(" got tensor %s \n ", reader.tensor_storage.name.c_str());
                         reader.tensor_storage.name       = prefix + reader.tensor_storage.name;
                         tensor_storages.push_back(reader.tensor_storage);
                         // LOG_DEBUG("%s", reader.tensor_storage.name.c_str());
