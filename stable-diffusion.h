@@ -158,6 +158,10 @@ SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, 
 
 SD_API bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type);
 
+SD_API void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
+
+SD_API std::string sd_basename(const std::string& path);
+
 #ifdef __cplusplus
 }
 #endif
