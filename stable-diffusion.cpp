@@ -7,6 +7,7 @@
 #include "util.h"
 
 #include "clip.hpp"
+#include "pmid.hpp"
 #include "control.hpp"
 #include "denoiser.hpp"
 #include "esrgan.hpp"
@@ -64,6 +65,7 @@ public:
     FrozenCLIPEmbedderWithCustomWords cond_stage_model;
     UNetModel diffusion_model;
     AutoEncoderKL first_stage_model;
+    PhotoMakerIDEncoder pmid_model;
     bool use_tiny_autoencoder = false;
     bool vae_tiling           = false;
     bool stacked_id           = false;
@@ -167,6 +169,8 @@ public:
         }
         cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
         diffusion_model  = UNetModel(version);
+        pmid_model = PhotoMakerIDEncoder(version);
+
 
         LOG_INFO("Stable Diffusion %s ", model_version_to_str[version]);
         if (wtype == GGML_TYPE_COUNT) {
