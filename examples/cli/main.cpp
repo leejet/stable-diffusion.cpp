@@ -3,10 +3,10 @@
 #include <time.h>
 #include <iostream>
 #include <random>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
-#include <sstream>
-#include <set>
 
 #include "preprocessing.hpp"
 #include "stable-diffusion.h"
@@ -20,9 +20,9 @@
 
 #include "stb_image_write.h"
 
-const char *rng_type_to_str[] = {
-        "std_default",
-        "cuda",
+const char* rng_type_to_str[] = {
+    "std_default",
+    "cuda",
 };
 
 // Names of the sampler method, same order as enum sample_method in stable-diffusion.h
@@ -93,7 +93,7 @@ struct SDParams {
     int64_t seed                  = 42;
     bool verbose                  = false;
     bool vae_tiling               = false;
-    bool vae_decode_only = false;
+    bool vae_decode_only          = false;
     bool control_net_cpu          = false;
     bool canny_preprocess         = false;
 };
@@ -190,7 +190,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -v, --verbose                      print extra info\n");
 }
 
-void parse_args(int argc, const char **argv, SDParams &params) {
+void parse_args(int argc, const char** argv, SDParams& params) {
     bool invalid_arg = false;
     std::string arg;
     for (int i = 1; i < argc; i++) {
@@ -496,7 +496,7 @@ bool check_params(SDParams params) {
     }
 
     if (params.seed < 0) {
-        srand((int) time(NULL));
+        srand((int)time(NULL));
         params.seed = rand();
     }
 
@@ -571,8 +571,7 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     }
 }
 
-
-std::vector<std::string> parse_cin(std::string &input, std::set<std::string> ignore_args) {
+std::vector<std::string> parse_cin(std::string& input, std::set<std::string> ignore_args) {
     std::vector<std::string> inputTokens;
     std::string token;
     std::istringstream iss(input);
@@ -588,8 +587,8 @@ std::vector<std::string> parse_cin(std::string &input, std::set<std::string> ign
 
         if (word[word.length() - 1] == '"') {
             stmt += word;
-            word = stmt.substr(1, stmt.length() - 2);
-            stmt = "";
+            word    = stmt.substr(1, stmt.length() - 2);
+            stmt    = "";
             in_stmt = false;
         }
 
@@ -736,26 +735,26 @@ SDParams merge_params(SDParams dst, SDParams src) {
 
 class CliInstance {
 public:
-    sd_ctx_t *sd_ctx;
+    sd_ctx_t* sd_ctx;
 
     ~CliInstance() {
         free_sd_ctx(sd_ctx);
     }
 
-    CliInstance(const SDParams &params) {
+    CliInstance(const SDParams& params) {
         sd_ctx = new_sd_ctx(
-                params.n_threads,
-                params.vae_decode_only,
-                true,
-                params.lora_model_dir.c_str(),
-                params.rng_type,
-                params.vae_tiling,
-                params.wtype,
-                params.schedule,
-                true);
+            params.n_threads,
+            params.vae_decode_only,
+            true,
+            params.lora_model_dir.c_str(),
+            params.rng_type,
+            params.vae_tiling,
+            params.wtype,
+            params.schedule,
+            true);
     }
 
-    bool load_from_file(SDParams &params) {
+    bool load_from_file(SDParams& params) {
         // free api always check if the following methods can free, so we can always free the model before load it.
         free_diffusions_params(sd_ctx);
         auto load_status = load_diffusions_from_file(sd_ctx, params.model_path.c_str());
@@ -778,7 +777,7 @@ public:
         return load_status;
     }
 
-    void txtimg(SDParams &params) {
+    void txtimg(SDParams& params) {
         set_options(sd_ctx, params.n_threads,
                     params.vae_decode_only,
                     true,
@@ -787,7 +786,7 @@ public:
                     params.vae_tiling,
                     params.wtype,
                     params.schedule);
-        sd_image_t *results = txt2img(sd_ctx,
+        sd_image_t* results = txt2img(sd_ctx,
                                       params.prompt.c_str(),
                                       params.negative_prompt.c_str(),
                                       params.clip_skip,
@@ -798,12 +797,11 @@ public:
                                       params.sample_steps,
                                       params.seed,
                                       params.batch_count);
-        results = upscaler(params, results);
+        results             = upscaler(params, results);
         save_image(params, results);
-
     }
 
-    void imgimg(SDParams &params) {
+    void imgimg(SDParams& params) {
         set_options(sd_ctx, params.n_threads,
                     params.vae_decode_only,
                     true,
@@ -812,9 +810,9 @@ public:
                     params.vae_tiling,
                     params.wtype,
                     params.schedule);
-        uint8_t *input_image_buffer = NULL;
+        uint8_t* input_image_buffer = NULL;
 
-        int c = 0;
+        int c              = 0;
         input_image_buffer = stbi_load(params.input_path.c_str(), &params.width, &params.height, &c, 3);
         if (input_image_buffer == NULL) {
             fprintf(stderr, "load image from '%s' failed\n", params.input_path.c_str());
@@ -837,12 +835,12 @@ public:
             return;
         }
 
-        sd_image_t input_image = {(uint32_t) params.width,
-                                  (uint32_t) params.height,
+        sd_image_t input_image = {(uint32_t)params.width,
+                                  (uint32_t)params.height,
                                   3,
                                   input_image_buffer};
 
-        sd_image_t *results = img2img(sd_ctx,
+        sd_image_t* results = img2img(sd_ctx,
                                       input_image,
                                       params.prompt.c_str(),
                                       params.negative_prompt.c_str(),
@@ -855,21 +853,20 @@ public:
                                       params.strength,
                                       params.seed,
                                       params.batch_count);
-        results = upscaler(params, results);
+        results             = upscaler(params, results);
         save_image(params, results);
     }
 
 protected:
-
-    void save_image(const SDParams &params, sd_image_t *results) {
-        size_t last = params.output_path.find_last_of(".");
+    void save_image(const SDParams& params, sd_image_t* results) {
+        size_t last            = params.output_path.find_last_of(".");
         std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
         for (int i = 0; i < params.batch_count; i++) {
             if (results[i].data == NULL) {
                 continue;
             }
             std::string final_image_path =
-                    i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
+                i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
             stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                            results[i].data, 0, get_image_params(params, params.seed + i).c_str());
             printf("save result image to '%s'\n", final_image_path.c_str());
@@ -879,10 +876,10 @@ protected:
         free(results);
     }
 
-    sd_image_t *upscaler(const SDParams &params, sd_image_t *results) {
+    sd_image_t* upscaler(const SDParams& params, sd_image_t* results) {
         int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
         if (params.esrgan_path.size() > 0) {
-            upscaler_ctx_t *upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
+            upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
                                                             params.n_threads,
                                                             params.wtype);
 
@@ -908,7 +905,7 @@ protected:
     }
 };
 
-int main(int argc, const char *argv[]) {
+int main(int argc, const char* argv[]) {
     SDParams params;
 
     parse_args(argc, argv, params);
@@ -917,7 +914,7 @@ int main(int argc, const char *argv[]) {
         return 1;
     }
 
-    sd_set_log_callback(sd_log_cb, (void *) &params);
+    sd_set_log_callback(sd_log_cb, (void*)&params);
 
     if (params.verbose) {
         print_params(params);
@@ -953,14 +950,14 @@ int main(int argc, const char *argv[]) {
             std::string input;
             std::cout << "please input args: " << std::endl;
             std::getline(std::cin, input);
-            //hold an ignore cmd for feature to ignore the cmd not support
+            // hold an ignore cmd for feature to ignore the cmd not support
             std::set<std::string> ignore_cmd = {""};
-            std::vector<std::string> args = parse_cin(input, ignore_cmd);
+            std::vector<std::string> args    = parse_cin(input, ignore_cmd);
             SDParams stream_params;
-            const char **args_c_arr = new const char *[args.size()];
+            const char** args_c_arr = new const char*[args.size()];
             for (int i = 0; i < args.size(); i++) {
                 std::string arg = args[i];
-                char *c_str = new char[args[i].length() + 1];
+                char* c_str     = new char[args[i].length() + 1];
                 std::strcpy(c_str, arg.c_str());
                 args_c_arr[i] = c_str;
             }

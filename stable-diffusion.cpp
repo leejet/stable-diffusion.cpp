@@ -75,11 +75,11 @@ public:
     std::map<std::string, LoraModel> loras;
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
-    schedule_t schedule = DEFAULT;
+    schedule_t schedule                = DEFAULT;
 
-    ggml_backend_t backend = NULL;             // general backend
+    ggml_backend_t backend    = NULL;             // general backend
     ggml_type model_data_type = GGML_TYPE_COUNT;  // runtime weight type
-    ggml_type wtype = GGML_TYPE_COUNT;  // options weight type
+    ggml_type wtype           = GGML_TYPE_COUNT;  // options weight type
 
     TinyAutoEncoder tae_first_stage;
 
@@ -104,15 +104,15 @@ public:
                         ggml_type wtype,
                         schedule_t schedule,
                         bool init_backend_immediately = true)
-            : n_threads(n_threads),
-              vae_decode_only(vae_decode_only),
-              free_params_immediately(free_params_immediately),
-              lora_model_dir(lora_model_dir),
-              vae_tiling(vae_tiling),
-              wtype(wtype),
-              schedule(schedule) {
+        : n_threads(n_threads),
+          vae_decode_only(vae_decode_only),
+          free_params_immediately(free_params_immediately),
+          lora_model_dir(lora_model_dir),
+          vae_tiling(vae_tiling),
+          wtype(wtype),
+          schedule(schedule) {
         first_stage_model.decode_only = vae_decode_only;
-        tae_first_stage.decode_only = vae_decode_only;
+        tae_first_stage.decode_only   = vae_decode_only;
         if (rng_type == STD_DEFAULT_RNG) {
             rng = std::make_shared<STDDefaultRNG>();
         } else if (rng_type == CUDA_RNG) {
@@ -152,13 +152,13 @@ public:
     }
 
     void set_options(int n_threads,
-                    bool vae_decode_only,
-                    bool free_params_immediately,
-                    std::string lora_model_dir,
-                    rng_type_t rng_type,
-                    bool vae_tiling,
-                    sd_type_t wtype,
-                    schedule_t schedule) {
+                     bool vae_decode_only,
+                     bool free_params_immediately,
+                     std::string lora_model_dir,
+                     rng_type_t rng_type,
+                     bool vae_tiling,
+                     sd_type_t wtype,
+                     schedule_t schedule) {
         this->n_threads = n_threads;
         bool standalone = clip_path != vae_path && vae_path != unet_path;
 
@@ -184,7 +184,7 @@ public:
         }
 
         this->free_params_immediately = free_params_immediately;
-        this->lora_model_dir = std::move(lora_model_dir);
+        this->lora_model_dir          = std::move(lora_model_dir);
         if (rng_type == STD_DEFAULT_RNG) {
             rng = std::make_shared<STDDefaultRNG>();
         } else if (rng_type == CUDA_RNG) {
@@ -192,14 +192,13 @@ public:
         }
         this->vae_tiling = vae_tiling;
 
-        if (this->wtype != (ggml_type) wtype) {
-            this->wtype = (ggml_type) wtype;
+        if (this->wtype != (ggml_type)wtype) {
+            this->wtype = (ggml_type)wtype;
             // TODO: can reload weight
             //            if (!standalone) {
             //                free_diffusions_params();
             //                load_diffusions_from_file(model_path);
             //            }
-
         }
 
         if (this->schedule != schedule) {
@@ -208,7 +207,7 @@ public:
         }
     }
 
-     bool load_clip_from_file(const std::string &model_path, bool standalone = true, const std::string &prefix = "te.") {
+    bool load_clip_from_file(const std::string& model_path, bool standalone = true, const std::string& prefix = "te.") {
         if (backend == NULL) {
             LOG_ERROR("if you set init_backend_immediately false, please call init_backend first");
             return false;
@@ -274,11 +273,11 @@ public:
         }
 
         struct ggml_init_params params;
-        params.mem_size = static_cast<size_t>(3 * 1024) * 1024;  // 3M
+        params.mem_size   = static_cast<size_t>(3 * 1024) * 1024;  // 3M
         params.mem_buffer = NULL;
-        params.no_alloc = false;
+        params.no_alloc   = false;
         // LOG_DEBUG("mem_size %u ", params.mem_size);
-        struct ggml_context *ctx = ggml_init(params);  // for  alphas_cumprod and is_using_v_parameterization check
+        struct ggml_context* ctx = ggml_init(params);  // for  alphas_cumprod and is_using_v_parameterization check
         if (!ctx) {
             LOG_ERROR("ggml_init() failed");
             return false;
@@ -288,10 +287,10 @@ public:
         LOG_DEBUG("loading clip weights");
         int64_t t0 = ggml_time_ms();
 
-        std::map<std::string, struct ggml_tensor *> tensors_need_to_load;
+        std::map<std::string, struct ggml_tensor*> tensors_need_to_load;
         std::set<std::string> ignore_tensors;
 
-        for (auto &pair: tensors) {
+        for (auto& pair : tensors) {
             tensors_need_to_load.insert(pair);
         }
 
@@ -316,9 +315,9 @@ public:
         }
     }
 
-    bool load_unet_from_file(const std::string &model_path,
-                             bool standalone = true,
-                             const std::string &prefix = "unet.") {
+    bool load_unet_from_file(const std::string& model_path,
+                             bool standalone           = true,
+                             const std::string& prefix = "unet.") {
         if (backend == NULL) {
             LOG_ERROR("if you set init_backend_immediately false, please call init_backend first");
             return false;
@@ -351,11 +350,11 @@ public:
         }
 
         struct ggml_init_params params;
-        params.mem_size = static_cast<size_t>(3 * 1024) * 1024;  // 3M
+        params.mem_size   = static_cast<size_t>(3 * 1024) * 1024;  // 3M
         params.mem_buffer = NULL;
-        params.no_alloc = false;
+        params.no_alloc   = false;
 
-        struct ggml_context *ctx = ggml_init(params);  // for  alphas_cumprod and is_using_v_parameterization check
+        struct ggml_context* ctx = ggml_init(params);  // for  alphas_cumprod and is_using_v_parameterization check
 
         if (!ctx) {
             LOG_ERROR("ggml_init() failed");
@@ -366,13 +365,13 @@ public:
         LOG_DEBUG("loading weights");
         int64_t t0 = ggml_time_ms();
 
-        std::map<std::string, struct ggml_tensor *> tensors_need_to_load;
+        std::map<std::string, struct ggml_tensor*> tensors_need_to_load;
         std::set<std::string> ignore_tensors;
-        ggml_tensor *alphas_cumprod_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, TIMESTEPS);
-        calculate_alphas_cumprod((float *) alphas_cumprod_tensor->data);
+        ggml_tensor* alphas_cumprod_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, TIMESTEPS);
+        calculate_alphas_cumprod((float*)alphas_cumprod_tensor->data);
         tensors_need_to_load["alphas_cumprod"] = alphas_cumprod_tensor;
-        for (auto &pair: tensors) {
-            const std::string &name = pair.first;
+        for (auto& pair : tensors) {
+            const std::string& name = pair.first;
             if (starts_with(name, "cond_stage_model.") || starts_with(name, "first_stage_model.")) {
                 ignore_tensors.insert(name);
                 continue;
@@ -415,9 +414,9 @@ public:
         }
     }
 
-    bool load_vae_from_file(const std::string &model_path,
-                            bool standalone = true,
-                            const std::string &prefix = "vae.") {
+    bool load_vae_from_file(const std::string& model_path,
+                            bool standalone           = true,
+                            const std::string& prefix = "vae.") {
         if (backend == NULL) {
             LOG_ERROR("if you set init_backend_immediately false, please call init_backend first");
             return false;
@@ -454,11 +453,11 @@ public:
         }
 
         struct ggml_init_params params;
-        params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 3M
+        params.mem_size   = static_cast<size_t>(10 * 1024) * 1024;  // 3M
         params.mem_buffer = NULL;
-        params.no_alloc = false;
+        params.no_alloc   = false;
         // LOG_DEBUG("mem_size %u ", params.mem_size);
-        struct ggml_context *ctx = ggml_init(params);  // for  alphas_cumprod and is_using_v_parameterization check
+        struct ggml_context* ctx = ggml_init(params);  // for  alphas_cumprod and is_using_v_parameterization check
         if (!ctx) {
             LOG_ERROR("ggml_init() failed");
             return false;
@@ -468,10 +467,10 @@ public:
         LOG_DEBUG("loading weights");
         int64_t t0 = ggml_time_ms();
 
-        std::map<std::string, struct ggml_tensor *> tensors_need_to_load;
+        std::map<std::string, struct ggml_tensor*> tensors_need_to_load;
         std::set<std::string> ignore_tensors;
-        for (auto &pair: tensors) {
-            const std::string &name = pair.first;
+        for (auto& pair : tensors) {
+            const std::string& name = pair.first;
             if (vae_decode_only &&
                 (starts_with(name, "first_stage_model.encoder") || starts_with(name, "first_stage_model.quant"))) {
                 ignore_tensors.insert(name);
@@ -500,7 +499,7 @@ public:
     }
 
     // load the all model from one file
-    bool load_diffusions_from_file(const std::string &model_path) {
+    bool load_diffusions_from_file(const std::string& model_path) {
         LOG_INFO("loading model from '%s'", model_path.c_str());
         if (!load_clip_from_file(model_path, false, "")) {
             free_clip_params();
@@ -534,7 +533,7 @@ public:
         LOG_INFO("free vae params");
     }
 
-    bool load_taesd_from_file(const std::string &taesd_path) {
+    bool load_taesd_from_file(const std::string& taesd_path) {
         if (first_stage_model.params_buffer_size > 0) {
             free_vae_params();
         }
@@ -542,7 +541,7 @@ public:
             return false;
         }
 
-        this->taesd_path = taesd_path;
+        this->taesd_path     = taesd_path;
         use_tiny_autoencoder = true;
         return true;
     }
@@ -826,25 +825,25 @@ public:
             switch (schedule) {
                 case DISCRETE:
                     LOG_INFO("running with discrete schedule");
-                denoiser->schedule = std::make_shared<DiscreteSchedule>();
-                break;
+                    denoiser->schedule = std::make_shared<DiscreteSchedule>();
+                    break;
                 case KARRAS:
                     LOG_INFO("running with Karras schedule");
-                denoiser->schedule = std::make_shared<KarrasSchedule>();
-                break;
+                    denoiser->schedule = std::make_shared<KarrasSchedule>();
+                    break;
                 case DEFAULT:
                     // Don't touch anything.
-                        break;
+                    break;
                 default:
                     LOG_ERROR("Unknown schedule %i", schedule);
-                abort();
+                    abort();
             }
         }
 
         for (int i = 0; i < TIMESTEPS; i++) {
             denoiser->schedule->alphas_cumprod[i] = alphas_cumprod_tensor[i];
-            denoiser->schedule->sigmas[i] = std::sqrt(
-                    (1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
+            denoiser->schedule->sigmas[i]         = std::sqrt(
+                (1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
             denoiser->schedule->log_sigmas[i] = std::log(denoiser->schedule->sigmas[i]);
         }
     }
@@ -1614,14 +1613,14 @@ struct sd_ctx_t {
 sd_ctx_t* new_sd_ctx(int n_threads,
                      bool vae_decode_only,
                      bool free_params_immediately,
-                     const char *lora_model_dir_c_str,
+                     const char* lora_model_dir_c_str,
                      enum rng_type_t rng_type,
                      bool vae_tiling,
                      enum sd_type_t wtype,
                      enum schedule_t s,
                      bool keep_control_net_cpu,
                      bool init_backend_immediately) {
-    sd_ctx_t *sd_ctx = (sd_ctx_t *) malloc(sizeof(sd_ctx_t));
+    sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == NULL) {
         return NULL;
     }
@@ -1647,8 +1646,7 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
     free(sd_ctx);
 }
 
-
-void init_backend(sd_ctx_t *sd_ctx) {
+void init_backend(sd_ctx_t* sd_ctx) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return;
@@ -1656,11 +1654,11 @@ void init_backend(sd_ctx_t *sd_ctx) {
     sd_ctx->sd->init_backend();
 }
 
-void set_options(sd_ctx_t *sd_ctx,
+void set_options(sd_ctx_t* sd_ctx,
                  int n_threads,
                  bool vae_decode_only,
                  bool free_params_immediately,
-                 const char *lora_model_dir,
+                 const char* lora_model_dir,
                  rng_type_t rng_type,
                  bool vae_tiling,
                  sd_type_t wtype,
@@ -1670,17 +1668,17 @@ void set_options(sd_ctx_t *sd_ctx,
         return;
     }
     sd_ctx->sd->set_options(
-            n_threads,
-            vae_decode_only,
-            free_params_immediately,
-            std::string(lora_model_dir),
-            rng_type,
-            vae_tiling,
-            wtype,
-            schedule);
+        n_threads,
+        vae_decode_only,
+        free_params_immediately,
+        std::string(lora_model_dir),
+        rng_type,
+        vae_tiling,
+        wtype,
+        schedule);
 }
 
-bool load_clip_from_file(sd_ctx_t *sd_ctx, const char *model_path, const char *prefix) {
+bool load_clip_from_file(sd_ctx_t* sd_ctx, const char* model_path, const char* prefix) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return false;
@@ -1688,7 +1686,7 @@ bool load_clip_from_file(sd_ctx_t *sd_ctx, const char *model_path, const char *p
     return sd_ctx->sd->load_clip_from_file(std::string(model_path), true, std::string(prefix));
 }
 
-void free_clip_params(sd_ctx_t *sd_ctx) {
+void free_clip_params(sd_ctx_t* sd_ctx) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return;
@@ -1696,7 +1694,7 @@ void free_clip_params(sd_ctx_t *sd_ctx) {
     sd_ctx->sd->free_clip_params();
 }
 
-bool load_unet_from_file(sd_ctx_t *sd_ctx, const char *model_path, const char *prefix) {
+bool load_unet_from_file(sd_ctx_t* sd_ctx, const char* model_path, const char* prefix) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return false;
@@ -1704,7 +1702,7 @@ bool load_unet_from_file(sd_ctx_t *sd_ctx, const char *model_path, const char *p
     return sd_ctx->sd->load_unet_from_file(std::string(model_path), true, std::string(prefix));
 }
 
-void free_unet_params(sd_ctx_t *sd_ctx) {
+void free_unet_params(sd_ctx_t* sd_ctx) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return;
@@ -1712,7 +1710,7 @@ void free_unet_params(sd_ctx_t *sd_ctx) {
     sd_ctx->sd->free_unet_params();
 }
 
-bool load_vae_from_file(sd_ctx_t *sd_ctx, const char *model_path, const char *prefix) {
+bool load_vae_from_file(sd_ctx_t* sd_ctx, const char* model_path, const char* prefix) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return false;
@@ -1720,7 +1718,7 @@ bool load_vae_from_file(sd_ctx_t *sd_ctx, const char *model_path, const char *pr
     return sd_ctx->sd->load_vae_from_file(std::string(model_path), true, std::string(prefix));
 }
 
-void free_vae_params(sd_ctx_t *sd_ctx) {
+void free_vae_params(sd_ctx_t* sd_ctx) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return;
@@ -1728,7 +1726,7 @@ void free_vae_params(sd_ctx_t *sd_ctx) {
     sd_ctx->sd->free_vae_params();
 }
 
-bool load_taesd_from_file(sd_ctx_t *sd_ctx, const char *model_path) {
+bool load_taesd_from_file(sd_ctx_t* sd_ctx, const char* model_path) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return false;
@@ -1736,7 +1734,7 @@ bool load_taesd_from_file(sd_ctx_t *sd_ctx, const char *model_path) {
     return sd_ctx->sd->load_taesd_from_file(std::string(model_path));
 }
 
-void free_taesd_params(sd_ctx_t *sd_ctx) {
+void free_taesd_params(sd_ctx_t* sd_ctx) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return;
@@ -1745,7 +1743,7 @@ void free_taesd_params(sd_ctx_t *sd_ctx) {
 }
 
 // load all model from one file
-bool load_diffusions_from_file(sd_ctx_t *sd_ctx, const char *model_path) {
+bool load_diffusions_from_file(sd_ctx_t* sd_ctx, const char* model_path) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return false;
@@ -1754,7 +1752,7 @@ bool load_diffusions_from_file(sd_ctx_t *sd_ctx, const char *model_path) {
 }
 
 // free all model from one file
-void free_diffusions_params(sd_ctx_t *sd_ctx) {
+void free_diffusions_params(sd_ctx_t* sd_ctx) {
     if (sd_ctx == NULL || sd_ctx->sd == NULL) {
         LOG_ERROR("must call new_sd_ctx first");
         return;
