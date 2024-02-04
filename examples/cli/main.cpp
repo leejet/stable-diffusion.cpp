@@ -98,18 +98,6 @@ struct SDParams {
     bool canny_preprocess         = false;
 };
 
-static std::string sd_basename(const std::string& path) {
-    size_t pos = path.find_last_of('/');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    pos = path.find_last_of('\\');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    return path;
-}
-
 void print_params(SDParams params) {
     printf("Option: \n");
     printf("    n_threads:         %d\n", params.n_threads);
