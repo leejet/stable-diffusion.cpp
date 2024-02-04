@@ -202,13 +202,21 @@ public:
 
         if (id_embeddings_path.size() > 0) {
             LOG_INFO("loading stacked ID embedding (PHOTOMAKER) model file from '%s'", id_embeddings_path.c_str());
-            if (!model_loader.init_from_file(id_embeddings_path)) {                
+            if (!model_loader.init_from_file(id_embeddings_path, "pmid.")) {                
                 LOG_WARN("loading stacked ID embedding from '%s' failed", id_embeddings_path.c_str());
             }
             else{
                 stacked_id = true;
             }
         }
+
+        if(stacked_id){
+            if (!pmid_model.alloc_params_buffer(backend, model_data_type)){
+                LOG_ERROR(" pmid model params buffer allocation failed");
+                return false;
+            }
+        }
+
 
         ggml_type vae_type = model_data_type;
         if (version == VERSION_XL) {
@@ -235,6 +243,11 @@ public:
                 first_stage_model.init_params();
             }
             first_stage_model.map_by_name(tensors, "first_stage_model.");
+
+            if(stacked_id){
+               pmid_model.init_params();
+               pmid_model.map_by_name(tensors, "pmid.");
+            }
         }
 
         struct ggml_init_params params;
@@ -252,6 +265,7 @@ public:
 
         // load weights
         LOG_DEBUG("loading weights");
+        fprintf(stderr, "%s: loading weights \n", __func__);
         int64_t t0 = ggml_time_ms();
 
         std::map<std::string, struct ggml_tensor*> tensors_need_to_load;
@@ -270,6 +284,14 @@ public:
                 continue;
             }
 
+            // temporaly ignore lora weights from photomaker
+            // add them later
+            if (stacked_id && (starts_with(name, "pmid.unet"))) {
+                ignore_tensors.insert(name);
+                continue;
+            }
+
+
             tensors_need_to_load.insert(pair);
         }
         bool success = model_loader.load_tensors(tensors_need_to_load, backend, ignore_tensors);
@@ -278,6 +300,7 @@ public:
             ggml_free(ctx);
             return false;
         }
+        fprintf(stderr, "%s: loading weights sccess\n", __func__);
 
         // LOG_DEBUG("model size = %.2fMB", total_size / 1024.0 / 1024.0);
 

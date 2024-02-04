@@ -863,7 +863,7 @@ struct CLIPVisionModel {
         return mem_size;
     }
 
-    void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+    void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix, const std::string stripped) {
         tensors[prefix + "post_layernorm.bias"]                  = post_ln_b;
         tensors[prefix + "post_layernorm.weight"]                = post_ln_w;
         tensors[prefix + "pre_layrnorm.bias"]                    = pre_ln_b;
@@ -876,7 +876,8 @@ struct CLIPVisionModel {
             std::string name = prefix + "encoder.layers." + std::to_string(i) + ".";
             resblocks[i].map_by_name(tensors, prefix + "encoder.layers." + std::to_string(i) + ".");
         }
-        tensors[prefix + "visual_projection"] = visual_projection;
+        // std::string stripped = prefix.replace(prefix.find("vision_model."), sizeof("vision_model.")-1, ""); 
+        tensors[stripped + "visual_projection.weight"] = visual_projection;
     }   
 
 

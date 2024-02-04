@@ -99,7 +99,7 @@ struct FuseModule{
     FuseModule(int imb_d): 
         embed_dim(imb_d), 
         mlp1(imb_d*2, imb_d, imb_d, false),
-        mlp2(imb_d*2, imb_d, imb_d, true) {
+        mlp2(imb_d, imb_d, imb_d, true) {
 
         // mlp1 = FuseBlock(embed_dim*2, embed_dim, embed_dim, false);
         // mlp2 = FuseBlock(embed_dim*2, embed_dim, embed_dim, true);
@@ -112,6 +112,8 @@ struct FuseModule{
         ln_w = ggml_new_tensor_1d(ctx, wtype, embed_dim);
         ln_b = ggml_new_tensor_1d(ctx, wtype, embed_dim);
         // alloc all tensors linked to this context
+        mlp1.init_params(ctx, wtype, alloc);
+        mlp2.init_params(ctx, wtype, alloc);
         for (struct ggml_tensor* t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->data == NULL) {
                 ggml_allocr_alloc(alloc, t);
@@ -123,8 +125,8 @@ struct FuseModule{
 
         tensors[prefix + "layer_norm.weight"] = ln_w;
         tensors[prefix + "layer_norm.bias"]   = ln_b;      
-        mlp1.map_by_name(tensors, prefix + ".mlp1.");
-        mlp2.map_by_name(tensors, prefix + ".mlp2.");
+        mlp1.map_by_name(tensors, prefix + "mlp1.");
+        mlp2.map_by_name(tensors, prefix + "mlp2.");
 
     }
 
@@ -188,14 +190,15 @@ struct PhotoMakerIDEncoder : public GGMLModule {
         
         vision_model.init_params(params_ctx, backend, wtype, alloc);
         fuse_module.init_params(params_ctx, wtype, alloc);
-        visual_projection_2 = ggml_new_tensor_2d(params_ctx, wtype, 1280, 1024); // python [1024, 1280]
+        // visual_projection_2 = ggml_new_tensor_2d(params_ctx, wtype, 1280, 1024); // python [1024, 1280]
+        visual_projection_2 = ggml_new_tensor_2d(params_ctx, wtype, 1024, 1280); // python [1024, 1280]
         ggml_allocr_alloc(alloc, visual_projection_2);
         ggml_allocr_free(alloc); 
     }
 
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        // vision_model.
-        fuse_module.map_by_name(tensors, prefix + ".fuse_module.");
+        vision_model.map_by_name(tensors, prefix + "vision_model.", prefix);
+        fuse_module.map_by_name(tensors, prefix + "fuse_module.");
         tensors[prefix + "visual_projection_2.weight"] = visual_projection_2;        
     }
 

@@ -1319,7 +1319,6 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                 continue;
             }
             // LOG_DEBUG("%s", tensor_storage.name.c_str());
-
             ggml_tensor* dst_tensor = NULL;
 
             success = on_new_tensor_cb(tensor_storage, &dst_tensor);
