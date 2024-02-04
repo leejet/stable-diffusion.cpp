@@ -745,12 +745,13 @@ public:
         sd_ctx = new_sd_ctx(
             params.n_threads,
             params.vae_decode_only,
-            true,
+            false,
             params.lora_model_dir.c_str(),
             params.rng_type,
             params.vae_tiling,
             params.wtype,
             params.schedule,
+            params.control_net_cpu,
             true);
     }
 
@@ -786,6 +787,23 @@ public:
                     params.vae_tiling,
                     params.wtype,
                     params.schedule);
+        int c                       = 0;
+        uint8_t* input_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
+        if (input_image_buffer == NULL) {
+            fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
+            return;
+        }
+        if (c != 3) {
+            fprintf(stderr, "input image must be a 3 channels RGB image, but got %d channels\n", c);
+            free(input_image_buffer);
+            return;
+        }
+
+        sd_image_t input_image = {(uint32_t)params.width,
+                                  (uint32_t)params.height,
+                                  3,
+                                  input_image_buffer};
+
         sd_image_t* results = txt2img(sd_ctx,
                                       params.prompt.c_str(),
                                       params.negative_prompt.c_str(),
@@ -796,8 +814,11 @@ public:
                                       params.sample_method,
                                       params.sample_steps,
                                       params.seed,
-                                      params.batch_count);
-        results             = upscaler(params, results);
+                                      params.batch_count,
+                                      &input_image,
+                                      params.control_strength);
+
+        results = upscaler(params, results);
         save_image(params, results);
     }
 
@@ -882,7 +903,6 @@ protected:
             upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
                                                             params.n_threads,
                                                             params.wtype);
-
             if (upscaler_ctx == NULL) {
                 printf("new_upscaler_ctx failed\n");
             } else {

@@ -102,19 +102,16 @@ typedef struct {
 
 typedef struct sd_ctx_t sd_ctx_t;
 
-SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
-                            const char* vae_path,
-                            const char* taesd_path,
-                            const char* control_net_path_c_str,
-                            const char* lora_model_dir,
-                            const char* embed_dir_c_str,
+SD_API sd_ctx_t* new_sd_ctx(int n_threads,
                             bool vae_decode_only,
-                            bool vae_tiling,
                             bool free_params_immediately,
-                            int n_threads,
+                            const char* lora_model_dir_c_str,
+                            enum rng_type_t rng_type,
+                            bool vae_tiling,
                             enum sd_type_t wtype,
                             enum schedule_t s,
-                            bool init_backend_immediately = true);
+                            bool keep_control_net_cpu,
+                            bool init_backend_immediately);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 

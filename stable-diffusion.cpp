@@ -552,6 +552,9 @@ public:
         }
     }
 
+    bool load_control_net_from_file(const std::string& control_path) {
+    }
+
     bool load_from_file(const std::string& model_path,
                         const std::string& vae_path,
                         const std::string& control_net_path,
