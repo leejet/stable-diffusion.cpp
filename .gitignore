@@ -10,5 +10,4 @@ test/
 *.gguf
 output*.png
 models*
-!taesd-model.gguf
 *.log

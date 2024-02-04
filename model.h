@@ -93,7 +93,6 @@ struct TensorStorage {
 };
 
 typedef std::function<bool(const TensorStorage&, ggml_tensor**)> on_new_tensor_cb_t;
-typedef std::function<void(const std::string&, int32_t)> on_new_token_cb_t;
 
 class ModelLoader {
 protected:
