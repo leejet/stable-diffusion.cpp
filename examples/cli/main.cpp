@@ -64,6 +64,7 @@ struct SDParams {
     std::string controlnet_path;
     std::string embeddings_path;
     std::string stacked_id_embeddings_path;
+    std::string input_id_images_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
@@ -103,6 +104,7 @@ void print_params(SDParams params) {
     printf("    controlnet_path:   %s\n", params.controlnet_path.c_str());
     printf("    embeddings_path:   %s\n", params.embeddings_path.c_str());
     printf("    stacked_id_embeddings_path:   %s\n", params.stacked_id_embeddings_path.c_str());
+    printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
@@ -137,7 +139,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
-    printf("  --stacked-id-embd-dir [ID_EMBEDDING_PATH]  path to photomakerstacked id embeddings.\n");
+    printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings.\n");
+    printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir.\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
@@ -240,6 +243,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.stacked_id_embeddings_path = argv[i];
+        } else if (arg == "--input-id-images-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.input_id_images_path = argv[i];
         } else if (arg == "--type") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -614,6 +623,27 @@ int main(int argc, const char* argv[]) {
             if (params.canny_preprocess) {  // apply preprocessor
                 LOG_INFO("Applying canny preprocessor");
                 control_image->data = preprocess_canny(control_image->data, control_image->width, control_image->height);
+            }
+        }
+        std::vector<sd_image_t*> input_id_images;
+        if (params.stacked_id_embeddings_path.size() > 0 && params.input_id_images_path.size() > 0) {
+            std::vector<std::string> img_files = get_files_from_dir(params.input_id_images_path);
+            for(std::string img_file : img_files){
+                int c = 0;
+                int width, height;
+                input_image_buffer = stbi_load(img_file.c_str(), &width, &height, &c, 3);
+                if (input_image_buffer == NULL) {
+                    fprintf(stderr, "load image from '%s' failed\n", img_file.c_str());
+                    return 1;
+                }else{
+                    fprintf(stderr, "successfully loaded image from '%s' \n", img_file.c_str());
+                }
+                sd_image_t* input_image = NULL;
+                input_image = new sd_image_t{(uint32_t)width,
+                                             (uint32_t)height,
+                                             3,
+                                             input_image_buffer};
+                input_id_images.push_back(input_image);
             }
         }
         results = txt2img(sd_ctx,

@@ -100,6 +100,7 @@ bool is_directory(const std::string& path) {
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
 }
 
+// TODO: add windows version 
 std::string get_full_path(const std::string& dir, const std::string& filename) {
     DIR* dp = opendir(dir.c_str());
 
@@ -117,6 +118,29 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
     }
 
     return "";
+}
+
+std::vector<std::string> get_files_from_dir(const std::string &dir){
+
+    std::vector<std::string> files;
+
+    DIR* dp = opendir(dir.c_str());
+
+    if (dp != nullptr) {
+        struct dirent* entry;
+
+        while ((entry = readdir(dp)) != nullptr) {
+            std::string fname = dir + "/" + entry->d_name;
+            if (!is_directory(fname))
+                files.push_back(fname);
+        }
+        closedir(dp);
+    }
+
+    sort(files.begin(), files.end());
+
+    return files;
+
 }
 
 #endif

@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "stable-diffusion.h"
 
@@ -16,6 +17,8 @@ void replace_all_chars(std::string& str, char target, char replacement);
 bool file_exists(const std::string& filename);
 bool is_directory(const std::string& path);
 std::string get_full_path(const std::string& dir, const std::string& filename);
+
+std::vector<std::string> get_files_from_dir(const std::string &dir);
 
 std::u32string utf8_to_utf32(const std::string& utf8_str);
 std::string utf32_to_utf8(const std::u32string& utf32_str);
