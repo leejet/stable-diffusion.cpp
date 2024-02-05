@@ -86,6 +86,8 @@ public:
 
     ControlNet control_net;
 
+    std::string trigger_word = "img"; // should be user settable
+
     StableDiffusionGGML() = default;
 
     StableDiffusionGGML(int n_threads,

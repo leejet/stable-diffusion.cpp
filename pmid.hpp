@@ -61,6 +61,11 @@ struct FuseBlock {
 
     }
 
+
+    size_t get_num_tensors() {
+        return 6;
+    }
+
     void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         tensors[prefix + "fc1.weight"] = fc1_w;
         tensors[prefix + "fc1.bias"]   = fc1_b;
@@ -128,6 +133,13 @@ struct FuseModule{
         mlp1.map_by_name(tensors, prefix + "mlp1.");
         mlp2.map_by_name(tensors, prefix + "mlp2.");
 
+    }
+
+    size_t get_num_tensors() {
+        size_t n = mlp1.get_num_tensors();
+        n += mlp2.get_num_tensors();
+        n += 2;
+        return n;
     }
 
     size_t calculate_mem_size(ggml_type wtype) {
@@ -213,8 +225,8 @@ struct PhotoMakerIDEncoder : public GGMLModule {
     }
 
     size_t get_num_tensors() {
-        size_t num_tensors = (3 + 2 + 37);
-        
+        size_t num_tensors = (3 + 2 + 37 * vision_model.num_hidden_layers);
+        num_tensors += fuse_module.get_num_tensors() + 1;
         return num_tensors;
     }
 
