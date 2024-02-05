@@ -3,6 +3,8 @@
 #include <time.h>
 #include <iostream>
 #include <random>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -10,10 +12,12 @@
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
+
 #include "stb_image.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
+
 #include "stb_image_write.h"
 
 const char* rng_type_to_str[] = {
@@ -50,6 +54,7 @@ enum SDMode {
     TXT2IMG,
     IMG2IMG,
     CONVERT,
+    STREAM,
     MODE_COUNT
 };
 
@@ -59,6 +64,8 @@ struct SDParams {
 
     std::string model_path;
     std::string vae_path;
+    std::string clip_path;
+    std::string unet_path;
     std::string taesd_path;
     std::string esrgan_path;
     std::string controlnet_path;
@@ -86,6 +93,7 @@ struct SDParams {
     int64_t seed                  = 42;
     bool verbose                  = false;
     bool vae_tiling               = false;
+    bool vae_decode_only          = false;
     bool control_net_cpu          = false;
     bool canny_preprocess         = false;
 };
@@ -97,6 +105,8 @@ void print_params(SDParams params) {
     printf("    model_path:        %s\n", params.model_path.c_str());
     printf("    wtype:             %s\n", params.wtype < SD_TYPE_COUNT ? sd_type_name(params.wtype) : "unspecified");
     printf("    vae_path:          %s\n", params.vae_path.c_str());
+    printf("    clip_path:         %s\n", params.clip_path.c_str());
+    printf("    unet_path:         %s\n", params.unet_path.c_str());
     printf("    taesd_path:        %s\n", params.taesd_path.c_str());
     printf("    esrgan_path:       %s\n", params.esrgan_path.c_str());
     printf("    controlnet_path:   %s\n", params.controlnet_path.c_str());
@@ -127,11 +137,14 @@ void print_usage(int argc, const char* argv[]) {
     printf("\n");
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
-    printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)\n");
+    printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert or stream, default: txt2img)\n");
     printf("  -t, --threads N                    number of threads to use during computation (default: -1).\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to model\n");
+    printf("                                     If the path is directory, support load model from \"unet/diffusion_pytorch_model.safetensors\", \"vae/diffusion_pytorch_model.safetensors\",\"text_encoder/model.safetensors\"\n");
     printf("  --vae [VAE]                        path to vae\n");
+    printf("  --clip [CLIP]                      path to clip\n");
+    printf("  --unet [UNET]                      path to unet\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
@@ -150,7 +163,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}\n");
+    printf("  --sampling-method                  {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}\n");
     printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
@@ -202,6 +215,18 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             }
             params.model_path = argv[i];
         } else if (arg == "--vae") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.vae_path = argv[i];
+        } else if (arg == "--clip") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.vae_path = argv[i];
+        } else if (arg == "--unet") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
@@ -416,52 +441,46 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         print_usage(argc, argv);
         exit(1);
     }
+}
+
+bool check_params(SDParams params) {
+    std::vector<std::string> required_args;
+    std::vector<std::string> invalid_args;
+
     if (params.n_threads <= 0) {
         params.n_threads = get_num_physical_cores();
     }
 
     if (params.mode != CONVERT && params.prompt.length() == 0) {
-        fprintf(stderr, "error: the following arguments are required: prompt\n");
-        print_usage(argc, argv);
-        exit(1);
+        required_args.emplace_back("prompt");
     }
 
     if (params.model_path.length() == 0) {
-        fprintf(stderr, "error: the following arguments are required: model_path\n");
-        print_usage(argc, argv);
-        exit(1);
+        required_args.emplace_back("model_path");
     }
 
     if (params.mode == IMG2IMG && params.input_path.length() == 0) {
-        fprintf(stderr, "error: when using the img2img mode, the following arguments are required: init-img\n");
-        print_usage(argc, argv);
-        exit(1);
+        required_args.emplace_back("init-img");
     }
 
     if (params.output_path.length() == 0) {
-        fprintf(stderr, "error: the following arguments are required: output_path\n");
-        print_usage(argc, argv);
-        exit(1);
+        required_args.emplace_back("output_path");
     }
 
     if (params.width <= 0 || params.width % 64 != 0) {
-        fprintf(stderr, "error: the width must be a multiple of 64\n");
-        exit(1);
+        invalid_args.emplace_back("the width must be a multiple of 64");
     }
 
     if (params.height <= 0 || params.height % 64 != 0) {
-        fprintf(stderr, "error: the height must be a multiple of 64\n");
-        exit(1);
+        invalid_args.emplace_back("the height must be a multiple of 64");
     }
 
     if (params.sample_steps <= 0) {
-        fprintf(stderr, "error: the sample_steps must be greater than 0\n");
-        exit(1);
+        invalid_args.emplace_back("the sample_steps must be greater than 0");
     }
 
     if (params.strength < 0.f || params.strength > 1.f) {
-        fprintf(stderr, "error: can only work with strength in [0.0, 1.0]\n");
-        exit(1);
+        invalid_args.emplace_back("can only work with strength in [0.0, 1.0]");
     }
 
     if (params.seed < 0) {
@@ -474,6 +493,36 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.output_path = "output.gguf";
         }
     }
+
+    if ((!invalid_args.empty()) || (!required_args.empty())) {
+        if (!invalid_args.empty()) {
+            std::ostringstream oss;
+            for (int i = 0; i < invalid_args.size(); i++) {
+                if (i > 0) {
+                    oss << ",\n";
+                }
+                oss << invalid_args[i];
+            }
+            std::string invalid_args_str = oss.str();
+            std::cout << "error: " << invalid_args_str << std::endl;
+        }
+
+        if (!required_args.empty()) {
+            std::ostringstream oss;
+            for (int i = 0; i < required_args.size(); i++) {
+                if (i > 0) {
+                    oss << ",";
+                }
+                oss << required_args[i];
+            }
+            std::string required_args_str = oss.str();
+            std::cout << "require: " << required_args_str << std::endl;
+        }
+
+        return false;
+    }
+
+    return true;
 }
 
 std::string get_image_params(SDParams params, int64_t seed) {
@@ -510,9 +559,448 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     }
 }
 
+std::vector<std::string> parse_cin(std::string& input, std::set<std::string> ignore_args) {
+    std::vector<std::string> inputTokens;
+    std::string token;
+    std::istringstream iss(input);
+
+    std::string word;
+    bool in_stmt = false;
+    std::string stmt;
+    inputTokens.emplace_back("fake run path, no use!");
+    while (iss >> word) {
+        if (word[0] == '"') {
+            in_stmt = true;
+        }
+
+        if (word[word.length() - 1] == '"') {
+            stmt += word;
+            word    = stmt.substr(1, stmt.length() - 2);
+            stmt    = "";
+            in_stmt = false;
+        }
+
+        if (in_stmt) {
+            stmt += word;
+            stmt += " ";
+            continue;
+        }
+        inputTokens.push_back(word);
+    }
+
+    std::vector<std::string> commands;
+    for (int i = 0; i < inputTokens.size(); i++) {
+        if (ignore_args.find(inputTokens[i]) != ignore_args.end()) {
+            i++;
+            continue;
+        }
+        commands.push_back(inputTokens[i]);
+    }
+    return commands;
+}
+
+SDParams merge_params(SDParams dst, SDParams src) {
+    if (dst.n_threads != src.n_threads) {
+        if (src.n_threads > 0) {
+            dst.n_threads = src.n_threads;
+        }
+    }
+
+    if (dst.mode != src.mode) {
+        if (src.mode == TXT2IMG || src.mode == IMG2IMG) {
+            dst.mode = src.mode;
+            if (dst.mode == IMG2IMG) {
+                dst.vae_decode_only = false;
+            }
+        }
+    }
+
+    if (dst.model_path != src.model_path) {
+        if (!src.model_path.empty()) {
+            dst.model_path = src.model_path;
+        }
+    }
+
+    if (dst.vae_path != src.vae_path) {
+        if (!src.vae_path.empty()) {
+            dst.vae_path = src.vae_path;
+        }
+    }
+
+    if (dst.clip_path != src.clip_path) {
+        if (!src.clip_path.empty()) {
+            dst.clip_path = src.clip_path;
+        }
+    }
+
+    if (dst.unet_path != src.unet_path) {
+        if (!src.unet_path.empty()) {
+            dst.unet_path = src.unet_path;
+        }
+    }
+
+    if (dst.taesd_path != src.taesd_path) {
+        if (!src.taesd_path.empty()) {
+            dst.taesd_path = src.taesd_path;
+        }
+    }
+
+    if (dst.esrgan_path != src.esrgan_path) {
+        if (!src.esrgan_path.empty()) {
+            dst.esrgan_path = src.esrgan_path;
+        }
+    }
+
+    if (dst.controlnet_path != src.control_image_path) {
+        if (!src.controlnet_path.empty()) {
+            dst.controlnet_path = src.controlnet_path;
+        }
+    }
+
+    if (dst.embeddings_path != src.embeddings_path) {
+        if (!src.embeddings_path.empty()) {
+            dst.embeddings_path = src.embeddings_path;
+        }
+    }
+
+    if (dst.wtype != src.wtype) {
+        dst.wtype = src.wtype;
+    }
+
+    if (dst.lora_model_dir != src.lora_model_dir) {
+        if (!src.lora_model_dir.empty()) {
+            dst.lora_model_dir = src.lora_model_dir;
+        }
+    }
+
+    if (dst.output_path != src.output_path) {
+        if (!src.output_path.empty()) {
+            dst.output_path = src.output_path;
+        }
+    }
+
+    if (dst.input_path != src.input_path) {
+        if (!src.input_path.empty()) {
+            dst.input_path = src.input_path;
+        }
+    }
+
+    if (dst.control_image_path != src.control_image_path) {
+        if (!src.control_image_path.empty()) {
+            dst.control_image_path = src.control_image_path;
+        }
+    }
+
+    if (dst.prompt != src.prompt) {
+        if (!src.prompt.empty()) {
+            dst.prompt = src.prompt;
+        }
+    }
+
+    if (dst.negative_prompt != src.negative_prompt) {
+        if (!src.negative_prompt.empty()) {
+            dst.negative_prompt = src.negative_prompt;
+        }
+    }
+
+    if (dst.cfg_scale != src.cfg_scale) {
+        if (src.cfg_scale >= 0) {
+            dst.cfg_scale = src.cfg_scale;
+        }
+    }
+
+    if (dst.clip_skip != src.clip_skip) {
+        dst.clip_skip = src.clip_skip;
+    }
+
+    if (dst.width != src.width) {
+        if (src.width > 0 || src.width % 64 == 0) {
+            dst.width = src.width;
+        }
+    }
+
+    if (dst.height != src.height) {
+        if (src.height > 0 || src.height % 64 == 0) {
+            dst.height = src.height;
+        }
+    }
+
+    if (dst.batch_count != src.batch_count) {
+        if (src.batch_count > 0) {
+            dst.batch_count = src.batch_count;
+        }
+    }
+
+    if (dst.batch_count != src.batch_count) {
+        if (src.batch_count > 0) {
+            dst.batch_count = src.batch_count;
+        }
+    }
+
+    if (dst.sample_method != src.sample_method) {
+        if (src.sample_method < N_SAMPLE_METHODS) {
+            dst.sample_method = src.sample_method;
+        }
+    }
+
+    if (dst.schedule != src.schedule) {
+        if (src.schedule < N_SAMPLE_METHODS) {
+            dst.schedule = src.schedule;
+        }
+    }
+
+    if (dst.sample_steps != src.sample_steps) {
+        if (src.sample_steps > 0) {
+            dst.sample_steps = src.sample_steps;
+        }
+    }
+
+    if (dst.strength != src.strength) {
+        if (src.strength >= 0.f && src.strength <= 1.f) {
+            dst.strength = src.strength;
+        }
+    }
+
+    if (dst.control_strength != src.control_strength) {
+        if (src.control_strength >= 0.f && src.control_strength <= 1.f) {
+            dst.control_strength = src.control_strength;
+        }
+    }
+
+    if (dst.rng_type != src.rng_type) {
+        if (src.rng_type < CUDA_RNG) {
+            dst.rng_type = src.rng_type;
+        }
+    }
+
+    if (dst.seed != src.seed) {
+        if (src.seed > 0) {
+            dst.seed = src.seed;
+        }
+    }
+
+    if (dst.verbose != src.verbose) {
+        dst.verbose = src.verbose;
+    }
+
+    if (dst.vae_tiling != src.vae_tiling) {
+        dst.verbose = src.verbose;
+    }
+
+    if (dst.vae_decode_only != src.vae_decode_only) {
+        dst.vae_decode_only = src.vae_decode_only;
+    }
+
+    if (dst.control_net_cpu != src.control_net_cpu) {
+        dst.control_net_cpu = src.control_net_cpu;
+    }
+
+    if (dst.canny_preprocess != src.canny_preprocess) {
+        dst.canny_preprocess = src.canny_preprocess;
+    }
+    return dst;
+}
+
+class CliInstance {
+public:
+    sd_ctx_t* sd_ctx;
+
+    ~CliInstance() {
+        free_sd_ctx(sd_ctx);
+    }
+
+    CliInstance(const SDParams& params) {
+        sd_ctx = new_sd_ctx(
+            params.n_threads,
+            params.vae_decode_only,
+            false,
+            params.lora_model_dir.c_str(),
+            params.rng_type,
+            params.vae_tiling,
+            params.wtype,
+            params.schedule,
+            params.control_net_cpu,
+            true);
+    }
+
+    bool load_from_file(SDParams& params) {
+        // free api always check if the following methods can free, so we can always free the model before load it.
+        free_diffusions_params(sd_ctx);
+        auto load_status = load_diffusions_from_file(sd_ctx, params.model_path.c_str());
+
+        if (load_status && !params.clip_path.empty()) {
+            free_clip_params(sd_ctx);
+            load_status = load_clip_from_file(sd_ctx, params.clip_path.c_str());
+        }
+
+        if (load_status && !params.vae_path.empty()) {
+            free_vae_params(sd_ctx);
+            load_status = load_vae_from_file(sd_ctx, params.vae_path.c_str());
+        }
+
+        if (load_status && !params.unet_path.empty()) {
+            free_unet_params(sd_ctx);
+            load_status = load_unet_from_file(sd_ctx, params.unet_path.c_str());
+        }
+
+        return load_status;
+    }
+
+    void txtimg(SDParams& params) {
+        set_options(sd_ctx, params.n_threads,
+                    params.vae_decode_only,
+                    true,
+                    params.lora_model_dir.c_str(),
+                    params.rng_type,
+                    params.vae_tiling,
+                    params.wtype,
+                    params.schedule);
+        int c                       = 0;
+        uint8_t* input_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
+        if (input_image_buffer == NULL) {
+            fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
+            return;
+        }
+        if (c != 3) {
+            fprintf(stderr, "input image must be a 3 channels RGB image, but got %d channels\n", c);
+            free(input_image_buffer);
+            return;
+        }
+
+        sd_image_t input_image = {(uint32_t)params.width,
+                                  (uint32_t)params.height,
+                                  3,
+                                  input_image_buffer};
+
+        sd_image_t* results = txt2img(sd_ctx,
+                                      params.prompt.c_str(),
+                                      params.negative_prompt.c_str(),
+                                      params.clip_skip,
+                                      params.cfg_scale,
+                                      params.width,
+                                      params.height,
+                                      params.sample_method,
+                                      params.sample_steps,
+                                      params.seed,
+                                      params.batch_count,
+                                      &input_image,
+                                      params.control_strength);
+
+        results = upscaler(params, results);
+        save_image(params, results);
+    }
+
+    void imgimg(SDParams& params) {
+        set_options(sd_ctx, params.n_threads,
+                    params.vae_decode_only,
+                    true,
+                    params.lora_model_dir.c_str(),
+                    params.rng_type,
+                    params.vae_tiling,
+                    params.wtype,
+                    params.schedule);
+        uint8_t* input_image_buffer = NULL;
+
+        int c              = 0;
+        input_image_buffer = stbi_load(params.input_path.c_str(), &params.width, &params.height, &c, 3);
+        if (input_image_buffer == NULL) {
+            fprintf(stderr, "load image from '%s' failed\n", params.input_path.c_str());
+            return;
+        }
+        if (c != 3) {
+            fprintf(stderr, "input image must be a 3 channels RGB image, but got %d channels\n", c);
+            free(input_image_buffer);
+            return;
+        }
+        if (params.width <= 0 || params.width % 64 != 0) {
+            fprintf(stderr, "error: the width of image must be a multiple of 64\n");
+            free(input_image_buffer);
+            return;
+        }
+
+        if (params.height <= 0 || params.height % 64 != 0) {
+            fprintf(stderr, "error: the height of image must be a multiple of 64\n");
+            free(input_image_buffer);
+            return;
+        }
+
+        sd_image_t input_image = {(uint32_t)params.width,
+                                  (uint32_t)params.height,
+                                  3,
+                                  input_image_buffer};
+
+        sd_image_t* results = img2img(sd_ctx,
+                                      input_image,
+                                      params.prompt.c_str(),
+                                      params.negative_prompt.c_str(),
+                                      params.clip_skip,
+                                      params.cfg_scale,
+                                      params.width,
+                                      params.height,
+                                      params.sample_method,
+                                      params.sample_steps,
+                                      params.strength,
+                                      params.seed,
+                                      params.batch_count);
+        results             = upscaler(params, results);
+        save_image(params, results);
+    }
+
+protected:
+    void save_image(const SDParams& params, sd_image_t* results) {
+        size_t last            = params.output_path.find_last_of(".");
+        std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
+        for (int i = 0; i < params.batch_count; i++) {
+            if (results[i].data == NULL) {
+                continue;
+            }
+            std::string final_image_path =
+                i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
+            stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                           results[i].data, 0, get_image_params(params, params.seed + i).c_str());
+            printf("save result image to '%s'\n", final_image_path.c_str());
+            free(results[i].data);
+            results[i].data = NULL;
+        }
+        free(results);
+    }
+
+    sd_image_t* upscaler(const SDParams& params, sd_image_t* results) {
+        int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
+        if (params.esrgan_path.size() > 0) {
+            upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
+                                                            params.n_threads,
+                                                            params.wtype);
+            if (upscaler_ctx == NULL) {
+                printf("new_upscaler_ctx failed\n");
+            } else {
+                for (int i = 0; i < params.batch_count; i++) {
+                    if (results[i].data == NULL) {
+                        continue;
+                    }
+                    sd_image_t upscaled_image = upscale(upscaler_ctx, results[i], upscale_factor);
+                    if (upscaled_image.data == NULL) {
+                        printf("upscale failed\n");
+                        continue;
+                    }
+                    free(results[i].data);
+                    results[i] = upscaled_image;
+                }
+                free_upscaler_ctx(upscaler_ctx);
+            }
+        }
+        return results;
+    }
+};
+
 int main(int argc, const char* argv[]) {
     SDParams params;
+
     parse_args(argc, argv, params);
+
+    if (params.mode != STREAM && !check_params(params)) {
+        return 1;
+    }
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
 
@@ -522,7 +1010,10 @@ int main(int argc, const char* argv[]) {
     }
 
     if (params.mode == CONVERT) {
-        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype);
+        bool success = convert(params.model_path.c_str(),
+                               params.vae_path.c_str(),
+                               params.output_path.c_str(),
+                               params.wtype);
         if (!success) {
             fprintf(stderr,
                     "convert '%s'/'%s' to '%s' failed\n",
@@ -539,152 +1030,63 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    bool vae_decode_only        = true;
-    uint8_t* input_image_buffer = NULL;
-    if (params.mode == IMG2IMG) {
-        vae_decode_only = false;
+    auto instance = new CliInstance(params);
 
-        int c              = 0;
-        input_image_buffer = stbi_load(params.input_path.c_str(), &params.width, &params.height, &c, 3);
-        if (input_image_buffer == NULL) {
-            fprintf(stderr, "load image from '%s' failed\n", params.input_path.c_str());
-            return 1;
-        }
-        if (c != 3) {
-            fprintf(stderr, "input image must be a 3 channels RGB image, but got %d channels\n", c);
-            free(input_image_buffer);
-            return 1;
-        }
-        if (params.width <= 0 || params.width % 64 != 0) {
-            fprintf(stderr, "error: the width of image must be a multiple of 64\n");
-            free(input_image_buffer);
-            return 1;
-        }
-        if (params.height <= 0 || params.height % 64 != 0) {
-            fprintf(stderr, "error: the height of image must be a multiple of 64\n");
-            free(input_image_buffer);
-            return 1;
-        }
-    }
-
-    sd_ctx_t* sd_ctx = new_sd_ctx(params.model_path.c_str(),
-                                  params.vae_path.c_str(),
-                                  params.taesd_path.c_str(),
-                                  params.controlnet_path.c_str(),
-                                  params.lora_model_dir.c_str(),
-                                  params.embeddings_path.c_str(),
-                                  vae_decode_only,
-                                  params.vae_tiling,
-                                  true,
-                                  params.n_threads,
-                                  params.wtype,
-                                  params.rng_type,
-                                  params.schedule,
-                                  params.control_net_cpu);
-
-    if (sd_ctx == NULL) {
-        printf("new_sd_ctx_t failed\n");
-        return 1;
-    }
-
-    sd_image_t* results;
-    if (params.mode == TXT2IMG) {
-        sd_image_t* control_image = NULL;
-        if (params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
-            int c              = 0;
-            input_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
-            if (input_image_buffer == NULL) {
-                fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
+    if (params.mode == STREAM) {
+        std::cout << "you are in stream model, feel free to use txt2img or img2img" << std::endl;
+        while (true) {
+            std::string input;
+            std::cout << "please input args: " << std::endl;
+            std::getline(std::cin, input);
+            // hold an ignore cmd for feature to ignore the cmd not support
+            std::set<std::string> ignore_cmd = {""};
+            std::vector<std::string> args    = parse_cin(input, ignore_cmd);
+            SDParams stream_params;
+            const char** args_c_arr = new const char*[args.size()];
+            for (int i = 0; i < args.size(); i++) {
+                std::string arg = args[i];
+                char* c_str     = new char[args[i].length() + 1];
+                std::strcpy(c_str, arg.c_str());
+                args_c_arr[i] = c_str;
+            }
+            parse_args(args.size(), args_c_arr, stream_params);
+            if (params.model_path != stream_params.model_path ||
+                params.clip_path != stream_params.clip_path ||
+                params.vae_path != stream_params.vae_path ||
+                params.unet_path != stream_params.unet_path) {
+                instance->load_from_file(stream_params);
+            }
+            params = merge_params(params, stream_params);
+            if (!check_params(params)) {
+                continue;
+            }
+            if (params.mode == TXT2IMG) {
+                instance->txtimg(params);
+            } else if (params.mode == IMG2IMG) {
+                instance->imgimg(params);
+            } else {
                 return 1;
             }
-            control_image = new sd_image_t{(uint32_t)params.width,
-                                           (uint32_t)params.height,
-                                           3,
-                                           input_image_buffer};
-            if (params.canny_preprocess) {  // apply preprocessor
-                LOG_INFO("Applying canny preprocessor");
-                control_image->data = preprocess_canny(control_image->data, control_image->width, control_image->height);
-            }
         }
-        results = txt2img(sd_ctx,
-                          params.prompt.c_str(),
-                          params.negative_prompt.c_str(),
-                          params.clip_skip,
-                          params.cfg_scale,
-                          params.width,
-                          params.height,
-                          params.sample_method,
-                          params.sample_steps,
-                          params.seed,
-                          params.batch_count,
-                          control_image,
-                          params.control_strength);
     } else {
-        sd_image_t input_image = {(uint32_t)params.width,
-                                  (uint32_t)params.height,
-                                  3,
-                                  input_image_buffer};
-
-        results = img2img(sd_ctx,
-                          input_image,
-                          params.prompt.c_str(),
-                          params.negative_prompt.c_str(),
-                          params.clip_skip,
-                          params.cfg_scale,
-                          params.width,
-                          params.height,
-                          params.sample_method,
-                          params.sample_steps,
-                          params.strength,
-                          params.seed,
-                          params.batch_count);
-    }
-
-    if (results == NULL) {
-        printf("generate failed\n");
-        free_sd_ctx(sd_ctx);
-        return 1;
-    }
-
-    int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
-    if (params.esrgan_path.size() > 0) {
-        upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
-                                                        params.n_threads,
-                                                        params.wtype);
-
-        if (upscaler_ctx == NULL) {
-            printf("new_upscaler_ctx failed\n");
+        if (!params.model_path.empty()) {
+            if (!instance->load_from_file(params)) {
+                return 1;
+            }
         } else {
-            for (int i = 0; i < params.batch_count; i++) {
-                if (results[i].data == NULL) {
-                    continue;
+            if (!params.clip_path.empty() && !params.vae_path.empty() && !params.unet_path.empty()) {
+                if (!instance->load_from_file(params)) {
+                    return 1;
                 }
-                sd_image_t upscaled_image = upscale(upscaler_ctx, results[i], upscale_factor);
-                if (upscaled_image.data == NULL) {
-                    printf("upscale failed\n");
-                    continue;
-                }
-                free(results[i].data);
-                results[i] = upscaled_image;
             }
         }
-    }
-
-    size_t last            = params.output_path.find_last_of(".");
-    std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
-    for (int i = 0; i < params.batch_count; i++) {
-        if (results[i].data == NULL) {
-            continue;
+        if (params.mode == TXT2IMG) {
+            instance->txtimg(params);
+        } else if (params.mode == IMG2IMG) {
+            instance->imgimg(params);
+        } else {
+            return 0;
         }
-        std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
-        stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                       results[i].data, 0, get_image_params(params, params.seed + i).c_str());
-        printf("save result image to '%s'\n", final_image_path.c_str());
-        free(results[i].data);
-        results[i].data = NULL;
     }
-    free(results);
-    free_sd_ctx(sd_ctx);
-
     return 0;
 }

@@ -465,7 +465,7 @@ struct SpatialTransformer {
 #if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL)
                 struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, h * w, d_head]
 #else
-                struct ggml_tensor* kq  = ggml_mul_mat(ctx, k, q);   // [N * n_head, h * w, max_position]
+                struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, h * w, max_position]
                 // kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
                 kq = ggml_soft_max_inplace(ctx, kq);
 

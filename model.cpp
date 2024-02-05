@@ -1391,7 +1391,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 
 bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                                ggml_backend_t backend,
-                               std::set<std::string> ignore_tensors) {
+                               std::set<std::string> ignore_tensors,
+                               bool standalone) {
     std::set<std::string> tensor_names_in_file;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
         const std::string& name = tensor_storage.name;
@@ -1402,7 +1403,11 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
             real = tensors[name];
         } else {
             if (ignore_tensors.find(name) == ignore_tensors.end()) {
-                LOG_WARN("unknown tensor '%s' in model file", name.c_str());
+                if (standalone) {
+                    LOG_WARN("unknown tensor '%s' in model file", name.c_str());
+                } else {
+                    LOG_DEBUG("unknown tensor '%s' in model file", name.c_str());
+                }
             }
             return true;
         }

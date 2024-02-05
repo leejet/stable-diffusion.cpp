@@ -102,20 +102,16 @@ typedef struct {
 
 typedef struct sd_ctx_t sd_ctx_t;
 
-SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
-                            const char* vae_path,
-                            const char* taesd_path,
-                            const char* control_net_path_c_str,
-                            const char* lora_model_dir,
-                            const char* embed_dir_c_str,
+SD_API sd_ctx_t* new_sd_ctx(int n_threads,
                             bool vae_decode_only,
-                            bool vae_tiling,
                             bool free_params_immediately,
-                            int n_threads,
-                            enum sd_type_t wtype,
+                            const char* lora_model_dir_c_str,
                             enum rng_type_t rng_type,
+                            bool vae_tiling,
+                            enum sd_type_t wtype,
                             enum schedule_t s,
-                            bool keep_control_net_cpu);
+                            bool keep_control_net_cpu,
+                            bool init_backend_immediately);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
@@ -155,6 +151,38 @@ SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor);
+
+SD_API void init_backend(sd_ctx_t* sd_ctx);
+
+SD_API void set_options(sd_ctx_t* sd_ctx,
+                        int n_threads,
+                        bool vae_decode_only,
+                        bool free_params_immediately,
+                        const char* lora_model_dir,
+                        rng_type_t rng_type,
+                        bool vae_tiling,
+                        sd_type_t wtype,
+                        schedule_t schedule);
+
+SD_API bool load_clip_from_file(sd_ctx_t* sd_ctx, const char* model_path, const char* prefix = "te.");
+
+SD_API void free_clip_params(sd_ctx_t* sd_ctx);
+
+SD_API bool load_unet_from_file(sd_ctx_t* sd_ctx, const char* model_path, const char* prefix = "unet.");
+
+SD_API void free_unet_params(sd_ctx_t* sd_ctx);
+
+SD_API bool load_vae_from_file(sd_ctx_t* sd_ctx, const char* model_path, const char* prefix = "vae.");
+
+SD_API void free_vae_params(sd_ctx_t* sd_ctx);
+
+SD_API bool load_taesd_from_file(sd_ctx_t* sd_ctx, const char* model_path);
+
+SD_API void free_taesd_params(sd_ctx_t* sd_ctx);
+
+SD_API bool load_diffusions_from_file(sd_ctx_t* sd_ctx, const char* model_path);
+
+SD_API void free_diffusions_params(sd_ctx_t* sd_ctx);
 
 SD_API bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type);
 

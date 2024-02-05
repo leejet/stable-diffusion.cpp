@@ -119,7 +119,8 @@ public:
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       ggml_backend_t backend,
-                      std::set<std::string> ignore_tensors = {});
+                      std::set<std::string> ignore_tensors = {},
+                      bool standalone                      = true);
     bool save_to_gguf_file(const std::string& file_path, ggml_type type);
     int64_t cal_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
     ~ModelLoader() = default;
