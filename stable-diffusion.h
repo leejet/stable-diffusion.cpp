@@ -132,7 +132,8 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            int64_t seed,
                            int batch_count,
                            const sd_image_t* control_cond,
-                           float control_strength);
+                           float control_strength,
+                           std::vector<sd_image_t*> &input_id_images);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,

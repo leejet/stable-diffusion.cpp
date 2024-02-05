@@ -26,6 +26,9 @@ std::u32string unicode_value_to_utf32(int unicode_value);
 
 std::string sd_basename(const std::string& path);
 
+sd_image_t *preprocess_id_image(sd_image_t * img);
+
+
 std::string path_join(const std::string& p1, const std::string& p2);
 
 void pretty_progress(int step, int steps, float time);

@@ -643,6 +643,11 @@ int main(int argc, const char* argv[]) {
                                              (uint32_t)height,
                                              3,
                                              input_image_buffer};
+                input_image = preprocess_id_image(input_image);
+                if(input_image == NULL){
+                    fprintf(stderr, "preprocess input id image from '%s' failed\n", img_file.c_str());
+                    return 1;
+                }
                 input_id_images.push_back(input_image);
             }
         }
@@ -658,7 +663,8 @@ int main(int argc, const char* argv[]) {
                           params.seed,
                           params.batch_count,
                           control_image,
-                          params.control_strength);
+                          params.control_strength,
+                          input_id_images);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,

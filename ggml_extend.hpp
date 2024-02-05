@@ -211,7 +211,8 @@ __STATIC_INLINE__ uint8_t* sd_tensor_to_image(struct ggml_tensor* input) {
 }
 
 __STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
-                                          struct ggml_tensor* output) {
+                                          struct ggml_tensor* output,
+                                          float *mean = NULL, float *std = NULL) {
     int64_t width    = output->ne[0];
     int64_t height   = output->ne[1];
     int64_t channels = output->ne[2];
@@ -220,7 +221,31 @@ __STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
                 int value = *(image_data + iy * width * channels + ix * channels + k);
-                ggml_tensor_set_f32(output, value / 255.0f, ix, iy, k);
+                float pixel_val = value / 255.0f;
+                if(mean != NULL && std != NULL)
+                    pixel_val = (pixel_val - mean[k]) / std[k];
+                ggml_tensor_set_f32(output, pixel_val, ix, iy, k);
+            }
+        }
+    }
+}
+
+__STATIC_INLINE__ void sd_mul_images_to_tensor(const uint8_t* image_data,
+                                              struct ggml_tensor* output,
+                                              int idx,
+                                              float *mean = NULL, float *std = NULL) {
+    int64_t width    = output->ne[0];
+    int64_t height   = output->ne[1];
+    int64_t channels = output->ne[2];
+    GGML_ASSERT(channels == 3 && output->type == GGML_TYPE_F32);
+    for (int iy = 0; iy < height; iy++) {
+        for (int ix = 0; ix < width; ix++) {
+            for (int k = 0; k < channels; k++) {
+                int value = *(image_data + iy * width * channels + ix * channels + k);
+                float pixel_val = value / 255.0f;
+                if(mean != NULL && std != NULL)
+                    pixel_val = (pixel_val - mean[k]) / std[k];
+                ggml_tensor_set_f32(output, pixel_val, ix, iy, k, idx);
             }
         }
     }

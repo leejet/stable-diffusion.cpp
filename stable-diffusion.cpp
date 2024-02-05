@@ -1249,7 +1249,8 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     int64_t seed,
                     int batch_count,
                     const sd_image_t* control_cond,
-                    float control_strength) {
+                    float control_strength,
+                    std::vector<sd_image_t*> &input_id_images) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1293,6 +1294,23 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         // by a third party with a seed <0, let's incorporate randomization here.
         srand((int)time(NULL));
         seed = rand();
+    }
+    ggml_tensor* init_img = NULL;
+    if(sd_ctx->sd->stacked_id){
+        int32_t width = input_id_images[0]->width;
+        int32_t height = input_id_images[0]->height;
+        int32_t channels = input_id_images[0]->channel;
+        int32_t num_input_images = input_id_images.size();
+        init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, channels, num_input_images);
+        float mean[] = {0.48145466, 0.4578275, 0.40821073};
+        float std[]  = {0.26862954, 0.26130258, 0.27577711};
+        for(int i = 0; i <  num_input_images; i++)  {
+            sd_image_t* init_image = input_id_images[i];
+             sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
+        }
+        int64_t *ne = init_img->ne;
+        fprintf(stderr, "%s: input id image tensor ne [%ld, %ld, %ld, %ld] \n",
+              __func__, ne[0], ne[1], ne[2], ne[3]);
     }
 
     t0                            = ggml_time_ms();

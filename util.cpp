@@ -23,6 +23,10 @@
 #include "ggml/ggml.h"
 #include "stable-diffusion.h"
 
+ #define STB_IMAGE_RESIZE_IMPLEMENTATION
+ #include "stb_image_resize.h"
+
+
 bool ends_with(const std::string& str, const std::string& ending) {
     if (str.length() >= ending.length()) {
         return (str.compare(str.length() - ending.length(), ending.length(), ending) == 0);
@@ -100,7 +104,7 @@ bool is_directory(const std::string& path) {
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
 }
 
-// TODO: add windows version 
+// TODO: add windows version
 std::string get_full_path(const std::string& dir, const std::string& filename) {
     DIR* dp = opendir(dir.c_str());
 
@@ -224,6 +228,43 @@ std::string path_join(const std::string& p1, const std::string& p2) {
     }
 
     return p1 + "/" + p2;
+}
+
+
+sd_image_t *preprocess_id_image(sd_image_t *img){
+    int shortest_edge = 224;
+    int size = shortest_edge;
+    sd_image_t * resized = NULL;
+    uint32_t w = img->width;
+    uint32_t h = img->height;
+    uint32_t c = img->channel;
+
+
+    // 1. do resize using stb_resize functions
+
+    unsigned char *buf = (unsigned char*)malloc(sizeof(unsigned char)*3*size*size);
+    if(!stbir_resize_uint8(img->data, w, h , 0,
+                                 buf, size, size, 0,
+                                 c)){
+        fprintf(stderr, "%s: resize operation failed \n ", __func__);
+        return resized;
+    }
+
+    // 2. do center crop (likely unnecessary due to step 1)
+
+    // 3. do rescale
+
+    // 4. do normalize
+
+    // 3 and 4 will need to be done in float format.
+
+
+
+    resized = new sd_image_t{(uint32_t)shortest_edge,
+                             (uint32_t)shortest_edge,
+                              3,
+                             buf};
+    return resized;
 }
 
 void pretty_progress(int step, int steps, float time) {
