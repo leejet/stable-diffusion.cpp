@@ -552,7 +552,25 @@ public:
         }
     }
 
-    bool load_control_net_from_file(const std::string& control_path) {
+    bool load_control_net_from_file(const std::string& control_net_path, const std::string& embeddings_path, bool control_net_cpu) {
+        if (!control_net_path.empty()) {
+            ggml_backend_t cn_backend = NULL;
+            if (control_net_cpu && !ggml_backend_is_cpu(backend)) {
+                LOG_DEBUG("ControlNet: Using CPU backend");
+                cn_backend = ggml_backend_cpu_init();
+            } else {
+                cn_backend = backend;
+            }
+            if (!control_net.load_from_file(control_net_path, cn_backend, GGML_TYPE_F16 /* just f16 controlnet models */)) {
+                return false;
+            }
+        }
+    }
+
+    void free_control_net_params() {
+        if (control_net.params_buffer_size > 0) {
+            control_net.free_params_buffer();
+        }
     }
 
     bool load_from_file(const std::string& model_path,
@@ -560,7 +578,7 @@ public:
                         const std::string& control_net_path,
                         const std::string& embeddings_path,
                         const std::string& taesd_path,
-                        bool vae_tiling_,
+                        bool vae_tiling,
                         ggml_type wtype,
                         schedule_t schedule,
                         bool control_net_cpu) {

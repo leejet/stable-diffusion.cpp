@@ -275,48 +275,40 @@ std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) 
     }
 
     if (match(m, std::regex(format("unet%ctime_embedding%clinear_(\\d+)(.*)", seq, seq)), key)) {
-        return format("model%cdiffusion_model%ctime_embed%c", seq, seq, seq) + std::to_string(std::stoi(m[0]) * 2 - 2) +
-               m[1];
+        return format("model%cdiffusion_model%ctime_embed%c", seq, seq, seq) + std::to_string(std::stoi(m[0]) * 2 - 2) + m[1];
     }
 
     if (match(m, std::regex(format("unet%cdown_blocks%c(\\d+)%c(attentions|resnets)%c(\\d+)%c(.+)", seq, seq, seq, seq, seq)), key)) {
         std::string suffix = get_converted_suffix(m[1], m[3]);
         // LOG_DEBUG("%s %s %s %s", m[0].c_str(), m[1].c_str(), m[2].c_str(), m[3].c_str());
-        return format("model%cdiffusion_model%cinput_blocks%c", seq, seq, seq) +
-               std::to_string(1 + std::stoi(m[0]) * 3 + std::stoi(m[2])) + seq +
+        return format("model%cdiffusion_model%cinput_blocks%c", seq, seq, seq) + std::to_string(1 + std::stoi(m[0]) * 3 + std::stoi(m[2])) + seq +
                (m[1] == "attentions" ? "1" : "0") + seq + suffix;
     }
 
     if (match(m, std::regex(format("unet%cmid_block%c(attentions|resnets)%c(\\d+)%c(.+)", seq, seq, seq, seq)), key)) {
         std::string suffix = get_converted_suffix(m[0], m[2]);
-        return format("model%cdiffusion_model%cmiddle_block%c", seq, seq, seq) +
-               (m[0] == "attentions" ? "1" : std::to_string(std::stoi(m[1]) * 2)) +
+        return format("model%cdiffusion_model%cmiddle_block%c", seq, seq, seq) + (m[0] == "attentions" ? "1" : std::to_string(std::stoi(m[1]) * 2)) +
                seq + suffix;
     }
 
     if (match(m, std::regex(format("unet%cup_blocks%c(\\d+)%c(attentions|resnets)%c(\\d+)%c(.+)", seq, seq, seq, seq, seq)), key)) {
         std::string suffix = get_converted_suffix(m[1], m[3]);
-        return format("model%cdiffusion_model%coutput_blocks%c", seq, seq, seq) +
-               std::to_string(std::stoi(m[0]) * 3 + std::stoi(m[2])) + seq +
+        return format("model%cdiffusion_model%coutput_blocks%c", seq, seq, seq) + std::to_string(std::stoi(m[0]) * 3 + std::stoi(m[2])) + seq +
                (m[1] == "attentions" ? "1" : "0") + seq + suffix;
     }
 
-    if (match(m, std::regex(format("unet%cdown_blocks%c(\\d+)%cdownsamplers%c0%cconv", seq, seq, seq, seq, seq)),
-              key)) {
-        return format("model%cdiffusion_model%cinput_blocks%c", seq, seq, seq) +
-               std::to_string(3 + std::stoi(m[0]) * 3) + seq + "0" + seq + "op";
+    if (match(m, std::regex(format("unet%cdown_blocks%c(\\d+)%cdownsamplers%c0%cconv", seq, seq, seq, seq, seq)), key)) {
+        return format("model%cdiffusion_model%cinput_blocks%c", seq, seq, seq) + std::to_string(3 + std::stoi(m[0]) * 3) + seq + "0" + seq + "op";
     }
 
     if (match(m, std::regex(format("unet%cup_blocks%c(\\d+)%cupsamplers%c0%cconv", seq, seq, seq, seq, seq)), key)) {
-        return format("model%cdiffusion_model%coutput_blocks%c", seq, seq, seq) +
-               std::to_string(2 + std::stoi(m[0]) * 3) + seq +
+        return format("model%cdiffusion_model%coutput_blocks%c", seq, seq, seq) + std::to_string(2 + std::stoi(m[0]) * 3) + seq +
                (std::stoi(m[0]) > 0 ? "2" : "1") + seq + "conv";
     }
 
     // clip
     if (match(m, std::regex(format("te%ctext_model%cencoder%clayers%c(\\d+)%c(.+)", seq, seq, seq, seq, seq)), key)) {
-        return format("cond_stage_model%ctransformer%ctext_model%cencoder%clayers%c", seq, seq, seq, seq, seq) + m[0] +
-               seq + m[1];
+        return format("cond_stage_model%ctransformer%ctext_model%cencoder%clayers%c", seq, seq, seq, seq, seq) + m[0] + seq + m[1];
     }
 
     if (match(m, std::regex(format("te%ctext_model(.*)", seq)), key)) {
@@ -328,9 +320,7 @@ std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) 
         return format("first_stage_model%c%s%cnorm_out%s", seq, m[0].c_str(), seq, m[1].c_str());
     }
 
-    if (match(m,
-              std::regex(format("vae%c(.*)%cmid_block%c(attentions|resnets)%c(\\d+)%c(.+)", seq, seq, seq, seq, seq)),
-              key)) {
+    if (match(m, std::regex(format("vae%c(.*)%cmid_block%c(attentions|resnets)%c(\\d+)%c(.+)", seq, seq, seq, seq, seq)), key)) {
         std::string suffix;
         std::string block_name;
         if (m[1] == "attentions") {
@@ -344,9 +334,7 @@ std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) 
                       seq, m[0].c_str(), seq, seq, block_name.c_str(), std::stoi(m[2]) + 1, seq, suffix.c_str());
     }
 
-    if (match(m,
-              std::regex(format("vae%c(.*)%cup_blocks%c(\\d+)%cresnets%c(\\d+)%c(.+)", seq, seq, seq, seq, seq, seq)),
-              key)) {
+    if (match(m, std::regex(format("vae%c(.*)%cup_blocks%c(\\d+)%cresnets%c(\\d+)%c(.+)", seq, seq, seq, seq, seq, seq)), key)) {
         std::string suffix = m[3];
         if (suffix == "conv_shortcut") {
             suffix = "nin_shortcut";
@@ -355,16 +343,12 @@ std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) 
                       seq, m[0].c_str(), seq, seq, 3 - std::stoi(m[1]), seq, seq, m[2].c_str(), seq, suffix.c_str());
     }
 
-    if (match(m,
-              std::regex(format("vae%c(.*)%cdown_blocks%c(\\d+)%cdownsamplers%c0%cconv", seq, seq, seq, seq, seq, seq)),
-              key)) {
+    if (match(m, std::regex(format("vae%c(.*)%cdown_blocks%c(\\d+)%cdownsamplers%c0%cconv", seq, seq, seq, seq, seq, seq)), key)) {
         return format("first_stage_model%c%s%cdown%c%d%cdownsample%cconv",
                       seq, m[0].c_str(), seq, seq, std::stoi(m[1]), seq, seq);
     }
 
-    if (match(m,
-              std::regex(format("vae%c(.*)%cdown_blocks%c(\\d+)%cresnets%c(\\d+)%c(.+)", seq, seq, seq, seq, seq, seq)),
-              key)) {
+    if (match(m, std::regex(format("vae%c(.*)%cdown_blocks%c(\\d+)%cresnets%c(\\d+)%c(.+)", seq, seq, seq, seq, seq, seq)), key)) {
         std::string suffix = m[3];
         if (suffix == "conv_shortcut") {
             suffix = "nin_shortcut";
@@ -373,8 +357,7 @@ std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) 
                       seq, m[0].c_str(), seq, seq, std::stoi(m[1]), seq, seq, m[2].c_str(), seq, suffix.c_str());
     }
 
-    if (match(m, std::regex(format("vae%c(.*)%cup_blocks%c(\\d+)%cupsamplers%c0%cconv", seq, seq, seq, seq, seq, seq)),
-              key)) {
+    if (match(m, std::regex(format("vae%c(.*)%cup_blocks%c(\\d+)%cupsamplers%c0%cconv", seq, seq, seq, seq, seq, seq)), key)) {
         return format("first_stage_model%c%s%cup%c%d%cupsample%cconv",
                       seq, m[0].c_str(), seq, seq, 3 - std::stoi(m[1]), seq, seq);
     }
@@ -511,9 +494,8 @@ void convert_tensor(void* src, ggml_type src_type, void* dst, ggml_type dst_type
         } else {
             auto qtype = ggml_internal_get_type_traits(src_type);
             if (qtype.to_float == NULL) {
-                throw std::runtime_error(
-                    format("type %s unsupported for integer quantization: no dequantization available",
-                           ggml_type_name(src_type)));
+                throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
+                                                ggml_type_name(src_type)));
             }
             qtype.to_float(src, (float*)dst, n);
         }
@@ -807,8 +789,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             ne[i] = shape[i].get<int64_t>();
         }
 
-        TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index,
-                                     ST_HEADER_SIZE_LEN + header_size_ + begin);
+        TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
 
         tensor_storage.reverse_ne();
 
@@ -1067,7 +1048,7 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                     break;
                 case ']':  // EMPTY_LIST     = b']'   # push empty list
                     break;
-                    // skip unused sections
+                // skip unused sections
                 case 'h':  // BINGET         = b'h'   #   "    "    "    "   "   "  ;   "    " 1-byte arg
                 case 'q':  // BINPUT         = b'q'   #   "     "    "   "   " ;   "    " 1-byte arg
                 case 'Q':  // BINPERSID      = b'Q'   #  "       "         "  ;  "  "   "     "  stack
@@ -1360,8 +1341,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 
                     if (tensor_storage.is_bf16) {
                         // inplace op
-                        bf16_to_f32_vec((uint16_t*)dst_tensor->data, (float*)dst_tensor->data,
-                                        tensor_storage.nelements());
+                        bf16_to_f32_vec((uint16_t*)dst_tensor->data, (float*)dst_tensor->data, tensor_storage.nelements());
                     }
                 } else {
                     read_buffer.resize(tensor_storage.nbytes());
@@ -1369,8 +1349,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 
                     if (tensor_storage.is_bf16) {
                         // inplace op
-                        bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(),
-                                        tensor_storage.nelements());
+                        bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
                     }
 
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
@@ -1382,8 +1361,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 
                 if (tensor_storage.is_bf16) {
                     // inplace op
-                    bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(),
-                                    tensor_storage.nelements());
+                    bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
                 }
 
                 if (tensor_storage.type == dst_tensor->type) {
@@ -1443,8 +1421,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
                 "tensor '%s' has wrong shape in model file: "
                 "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
                 name.c_str(),
-                (int)tensor_storage.ne[0], (int)tensor_storage.ne[1], (int)tensor_storage.ne[2],
-                (int)tensor_storage.ne[3],
+                (int)tensor_storage.ne[0], (int)tensor_storage.ne[1], (int)tensor_storage.ne[2], (int)tensor_storage.ne[3],
                 (int)real->ne[0], (int)real->ne[1], (int)real->ne[2], (int)real->ne[3]);
             return false;
         }

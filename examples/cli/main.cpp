@@ -651,6 +651,18 @@ SDParams merge_params(SDParams dst, SDParams src) {
         }
     }
 
+    if (dst.controlnet_path != src.control_image_path) {
+        if (!src.controlnet_path.empty()) {
+            dst.controlnet_path = src.controlnet_path;
+        }
+    }
+
+    if (dst.embeddings_path != src.embeddings_path) {
+        if (!src.embeddings_path.empty()) {
+            dst.embeddings_path = src.embeddings_path;
+        }
+    }
+
     if (dst.wtype != src.wtype) {
         dst.wtype = src.wtype;
     }
@@ -664,6 +676,18 @@ SDParams merge_params(SDParams dst, SDParams src) {
     if (dst.output_path != src.output_path) {
         if (!src.output_path.empty()) {
             dst.output_path = src.output_path;
+        }
+    }
+
+    if (dst.input_path != src.input_path) {
+        if (!src.input_path.empty()) {
+            dst.input_path = src.input_path;
+        }
+    }
+
+    if (dst.control_image_path != src.control_image_path) {
+        if (!src.control_image_path.empty()) {
+            dst.control_image_path = src.control_image_path;
         }
     }
 
@@ -701,6 +725,30 @@ SDParams merge_params(SDParams dst, SDParams src) {
         }
     }
 
+    if (dst.batch_count != src.batch_count) {
+        if (src.batch_count > 0) {
+            dst.batch_count = src.batch_count;
+        }
+    }
+
+    if (dst.batch_count != src.batch_count) {
+        if (src.batch_count > 0) {
+            dst.batch_count = src.batch_count;
+        }
+    }
+
+    if (dst.sample_method != src.sample_method) {
+        if (src.sample_method < N_SAMPLE_METHODS) {
+            dst.sample_method = src.sample_method;
+        }
+    }
+
+    if (dst.schedule != src.schedule) {
+        if (src.schedule < N_SAMPLE_METHODS) {
+            dst.schedule = src.schedule;
+        }
+    }
+
     if (dst.sample_steps != src.sample_steps) {
         if (src.sample_steps > 0) {
             dst.sample_steps = src.sample_steps;
@@ -713,10 +761,42 @@ SDParams merge_params(SDParams dst, SDParams src) {
         }
     }
 
+    if (dst.control_strength != src.control_strength) {
+        if (src.control_strength >= 0.f && src.control_strength <= 1.f) {
+            dst.control_strength = src.control_strength;
+        }
+    }
+
+    if (dst.rng_type != src.rng_type) {
+        if (src.rng_type < CUDA_RNG) {
+            dst.rng_type = src.rng_type;
+        }
+    }
+
     if (dst.seed != src.seed) {
         if (src.seed > 0) {
             dst.seed = src.seed;
         }
+    }
+
+    if (dst.verbose != src.verbose) {
+        dst.verbose = src.verbose;
+    }
+
+    if (dst.vae_tiling != src.vae_tiling) {
+        dst.verbose = src.verbose;
+    }
+
+    if (dst.vae_decode_only != src.vae_decode_only) {
+        dst.vae_decode_only = src.vae_decode_only;
+    }
+
+    if (dst.control_net_cpu != src.control_net_cpu) {
+        dst.control_net_cpu = src.control_net_cpu;
+    }
+
+    if (dst.canny_preprocess != src.canny_preprocess) {
+        dst.canny_preprocess = src.canny_preprocess;
     }
     return dst;
 }
