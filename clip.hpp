@@ -166,7 +166,7 @@ public:
         }
         encoder_len = i;
 
-        auto it = encoder.find(utf8_to_utf32("img"));
+        auto it = encoder.find(utf8_to_utf32("img</w>"));
         if (it != encoder.end()) {
             printf(" trigger word img already in vocab \n");
         }else{
@@ -1213,6 +1213,34 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
     std::pair<std::vector<int>, std::vector<float>> tokenize(std::string text,
                                                              bool padding = false) {
         return tokenize(text, text_model.max_position_embeddings, padding);
+    }
+
+    std::vector<int> convert_token_to_id(std::string text) {
+        auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
+            size_t word_end       = str.find(",");
+            std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
+            embd_name             = trim(embd_name);
+            std::string embd_path = get_full_path(text_model.embd_dir, embd_name + ".pt");
+            if (embd_path.size() == 0) {
+                embd_path = get_full_path(text_model.embd_dir, embd_name + ".ckpt");
+            }
+            if (embd_path.size() == 0) {
+                embd_path = get_full_path(text_model.embd_dir, embd_name + ".safetensors");
+            }
+            if (embd_path.size() > 0) {
+                if (text_model.load_embedding(embd_name, embd_path, bpe_tokens)) {
+                    if (word_end != std::string::npos) {
+                        str = str.substr(word_end);
+                    } else {
+                        str = "";
+                    }
+                    return true;
+                }
+            }
+            return false;
+        };
+        std::vector<int> curr_tokens = tokenizer.encode(text, on_new_token_cb);
+        return curr_tokens;
     }
 
     std::pair<std::vector<int>, std::vector<float>> tokenize(std::string text,

@@ -585,6 +585,12 @@ public:
                                                                 int height,
                                                                 bool force_zero_embeddings = false) {
         cond_stage_model.set_clip_skip(clip_skip);
+        auto image_tokens = cond_stage_model.convert_token_to_id(trigger_word);
+        printf(" length of image tokens: %lu \n", image_tokens.size());
+        if(image_tokens.size() == 1){
+            printf(" image token id is: %d \n", image_tokens[0]);
+        }     
+
         auto tokens_and_weights     = cond_stage_model.tokenize(text, true);
         std::vector<int>& tokens    = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
