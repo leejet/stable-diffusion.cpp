@@ -76,8 +76,11 @@ private:
     SDVersion version = VERSION_1_x;
     std::map<int, std::u32string> byte_encoder;
     std::map<std::u32string, int> encoder;
+    std::map<int, std::u32string> decoder;
     std::map<std::pair<std::u32string, std::u32string>, int> bpe_ranks;
     std::regex pat;
+    int encoder_len;
+    int bpe_len;
 
     static std::string strip(const std::string& str) {
         std::string::size_type start = str.find_first_not_of(" \t\n\r\v\f");
@@ -118,6 +121,7 @@ public:
 
     void load_from_merges(const std::string& merges_utf8_str) {
         auto byte_unicode_pairs = bytes_to_unicode();
+        // printf("byte_unicode_pairs have %lu pairs \n", byte_unicode_pairs.size());
         byte_encoder            = std::map<int, std::u32string>(byte_unicode_pairs.begin(), byte_unicode_pairs.end());
         // for (auto & pair: byte_unicode_pairs) {
         //     std::cout << pair.first << ": " << pair.second << std::endl;
@@ -138,6 +142,8 @@ public:
             size_t space_pos = merge.find(' ');
             merge_pairs.emplace_back(merge.substr(0, space_pos), merge.substr(space_pos + 1));
             // LOG_DEBUG("%s", utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
+            // printf("%s :: %s, %s \n", utf32_to_utf8(merge).c_str(), utf32_to_utf8(merge.substr(0, space_pos)).c_str(), 
+            //                     utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
         }
         std::vector<std::u32string> vocab;
         for (const auto& pair : byte_unicode_pairs) {
@@ -154,14 +160,36 @@ public:
         LOG_DEBUG("vocab size: %llu", vocab.size());
         int i = 0;
         for (const auto& token : vocab) {
-            encoder[token] = i++;
+            encoder[token] = i;
+            decoder[i] = token;
+            i++;
+        }
+        encoder_len = i;
+
+        auto it = encoder.find(utf8_to_utf32("img"));
+        if (it != encoder.end()) {
+            printf(" trigger word img already in vocab \n");
+        }else{
+            printf(" trigger word img not in vocab yet\n");
         }
 
         int rank = 0;
         for (const auto& merge : merge_pairs) {
             bpe_ranks[merge] = rank++;
         }
+        bpe_len = rank;
     };
+
+
+    void add_token(const std::string &text){
+        std::u32string token = utf8_to_utf32(text);
+        auto it = encoder.find(token);
+        if (it != encoder.end()) {
+            encoder[token] = encoder_len;
+            decoder[encoder_len] = token;
+            encoder_len++;            
+        }
+    }
 
     std::u32string bpe(const std::u32string& token) {
         std::vector<std::u32string> word;
@@ -243,6 +271,7 @@ public:
                               size_t max_length = 0,
                               bool padding      = false) {
         std::vector<int32_t> tokens = encode(text, on_new_token_cb);
+        
         tokens.insert(tokens.begin(), BOS_TOKEN_ID);
         if (max_length > 0) {
             if (tokens.size() > max_length - 1) {
@@ -259,6 +288,7 @@ public:
                 }
             }
         }
+        
         return tokens;
     }
 
@@ -308,7 +338,8 @@ public:
             ss << "\"" << token << "\", ";
         }
         ss << "]";
-        LOG_DEBUG("split prompt \"%s\" to tokens %s", original_text.c_str(), ss.str().c_str());
+        // LOG_DEBUG("split prompt \"%s\" to tokens %s", original_text.c_str(), ss.str().c_str());
+        printf("split prompt \"%s\" to tokens %s \n", original_text.c_str(), ss.str().c_str());
         return bpe_tokens;
     }
 };
@@ -1255,10 +1286,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             }
         }
 
-        // for (int i = 0; i < tokens.size(); i++) {
-        //     std::cout << tokens[i] << ":" << weights[i] << ", ";
-        // }
-        // std::cout << std::endl;
+        for (int i = 0; i < tokens.size(); i++) {
+            std::cout << tokens[i] << ":" << weights[i] << ", ";
+        }
+        std::cout << std::endl;
 
         return {tokens, weights};
     }

@@ -268,7 +268,7 @@ public:
 
         // load weights
         LOG_DEBUG("loading weights");
-        fprintf(stderr, "%s: loading weights \n", __func__);
+        
         int64_t t0 = ggml_time_ms();
 
         std::map<std::string, struct ggml_tensor*> tensors_need_to_load;
@@ -303,7 +303,7 @@ public:
             ggml_free(ctx);
             return false;
         }
-        fprintf(stderr, "%s: loading weights sccess\n", __func__);
+        
 
         // LOG_DEBUG("model size = %.2fMB", total_size / 1024.0 / 1024.0);
 
@@ -472,6 +472,110 @@ public:
         }
 
         curr_lora_state = lora_state;
+    }
+
+
+    std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*>
+                             get_learned_condition_with_trigger(ggml_context* work_ctx,
+                                                                const std::string& text,
+                                                                int clip_skip,                                                                
+                                                                int width,
+                                                                int height,
+                                                                int num_input_imgs,
+                                                                bool force_zero_embeddings = false) {
+        cond_stage_model.set_clip_skip(clip_skip);
+        auto image_token_id = cond_stage_model.tokenize(trigger_word, true); 
+
+
+        auto tokens_and_weights     = cond_stage_model.tokenize(text, true);
+        std::vector<int>& tokens    = tokens_and_weights.first;
+        std::vector<float>& weights = tokens_and_weights.second;
+        int64_t t0                  = ggml_time_ms();
+        struct ggml_tensor* pooled  = NULL;
+        size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
+        if (version == VERSION_XL) {
+            total_hidden_size += cond_stage_model.text_model2.hidden_size;
+            pooled = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, cond_stage_model.text_model2.projection_dim);
+        }
+        struct ggml_tensor* hidden_states = ggml_new_tensor_2d(work_ctx,
+                                                               GGML_TYPE_F32,
+                                                               total_hidden_size,
+                                                               cond_stage_model.text_model.max_position_embeddings);  // [N, n_token, hidden_size]
+        cond_stage_model.alloc_compute_buffer(work_ctx, (int)tokens.size());
+        cond_stage_model.compute(n_threads, tokens, hidden_states, pooled);
+        cond_stage_model.free_compute_buffer();
+        // if (pooled != NULL) {
+        //     print_ggml_tensor(hidden_states);
+        //     print_ggml_tensor(pooled);
+        // }
+
+        ggml_tensor *class_tokens_mask = ggml_dup_tensor(work_ctx, hidden_states);
+
+        int64_t t1 = ggml_time_ms();
+        LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+        ggml_tensor* result = ggml_dup_tensor(work_ctx, hidden_states);
+        {
+            float original_mean = ggml_tensor_mean(hidden_states);
+            for (int i2 = 0; i2 < hidden_states->ne[2]; i2++) {
+                for (int i1 = 0; i1 < hidden_states->ne[1]; i1++) {
+                    for (int i0 = 0; i0 < hidden_states->ne[0]; i0++) {
+                        float value = ggml_tensor_get_f32(hidden_states, i0, i1, i2);
+                        value *= weights[i1];
+                        ggml_tensor_set_f32(result, value, i0, i1, i2);
+                    }
+                }
+            }
+            float new_mean = ggml_tensor_mean(result);
+            ggml_tensor_scale(result, (original_mean / new_mean));
+        }
+        if (force_zero_embeddings) {
+            float* vec = (float*)result->data;
+            for (int i = 0; i < ggml_nelements(result); i++) {
+                vec[i] = 0;
+            }
+        }
+
+        ggml_tensor* vec = NULL;
+        if (version == VERSION_XL) {
+            int out_dim = 256;
+            vec         = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model.adm_in_channels);
+            // [0:1280]
+            size_t offset = 0;
+            memcpy(vec->data, pooled->data, ggml_nbytes(pooled));
+            offset += ggml_nbytes(pooled);
+
+            struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 2);
+            // original_size_as_tuple
+            float orig_width  = (float)width;
+            float orig_height = (float)height;
+            ggml_tensor_set_f32(timesteps, orig_height, 0);
+            ggml_tensor_set_f32(timesteps, orig_width, 1);
+            ggml_tensor* embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
+            offset += ggml_nbytes(embed_view);
+            set_timestep_embedding(timesteps, embed_view, out_dim);
+            // print_ggml_tensor(ggml_reshape_1d(work_ctx, embed_view, out_dim * 2));
+            // crop_coords_top_left
+            float crop_coord_top  = 0.f;
+            float crop_coord_left = 0.f;
+            ggml_tensor_set_f32(timesteps, crop_coord_top, 0);
+            ggml_tensor_set_f32(timesteps, crop_coord_left, 1);
+            embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
+            offset += ggml_nbytes(embed_view);
+            set_timestep_embedding(timesteps, embed_view, out_dim);
+            // print_ggml_tensor(ggml_reshape_1d(work_ctx, embed_view, out_dim * 2));
+            // target_size_as_tuple
+            float target_width  = (float)width;
+            float target_height = (float)height;
+            ggml_tensor_set_f32(timesteps, target_height, 0);
+            ggml_tensor_set_f32(timesteps, target_width, 1);
+            embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
+            offset += ggml_nbytes(embed_view);
+            set_timestep_embedding(timesteps, embed_view, out_dim);
+            // print_ggml_tensor(ggml_reshape_1d(work_ctx, embed_view, out_dim * 2));
+            GGML_ASSERT(offset == ggml_nbytes(vec));
+        }
+        // print_ggml_tensor(result);
+        return std::make_tuple(result, vec, class_tokens_mask);
     }
 
     std::pair<ggml_tensor*, ggml_tensor*> get_learned_condition(ggml_context* work_ctx,
