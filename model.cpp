@@ -789,7 +789,6 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             ne[i] = shape[i].get<int64_t>();
         }
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
-
         tensor_storage.reverse_ne();
 
         size_t tensor_data_size = end - begin;
@@ -1228,7 +1227,9 @@ std::string ModelLoader::load_merges() {
     return merges_utf8_str;
 }
 
-void remove_duplicates(std::vector<TensorStorage>& vec) {
+std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& vec) {
+
+    std::vector<TensorStorage> res;
     std::unordered_map<std::string, size_t> name_to_index_map;
 
     for (size_t i = 0; i < vec.size(); ++i) {
@@ -1236,13 +1237,16 @@ void remove_duplicates(std::vector<TensorStorage>& vec) {
         auto it                         = name_to_index_map.find(current_name);
 
         if (it != name_to_index_map.end()) {
-            vec[it->second] = vec[i];
+            res[it->second] = vec[i];
         } else {
             name_to_index_map[current_name] = i;
+            res.push_back(vec[i]);
         }
     }
 
-    vec.resize(name_to_index_map.size());
+    // vec.resize(name_to_index_map.size());
+
+    return res;
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend) {
@@ -1256,7 +1260,9 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 
         preprocess_tensor(tensor_storage, processed_tensor_storages);
     }
-    remove_duplicates(processed_tensor_storages);
+    std::vector<TensorStorage> dedup = remove_duplicates(processed_tensor_storages);
+    processed_tensor_storages = dedup;
+
     bool success = true;
     for (size_t file_index = 0; file_index < file_paths_.size(); file_index++) {
         std::string file_path = file_paths_[file_index];
@@ -1402,7 +1408,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
             real = tensors[name];
         } else {
             if (ignore_tensors.find(name) == ignore_tensors.end()) {
-                LOG_WARN("unknown tensor '%s' in model file", name.c_str());
+                // LOG_WARN("unknown tensor '%s' in model file", name.c_str());
             }
             return true;
         }

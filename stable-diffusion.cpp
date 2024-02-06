@@ -188,6 +188,7 @@ public:
             LOG_ERROR("get merges failed: '%s'", model_path.c_str());
             return false;
         }
+        LOG_INFO("vocab loaded with size: %u", merges_utf8_str.size());
 
         cond_stage_model.tokenizer.load_from_merges(merges_utf8_str);
 
