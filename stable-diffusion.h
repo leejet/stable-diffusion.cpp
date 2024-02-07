@@ -162,6 +162,8 @@ SD_API void log_printf(sd_log_level_t level, const char* file, int line, const c
 
 SD_API std::string sd_basename(const std::string& path);
 
+SD_API uint8_t* preprocess_canny(uint8_t* img, int width, int height, float highThreshold = 0.08f, float lowThreshold = 0.08f, float weak = 0.8f, float strong = 1.0f, bool inverse = false);
+
 #ifdef __cplusplus
 }
 #endif
