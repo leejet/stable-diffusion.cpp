@@ -474,6 +474,20 @@ public:
         curr_lora_state = lora_state;
     }
 
+    std::string remove_trigger_from_prompt(ggml_context* work_ctx,
+                                          const std::string& prompt){
+
+        auto image_tokens = cond_stage_model.convert_token_to_id(trigger_word);                                    
+        GGML_ASSERT(image_tokens.size() == 1);
+
+        auto tokens_and_weights  = cond_stage_model.tokenize(prompt, false);
+        std::vector<int>& tokens    = tokens_and_weights.first;    
+        auto it = std::find(tokens.begin(), tokens.end(), image_tokens[0]);
+        GGML_ASSERT(it != tokens.end()); // prompt must have trigger word
+        tokens.erase(it);
+        return cond_stage_model.decode(tokens);
+                        
+    }
 
     std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*>
                              get_learned_condition_with_trigger(ggml_context* work_ctx,
@@ -483,13 +497,21 @@ public:
                                                                 int height,
                                                                 int num_input_imgs,
                                                                 bool force_zero_embeddings = false) {
-        cond_stage_model.set_clip_skip(clip_skip);
-        auto image_token_id = cond_stage_model.tokenize(trigger_word, true); 
-
-
-        auto tokens_and_weights     = cond_stage_model.tokenize(text, true);
-        std::vector<int>& tokens    = tokens_and_weights.first;
-        std::vector<float>& weights = tokens_and_weights.second;
+        cond_stage_model.set_clip_skip(clip_skip);        
+        auto image_tokens = cond_stage_model.convert_token_to_id(trigger_word);
+        printf(" length of image tokens: %lu \n", image_tokens.size());
+        if(image_tokens.size() == 1){
+            printf(" image token id is: %d \n", image_tokens[0]);
+        }     
+        GGML_ASSERT(image_tokens.size() == 1);
+        // auto tokens_and_weights     = cond_stage_model.tokenize(text, true);
+        auto tokens_and_weights     = cond_stage_model.tokenize_with_trigger_token(text, 
+                                                                             num_input_imgs, 
+                                                                             image_tokens[0], 
+                                                                             true);
+        std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
+        std::vector<float>& weights = std::get<1>(tokens_and_weights);
+        std::vector<bool>& clsm     = std::get<2>(tokens_and_weights);
         int64_t t0                  = ggml_time_ms();
         struct ggml_tensor* pooled  = NULL;
         size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
@@ -509,7 +531,13 @@ public:
         //     print_ggml_tensor(pooled);
         // }
 
-        ggml_tensor *class_tokens_mask = ggml_dup_tensor(work_ctx, hidden_states);
+        ggml_tensor *class_tokens_mask = ggml_new_tensor_1d(work_ctx, GGML_TYPE_I32, cond_stage_model.text_model.max_position_embeddings);
+        for (int i1 = 0; i1 < hidden_states->ne[1]; i1++) {
+            if(clsm[i1])
+                ggml_set_i32_1d(class_tokens_mask, i1, 1);
+            else
+                ggml_set_i32_1d(class_tokens_mask, i1, 0);
+        }
 
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
@@ -584,12 +612,7 @@ public:
                                                                 int width,
                                                                 int height,
                                                                 bool force_zero_embeddings = false) {
-        cond_stage_model.set_clip_skip(clip_skip);
-        auto image_tokens = cond_stage_model.convert_token_to_id(trigger_word);
-        printf(" length of image tokens: %lu \n", image_tokens.size());
-        if(image_tokens.size() == 1){
-            printf(" image token id is: %d \n", image_tokens[0]);
-        }     
+        cond_stage_model.set_clip_skip(clip_skip);      
 
         auto tokens_and_weights     = cond_stage_model.tokenize(text, true);
         std::vector<int>& tokens    = tokens_and_weights.first;
@@ -1425,6 +1448,9 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         fprintf(stderr, "%s: input id image tensor ne [%ld, %ld, %ld, %ld] \n",
               __func__, ne[0], ne[1], ne[2], ne[3]);
     }
+
+    std::string prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt);
+    printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
 
     t0                            = ggml_time_ms();
     auto cond_pair                = sd_ctx->sd->get_learned_condition(work_ctx, prompt, clip_skip, width, height);
