@@ -606,6 +606,25 @@ public:
         return std::make_tuple(result, vec, class_tokens_mask);
     }
 
+    ggml_tensor* id_encoder(ggml_context* work_ctx, 
+                            ggml_tensor* init_img, 
+                            ggml_tensor* prompts_embeds, 
+                            ggml_tensor* class_tokens_mask){
+
+        size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
+        if (version == VERSION_XL) {
+            total_hidden_size += cond_stage_model.text_model2.hidden_size;         
+        }
+        ggml_tensor *res = ggml_new_tensor_2d(work_ctx,
+                                                GGML_TYPE_F32,
+                                                total_hidden_size,
+                                                cond_stage_model.text_model.max_position_embeddings);
+        pmid_model.alloc_compute_buffer(work_ctx, init_img, prompts_embeds, class_tokens_mask);
+        pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);
+        pmid_model.free_compute_buffer(); 
+        return res; 
+    }
+
     std::pair<ggml_tensor*, ggml_tensor*> get_learned_condition(ggml_context* work_ctx,
                                                                 const std::string& text,
                                                                 int clip_skip,
@@ -1431,13 +1450,19 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         srand((int)time(NULL));
         seed = rand();
     }
+
+    std::string prompt_text_only;
     ggml_tensor* init_img = NULL;
+    ggml_tensor* prompts_embeds = NULL;
+    ggml_tensor* pooled_prompts_embeds = NULL;
+    ggml_tensor* class_tokens_mask = NULL;
     if(sd_ctx->sd->stacked_id){
         int32_t width = input_id_images[0]->width;
         int32_t height = input_id_images[0]->height;
         int32_t channels = input_id_images[0]->channel;
         int32_t num_input_images = input_id_images.size();
         init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, channels, num_input_images);
+        // TODO: move these to somewhere else and be user settable
         float mean[] = {0.48145466, 0.4578275, 0.40821073};
         float std[]  = {0.26862954, 0.26130258, 0.27577711};
         for(int i = 0; i <  num_input_images; i++)  {
@@ -1447,15 +1472,45 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         int64_t *ne = init_img->ne;
         fprintf(stderr, "%s: input id image tensor ne [%ld, %ld, %ld, %ld] \n",
               __func__, ne[0], ne[1], ne[2], ne[3]);
+        auto cond_tup                = sd_ctx->sd->get_learned_condition_with_trigger(work_ctx, prompt, 
+                                                   clip_skip, width, height, num_input_images );
+        prompts_embeds                = std::get<0>(cond_tup);
+        pooled_prompts_embeds         = std::get<1>(cond_tup);  // [adm_in_channels, ]
+        class_tokens_mask             = std::get<2>(cond_tup);  // 
+        ne = prompts_embeds->ne;
+        fprintf(stderr, "%s: text embedding tensor ne [%ld, %ld, %ld, %ld] \n",
+              __func__, ne[0], ne[1], ne[2], ne[3]);
+        ne = pooled_prompts_embeds->ne;
+        fprintf(stderr, "%s: SDXL pooled text embedding tensor ne [%ld, %ld, %ld, %ld] \n",
+              __func__, ne[0], ne[1], ne[2], ne[3]);
+        ne = class_tokens_mask->ne;
+        fprintf(stderr, "%s: class token mask tensor ne [%ld, %ld, %ld, %ld] \n",
+              __func__, ne[0], ne[1], ne[2], ne[3]); 
+
+        // prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
+
+        // if (sd_ctx->sd->free_params_immediately) {
+        //     sd_ctx->sd->pmid_model.free_params_buffer();
+        // } 
+        // Encode input prompt without the trigger word for delayed conditioning
+        prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt); 
+    //    printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
+        prompt = prompt_text_only; //  
     }
 
-    std::string prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt);
-    printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
 
-    t0                            = ggml_time_ms();
+
+    t0                            = ggml_time_ms();    
     auto cond_pair                = sd_ctx->sd->get_learned_condition(work_ctx, prompt, clip_skip, width, height);
     ggml_tensor* c                = cond_pair.first;
     ggml_tensor* c_vector         = cond_pair.second;  // [adm_in_channels, ]
+
+    int64_t *ne = c->ne;
+        fprintf(stderr, "%s: text embedding tensor ne [%ld, %ld, %ld, %ld] \n",
+              __func__, ne[0], ne[1], ne[2], ne[3]);
+    ne = c_vector->ne;
+        fprintf(stderr, "%s: SDXL  pooled text embedding tensor ne [%ld, %ld, %ld, %ld] \n",
+              __func__, ne[0], ne[1], ne[2], ne[3]);
     struct ggml_tensor* uc        = NULL;
     struct ggml_tensor* uc_vector = NULL;
     if (cfg_scale != 1.0) {
@@ -1496,7 +1551,17 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         std::vector<float> sigmas = sd_ctx->sd->denoiser->schedule->get_sigmas(sample_steps);
 
-        struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, x_t, NULL, c, c_vector, uc, uc_vector, image_hint, cfg_scale, sample_method, sigmas, control_strength);
+        struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, 
+                                            x_t, 
+                                            NULL, 
+                                            c, 
+                                            c_vector, 
+                                            uc, uc_vector, 
+                                            image_hint, 
+                                            cfg_scale, 
+                                            sample_method, 
+                                            sigmas, 
+                                            control_strength);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();

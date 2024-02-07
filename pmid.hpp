@@ -254,6 +254,73 @@ struct PhotoMakerIDEncoder : public GGMLModule {
 
     }
 
+     struct ggml_cgraph* build_graph(struct ggml_allocr* allocr, 
+                                     struct ggml_tensor* id_pixel_values,
+                                     struct ggml_tensor* prompt_embeds,
+                                     struct ggml_tensor* class_tokens_mask
+                              ) {
+        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
+        static size_t buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
+        static std::vector<uint8_t> buf(buf_size);
+
+        struct ggml_init_params params = {
+            /*.mem_size   =*/buf_size,
+            /*.mem_buffer =*/buf.data(),
+            /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
+        };
+
+        struct ggml_context* ctx0 = ggml_init(params);
+
+        struct ggml_cgraph* gf = ggml_new_graph(ctx0);   
+
+        struct ggml_tensor* id_pixel_values_d = ggml_dup_tensor(ctx0, id_pixel_values);
+        ggml_allocr_alloc(allocr, id_pixel_values_d);
+        struct ggml_tensor* prompt_embeds_d = ggml_dup_tensor(ctx0, prompt_embeds);
+        ggml_allocr_alloc(allocr, prompt_embeds_d);
+        struct ggml_tensor* class_tokens_mask_d = ggml_dup_tensor(ctx0, class_tokens_mask);
+        ggml_allocr_alloc(allocr, class_tokens_mask_d);
+
+        if (!ggml_allocr_is_measure(allocr)) {
+            ggml_backend_tensor_set(id_pixel_values_d, id_pixel_values->data, 0,  ggml_nbytes(id_pixel_values));
+            ggml_backend_tensor_set(prompt_embeds_d, prompt_embeds->data, 0,  ggml_nbytes(prompt_embeds));
+            ggml_backend_tensor_set(class_tokens_mask_d, class_tokens_mask->data, 0,  ggml_nbytes(class_tokens_mask_d));
+        }     
+        struct ggml_tensor*  updated_prompt_embeds = forward(ctx0, 
+                                                            id_pixel_values_d, 
+                                                            prompt_embeds_d, 
+                                                            class_tokens_mask_d);
+
+        ggml_build_forward_expand(gf, updated_prompt_embeds);
+        ggml_free(ctx0);
+
+        return gf;
+    }
+
+    void alloc_compute_buffer(ggml_context* work_ctx, 
+                              struct ggml_tensor* id_pixel_values,
+                              struct ggml_tensor* prompt_embeds,
+                              struct ggml_tensor* class_tokens_mask) {
+        auto get_graph = [&]() -> struct ggml_cgraph* {            
+            
+            return build_graph(compute_allocr, id_pixel_values, prompt_embeds, class_tokens_mask);
+        };
+        GGMLModule::alloc_compute_buffer(get_graph);
+    }
+
+    void compute(const int n_threads,
+                 struct ggml_tensor* id_pixel_values,
+                 struct ggml_tensor* prompt_embeds,
+                 struct ggml_tensor* class_tokens_mask,
+                 struct ggml_tensor* updated_prompt_embeds) {
+        
+        auto get_graph = [&]() -> struct ggml_cgraph* {
+            return build_graph(compute_allocr, id_pixel_values, prompt_embeds, class_tokens_mask);
+        };
+
+        GGMLModule::compute(get_graph, n_threads, updated_prompt_embeds);
+        
+    }
+
 };
 
 

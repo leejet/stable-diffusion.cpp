@@ -146,7 +146,7 @@ public:
             size_t space_pos = merge.find(' ');
             merge_pairs.emplace_back(merge.substr(0, space_pos), merge.substr(space_pos + 1));
             // LOG_DEBUG("%s", utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
-            // printf("%s :: %s, %s \n", utf32_to_utf8(merge).c_str(), utf32_to_utf8(merge.substr(0, space_pos)).c_str(), 
+            // printf("%s :: %s | %s \n", utf32_to_utf8(merge).c_str(), utf32_to_utf8(merge.substr(0, space_pos)).c_str(), 
             //                     utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
         }
         std::vector<std::u32string> vocab;
@@ -297,21 +297,22 @@ public:
     }
 
     std::string decode(const std::vector<int> &tokens){
-        std::u32string text = utf8_to_utf32("");
+        std::string text = "";
         for(int t : tokens){
             if(t == 49406 || t == 49407)
                 continue;
             std::u32string ts = decoder[t];
-            // printf("%d, %s\n", t, ts.c_str());
-            text += ts;
+            // printf("%d, %s \n", t,  utf32_to_utf8(ts).c_str());
+            text += " "+utf32_to_utf8(ts).replace(ts.length()-4, ts.length()-1, "") ;
         }
         std::vector<unsigned char> bytes;
-        for (auto c : text){
-            bytes.push_back(byte_decoder[c]);
-        }
+        // for (auto c : text){
+        //     bytes.push_back(byte_decoder[c]);
+        // }
 
-        std::string s((char *)bytes.data());  
-        return s;
+        // std::string s((char *)bytes.data());  
+        // std::string s = "";
+        return trim(text);
     }
 
 
@@ -867,6 +868,7 @@ struct CLIPVisionModel {
     int32_t num_hidden_layers       = 24;    // 24 for OPEN_CLIP_VIT_H_14
     int32_t patch_size              = 14; 
     int32_t projection_dim          = 768;  // only for OPEN_CLIP_VIT_BIGG_14
+    float eps = 1.e-8;
         
     // embeddings
     struct ggml_tensor * class_embedding;  // [hidden_size,]
@@ -943,9 +945,17 @@ struct CLIPVisionModel {
     struct ggml_tensor* forward(struct ggml_context* ctx0, struct ggml_tensor *x) {
         // input_ids: [N, n_token]
         // GGML_ASSERT(input_ids->ne[0] <= position_ids->ne[0]);
+        const int image_size = x->ne[0]; 
+        int batch_size = x->ne[3];
+        const int num_patches = ((image_size / patch_size) * (image_size / patch_size));
+        const int num_positions = num_patches + 1;
+        int32_t n_layer = num_hidden_layers;
+#if 0
+        static size_t scr0_size = get_scr_buf_req_by_size((struct clip_ctx *)ctx);
+        static void * scr0 = malloc(scr0_size);
 
         // token_embedding + position_embedding
-#if 0
+
          struct ggml_tensor * inp = ggml_conv_2d(ctx0, patch_embeddings, x, patch_size, patch_size, 0, 0, 1, 1);
 
         inp = ggml_reshape_3d(ctx0, inp, num_patches, hidden_size, batch_size);
@@ -957,10 +967,10 @@ struct CLIPVisionModel {
         ggml_set_zero(embeddings);
         struct ggml_tensor * temp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, 1, batch_size);
 
-        embeddings = ggml_acc(ctx0, embeddings, ggml_repeat(ctx0, model.class_embedding, temp), embeddings->nb[1],
+        embeddings = ggml_acc(ctx0, embeddings, ggml_repeat(ctx0, class_embedding, temp), embeddings->nb[1],
                             embeddings->nb[2], embeddings->nb[3], 0);
         embeddings =
-            ggml_acc(ctx0, embeddings, inp, embeddings->nb[1], embeddings->nb[2], embeddings->nb[3], model.class_embedding->nb[1]);
+            ggml_acc(ctx0, embeddings, inp, embeddings->nb[1], embeddings->nb[2], embeddings->nb[3], class_embedding->nb[1]);
 
         struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
         for (int i = 0; i < num_positions; i++) {
@@ -968,21 +978,21 @@ struct CLIPVisionModel {
         }
 
         embeddings =
-            ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, model.position_embeddings, positions), embeddings));
+            ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
 
         // pre-layernorm
         {
             embeddings = ggml_norm(ctx0, embeddings, eps);
 
-            embeddings = ggml_add(ctx0, ggml_mul(ctx0, ggml_repeat(ctx0, model.pre_ln_w, embeddings), embeddings),
-                                ggml_repeat(ctx0, model.pre_ln_b, embeddings));
+            embeddings = ggml_add(ctx0, ggml_mul(ctx0, ggml_repeat(ctx0, pre_ln_w, embeddings), embeddings),
+                                ggml_repeat(ctx0, pre_ln_b, embeddings));
         }
 
         // loop over layers
         for (int il = 0; il < n_layer; il++) {
             struct ggml_tensor * cur = embeddings; // embeddings = residual, cur = hidden_states
 
-            const size_t nb_q_w = model.layers[il].q_w->nb[0];
+            const size_t nb_q_w = resblocks[il].q_w->nb[0];
 
             ggml_set_scratch(ctx0, {0, scr0_size, scr0});
 
@@ -990,15 +1000,15 @@ struct CLIPVisionModel {
             {
                 cur = ggml_norm(ctx0, cur, eps);
 
-                cur = ggml_add(ctx0, ggml_mul(ctx0, ggml_repeat(ctx0, model.layers[il].ln_1_w, cur), cur),
-                            ggml_repeat(ctx0, model.layers[il].ln_1_b, cur));
+                cur = ggml_add(ctx0, ggml_mul(ctx0, ggml_repeat(ctx0, resblocks[il].ln_1_w, cur), cur),
+                            ggml_repeat(ctx0, resblocks[il].ln_1_b, cur));
             }
 
             // self-attention
             {
 
                 struct ggml_tensor * Q =
-                    ggml_add(ctx0, ggml_repeat(ctx0, model.layers[il].q_b, cur), ggml_mul_mat(ctx0, model.layers[il].q_w, cur));
+                    ggml_add(ctx0, ggml_repeat(ctx0, resblocks[il].q_b, cur), ggml_mul_mat(ctx0, resblocks[il].q_w, cur));
 
                 Q = ggml_scale_inplace(ctx0, Q, ggml_new_f32(ctx0, 1.0f / sqrt((float)d_head)));
                 Q = ggml_reshape_4d(ctx0, Q, d_head, n_head, num_positions, batch_size);
@@ -1006,7 +1016,7 @@ struct CLIPVisionModel {
                 Q = ggml_reshape_3d(ctx0, Q, d_head, num_positions, n_head * batch_size);
 
                 struct ggml_tensor * K =
-                    ggml_add(ctx0, ggml_repeat(ctx0, model.layers[il].k_b, cur), ggml_mul_mat(ctx0, model.layers[il].k_w, cur));
+                    ggml_add(ctx0, ggml_repeat(ctx0, resblocks[il].k_b, cur), ggml_mul_mat(ctx0, resblocks[il].k_w, cur));
 
                 K = ggml_reshape_4d(ctx0, K, d_head, n_head, num_positions, batch_size);
                 K = ggml_cont(ctx0, ggml_permute(ctx0, K, 0, 2, 1, 3));
