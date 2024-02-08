@@ -234,19 +234,28 @@ struct PhotoMakerIDEncoder : public GGMLModule {
     struct ggml_tensor* forward(struct ggml_context* ctx, 
                            struct ggml_tensor* id_pixel_values,
                            struct ggml_tensor* prompt_embeds,                           
-                           struct ggml_tensor* class_tokens_mask) {
+                           struct ggml_tensor* class_tokens_mask,
+                           struct ggml_tensor* class_embedding_temp,
+                           struct ggml_tensor* positions) {
         // x: [N, channels, h, w]
 
         // in_layers
-
-        struct ggml_tensor *shared_id_embeds = vision_model.forward(ctx, id_pixel_values); // [batch_size, seq_length, hidden_size]
+        print_ggml_tensor(prompt_embeds, true, "prompt_embeds");
+        print_ggml_tensor(class_embedding_temp, true, "class_embedding_temp");
+        struct ggml_tensor *shared_id_embeds = vision_model.forward(ctx, 
+                                                             id_pixel_values,
+                                                             class_embedding_temp,
+                                                             positions
+                                                             ); // [batch_size, seq_length, hidden_size]
+        print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds");
         struct ggml_tensor *id_embeds = vision_model.visual_project(ctx, shared_id_embeds); // [batch_size, seq_length, proj_dim(768)]
         struct ggml_tensor *id_embeds_2 = ggml_mul_mat(ctx, visual_projection_2, shared_id_embeds); // [batch_size, seq_length, 1280]
-        
         // id_embeds = id_embeds.view(b, num_inputs, 1, -1)
         // id_embeds_2 = id_embeds_2.view(b, num_inputs, 1, -1)    
 
         // id_embeds = torch.cat((id_embeds, id_embeds_2), dim=-1)
+        print_ggml_tensor(id_embeds, true, "id_embeds");
+        print_ggml_tensor(id_embeds_2, true, "id_embeds_2");
         id_embeds = ggml_concat(ctx, id_embeds, id_embeds_2); // [batch_size, seq_length, 1, 2048] check whether concat at dim 2 is right
         struct ggml_tensor * updated_prompt_embeds = fuse_module.forward(ctx, prompt_embeds, id_embeds, class_tokens_mask);
 
@@ -280,15 +289,37 @@ struct PhotoMakerIDEncoder : public GGMLModule {
         struct ggml_tensor* class_tokens_mask_d = ggml_dup_tensor(ctx0, class_tokens_mask);
         ggml_allocr_alloc(allocr, class_tokens_mask_d);
 
+        const int image_size = id_pixel_values->ne[0]; 
+        int batch_size = id_pixel_values->ne[3];
+        const int num_patches = ((image_size / vision_model.patch_size) * (image_size / vision_model.patch_size));
+        const int num_positions = num_patches + 1;
+
+       
+        struct ggml_tensor * class_embedding_temp = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 
+                                       vision_model.hidden_size, 1, 1, batch_size);
+        struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
+        ggml_allocr_alloc(allocr, class_embedding_temp);
+        ggml_allocr_alloc(allocr, positions);
+
+
+
         if (!ggml_allocr_is_measure(allocr)) {
             ggml_backend_tensor_set(id_pixel_values_d, id_pixel_values->data, 0,  ggml_nbytes(id_pixel_values));
             ggml_backend_tensor_set(prompt_embeds_d, prompt_embeds->data, 0,  ggml_nbytes(prompt_embeds));
             ggml_backend_tensor_set(class_tokens_mask_d, class_tokens_mask->data, 0,  ggml_nbytes(class_tokens_mask_d));
+            std::vector<int> pos;
+            for (int i = 0; i < num_positions; i++) {
+                pos.push_back(i);
+            }
+            ggml_backend_tensor_set(positions, pos.data(), 0, ggml_nbytes(positions));
         }     
         struct ggml_tensor*  updated_prompt_embeds = forward(ctx0, 
                                                             id_pixel_values_d, 
                                                             prompt_embeds_d, 
-                                                            class_tokens_mask_d);
+                                                            class_tokens_mask_d,                                                            
+                                                            class_embedding_temp,
+                                                            positions
+                                                            );
 
         ggml_build_forward_expand(gf, updated_prompt_embeds);
         ggml_free(ctx0);

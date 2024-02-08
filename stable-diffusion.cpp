@@ -1487,11 +1487,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         fprintf(stderr, "%s: class token mask tensor ne [%ld, %ld, %ld, %ld] \n",
               __func__, ne[0], ne[1], ne[2], ne[3]); 
 
-        // prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
+        prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
 
-        // if (sd_ctx->sd->free_params_immediately) {
-        //     sd_ctx->sd->pmid_model.free_params_buffer();
-        // } 
+        if (sd_ctx->sd->free_params_immediately) {
+            sd_ctx->sd->pmid_model.free_params_buffer();
+        } 
         // Encode input prompt without the trigger word for delayed conditioning
         prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt); 
     //    printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
