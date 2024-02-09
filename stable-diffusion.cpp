@@ -489,7 +489,7 @@ public:
                         
     }
 
-    std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*>
+    std::tuple<ggml_tensor*, ggml_tensor*, std::vector<bool>>
                              get_learned_condition_with_trigger(ggml_context* work_ctx,
                                                                 const std::string& text,
                                                                 int clip_skip,                                                                
@@ -531,13 +531,13 @@ public:
         //     print_ggml_tensor(pooled);
         // }
 
-        ggml_tensor *class_tokens_mask = ggml_new_tensor_1d(work_ctx, GGML_TYPE_I32, cond_stage_model.text_model.max_position_embeddings);
-        for (int i1 = 0; i1 < hidden_states->ne[1]; i1++) {
-            if(clsm[i1])
-                ggml_set_i32_1d(class_tokens_mask, i1, 1);
-            else
-                ggml_set_i32_1d(class_tokens_mask, i1, 0);
-        }
+        // ggml_tensor *class_tokens_mask = ggml_new_tensor_1d(work_ctx, GGML_TYPE_I32, cond_stage_model.text_model.max_position_embeddings);
+        // for (int i1 = 0; i1 < hidden_states->ne[1]; i1++) {
+        //     if(clsm[i1])
+        //         ggml_set_i32_1d(class_tokens_mask, i1, 1);
+        //     else
+        //         ggml_set_i32_1d(class_tokens_mask, i1, 0);
+        // }
 
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
@@ -603,13 +603,13 @@ public:
             GGML_ASSERT(offset == ggml_nbytes(vec));
         }
         // print_ggml_tensor(result);
-        return std::make_tuple(result, vec, class_tokens_mask);
+        return std::make_tuple(result, vec, clsm);
     }
 
     ggml_tensor* id_encoder(ggml_context* work_ctx, 
                             ggml_tensor* init_img, 
                             ggml_tensor* prompts_embeds, 
-                            ggml_tensor* class_tokens_mask){
+                            std::vector<bool> &class_tokens_mask){
 
         size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
         if (version == VERSION_XL) {
@@ -1455,7 +1455,8 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     ggml_tensor* init_img = NULL;
     ggml_tensor* prompts_embeds = NULL;
     ggml_tensor* pooled_prompts_embeds = NULL;
-    ggml_tensor* class_tokens_mask = NULL;
+    // ggml_tensor* class_tokens_mask = NULL;
+    std::vector<bool> class_tokens_mask;
     if(sd_ctx->sd->stacked_id){
         int32_t width = input_id_images[0]->width;
         int32_t height = input_id_images[0]->height;
@@ -1483,9 +1484,9 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         ne = pooled_prompts_embeds->ne;
         fprintf(stderr, "%s: SDXL pooled text embedding tensor ne [%ld, %ld, %ld, %ld] \n",
               __func__, ne[0], ne[1], ne[2], ne[3]);
-        ne = class_tokens_mask->ne;
-        fprintf(stderr, "%s: class token mask tensor ne [%ld, %ld, %ld, %ld] \n",
-              __func__, ne[0], ne[1], ne[2], ne[3]); 
+        // ne = class_tokens_mask->ne;
+        // fprintf(stderr, "%s: class token mask tensor ne [%ld, %ld, %ld, %ld] \n",
+        //       __func__, ne[0], ne[1], ne[2], ne[3]); 
 
         prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
 
