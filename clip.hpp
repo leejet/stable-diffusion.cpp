@@ -945,7 +945,9 @@ struct CLIPVisionModel {
         return h;
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx0,  struct ggml_tensor *x,
+    struct ggml_tensor* forward(struct ggml_context* ctx0,  
+                                struct ggml_tensor *x,
+                                struct ggml_tensor *cls,
                                 struct ggml_tensor *temp,
                                 struct ggml_tensor *positions) {
         // input_ids: [N, n_token]
@@ -978,8 +980,6 @@ struct CLIPVisionModel {
         
         // struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
 
-        
-
         embeddings =
             ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
 
@@ -991,12 +991,18 @@ struct CLIPVisionModel {
             embeddings = resblocks[i].forward(ctx0, embeddings);  // [N, n_token, hidden_size]
         }        
 
+        // get the output of cls token, e.g., 0th index
+        embeddings = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, embeddings, hidden_size, num_positions * batch_size), cls);
+
+        // post-layernorm      
+        embeddings = ggml_nn_layer_norm(ctx0, embeddings, post_ln_w, post_ln_b);
+
         struct ggml_tensor * cur = embeddings;
 
-        ggml_set_name(cur, "last_hidden_state");
-        // we return last hidden state instead of image embedding here 
+        ggml_set_name(cur, "pooled_output");
+        // we return pooled output instead of image embedding here 
         // TODO: add other return items
-        return cur;  // [batch_size, seq_length, hidden_size]
+        return cur;  // [batch_size, hidden_size]
 
     }
 
