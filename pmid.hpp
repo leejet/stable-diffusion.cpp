@@ -165,7 +165,7 @@ struct FuseModule{
         stacked_id_embeds = mlp1.forward(ctx, stacked_id_embeds);
         stacked_id_embeds = ggml_add(ctx, stacked_id_embeds, prompt_embeds);
         stacked_id_embeds = mlp2.forward(ctx, stacked_id_embeds);
-        stacked_id_embeds =  ggml_nn_layer_norm(ctx, stacked_id_embeds, ln_w, ln_b);
+        stacked_id_embeds = ggml_nn_layer_norm(ctx, stacked_id_embeds, ln_w, ln_b);
         return stacked_id_embeds;
         
     }
@@ -175,7 +175,9 @@ struct FuseModule{
                            struct ggml_tensor* prompt_embeds,
                            struct ggml_tensor* id_embeds,
                            struct ggml_tensor* class_tokens_mask,
-                           struct ggml_tensor* class_tokens_mask_pos) {
+                           struct ggml_tensor* class_tokens_mask_pos,
+                           struct ggml_tensor* left,
+                           struct ggml_tensor* right) {
         // x: [N, channels, h, w]
 
         // in_layers
@@ -204,13 +206,27 @@ struct FuseModule{
         struct ggml_tensor * image_token_embeds = ggml_get_rows(ctx, prompt_embeds, class_tokens_mask_pos);
         print_ggml_tensor(image_token_embeds, true, "image_token_embeds");
         struct ggml_tensor *stacked_id_embeds = fuse_fn(ctx, image_token_embeds, valid_id_embeds);
-        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds");
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_before_concat");
+
+        stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute");
+        if(left && right){
+            stacked_id_embeds = ggml_concat(ctx, left, stacked_id_embeds);
+            stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right);
+        }else if(left){
+            stacked_id_embeds = ggml_concat(ctx, left, stacked_id_embeds);
+        }else if(right){
+            stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right);
+        }
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_concat");
+        stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute_2");
         // assert class_tokens_mask.sum() == stacked_id_embeds.shape[0], f"{class_tokens_mask.sum()} != {stacked_id_embeds.shape[0]}"
         // prompt_embeds.masked_scatter_(class_tokens_mask[:, None], stacked_id_embeds.to(prompt_embeds.dtype))
+        prompt_embeds = ggml_mul(ctx, prompt_embeds, ggml_repeat(ctx, class_tokens_mask, prompt_embeds));
+        struct ggml_tensor * updated_prompt_embeds = ggml_add(ctx, prompt_embeds, stacked_id_embeds);
         // updated_prompt_embeds = prompt_embeds.view(batch_size, seq_length, -1)
-        // return updated_prompt_embeds
-        struct ggml_tensor*  h = NULL; 
-        return h;    
+        return updated_prompt_embeds;
     }
 
     
@@ -274,7 +290,9 @@ struct PhotoMakerIDEncoder : public GGMLModule {
                            struct ggml_tensor* class_tokens_mask_pos,
                            struct ggml_tensor* cls,
                            struct ggml_tensor* class_embedding_temp,
-                           struct ggml_tensor* positions) {
+                           struct ggml_tensor* positions,
+                           struct ggml_tensor* left,
+                           struct ggml_tensor* right) {
         // x: [N, channels, h, w]
 
         // in_layers
@@ -319,8 +337,11 @@ struct PhotoMakerIDEncoder : public GGMLModule {
         print_ggml_tensor(id_embeds, true, "id_embeds_after_cat+perm");
         
 
-        struct ggml_tensor * updated_prompt_embeds = fuse_module.forward(ctx, prompt_embeds, id_embeds, 
-                            class_tokens_mask, class_tokens_mask_pos);
+        struct ggml_tensor * updated_prompt_embeds = fuse_module.forward(ctx,
+                                          prompt_embeds, id_embeds,
+                                          class_tokens_mask,
+                                          class_tokens_mask_pos,
+                                          left, right);
 
         return updated_prompt_embeds;
 
@@ -349,20 +370,35 @@ struct PhotoMakerIDEncoder : public GGMLModule {
         ggml_allocr_alloc(allocr, id_pixel_values_d);
         struct ggml_tensor* prompt_embeds_d = ggml_dup_tensor(ctx0, prompt_embeds);
         ggml_allocr_alloc(allocr, prompt_embeds_d);
-        struct ggml_tensor* class_tokens_mask_d = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, class_tokens_mask.size());
+        struct ggml_tensor* class_tokens_mask_d = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, class_tokens_mask.size());
         ggml_allocr_alloc(allocr, class_tokens_mask_d);
 
-        std::vector<int> ctm;
-        std::vector<int> ctmpos;
+        int64_t hidden_size = prompt_embeds->ne[0];
+        int64_t seq_length  = prompt_embeds->ne[1];
+        ggml_type type = prompt_embeds->type;
 
+
+        std::vector<float> ctm;
+        std::vector<int> ctmpos;
+        struct ggml_tensor*  left  = NULL;
+        struct ggml_tensor*  right = NULL;
         for(int i=0; i < class_tokens_mask.size(); i++){
             if(class_tokens_mask[i]){
-                ctm.push_back(1);
+                ctm.push_back(0.f); // here use 0.f instead of 1.f to make a scale mask
                 ctmpos.push_back(i);
             }else{
-                ctm.push_back(0);
+                ctm.push_back(1.f); // here use 1.f instead of 0.f to make a scale mask
             }  
         } 
+        if(ctmpos[0] > 0){
+            left = ggml_new_tensor_2d(ctx0, type, hidden_size, ctmpos[0]);
+            ggml_allocr_alloc(allocr, left);
+        }
+        if(ctmpos[ctmpos.size()-1] < seq_length - 1){
+            right = ggml_new_tensor_2d(ctx0, type,
+                   hidden_size, seq_length-ctmpos[ctmpos.size()-1]-1);
+            ggml_allocr_alloc(allocr, right);
+        }
         struct ggml_tensor*  class_tokens_mask_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ctmpos.size());
         ggml_allocr_alloc(allocr, class_tokens_mask_pos);
 
@@ -397,6 +433,24 @@ struct PhotoMakerIDEncoder : public GGMLModule {
             ggml_backend_tensor_set(cls, cls_h.data(), 0, ggml_nbytes(cls));
             ggml_backend_tensor_set(positions, pos.data(), 0, ggml_nbytes(positions));
             ggml_backend_tensor_set(class_tokens_mask_pos, ctmpos.data(), 0, ggml_nbytes(class_tokens_mask_pos));
+            if(left){
+                if(type == GGML_TYPE_F16){
+                    std::vector<ggml_fp16_t> zeros(ggml_nelements(left), ggml_fp32_to_fp16(0.f));
+                    ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
+                }else{
+                    std::vector<float> zeros(ggml_nelements(left), 0.f);
+                    ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
+                }
+            }
+            if(right){
+                if(type == GGML_TYPE_F16){
+                    std::vector<ggml_fp16_t> zeros(ggml_nelements(right), ggml_fp32_to_fp16(0.f));
+                    ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
+                }else{
+                    std::vector<float> zeros(ggml_nelements(right), 0.f);
+                    ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
+                }
+            }
         }     
         struct ggml_tensor*  updated_prompt_embeds = forward(ctx0, 
                                                             id_pixel_values_d, 
@@ -405,7 +459,8 @@ struct PhotoMakerIDEncoder : public GGMLModule {
                                                             class_tokens_mask_pos,
                                                             cls,
                                                             class_embedding_temp,
-                                                            positions
+                                                            positions,
+                                                            left, right
                                                             );
 
         ggml_build_forward_expand(gf, updated_prompt_embeds);
