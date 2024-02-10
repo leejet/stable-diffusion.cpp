@@ -695,7 +695,7 @@ struct CLIPTextModel {
             return false;
         }
         if (std::find(readed_embeddings.begin(), readed_embeddings.end(), embd_name) != readed_embeddings.end()) {
-            LOG_DEBUG("embedding already readed in: %s", embd_name.c_str());
+            LOG_DEBUG("embedding already read in: %s", embd_name.c_str());
             return false;
         }
         struct ggml_init_params params;

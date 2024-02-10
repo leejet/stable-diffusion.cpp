@@ -63,7 +63,6 @@ struct LoraModel : public GGMLModule {
         };
 
         model_loader.load_tensors(on_new_tensor_cb, backend);
-        
         LOG_DEBUG("finished loaded lora");
         ggml_allocr_free(alloc);
         return true;
