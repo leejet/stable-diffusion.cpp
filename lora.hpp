@@ -3,7 +3,7 @@
 
 #include "ggml_extend.hpp"
 
-#define LORA_GRAPH_SIZE 10240
+#define LORA_GRAPH_SIZE 40960
 
 struct LoraModel : public GGMLModule {
     float multiplier = 1.0f;
@@ -28,6 +28,15 @@ struct LoraModel : public GGMLModule {
         return model_loader.cal_mem_size(NULL);
     }
 
+    static inline int ggml_n_dims_t(const struct TensorStorage tensor) {
+        for (int i = GGML_MAX_DIMS - 1; i >= 1; --i) {
+            if (tensor.ne[i] > 1) {
+                return i + 1;
+            }
+        }
+        return 1;
+    }
+
     bool load_from_file(ggml_backend_t backend) {
         if (!alloc_params_buffer(backend)) {
             return false;
@@ -44,7 +53,7 @@ struct LoraModel : public GGMLModule {
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
             const std::string& name = tensor_storage.name;
 
-            struct ggml_tensor* real = ggml_new_tensor(params_ctx, tensor_storage.type, tensor_storage.n_dims, tensor_storage.ne);
+            struct ggml_tensor* real = ggml_new_tensor(params_ctx, tensor_storage.type, this->ggml_n_dims_t(tensor_storage), tensor_storage.ne);
             ggml_allocr_alloc(alloc, real);
 
             *dst_tensor = real;
@@ -54,7 +63,7 @@ struct LoraModel : public GGMLModule {
         };
 
         model_loader.load_tensors(on_new_tensor_cb, backend);
-
+        
         LOG_DEBUG("finished loaded lora");
         ggml_allocr_free(alloc);
         return true;

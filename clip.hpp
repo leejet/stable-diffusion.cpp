@@ -694,8 +694,12 @@ struct CLIPTextModel {
             LOG_ERROR("embedding '%s' failed", embd_name.c_str());
             return false;
         }
+        if (std::find(readed_embeddings.begin(), readed_embeddings.end(), embd_name) != readed_embeddings.end()) {
+            LOG_DEBUG("embedding already readed in: %s", embd_name.c_str());
+            return false;
+        }
         struct ggml_init_params params;
-        params.mem_size               = 32 * 1024;  // max for custom embeddings 32 KB
+        params.mem_size               = 256 * 1024;  // max for custom embeddings 256 KB
         params.mem_buffer             = NULL;
         params.no_alloc               = false;
         struct ggml_context* embd_ctx = ggml_init(params);
@@ -709,7 +713,11 @@ struct CLIPTextModel {
             *dst_tensor = embd;
             return true;
         };
+
         model_loader.load_tensors(on_load, NULL);
+        if (ggml_nbytes(token_embed_custom) <= (num_custom_embeddings * hidden_size * ggml_type_size(token_embed_custom->type)) + ggml_nbytes(embd)) {
+            return false;
+        }
         ggml_backend_tensor_set(token_embed_custom, embd->data, num_custom_embeddings * hidden_size * ggml_type_size(token_embed_custom->type), ggml_nbytes(embd));
         readed_embeddings.push_back(embd_name);
         for (int i = 0; i < embd->ne[1]; i++) {

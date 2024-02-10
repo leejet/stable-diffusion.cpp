@@ -6,7 +6,7 @@
 
 /*================================================== AutoEncoderKL ===================================================*/
 
-#define VAE_GRAPH_SIZE 10240
+#define VAE_GRAPH_SIZE 20480
 
 struct ResnetBlock {
     // network hparams
