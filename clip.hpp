@@ -959,11 +959,19 @@ struct CLIPVisionModel {
         int32_t n_layer = num_hidden_layers;
         const int d_head = hidden_size / n_head;
 
+        ggml_set_name(x, "id_pixel");
+        ggml_set_name(temp, "temp_input");
+
         struct ggml_tensor * inp = ggml_conv_2d(ctx0, patch_embeddings, x, patch_size, patch_size, 0, 0, 1, 1);
 
+        ggml_set_name(inp, "inp_conv_2d");
+
         inp = ggml_reshape_3d(ctx0, inp, num_patches, hidden_size, batch_size);
+        ggml_set_name(inp, "inp_reshape_3d");
         // inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 2, 0, 3, 1));
+        ggml_set_name(inp, "inp_cont");
+        ggml_set_name(class_embedding, "class_embedding");
 
         // concat class_embeddings and patch_embeddings
         // struct ggml_tensor * embeddings = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, num_positions, batch_size);
@@ -971,9 +979,12 @@ struct CLIPVisionModel {
         // struct ggml_tensor * temp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, 1, batch_size);
        
         ggml_tensor *class_embedding_rep = ggml_repeat(ctx0, class_embedding, temp);
+        ggml_set_name(class_embedding_rep, "class_embedding_rep");
 
         struct ggml_tensor *embeddings =  ggml_concat(ctx0, class_embedding_rep, inp);
+        ggml_set_name(embeddings, "embeddings_after_concat");
         embeddings =  ggml_cont(ctx0, ggml_permute(ctx0, embeddings, 0, 3, 1, 2));
+        ggml_set_name(embeddings, "embeddings_after_permute");
 
         // embeddings = ggml_acc(ctx0, embeddings, ggml_repeat(ctx0, class_embedding, temp), embeddings->nb[1],
         //                     embeddings->nb[2], embeddings->nb[3], 0);
@@ -982,20 +993,25 @@ struct CLIPVisionModel {
 
         embeddings =
             ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
+        ggml_set_name(embeddings, "embeddings_after_add");
 
         // pre-layernorm        
         embeddings = ggml_nn_layer_norm(ctx0, embeddings, pre_ln_w, pre_ln_w);
+        ggml_set_name(embeddings, "embeddings_after_pre-layernorm");
 
         // transformer
         for (int i = 0; i < num_hidden_layers; i++) {            
             embeddings = resblocks[i].forward(ctx0, embeddings);  // [N, n_token, hidden_size]
         }        
+        ggml_set_name(embeddings, "embeddings_after_transformer");
 
         // get the output of cls token, e.g., 0th index
         embeddings = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, embeddings, hidden_size, num_positions * batch_size), cls);
+        ggml_set_name(embeddings, "embeddings_after_cls_token");
 
         // post-layernorm      
         embeddings = ggml_nn_layer_norm(ctx0, embeddings, post_ln_w, post_ln_b);
+        ggml_set_name(embeddings, "embeddings_after_post-layernorm");
 
         struct ggml_tensor * cur = embeddings;
 

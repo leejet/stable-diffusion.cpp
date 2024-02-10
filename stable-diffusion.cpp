@@ -616,11 +616,11 @@ public:
             total_hidden_size += cond_stage_model.text_model2.hidden_size;         
         }
         ggml_tensor *res = ggml_new_tensor_2d(work_ctx,
-                                                GGML_TYPE_F32,
+                                                prompts_embeds->type,
                                                 total_hidden_size,
                                                 cond_stage_model.text_model.max_position_embeddings);
         pmid_model.alloc_compute_buffer(work_ctx, init_img, prompts_embeds, class_tokens_mask);
-        pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);
+        pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);        
         pmid_model.free_compute_buffer(); 
         return res; 
     }
@@ -1495,7 +1495,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         } 
         // Encode input prompt without the trigger word for delayed conditioning
         prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt); 
-    //    printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
+        printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
         prompt = prompt_text_only; //  
     }
 
