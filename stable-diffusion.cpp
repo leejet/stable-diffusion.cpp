@@ -250,10 +250,10 @@ public:
             first_stage_model.map_by_name(tensors, "first_stage_model.");
             
             if(stacked_id){
-               printf("preparing memory for pmid \n");  
-               pmid_model.init_params();
+            //    printf("preparing memory for pmid \n");  
+               pmid_model.init_params(GGML_TYPE_F32);
+            //    printf("done preparing memory for pmid \n");  
                pmid_model.map_by_name(tensors, "pmid.");
-               printf("done preparing memory for pmid \n");  
             }
 
         }
@@ -506,10 +506,10 @@ public:
                                                                 bool force_zero_embeddings = false) {
         cond_stage_model.set_clip_skip(clip_skip);        
         auto image_tokens = cond_stage_model.convert_token_to_id(trigger_word);
-        printf(" length of image tokens: %lu \n", image_tokens.size());
-        if(image_tokens.size() == 1){
-            printf(" image token id is: %d \n", image_tokens[0]);
-        }     
+        // printf(" length of image tokens: %lu \n", image_tokens.size());
+        // if(image_tokens.size() == 1){
+        //     printf(" image token id is: %d \n", image_tokens[0]);
+        // }     
         GGML_ASSERT(image_tokens.size() == 1);
         // auto tokens_and_weights     = cond_stage_model.tokenize(text, true);
         auto tokens_and_weights     = cond_stage_model.tokenize_with_trigger_token(text, 
@@ -1475,25 +1475,13 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         float std[]  = {0.26862954, 0.26130258, 0.27577711};
         for(int i = 0; i <  num_input_images; i++)  {
             sd_image_t* init_image = input_id_images[i];
-             sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
-        }
-        int64_t *ne = init_img->ne;
-        fprintf(stderr, "%s: input id image tensor ne [%ld, %ld, %ld, %ld] \n",
-              __func__, ne[0], ne[1], ne[2], ne[3]);
+            sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
+        }        
         auto cond_tup                = sd_ctx->sd->get_learned_condition_with_trigger(work_ctx, prompt, 
                                                    clip_skip, width, height, num_input_images );
         prompts_embeds                = std::get<0>(cond_tup);
         pooled_prompts_embeds         = std::get<1>(cond_tup);  // [adm_in_channels, ]
         class_tokens_mask             = std::get<2>(cond_tup);  // 
-        ne = prompts_embeds->ne;
-        fprintf(stderr, "%s: text embedding tensor ne [%ld, %ld, %ld, %ld] \n",
-              __func__, ne[0], ne[1], ne[2], ne[3]);
-        ne = pooled_prompts_embeds->ne;
-        fprintf(stderr, "%s: SDXL pooled text embedding tensor ne [%ld, %ld, %ld, %ld] \n",
-              __func__, ne[0], ne[1], ne[2], ne[3]);
-        // ne = class_tokens_mask->ne;
-        // fprintf(stderr, "%s: class token mask tensor ne [%ld, %ld, %ld, %ld] \n",
-        //       __func__, ne[0], ne[1], ne[2], ne[3]); 
 
         prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
 
@@ -1512,13 +1500,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     auto cond_pair                = sd_ctx->sd->get_learned_condition(work_ctx, prompt, clip_skip, width, height);
     ggml_tensor* c                = cond_pair.first;
     ggml_tensor* c_vector         = cond_pair.second;  // [adm_in_channels, ]
-
-    int64_t *ne = c->ne;
-        fprintf(stderr, "%s: text embedding tensor ne [%ld, %ld, %ld, %ld] \n",
-              __func__, ne[0], ne[1], ne[2], ne[3]);
-    ne = c_vector->ne;
-        fprintf(stderr, "%s: SDXL  pooled text embedding tensor ne [%ld, %ld, %ld, %ld] \n",
-              __func__, ne[0], ne[1], ne[2], ne[3]);
+    
     struct ggml_tensor* uc        = NULL;
     struct ggml_tensor* uc_vector = NULL;
     if (cfg_scale != 1.0) {

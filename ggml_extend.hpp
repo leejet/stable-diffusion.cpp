@@ -651,19 +651,18 @@ struct GGMLModule {
             ggml_backend_metal_set_n_cb(backend, n_threads);
         }
 #endif
-        printf("about to do ggml_backend_graph_compute \n");   
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
-        if (output != NULL) 
-            print_ggml_tensor(output, true, "output_before_get");
+        // if (output != NULL) 
+        //     print_ggml_tensor(output, true, "output_before_get");
         if (output != NULL) {
             ggml_backend_tensor_get_and_sync(backend, gf->nodes[gf->n_nodes - 1], output->data, 0, ggml_nbytes(output));
         }
-        if (output != NULL) 
-            print_ggml_tensor(output, true, "output_get");
+        // if (output != NULL) 
+        //     print_ggml_tensor(output, true, "output_get");
     }
 
     void free_compute_buffer() {
