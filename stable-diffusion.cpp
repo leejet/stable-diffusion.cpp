@@ -740,6 +740,8 @@ public:
                         float cfg_scale,
                         sample_method_t method,
                         const std::vector<float>& sigmas,
+                        int start_merge_step,
+                        ggml_tensor* c_id,
                         float control_strength) {
         size_t steps = sigmas.size() - 1;
         // x_t = load_tensor_from_file(work_ctx, "./rand0.bin");
@@ -810,7 +812,15 @@ public:
             if (control_hint != NULL) {
                 control_net.compute(n_threads, noised_input, guided_hint, c, t_emb);
             }
-            diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
+            if (start_merge_step != -1){
+                if (step <= start_merge_step)
+                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
+                else
+                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
+            }else{
+                diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
+            }
+
 
             float* negative_data = NULL;
             if (has_unconditioned) {
@@ -1492,6 +1502,10 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt); 
         printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
         prompt = prompt_text_only; //  
+        if(sample_steps < 50){
+            LOG_INFO("sampling steps increases from %d to 50 for PHOTOMAKER", sample_steps);
+            sample_steps  = 50;
+        }
     }
 
 
@@ -1541,16 +1555,27 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         std::vector<float> sigmas = sd_ctx->sd->denoiser->schedule->get_sigmas(sample_steps);
 
+        int start_merge_step = -1;
+        if(sd_ctx->sd->stacked_id){
+            int style_strength_ratio = 20;
+            start_merge_step = int(style_strength_ratio / 100 * sample_steps);
+            if(start_merge_step > 30)
+                start_merge_step = 30;
+        }
+
         struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, 
                                             x_t, 
                                             NULL, 
                                             c, 
                                             c_vector, 
-                                            uc, uc_vector, 
+                                            uc,
+                                            uc_vector,
                                             image_hint, 
                                             cfg_scale, 
                                             sample_method, 
                                             sigmas, 
+                                            start_merge_step,
+                                            prompts_embeds,
                                             control_strength);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
@@ -1705,7 +1730,9 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
 
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, init_latent, noise, c, c_vector, uc,
-                                                 uc_vector, NULL, cfg_scale, sample_method, sigma_sched, 1.0f);
+                                                 uc_vector, NULL, cfg_scale, sample_method, sigma_sched,
+                                                 -1, NULL,
+                                                 1.0f);
     // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
     // print_ggml_tensor(x_0);
     int64_t t3 = ggml_time_ms();
