@@ -37,7 +37,7 @@ struct FuseBlock {
         size_t mem_size = 0;
         mem_size += 2 * ggml_row_size(wtype, in_dim);
         mem_size += ggml_row_size(wtype, in_dim*hidden_dim);
-        mem_size += 5 * ggml_row_size(wtype, in_dim);
+        mem_size += ggml_row_size(wtype, out_dim);
         mem_size += ggml_row_size(wtype, hidden_dim*out_dim);
         mem_size += ggml_row_size(wtype, hidden_dim);
         
@@ -261,7 +261,7 @@ struct PhotoMakerIDEncoder : public GGMLModule {
     }
 
     // void init_params(ggml_context* ctx, ggml_backend_t backend, ggml_type wtype, ggml_allocr* alloc) {   
-    void init_params() {       
+    void init_params() {               
 
         ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
         
@@ -281,10 +281,15 @@ struct PhotoMakerIDEncoder : public GGMLModule {
 
     size_t calculate_mem_size() {
         size_t mem_size = vision_model.calculate_mem_size(wtype);
-
+        LOG_INFO("pmid vision memory buffer size = %.2fMB ",
+                 vision_model.calculate_mem_size(wtype) / 1024.0 / 1024.0);
         mem_size += fuse_module.calculate_mem_size(wtype);
+        LOG_INFO("pmid fuse memory buffer size = %.2fMB ",
+                 fuse_module.calculate_mem_size(wtype) / 1024.0 / 1024.0);
         
         mem_size += ggml_row_size(wtype, 1280*1024);
+         LOG_INFO("pmid porject buffer size = %.2fMB ",
+                  ggml_row_size(wtype, 1280*1024) / 1024.0 / 1024.0);
               
         return mem_size;
     }
@@ -393,7 +398,7 @@ struct PhotoMakerIDEncoder : public GGMLModule {
 
         int64_t hidden_size = prompt_embeds->ne[0];
         int64_t seq_length  = prompt_embeds->ne[1];
-        ggml_type type = prompt_embeds->type;
+        ggml_type type = GGML_TYPE_F32;
 
         struct ggml_tensor* id_pixel_values_d = ggml_dup_tensor(ctx0, id_pixel_values);
         ggml_allocr_alloc(allocr, id_pixel_values_d);
@@ -441,11 +446,13 @@ struct PhotoMakerIDEncoder : public GGMLModule {
         struct ggml_tensor * cls = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch_size);
 
         struct ggml_tensor * class_embedding_temp = ggml_new_tensor_4d(ctx0, type, 
-                                       vision_model.hidden_size, 1, 1, batch_size);
+                                       vision_model.hidden_size, batch_size, 1, 1);
         struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
+        struct ggml_tensor * cast_f32_class = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, vision_model.hidden_size);
         ggml_allocr_alloc(allocr, cls);
         ggml_allocr_alloc(allocr, class_embedding_temp);
         ggml_allocr_alloc(allocr, positions);
+        ggml_allocr_alloc(allocr, cast_f32_class);
 
 
 
@@ -467,6 +474,11 @@ struct PhotoMakerIDEncoder : public GGMLModule {
             ggml_backend_tensor_set(cls, cls_h.data(), 0, ggml_nbytes(cls));
             ggml_backend_tensor_set(positions, pos.data(), 0, ggml_nbytes(positions));
             ggml_backend_tensor_set(class_tokens_mask_pos, ctmpos.data(), 0, ggml_nbytes(class_tokens_mask_pos));
+            std::vector<float> zeros;
+            for (int i = 0; i < hidden_size; i++) {
+                zeros.push_back(0.f);
+            }
+            ggml_backend_tensor_set(cast_f32_class, zeros.data(), 0, ggml_nbytes(cast_f32_class));
             if(left){
                 if(type == GGML_TYPE_F16){
                     std::vector<ggml_fp16_t> zeros(ggml_nelements(left), ggml_fp32_to_fp16(0.f));

@@ -218,6 +218,8 @@ public:
                 LOG_ERROR(" pmid model params buffer allocation failed");
                 return false;
             }
+            LOG_INFO("pmid param memory buffer size = %.2fMB ",
+                 pmid_model.params_buffer_size / 1024.0 / 1024.0);
         }
 
 
@@ -246,11 +248,14 @@ public:
                 first_stage_model.init_params();
             }
             first_stage_model.map_by_name(tensors, "first_stage_model.");
-
+            
             if(stacked_id){
+               printf("preparing memory for pmid \n");  
                pmid_model.init_params();
                pmid_model.map_by_name(tensors, "pmid.");
+               printf("done preparing memory for pmid \n");  
             }
+
         }
 
         struct ggml_init_params params;
@@ -311,6 +316,8 @@ public:
             cond_stage_model.params_buffer_size +
             diffusion_model.params_buffer_size +
             first_stage_model.params_buffer_size;
+        if(stacked_id)
+            total_params_size += pmid_model.params_buffer_size;
         LOG_INFO("total memory buffer size = %.2fMB (clip %.2fMB, unet %.2fMB, vae %.2fMB)",
                  total_params_size / 1024.0 / 1024.0,
                  cond_stage_model.params_buffer_size / 1024.0 / 1024.0,

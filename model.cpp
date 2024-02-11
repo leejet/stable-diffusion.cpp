@@ -789,6 +789,8 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             ne[i] = shape[i].get<int64_t>();
         }
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
+        // if(strcmp(prefix.c_str(), "pmid") == 0)
+        // printf(" %s %s \n", (prefix + name).c_str(), ggml_type_name(type));
         tensor_storage.reverse_ne();
 
         size_t tensor_data_size = end - begin;
@@ -1126,7 +1128,7 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                         reader.tensor_storage.reverse_ne();
                         reader.tensor_storage.file_index = file_index;
                         // if(strcmp(prefix.c_str(), "pm") == 0)
-                        printf(" got tensor %s \n ", reader.tensor_storage.name.c_str());
+                        // printf(" got tensor %s \n ", reader.tensor_storage.name.c_str());
                         reader.tensor_storage.name       = prefix + reader.tensor_storage.name;
                         tensor_storages.push_back(reader.tensor_storage);
                         // LOG_DEBUG("%s", reader.tensor_storage.name.c_str());

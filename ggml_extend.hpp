@@ -81,7 +81,7 @@ __STATIC_INLINE__ ggml_fp16_t ggml_tensor_get_f16(const ggml_tensor* tensor, int
 
 
 __STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false, const char *mark = "") {
-    printf("%s: shape(%zu, %zu, %zu, %zu)\n", mark, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+    printf("%s (%s): shape(%zu, %zu, %zu, %zu)\n", mark, ggml_type_name(tensor->type), tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     fflush(stdout);
     if (shape_only) {
         return;

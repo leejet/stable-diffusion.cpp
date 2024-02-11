@@ -948,7 +948,7 @@ struct CLIPVisionModel {
     struct ggml_tensor* forward(struct ggml_context* ctx0,  
                                 struct ggml_tensor *x,
                                 struct ggml_tensor *cls,
-                                struct ggml_tensor *temp,
+                                struct ggml_tensor *temp,                                
                                 struct ggml_tensor *positions) {
         // input_ids: [N, n_token]
         // GGML_ASSERT(input_ids->ne[0] <= position_ids->ne[0]);
@@ -965,11 +965,15 @@ struct CLIPVisionModel {
         struct ggml_tensor * inp = ggml_conv_2d(ctx0, patch_embeddings, x, patch_size, patch_size, 0, 0, 1, 1);
 
         ggml_set_name(inp, "inp_conv_2d");
+        print_ggml_tensor(inp, true, "inp_conv_2d");
 
         inp = ggml_reshape_3d(ctx0, inp, num_patches, hidden_size, batch_size);
         ggml_set_name(inp, "inp_reshape_3d");
+        print_ggml_tensor(inp, true, "inp_reshape_3d");
         // inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
-        inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 2, 0, 3, 1));
+        print_ggml_tensor(ggml_permute(ctx0, inp, 2, 0, 1, 3), true, "inp_permute");
+        inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 2, 0, 1, 3));
+        print_ggml_tensor(inp, true, "inp_cont");
         ggml_set_name(inp, "inp_cont");
         ggml_set_name(class_embedding, "class_embedding");
 
@@ -977,23 +981,36 @@ struct CLIPVisionModel {
         // struct ggml_tensor * embeddings = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, num_positions, batch_size);
                
         // struct ggml_tensor * temp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, 1, batch_size);
-       
+        // ggml_tensor *class_embedding_rep = ggml_add(ctx0, cast_f32_class, class_embedding);
+        // ggml_set_name(class_embedding_rep, "add_class_embedding_to_zero");
+        print_ggml_tensor(class_embedding, true, "model.class_embedding");
+        // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep_bef_repeat");
+        print_ggml_tensor(temp, true, "temp");
         ggml_tensor *class_embedding_rep = ggml_repeat(ctx0, class_embedding, temp);
-        ggml_set_name(class_embedding_rep, "class_embedding_rep");
 
+        ggml_set_name(class_embedding_rep, "class_embedding_rep");
+        print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep");
+        class_embedding_rep = ggml_cast(ctx0, class_embedding_rep, inp->type);
+        print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep_aft_casting");
         struct ggml_tensor *embeddings =  ggml_concat(ctx0, class_embedding_rep, inp);
         ggml_set_name(embeddings, "embeddings_after_concat");
-        embeddings =  ggml_cont(ctx0, ggml_permute(ctx0, embeddings, 0, 3, 1, 2));
+        print_ggml_tensor(embeddings, true, "embeddings_after_concat");
+        // print_ggml_tensor(ggml_permute(ctx0, embeddings, 0, 3, 1, 2), true, "embeddings_after_concat_permute");
+        embeddings =  ggml_cont(ctx0, ggml_permute(ctx0, embeddings, 0, 2, 1, 3));
         ggml_set_name(embeddings, "embeddings_after_permute");
 
         // embeddings = ggml_acc(ctx0, embeddings, ggml_repeat(ctx0, class_embedding, temp), embeddings->nb[1],
         //                     embeddings->nb[2], embeddings->nb[3], 0);
         
         // struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
-
+        // print_ggml_tensor(embeddings, true, "embeddings_bef_add");
+        print_ggml_tensor(ggml_get_rows(ctx0, position_embeddings, positions), true, "embeddings_add_src1");
+        // print_ggml_tensor(ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings), true, "embeddings_add_src1");
+        // embeddings =  ggml_cont(ctx0, ggml_permute(ctx0, embeddings, 0, 1, 3, 2));
         embeddings =
             ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
         ggml_set_name(embeddings, "embeddings_after_add");
+        print_ggml_tensor(embeddings, true, "embeddings_after_add");
 
         // pre-layernorm        
         embeddings = ggml_nn_layer_norm(ctx0, embeddings, pre_ln_w, pre_ln_w);
@@ -1023,6 +1040,7 @@ struct CLIPVisionModel {
     }
 
     void init_params(ggml_context* ctx, ggml_backend_t backend, ggml_type wtype, ggml_allocr* alloc) {
+        wtype = GGML_TYPE_F32;
         class_embedding = ggml_new_tensor_1d(ctx, wtype, hidden_size);
 
         patch_embeddings = ggml_new_tensor_4d(ctx, wtype, patch_size, patch_size, 3, hidden_size);
@@ -1142,7 +1160,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
                                                   hidden_states2->ne[2],
                                                   hidden_states2->ne[3]);
             hidden_states2      = ggml_cont(ctx0, ggml_permute(ctx0, hidden_states2, 2, 0, 1, 3));
-
+            // print_ggml_tensor(hidden_states, true, "hidden_states");
+            // print_ggml_tensor(hidden_states2, true, "hidden_states2");
             hidden_states = ggml_concat(ctx0, hidden_states, hidden_states2);  // [N, n_token, hidden_size + hidden_size2]
 
             hidden_states = ggml_cont(ctx0, ggml_permute(ctx0, hidden_states, 1, 2, 0, 3));
