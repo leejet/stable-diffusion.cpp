@@ -204,16 +204,16 @@ struct FuseModule{
         struct ggml_tensor * valid_id_embeds = id_embeds;
         // # slice out the image token embeddings
         struct ggml_tensor * image_token_embeds = ggml_get_rows(ctx, prompt_embeds, class_tokens_mask_pos);
-        // print_ggml_tensor(image_token_embeds, true, "image_token_embeds");
-        // print_ggml_tensor(valid_id_embeds, true, "valid_id_embeds");
+        print_ggml_tensor(image_token_embeds, true, "image_token_embeds");
+        print_ggml_tensor(valid_id_embeds, true, "valid_id_embeds");
         struct ggml_tensor *stacked_id_embeds = fuse_fn(ctx, image_token_embeds, valid_id_embeds);
-        // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_before_concat");
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_before_concat");
 
         stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
-        // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute");
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute");
         if(left && right){
-            // print_ggml_tensor(left, true, "left");
-            // print_ggml_tensor(right, true, "right");
+            print_ggml_tensor(left, true, "left");
+            print_ggml_tensor(right, true, "right");
             stacked_id_embeds = ggml_concat(ctx, left, stacked_id_embeds);
             stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right);
         }else if(left){
@@ -221,19 +221,20 @@ struct FuseModule{
         }else if(right){
             stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right);
         }
-        // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_concat");
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_concat");
         stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
-        // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute_2");
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute_2");
         // print_ggml_tensor(class_tokens_mask, true, "class_tokens_mask");
         // print_ggml_tensor(prompt_embeds, true, "prompt_embeds");
         // assert class_tokens_mask.sum() == stacked_id_embeds.shape[0], f"{class_tokens_mask.sum()} != {stacked_id_embeds.shape[0]}"
         // prompt_embeds.masked_scatter_(class_tokens_mask[:, None], stacked_id_embeds.to(prompt_embeds.dtype))
         // struct ggml_tensor *prompt_embeds_perm = ggml_cont(ctx, ggml_permute(ctx, prompt_embeds, 1, 0, 2, 3));
-        struct ggml_tensor *prompt_embeds_perm = ggml_cont(ctx, ggml_transpose(ctx, prompt_embeds));
-        // print_ggml_tensor(prompt_embeds_perm, true, "prompt_embeds_perm");
-        class_tokens_mask = ggml_repeat(ctx, class_tokens_mask, prompt_embeds_perm);
-        // print_ggml_tensor(class_tokens_mask, true, "class_tokens_mask_repeat");
-        class_tokens_mask =  ggml_cont(ctx, ggml_transpose(ctx, class_tokens_mask));
+        // struct ggml_tensor *prompt_embeds_perm = ggml_cont(ctx, ggml_transpose(ctx, prompt_embeds));
+        print_ggml_tensor(prompt_embeds, true, "prompt_embeds_perm");
+        // class_tokens_mask = ggml_repeat(ctx, class_tokens_mask, prompt_embeds_perm);
+        class_tokens_mask = ggml_cont(ctx, ggml_transpose(ctx, class_tokens_mask));
+        print_ggml_tensor(class_tokens_mask, true, "class_tokens_mask_repeat");
+        // class_tokens_mask =  ggml_cont(ctx, ggml_transpose(ctx, class_tokens_mask));
         // print_ggml_tensor(class_tokens_mask, true, "class_tokens_mask_transpose");
         prompt_embeds = ggml_mul(ctx, prompt_embeds, class_tokens_mask);
         // print_ggml_tensor(prompt_embeds, true, "prompt_embeds_after_mul");
@@ -358,11 +359,11 @@ struct PhotoMakerIDEncoder : public GGMLModule {
         // print_ggml_tensor(id_embeds_2, true, "id_embeds_2_after_perm");
 
         id_embeds = ggml_concat(ctx, id_embeds, id_embeds_2); // [batch_size, seq_length, 1, 2048] check whether concat at dim 2 is right
-        // print_ggml_tensor(id_embeds, true, "id_embeds_after_cat");
+        print_ggml_tensor(id_embeds, true, "id_embeds_after_cat");
         
 
         id_embeds = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 1, 2, 0, 3));
-        // print_ggml_tensor(id_embeds, true, "id_embeds_after_cat+perm");
+        print_ggml_tensor(id_embeds, true, "id_embeds_after_cat+perm");
         
 
         struct ggml_tensor * updated_prompt_embeds = fuse_module.forward(ctx,
@@ -447,11 +448,9 @@ struct PhotoMakerIDEncoder : public GGMLModule {
         struct ggml_tensor * class_embedding_temp = ggml_new_tensor_4d(ctx0, type, 
                                        vision_model.hidden_size, batch_size, 1, 1);
         struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
-        struct ggml_tensor * cast_f32_class = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, vision_model.hidden_size);
         ggml_allocr_alloc(allocr, cls);
         ggml_allocr_alloc(allocr, class_embedding_temp);
         ggml_allocr_alloc(allocr, positions);
-        ggml_allocr_alloc(allocr, cast_f32_class);
 
 
 
@@ -477,7 +476,6 @@ struct PhotoMakerIDEncoder : public GGMLModule {
             for (int i = 0; i < hidden_size; i++) {
                 zeros.push_back(0.f);
             }
-            ggml_backend_tensor_set(cast_f32_class, zeros.data(), 0, ggml_nbytes(cast_f32_class));
             if(left){
                 if(type == GGML_TYPE_F16){
                     std::vector<ggml_fp16_t> zeros(ggml_nelements(left), ggml_fp32_to_fp16(0.f));
@@ -542,6 +540,392 @@ struct PhotoMakerIDEncoder : public GGMLModule {
 
 };
 
+
+
+#define PM_LORA_GRAPH_SIZE 10240
+
+struct PhotoMakerLoraModel : public GGMLModule {
+    float multiplier = 1.0f;
+    std::map<std::string, struct ggml_tensor*> lora_tensors;
+    std::string file_path;
+     int in_channels                        = 4;
+    // ModelLoader model_loader;
+    bool load_failed = false;
+    int model_channels                     = 320;  // only for SDXL
+    int num_heads                          = -1;   // only for SDXL
+    int num_head_channels                  = 64;   // only for SDXL
+    int context_dim                        = 2048; // only for SDXL
+
+    std::vector<int>  transformer_depth     = {1, 2, 10}; // only for SDXL
+    std::vector<int>  channel_mult          = {1, 2, 4}; // only for SDXL
+
+    struct SpatialTransformerLora{
+        int in_channels;        // mult * model_channels
+        int n_head;             // num_heads
+        int d_head;             // in_channels // n_heads
+        int depth       = 1;    // 1
+        int context_dim = 768;  // hidden_size, 1024 for VERSION_2_x
+          
+
+        struct TransformerLora {
+        
+            // attn1
+            struct ggml_tensor* attn1_q_w_up;  // [in_channels, in_channels]
+            struct ggml_tensor* attn1_q_w_dn;  // [in_channels, in_channels]
+            struct ggml_tensor* attn1_k_w_up;  // [in_channels, in_channels]
+            struct ggml_tensor* attn1_k_w_dn;  // [in_channels, in_channels]
+            struct ggml_tensor* attn1_v_w_up;  // [in_channels, in_channels]
+            struct ggml_tensor* attn1_v_w_dn;  // [in_channels, in_channels]
+
+            struct ggml_tensor* attn1_out_w_up;  // [in_channels, in_channels]
+            struct ggml_tensor* attn1_out_w_dn;  // [in_channels, in_channels]
+
+            // attn2
+            struct ggml_tensor* attn2_q_w_up;  // [in_channels, in_channels]
+            struct ggml_tensor* attn2_q_w_dn;  // [in_channels, in_channels]
+            struct ggml_tensor* attn2_k_w_up;  // [in_channels, context_dim]
+            struct ggml_tensor* attn2_k_w_dn;  // [in_channels, context_dim]
+            struct ggml_tensor* attn2_v_w_up;  // [in_channels, context_dim]
+            struct ggml_tensor* attn2_v_w_dn;  // [in_channels, context_dim]
+
+            struct ggml_tensor* attn2_out_w_up;  // [in_channels, in_channels]
+            struct ggml_tensor* attn2_out_w_dn;  // [in_channels, in_channels]
+
+
+
+        };
+
+        std::vector<TransformerLora> transformers;
+
+        SpatialTransformerLora(int depth = -1)
+        : depth(depth) {
+            if(depth > 0)
+                transformers.resize(depth);
+        }
+
+        int get_num_tensors() {
+            return depth * 16;
+        }
+
+        size_t calculate_mem_size(ggml_type wtype) {
+            size_t mem_size = 0;            
+            // transformer
+            for (auto& transformer : transformers) {
+                mem_size += 12 * ggml_row_size(wtype, in_channels * in_channels);      // attn1_q/k/v/out_w attn2_q/out_w
+                mem_size +=  4 * ggml_row_size(wtype, in_channels * context_dim);      // attn2_k/v_w
+            }
+            return mem_size;
+        }
+
+       void init_params(struct ggml_context* ctx, ggml_type wtype) {
+            // transformer
+            for (auto& transformer : transformers) {
+
+                transformer.attn1_q_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+                transformer.attn1_q_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+                transformer.attn1_k_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+                transformer.attn1_k_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+                transformer.attn1_v_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+                transformer.attn1_v_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+
+                transformer.attn1_out_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+                transformer.attn1_out_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+
+            
+
+                transformer.attn2_q_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+                transformer.attn2_q_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+                transformer.attn2_k_w_up = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
+                transformer.attn2_k_w_dn = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
+                transformer.attn2_v_w_up = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
+                transformer.attn2_v_w_dn = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
+
+                transformer.attn2_out_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+                transformer.attn2_out_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
+            
+            }
+        }
+
+
+    };
+
+
+    SpatialTransformerLora down_blocks[3][2];
+    SpatialTransformerLora mid_block;
+    SpatialTransformerLora up_blocks[3][3];
+
+
+
+    PhotoMakerLoraModel(const std::string file_path = "")
+        : file_path(file_path) {
+        name = "photomaker lora";
+        // if (!model_loader.init_from_file(file_path)) {
+        //     load_failed = true;
+        // }
+        int ch = model_channels;
+        for(int i = 0; i < 3; i++){
+            int mult = channel_mult[i];
+            if(i == 0) continue;
+            for(int j = 0; j < 2; j++){
+                ch = mult * model_channels;
+                int n_head = num_heads;
+                int d_head = ch / num_heads;
+                if (num_head_channels != -1) {
+                    d_head = num_head_channels;
+                    n_head = ch / d_head;
+                }
+                down_blocks[i][j] = SpatialTransformerLora(transformer_depth[i]);
+                down_blocks[i][j].in_channels = ch;
+                down_blocks[i][j].n_head      = n_head;
+                down_blocks[i][j].d_head      = d_head;
+                down_blocks[i][j].context_dim = context_dim;
+            }
+        }
+        int n_head = num_heads;
+        int d_head = ch / num_heads;
+        if (num_head_channels != -1) {
+            d_head = num_head_channels;
+            n_head = ch / d_head;
+        }
+        mid_block = SpatialTransformerLora(transformer_depth[transformer_depth.size()-1]);
+        mid_block.in_channels = ch;
+        mid_block.n_head      = n_head;
+        mid_block.d_head      = d_head;
+        mid_block.context_dim = context_dim;
+
+
+        for(int i = 2; i >= 0 ; i--){
+            int mult = channel_mult[i];
+            if(i == 0) continue;
+            for(int j = 0; j < 2; j++){
+                ch = mult * model_channels;
+                int n_head = num_heads;
+                int d_head = ch / num_heads;
+                if (num_head_channels != -1) {
+                    d_head = num_head_channels;
+                    n_head = ch / d_head;
+                }
+                up_blocks[i][j] = SpatialTransformerLora(transformer_depth[i]);
+                up_blocks[i][j].in_channels = ch;
+                up_blocks[i][j].n_head      = n_head;
+                up_blocks[i][j].d_head      = d_head;
+                up_blocks[i][j].context_dim = context_dim;
+            }
+        }
+      
+        
+    }
+
+    size_t get_num_tensors() {
+        size_t num_tensors = 0;         
+        // return model_loader.cal_mem_size(NULL);
+        for(int i = 0; i < 3; i++){
+            if(i == 0) continue;
+            for(int j = 0; j < 2; j++)               
+                num_tensors += down_blocks[i][j].get_num_tensors();
+        }
+        for(int i = 2; i >= 0 ; i--){
+            if(i == 0) continue;
+            for(int j = 0; j < 2; j++)
+                num_tensors += up_blocks[i][j].get_num_tensors();
+        }
+        num_tensors += mid_block.get_num_tensors();
+        return num_tensors;     
+               
+    }
+
+    size_t calculate_mem_size(ggml_type wtype) {
+        size_t mem_size = 0;         
+        // return model_loader.cal_mem_size(NULL);
+        for(int i = 0; i < 3; i++){
+            if(i == 0) continue;
+            for(int j = 0; j < 2; j++)               
+                mem_size += down_blocks[i][j].calculate_mem_size(wtype);
+        }
+        for(int i = 2; i >= 0 ; i--){
+            if(i == 0) continue;
+            for(int j = 0; j < 2; j++)
+                mem_size += up_blocks[i][j].calculate_mem_size(wtype);
+               
+        }
+        mem_size += mid_block.calculate_mem_size(wtype);
+        return mem_size;       
+    }
+
+
+    void init_params(ggml_type wtype){
+        ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
+
+        for(int i = 0; i < 3; i++){
+            if(i == 0) continue;
+            for(int j = 0; j < 2; j++)               
+                down_blocks[i][j].init_params(params_ctx, wtype);
+        }
+        for(int i = 2; i >= 0 ; i--){
+            if(i == 0) continue;
+            for(int j = 0; j < 2; j++)
+                up_blocks[i][j].init_params(params_ctx, wtype);
+        }
+
+        mid_block.init_params(params_ctx, wtype);
+
+        // alloc all tensors linked to this context
+        for (struct ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != NULL; t = ggml_get_next_tensor(params_ctx, t)) {
+            if (t->data == NULL) {
+                ggml_allocr_alloc(alloc, t);
+            }
+        }
+        
+        ggml_allocr_free(alloc); 
+
+    }
+
+    bool load_from_file(ggml_backend_t backend) {
+        if (!alloc_params_buffer(backend)) {
+            return false;
+        }
+        LOG_INFO("loading LoRA from '%s'", file_path.c_str());
+
+        if (load_failed) {
+            LOG_ERROR("init lora model loader from file failed: '%s'", file_path.c_str());
+            return false;
+        }
+
+        ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
+
+        auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+            const std::string& name = tensor_storage.name;
+
+            struct ggml_tensor* real = ggml_new_tensor(params_ctx, tensor_storage.type, tensor_storage.n_dims, tensor_storage.ne);
+            ggml_allocr_alloc(alloc, real);
+
+            *dst_tensor = real;
+
+            lora_tensors[name] = real;
+            return true;
+        };
+
+        // model_loader.load_tensors(on_new_tensor_cb, backend);
+
+        LOG_DEBUG("finished loaded lora");
+        ggml_allocr_free(alloc);
+        return true;
+    }
+
+    struct ggml_cgraph* build_graph(std::map<std::string, struct ggml_tensor*> model_tensors) {
+        // make a graph to compute all lora, expected lora and models tensors are in the same backend
+        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
+        static size_t buf_size = ggml_tensor_overhead() * PM_LORA_GRAPH_SIZE + ggml_graph_overhead();
+        static std::vector<uint8_t> buf(buf_size);
+
+        struct ggml_init_params params = {
+            /*.mem_size   =*/buf_size,
+            /*.mem_buffer =*/buf.data(),
+            /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
+        };
+        // LOG_DEBUG("mem_size %u ", params.mem_size);
+
+        struct ggml_context* ctx0 = ggml_init(params);
+        struct ggml_cgraph* gf    = ggml_new_graph_custom(ctx0, PM_LORA_GRAPH_SIZE, false);
+
+        std::set<std::string> applied_lora_tensors;
+        for (auto it : model_tensors) {
+            std::string k_tensor       = it.first;
+            struct ggml_tensor* weight = model_tensors[it.first];
+
+            size_t k_pos = k_tensor.find(".weight");
+            if (k_pos == std::string::npos) {
+                continue;
+            }
+            k_tensor = k_tensor.substr(0, k_pos);
+            replace_all_chars(k_tensor, '.', '_');
+            std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
+            std::string lora_down_name = "lora." + k_tensor + ".lora_down.weight";
+            std::string alpha_name     = "lora." + k_tensor + ".alpha";
+            std::string scale_name     = "lora." + k_tensor + ".scale";
+
+            ggml_tensor* lora_up   = NULL;
+            ggml_tensor* lora_down = NULL;
+
+            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
+                lora_up = lora_tensors[lora_up_name];
+            }
+
+            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
+                lora_down = lora_tensors[lora_down_name];
+            }
+
+            if (lora_up == NULL || lora_down == NULL) {
+                continue;
+            }
+
+            applied_lora_tensors.insert(lora_up_name);
+            applied_lora_tensors.insert(lora_down_name);
+            applied_lora_tensors.insert(alpha_name);
+            applied_lora_tensors.insert(scale_name);
+
+            // calc_cale
+            int64_t dim       = lora_down->ne[ggml_n_dims(lora_down) - 1];
+            float scale_value = 1.0f;
+            if (lora_tensors.find(scale_name) != lora_tensors.end()) {
+                scale_value = ggml_backend_tensor_get_f32(lora_tensors[scale_name]);
+            } else if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
+                float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
+                scale_value = alpha / dim;
+            }
+            scale_value *= multiplier;
+
+            // flat lora tensors to multiply it
+            int64_t lora_up_rows   = lora_up->ne[ggml_n_dims(lora_up) - 1];
+            lora_up                = ggml_reshape_2d(ctx0, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
+            int64_t lora_down_rows = lora_down->ne[ggml_n_dims(lora_down) - 1];
+            lora_down              = ggml_reshape_2d(ctx0, lora_down, ggml_nelements(lora_down) / lora_down_rows, lora_down_rows);
+
+            // ggml_mul_mat requires tensor b transposed
+            lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
+            struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_up, lora_down);
+            updown                     = ggml_cont(ctx0, ggml_transpose(ctx0, updown));
+            updown                     = ggml_reshape(ctx0, updown, weight);
+            GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
+            updown = ggml_scale_inplace(ctx0, updown, scale_value);
+            ggml_tensor* final_weight;
+            // if (weight->type != GGML_TYPE_F32 && weight->type != GGML_TYPE_F16) {
+            //     final_weight = ggml_new_tensor(ctx0, GGML_TYPE_F32, weight->n_dims, weight->ne);
+            //     final_weight = ggml_cpy_inplace(ctx0, weight, final_weight);
+            //     final_weight = ggml_add_inplace(ctx0, final_weight, updown);
+            //     final_weight = ggml_cpy_inplace(ctx0, final_weight, weight);
+            // } else {
+            //     final_weight = ggml_add_inplace(ctx0, weight, updown);
+            // }
+            final_weight = ggml_add_inplace(ctx0, weight, updown);  // apply directly
+            ggml_build_forward_expand(gf, final_weight);
+        }
+
+        for (auto& kv : lora_tensors) {
+            if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
+                LOG_WARN("unused lora tensor %s", kv.first.c_str());
+            }
+        }
+
+        return gf;
+    }
+
+    void alloc_compute_buffer(std::map<std::string, struct ggml_tensor*> model_tensors) {
+        auto get_graph = [&]() -> struct ggml_cgraph* {
+            return build_graph(model_tensors);
+        };
+        GGMLModule::alloc_compute_buffer(get_graph);
+    }
+
+    void apply(std::map<std::string, struct ggml_tensor*> model_tensors, int n_threads) {
+        alloc_compute_buffer(model_tensors);
+
+        auto get_graph = [&]() -> struct ggml_cgraph* {
+            return build_graph(model_tensors);
+        };
+        GGMLModule::compute(get_graph, n_threads);
+    }
+};
 
 
 #endif  // __PMI_HPP__

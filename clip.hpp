@@ -1016,7 +1016,7 @@ struct CLIPVisionModel {
             // ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
             ggml_add(ctx0, embeddings, ggml_get_rows(ctx0, position_embeddings, positions));
         ggml_set_name(embeddings, "embeddings_after_add");
-        // print_ggml_tensor(embeddings, true, "embeddings_after_add");
+        print_ggml_tensor(embeddings, true, "embeddings_after_add");
 
         // pre-layernorm        
         embeddings = ggml_nn_layer_norm(ctx0, embeddings, pre_ln_w, pre_ln_w);

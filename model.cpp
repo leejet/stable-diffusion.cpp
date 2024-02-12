@@ -1410,7 +1410,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
             real = tensors[name];
         } else {
             if (ignore_tensors.find(name) == ignore_tensors.end()) {
-                // LOG_WARN("unknown tensor '%s' in model file", name.c_str());
+                LOG_WARN("unknown tensor '%s' in model file", name.c_str());
             }
             return true;
         }

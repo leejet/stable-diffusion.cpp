@@ -16,6 +16,10 @@
 #include "unet.hpp"
 #include "vae.hpp"
 
+// #define STB_IMAGE_WRITE_IMPLEMENTATION
+// #define STB_IMAGE_WRITE_STATIC
+// #include "stb_image_write.h"
+
 const char* model_version_to_str[] = {
     "1.x",
     "2.x",
@@ -814,11 +818,13 @@ public:
                 control_net.compute(n_threads, noised_input, guided_hint, c, t_emb);
             }
             if (start_merge_step != -1){
-                if (step <= start_merge_step)
+                if (step <= start_merge_step){
                     diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
-                else
+                }
+                else{
                     // diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vec_id);
                     diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
+                }
             }else{
                 diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
             }
@@ -1488,7 +1494,32 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         for(int i = 0; i <  num_input_images; i++)  {
             sd_image_t* init_image = input_id_images[i];
             sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
+            // sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
         }        
+        // sd_image_t* cropped_images = (sd_image_t*)calloc(num_input_images, sizeof(sd_image_t));
+        // if (cropped_images == NULL) {
+        //     ggml_free(work_ctx);
+        //     return NULL;
+        // }
+        // for (size_t i = 0; i < num_input_images; i++) {
+        //     cropped_images[i].width   = 224;
+        //     cropped_images[i].height  = 224;
+        //     cropped_images[i].channel = 3;
+        //     cropped_images[i].data    = sd_tensor_to_mul_image(init_img, i);
+        // }
+        // for (int i = 0; i < num_input_images; i++) {
+        //     if (cropped_images[i].data == NULL) {
+        //         continue;
+        //     }
+        //     std::string  final_image_path = "cropped_" + std::to_string(i + 1) + ".png";
+        //     stbi_write_png(final_image_path.c_str(), cropped_images[i].width, cropped_images[i].height, 
+        //                cropped_images[i].channel,
+        //                 cropped_images[i].data, 0, "");
+        //     printf("save result image to '%s'\n", final_image_path.c_str());
+        //     free(cropped_images[i].data);
+        //     cropped_images[i].data = NULL;
+        // }
+
         auto cond_tup                = sd_ctx->sd->get_learned_condition_with_trigger(work_ctx, prompt, 
                                                    clip_skip, width, height, num_input_images );
         prompts_embeds                = std::get<0>(cond_tup);
