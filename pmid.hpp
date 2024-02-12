@@ -548,237 +548,35 @@ struct PhotoMakerLoraModel : public GGMLModule {
     float multiplier = 1.0f;
     std::map<std::string, struct ggml_tensor*> lora_tensors;
     std::string file_path;
-     int in_channels                        = 4;
-    // ModelLoader model_loader;
+    int in_channels                        = 4;
+    ModelLoader model_loader;
     bool load_failed = false;
     int model_channels                     = 320;  // only for SDXL
     int num_heads                          = -1;   // only for SDXL
     int num_head_channels                  = 64;   // only for SDXL
     int context_dim                        = 2048; // only for SDXL
 
-    std::vector<int>  transformer_depth     = {1, 2, 10}; // only for SDXL
-    std::vector<int>  channel_mult          = {1, 2, 4}; // only for SDXL
 
-    struct SpatialTransformerLora{
-        int in_channels;        // mult * model_channels
-        int n_head;             // num_heads
-        int d_head;             // in_channels // n_heads
-        int depth       = 1;    // 1
-        int context_dim = 768;  // hidden_size, 1024 for VERSION_2_x
-          
-
-        struct TransformerLora {
-        
-            // attn1
-            struct ggml_tensor* attn1_q_w_up;  // [in_channels, in_channels]
-            struct ggml_tensor* attn1_q_w_dn;  // [in_channels, in_channels]
-            struct ggml_tensor* attn1_k_w_up;  // [in_channels, in_channels]
-            struct ggml_tensor* attn1_k_w_dn;  // [in_channels, in_channels]
-            struct ggml_tensor* attn1_v_w_up;  // [in_channels, in_channels]
-            struct ggml_tensor* attn1_v_w_dn;  // [in_channels, in_channels]
-
-            struct ggml_tensor* attn1_out_w_up;  // [in_channels, in_channels]
-            struct ggml_tensor* attn1_out_w_dn;  // [in_channels, in_channels]
-
-            // attn2
-            struct ggml_tensor* attn2_q_w_up;  // [in_channels, in_channels]
-            struct ggml_tensor* attn2_q_w_dn;  // [in_channels, in_channels]
-            struct ggml_tensor* attn2_k_w_up;  // [in_channels, context_dim]
-            struct ggml_tensor* attn2_k_w_dn;  // [in_channels, context_dim]
-            struct ggml_tensor* attn2_v_w_up;  // [in_channels, context_dim]
-            struct ggml_tensor* attn2_v_w_dn;  // [in_channels, context_dim]
-
-            struct ggml_tensor* attn2_out_w_up;  // [in_channels, in_channels]
-            struct ggml_tensor* attn2_out_w_dn;  // [in_channels, in_channels]
-
-
-
-        };
-
-        std::vector<TransformerLora> transformers;
-
-        SpatialTransformerLora(int depth = -1)
-        : depth(depth) {
-            if(depth > 0)
-                transformers.resize(depth);
-        }
-
-        int get_num_tensors() {
-            return depth * 16;
-        }
-
-        size_t calculate_mem_size(ggml_type wtype) {
-            size_t mem_size = 0;            
-            // transformer
-            for (auto& transformer : transformers) {
-                mem_size += 12 * ggml_row_size(wtype, in_channels * in_channels);      // attn1_q/k/v/out_w attn2_q/out_w
-                mem_size +=  4 * ggml_row_size(wtype, in_channels * context_dim);      // attn2_k/v_w
-            }
-            return mem_size;
-        }
-
-       void init_params(struct ggml_context* ctx, ggml_type wtype) {
-            // transformer
-            for (auto& transformer : transformers) {
-
-                transformer.attn1_q_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-                transformer.attn1_q_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-                transformer.attn1_k_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-                transformer.attn1_k_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-                transformer.attn1_v_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-                transformer.attn1_v_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-
-                transformer.attn1_out_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-                transformer.attn1_out_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-
-            
-
-                transformer.attn2_q_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-                transformer.attn2_q_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-                transformer.attn2_k_w_up = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
-                transformer.attn2_k_w_dn = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
-                transformer.attn2_v_w_up = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
-                transformer.attn2_v_w_dn = ggml_new_tensor_2d(ctx, wtype, context_dim, in_channels);
-
-                transformer.attn2_out_w_up = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-                transformer.attn2_out_w_dn = ggml_new_tensor_2d(ctx, wtype, in_channels, in_channels);
-            
-            }
-        }
-
-
-    };
-
-
-    SpatialTransformerLora down_blocks[3][2];
-    SpatialTransformerLora mid_block;
-    SpatialTransformerLora up_blocks[3][3];
+    
 
 
 
     PhotoMakerLoraModel(const std::string file_path = "")
         : file_path(file_path) {
         name = "photomaker lora";
-        // if (!model_loader.init_from_file(file_path)) {
-        //     load_failed = true;
-        // }
-        int ch = model_channels;
-        for(int i = 0; i < 3; i++){
-            int mult = channel_mult[i];
-            if(i == 0) continue;
-            for(int j = 0; j < 2; j++){
-                ch = mult * model_channels;
-                int n_head = num_heads;
-                int d_head = ch / num_heads;
-                if (num_head_channels != -1) {
-                    d_head = num_head_channels;
-                    n_head = ch / d_head;
-                }
-                down_blocks[i][j] = SpatialTransformerLora(transformer_depth[i]);
-                down_blocks[i][j].in_channels = ch;
-                down_blocks[i][j].n_head      = n_head;
-                down_blocks[i][j].d_head      = d_head;
-                down_blocks[i][j].context_dim = context_dim;
-            }
+        if (!model_loader.init_from_file(file_path, "pmid.")) {
+            load_failed = true;
         }
-        int n_head = num_heads;
-        int d_head = ch / num_heads;
-        if (num_head_channels != -1) {
-            d_head = num_head_channels;
-            n_head = ch / d_head;
-        }
-        mid_block = SpatialTransformerLora(transformer_depth[transformer_depth.size()-1]);
-        mid_block.in_channels = ch;
-        mid_block.n_head      = n_head;
-        mid_block.d_head      = d_head;
-        mid_block.context_dim = context_dim;
-
-
-        for(int i = 2; i >= 0 ; i--){
-            int mult = channel_mult[i];
-            if(i == 0) continue;
-            for(int j = 0; j < 2; j++){
-                ch = mult * model_channels;
-                int n_head = num_heads;
-                int d_head = ch / num_heads;
-                if (num_head_channels != -1) {
-                    d_head = num_head_channels;
-                    n_head = ch / d_head;
-                }
-                up_blocks[i][j] = SpatialTransformerLora(transformer_depth[i]);
-                up_blocks[i][j].in_channels = ch;
-                up_blocks[i][j].n_head      = n_head;
-                up_blocks[i][j].d_head      = d_head;
-                up_blocks[i][j].context_dim = context_dim;
-            }
-        }
-      
-        
     }
 
     size_t get_num_tensors() {
-        size_t num_tensors = 0;         
-        // return model_loader.cal_mem_size(NULL);
-        for(int i = 0; i < 3; i++){
-            if(i == 0) continue;
-            for(int j = 0; j < 2; j++)               
-                num_tensors += down_blocks[i][j].get_num_tensors();
-        }
-        for(int i = 2; i >= 0 ; i--){
-            if(i == 0) continue;
-            for(int j = 0; j < 2; j++)
-                num_tensors += up_blocks[i][j].get_num_tensors();
-        }
-        num_tensors += mid_block.get_num_tensors();
-        return num_tensors;     
-               
+        return PM_LORA_GRAPH_SIZE;
     }
 
-    size_t calculate_mem_size(ggml_type wtype) {
-        size_t mem_size = 0;         
-        // return model_loader.cal_mem_size(NULL);
-        for(int i = 0; i < 3; i++){
-            if(i == 0) continue;
-            for(int j = 0; j < 2; j++)               
-                mem_size += down_blocks[i][j].calculate_mem_size(wtype);
-        }
-        for(int i = 2; i >= 0 ; i--){
-            if(i == 0) continue;
-            for(int j = 0; j < 2; j++)
-                mem_size += up_blocks[i][j].calculate_mem_size(wtype);
-               
-        }
-        mem_size += mid_block.calculate_mem_size(wtype);
-        return mem_size;       
+    size_t calculate_mem_size() {
+        return model_loader.cal_mem_size(NULL);
     }
-
-
-    void init_params(ggml_type wtype){
-        ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
-
-        for(int i = 0; i < 3; i++){
-            if(i == 0) continue;
-            for(int j = 0; j < 2; j++)               
-                down_blocks[i][j].init_params(params_ctx, wtype);
-        }
-        for(int i = 2; i >= 0 ; i--){
-            if(i == 0) continue;
-            for(int j = 0; j < 2; j++)
-                up_blocks[i][j].init_params(params_ctx, wtype);
-        }
-
-        mid_block.init_params(params_ctx, wtype);
-
-        // alloc all tensors linked to this context
-        for (struct ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != NULL; t = ggml_get_next_tensor(params_ctx, t)) {
-            if (t->data == NULL) {
-                ggml_allocr_alloc(alloc, t);
-            }
-        }
-        
-        ggml_allocr_free(alloc); 
-
-    }
+   
 
     bool load_from_file(ggml_backend_t backend) {
         if (!alloc_params_buffer(backend)) {
@@ -795,7 +593,14 @@ struct PhotoMakerLoraModel : public GGMLModule {
 
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
             const std::string& name = tensor_storage.name;
+            // LOG_INFO("loading LoRA tesnor '%s'", name.c_str());
+            if (!starts_with(name, "pmid.unet")){
+                // LOG_INFO("skipping LoRA tesnor '%s'", name.c_str());
+                return true;
+            }
 
+               
+            // LOG_INFO("loading LoRA tesnor '%s'", name.c_str());
             struct ggml_tensor* real = ggml_new_tensor(params_ctx, tensor_storage.type, tensor_storage.n_dims, tensor_storage.ne);
             ggml_allocr_alloc(alloc, real);
 
@@ -805,7 +610,7 @@ struct PhotoMakerLoraModel : public GGMLModule {
             return true;
         };
 
-        // model_loader.load_tensors(on_new_tensor_cb, backend);
+        model_loader.load_tensors(on_new_tensor_cb, backend);
 
         LOG_DEBUG("finished loaded lora");
         ggml_allocr_free(alloc);

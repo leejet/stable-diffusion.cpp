@@ -70,6 +70,7 @@ public:
     UNetModel diffusion_model;
     AutoEncoderKL first_stage_model;
     PhotoMakerIDEncoder pmid_model;
+    PhotoMakerLoraModel pmid_lora;
     bool use_tiny_autoencoder = false;
     bool vae_tiling           = false;
     bool stacked_id           = false;
@@ -176,7 +177,13 @@ public:
         cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
         diffusion_model  = UNetModel(version);
         pmid_model = PhotoMakerIDEncoder(version);
-
+        if (id_embeddings_path.size() > 0) {
+            pmid_lora = PhotoMakerLoraModel(id_embeddings_path);
+            if (!pmid_lora.load_from_file(backend)) {
+                LOG_WARN("load photomaker lora tensors from %s failed", id_embeddings_path.c_str());
+                return false;
+            }
+        }
 
         LOG_INFO("Stable Diffusion %s ", model_version_to_str[version]);
         if (wtype == GGML_TYPE_COUNT) {
@@ -218,14 +225,13 @@ public:
         }
 
         if(stacked_id){
-            if (!pmid_model.alloc_params_buffer(backend, model_data_type)){
+            if (!pmid_model.alloc_params_buffer(backend, GGML_TYPE_F32)){
                 LOG_ERROR(" pmid model params buffer allocation failed");
                 return false;
             }
             LOG_INFO("pmid param memory buffer size = %.2fMB ",
                  pmid_model.params_buffer_size / 1024.0 / 1024.0);
         }
-
 
         ggml_type vae_type = model_data_type;
         if (version == VERSION_XL) {
@@ -254,12 +260,9 @@ public:
             first_stage_model.map_by_name(tensors, "first_stage_model.");
             
             if(stacked_id){
-            //    printf("preparing memory for pmid \n");  
                pmid_model.init_params(GGML_TYPE_F32);
-            //    printf("done preparing memory for pmid \n");  
-               pmid_model.map_by_name(tensors, "pmid.");
+               pmid_model.map_by_name(tensors, "pmid.");               
             }
-
         }
 
         struct ggml_init_params params;
@@ -296,16 +299,16 @@ public:
                 continue;
             }
 
-            // temporaly ignore lora weights from photomaker
-            // add them later
-            if (stacked_id && (starts_with(name, "pmid.unet"))) {
-                ignore_tensors.insert(name);
-                continue;
-            }
-
-
             tensors_need_to_load.insert(pair);
         }
+        if (stacked_id) {
+            for (auto& pair : pmid_lora.lora_tensors){
+                const std::string& name = pair.first;
+                ignore_tensors.insert(name);  
+            }
+        }
+
+
         bool success = model_loader.load_tensors(tensors_need_to_load, backend, ignore_tensors);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
@@ -320,8 +323,9 @@ public:
             cond_stage_model.params_buffer_size +
             diffusion_model.params_buffer_size +
             first_stage_model.params_buffer_size;
-        if(stacked_id)
-            total_params_size += pmid_model.params_buffer_size;
+        if(stacked_id){
+            total_params_size += pmid_model.params_buffer_size;            
+        }
         LOG_INFO("total memory buffer size = %.2fMB (clip %.2fMB, unet %.2fMB, vae %.2fMB)",
                  total_params_size / 1024.0 / 1024.0,
                  cond_stage_model.params_buffer_size / 1024.0 / 1024.0,
