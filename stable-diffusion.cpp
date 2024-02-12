@@ -742,6 +742,7 @@ public:
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         ggml_tensor* c_id,
+                        ggml_tensor* c_vec_id,
                         float control_strength) {
         size_t steps = sigmas.size() - 1;
         // x_t = load_tensor_from_file(work_ctx, "./rand0.bin");
@@ -816,6 +817,7 @@ public:
                 if (step <= start_merge_step)
                     diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
                 else
+                    // diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vec_id);
                     diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
             }else{
                 diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
@@ -1475,11 +1477,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     // ggml_tensor* class_tokens_mask = NULL;
     std::vector<bool> class_tokens_mask;
     if(sd_ctx->sd->stacked_id){
-        int32_t width = input_id_images[0]->width;
-        int32_t height = input_id_images[0]->height;
+        int32_t w = input_id_images[0]->width;
+        int32_t h = input_id_images[0]->height;
         int32_t channels = input_id_images[0]->channel;
         int32_t num_input_images = input_id_images.size();
-        init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, channels, num_input_images);
+        init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, w, h, channels, num_input_images);
         // TODO: move these to somewhere else and be user settable
         float mean[] = {0.48145466, 0.4578275, 0.40821073};
         float std[]  = {0.26862954, 0.26130258, 0.27577711};
@@ -1557,11 +1559,13 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         int start_merge_step = -1;
         if(sd_ctx->sd->stacked_id){
-            int style_strength_ratio = 20;
-            start_merge_step = int(style_strength_ratio / 100 * sample_steps);
+            float style_strength_ratio = 20.f;
+            start_merge_step = int(style_strength_ratio / 100.f * sample_steps);
             if(start_merge_step > 30)
                 start_merge_step = 30;
+            LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);    
         }
+
 
         struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, 
                                             x_t, 
@@ -1576,6 +1580,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                             sigmas, 
                                             start_merge_step,
                                             prompts_embeds,
+                                            pooled_prompts_embeds,
                                             control_strength);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
@@ -1731,7 +1736,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, init_latent, noise, c, c_vector, uc,
                                                  uc_vector, NULL, cfg_scale, sample_method, sigma_sched,
-                                                 -1, NULL,
+                                                 -1, NULL, NULL,
                                                  1.0f);
     // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
     // print_ggml_tensor(x_0);

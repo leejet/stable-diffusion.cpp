@@ -995,7 +995,7 @@ struct CLIPVisionModel {
 
         ggml_set_name(class_embedding_rep, "class_embedding_rep");
         // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep");
-        class_embedding_rep = ggml_cast(ctx0, class_embedding_rep, inp->type);
+        // class_embedding_rep = ggml_cast(ctx0, class_embedding_rep, inp->type);
         // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep_aft_casting");
         struct ggml_tensor *embeddings =  ggml_concat(ctx0, class_embedding_rep, inp);
         ggml_set_name(embeddings, "embeddings_after_concat");
@@ -1009,11 +1009,12 @@ struct CLIPVisionModel {
         
         // struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
         // print_ggml_tensor(embeddings, true, "embeddings_bef_add");
-        // print_ggml_tensor(ggml_get_rows(ctx0, position_embeddings, positions), true, "embeddings_add_src1");
+        // print_ggml_tensor(ggml_get_rows(ctx0, position_embeddings, positions), true, "position_embeddings_bef_add");
         // print_ggml_tensor(ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings), true, "embeddings_add_src1");
         // embeddings =  ggml_cont(ctx0, ggml_permute(ctx0, embeddings, 0, 1, 3, 2));
         embeddings =
-            ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
+            // ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
+            ggml_add(ctx0, embeddings, ggml_get_rows(ctx0, position_embeddings, positions));
         ggml_set_name(embeddings, "embeddings_after_add");
         // print_ggml_tensor(embeddings, true, "embeddings_after_add");
 

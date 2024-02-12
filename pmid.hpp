@@ -205,6 +205,7 @@ struct FuseModule{
         // # slice out the image token embeddings
         struct ggml_tensor * image_token_embeds = ggml_get_rows(ctx, prompt_embeds, class_tokens_mask_pos);
         // print_ggml_tensor(image_token_embeds, true, "image_token_embeds");
+        // print_ggml_tensor(valid_id_embeds, true, "valid_id_embeds");
         struct ggml_tensor *stacked_id_embeds = fuse_fn(ctx, image_token_embeds, valid_id_embeds);
         // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_before_concat");
 

@@ -230,6 +230,7 @@ __STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
                 ggml_tensor_set_f32(output, pixel_val, ix, iy, k);
             }
         }
+       
     }
 }
 
