@@ -547,6 +547,7 @@ struct PhotoMakerIDEncoder : public GGMLModule {
 struct PhotoMakerLoraModel : public GGMLModule {
     float multiplier = 1.0f;
     std::map<std::string, struct ggml_tensor*> lora_tensors;
+    std::vector<std::string> lora_tensors_to_be_ignored;
     std::string file_path;   
     ModelLoader model_loader;
     bool load_failed = false;
@@ -582,7 +583,7 @@ struct PhotoMakerLoraModel : public GGMLModule {
         ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
 
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
-            const std::string& name = tensor_storage.name;
+            std::string name = tensor_storage.name;
             // LOG_INFO("loading LoRA tesnor '%s'", name.c_str());
             if (!starts_with(name, "pmid.unet")){
                 // LOG_INFO("skipping LoRA tesnor '%s'", name.c_str());
@@ -595,7 +596,12 @@ struct PhotoMakerLoraModel : public GGMLModule {
             ggml_allocr_alloc(alloc, real);
 
             *dst_tensor = real;
-
+            lora_tensors_to_be_ignored.push_back(name);
+            size_t k_pos = name.find(".processor");
+            if(k_pos != std::string::npos)
+               name.replace(k_pos, strlen(".processor"), "");
+            // if(starts_with(name, "pmid.unet.down_blocks.2.attentions.1.transformer_blocks.9.attn2"))
+            //     print_ggml_tensor(real, true, name.c_str());
             lora_tensors[name] = real;
             return true;
         };
@@ -605,6 +611,28 @@ struct PhotoMakerLoraModel : public GGMLModule {
         LOG_DEBUG("finished loaded lora");
         ggml_allocr_free(alloc);
         return true;
+    }
+
+    std::pair<int,int> find_ij0(int n){
+        int i, j;
+        for(i = 0; i < 3; i++){
+            for(j = 0; j < 2; j++){
+                if((i*3+j+1) == n)
+                    return {i,j};
+            }
+        }
+        return {-1, -1};
+    }
+
+    std::pair<int,int> find_ij(int n){
+        int i, j;
+        for(i = 0; i < 2; i++){
+            for(j = 0; j < 3; j++){
+                if((i*3+j) == n)
+                    return {i,j};
+            }
+        }
+        return {-1, -1};
     }
 
     struct ggml_cgraph* build_graph(std::map<std::string, struct ggml_tensor*> model_tensors) {
@@ -627,15 +655,81 @@ struct PhotoMakerLoraModel : public GGMLModule {
         for (auto it : model_tensors) {
             std::string k_tensor       = it.first;
             struct ggml_tensor* weight = model_tensors[it.first];
-
-            size_t k_pos = k_tensor.find(".weight");
+            std::string full_name = k_tensor;
+            // size_t k_pos = k_tensor.find(".weight");
+            size_t k_pos = k_tensor.find(".attn1");
             if (k_pos == std::string::npos) {
-                continue;
+                k_pos = k_tensor.find(".attn2");
+                if (k_pos == std::string::npos) {
+                    continue;
+                }
             }
-            k_tensor = k_tensor.substr(0, k_pos);
-            replace_all_chars(k_tensor, '.', '_');
-            std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
-            std::string lora_down_name = "lora." + k_tensor + ".lora_down.weight";
+            if(ends_with(k_tensor, "bias"))
+               continue;
+            int block_kind = -1;
+            int block_id = -1;
+            if ((k_pos = k_tensor.find("input_blocks")) != std::string::npos) {
+                block_id = atoi(k_tensor.substr(k_pos+strlen("input_blocks")+1).c_str());
+                block_kind = 0;  // input ->  down block
+
+            }else if ((k_pos = k_tensor.find("output_blocks")) != std::string::npos) {
+                block_id = atoi(k_tensor.substr(k_pos+strlen("output_blocks")+1).c_str());
+                block_kind = 1;  // output ->  up block
+            }else{
+                k_pos = k_tensor.find("transformer_blocks");
+                block_id = atoi(k_tensor.substr(k_pos-4,1).c_str());
+                block_kind = 2;  // middle block
+            }
+
+
+            std::string lora_up_name;
+            std::string lora_down_name;
+            std::string prefix = "pmid.unet";
+            if (block_kind == 0){
+                prefix = prefix + ".down_blocks";
+                k_pos = k_tensor.find(".weight");
+                k_tensor = k_tensor.substr(0, k_pos);
+                k_pos = k_tensor.find("transformer_blocks");
+                k_tensor = k_tensor.substr(k_pos);
+                if(ends_with(k_tensor, "0")){
+                    k_tensor = k_tensor.substr(0, k_tensor.length()-2);
+                }
+                std::pair<int, int> ij = find_ij0(block_id);
+                if(ij.first == -1)
+                   continue;
+                prefix = prefix + "."+std::to_string(ij.first)+".attentions."+std::to_string(ij.second)+".";
+                lora_up_name     = prefix + k_tensor + "_lora.up.weight";
+                lora_down_name   = prefix + k_tensor + "_lora.down.weight";
+            }else if (block_kind == 1){
+                prefix = prefix + ".up_blocks";
+                k_pos = k_tensor.find(".weight");
+                k_tensor = k_tensor.substr(0, k_pos);
+                k_pos = k_tensor.find("transformer_blocks");
+                k_tensor = k_tensor.substr(k_pos);
+                if(ends_with(k_tensor, "0")){
+                    k_tensor = k_tensor.substr(0, k_tensor.length()-2);
+                }
+                std::pair<int, int> ij = find_ij(block_id);
+                if(ij.first == -1)
+                   continue;
+                prefix = prefix + "."+std::to_string(ij.first)+".attentions."+std::to_string(ij.second)+".";
+                lora_up_name     = prefix + k_tensor + "_lora.up.weight";
+                lora_down_name   = prefix + k_tensor + "_lora.down.weight";
+            }else{
+                prefix = prefix + ".mid_block" + ".attentions.0.";
+                k_pos = k_tensor.find(".weight");
+                k_tensor = k_tensor.substr(0, k_pos); 
+                k_pos = k_tensor.find("transformer_blocks");
+                k_tensor = k_tensor.substr(k_pos);
+                if(ends_with(k_tensor, "0")){
+                    k_tensor = k_tensor.substr(0, k_tensor.length()-2);
+                }
+                lora_up_name     = prefix + k_tensor + "_lora.up.weight";
+                lora_down_name   = prefix + k_tensor + "_lora.down.weight";
+            }
+            // LOG_INFO("unet transformer tensor: %s ", full_name.c_str());
+            // LOG_INFO("corresponding up tensor: %s ", lora_up_name.c_str());
+            // LOG_INFO("corresponding dn tensor: %s ", lora_down_name.c_str());
 
             ggml_tensor* lora_up   = NULL;
             ggml_tensor* lora_down = NULL;
@@ -649,14 +743,17 @@ struct PhotoMakerLoraModel : public GGMLModule {
             }
 
             if (lora_up == NULL || lora_down == NULL) {
+                LOG_WARN("can not find: %s and %s  k,id = (%d, %d)", lora_down_name.c_str(), lora_up_name.c_str(), block_kind, block_id);
                 continue;
             }
+
+            ggml_tensor* lora_up_orig = lora_up;
 
             applied_lora_tensors.insert(lora_up_name);
             applied_lora_tensors.insert(lora_down_name);
             
             // ggml_mul_mat requires tensor b transposed
-            lora_up                    = ggml_cont(ctx0, ggml_transpose(ctx0, lora_up));
+            lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
             struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_down, lora_up);
             updown                     = ggml_cont(ctx0, updown);
             GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));

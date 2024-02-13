@@ -302,8 +302,7 @@ public:
             tensors_need_to_load.insert(pair);
         }
         if (stacked_id) {
-            for (auto& pair : pmid_lora.lora_tensors){
-                const std::string& name = pair.first;
+            for (auto& name : pmid_lora.lora_tensors_to_be_ignored){
                 ignore_tensors.insert(name);  
             }
         }
@@ -1458,6 +1457,15 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     sd_ctx->sd->apply_loras(lora_f2m);
     int64_t t1 = ggml_time_ms();
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+
+    if(sd_ctx->sd->stacked_id){
+        sd_ctx->sd->pmid_lora.apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
+        sd_ctx->sd->pmid_lora.free_compute_buffer();
+        if (sd_ctx->sd->free_params_immediately) {
+            sd_ctx->sd->pmid_lora.free_params_buffer();
+        }
+    }
+
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     params.mem_size += width * height * 3 * sizeof(float);
