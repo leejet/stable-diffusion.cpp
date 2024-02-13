@@ -547,20 +547,10 @@ struct PhotoMakerIDEncoder : public GGMLModule {
 struct PhotoMakerLoraModel : public GGMLModule {
     float multiplier = 1.0f;
     std::map<std::string, struct ggml_tensor*> lora_tensors;
-    std::string file_path;
-    int in_channels                        = 4;
+    std::string file_path;   
     ModelLoader model_loader;
     bool load_failed = false;
-    int model_channels                     = 320;  // only for SDXL
-    int num_heads                          = -1;   // only for SDXL
-    int num_head_channels                  = 64;   // only for SDXL
-    int context_dim                        = 2048; // only for SDXL
-
-
-    
-
-
-
+   
     PhotoMakerLoraModel(const std::string file_path = "")
         : file_path(file_path) {
         name = "photomaker lora";
@@ -646,8 +636,6 @@ struct PhotoMakerLoraModel : public GGMLModule {
             replace_all_chars(k_tensor, '.', '_');
             std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
             std::string lora_down_name = "lora." + k_tensor + ".lora_down.weight";
-            std::string alpha_name     = "lora." + k_tensor + ".alpha";
-            std::string scale_name     = "lora." + k_tensor + ".scale";
 
             ggml_tensor* lora_up   = NULL;
             ggml_tensor* lora_down = NULL;
@@ -666,33 +654,13 @@ struct PhotoMakerLoraModel : public GGMLModule {
 
             applied_lora_tensors.insert(lora_up_name);
             applied_lora_tensors.insert(lora_down_name);
-            applied_lora_tensors.insert(alpha_name);
-            applied_lora_tensors.insert(scale_name);
-
-            // calc_cale
-            int64_t dim       = lora_down->ne[ggml_n_dims(lora_down) - 1];
-            float scale_value = 1.0f;
-            if (lora_tensors.find(scale_name) != lora_tensors.end()) {
-                scale_value = ggml_backend_tensor_get_f32(lora_tensors[scale_name]);
-            } else if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
-                float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
-                scale_value = alpha / dim;
-            }
-            scale_value *= multiplier;
-
-            // flat lora tensors to multiply it
-            int64_t lora_up_rows   = lora_up->ne[ggml_n_dims(lora_up) - 1];
-            lora_up                = ggml_reshape_2d(ctx0, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
-            int64_t lora_down_rows = lora_down->ne[ggml_n_dims(lora_down) - 1];
-            lora_down              = ggml_reshape_2d(ctx0, lora_down, ggml_nelements(lora_down) / lora_down_rows, lora_down_rows);
-
+            
             // ggml_mul_mat requires tensor b transposed
-            lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
-            struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_up, lora_down);
-            updown                     = ggml_cont(ctx0, ggml_transpose(ctx0, updown));
-            updown                     = ggml_reshape(ctx0, updown, weight);
+            lora_up                    = ggml_cont(ctx0, ggml_transpose(ctx0, lora_up));
+            struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_down, lora_up);
+            updown                     = ggml_cont(ctx0, updown);
             GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
-            updown = ggml_scale_inplace(ctx0, updown, scale_value);
+            updown = ggml_scale_inplace(ctx0, updown, multiplier);
             ggml_tensor* final_weight;
             // if (weight->type != GGML_TYPE_F32 && weight->type != GGML_TYPE_F16) {
             //     final_weight = ggml_new_tensor(ctx0, GGML_TYPE_F32, weight->n_dims, weight->ne);
