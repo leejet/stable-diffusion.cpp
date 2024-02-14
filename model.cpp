@@ -789,8 +789,8 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             ne[i] = shape[i].get<int64_t>();
         }
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
-        // if(strcmp(prefix.c_str(), "pmid") == 0)
-        // printf(" %s:%s [%zu, %zu, %zu, %zu]\n", (prefix + name).c_str(), ggml_type_name(type), ne[0], ne[1],ne[2], ne[3]);
+        // if(starts_with(prefix, "pmi"))
+        //     printf(" %s:%s [%zu, %zu, %zu, %zu]\n", (prefix + name).c_str(), ggml_type_name(type), ne[0], ne[1],ne[2], ne[3]);
         tensor_storage.reverse_ne();
 
         size_t tensor_data_size = end - begin;

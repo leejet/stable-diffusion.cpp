@@ -633,9 +633,17 @@ public:
                                                 prompts_embeds->type,
                                                 total_hidden_size,
                                                 cond_stage_model.text_model.max_position_embeddings);
+
         pmid_model.alloc_compute_buffer(work_ctx, init_img, prompts_embeds, class_tokens_mask);
         pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);        
         pmid_model.free_compute_buffer(); 
+        // printf("[");
+        // int j = 70;
+        // for(int i = 0; i < 100; i++){
+        //     float val = *((float *)(res->data)+j*total_hidden_size+i);
+        //     printf("%f, ", val);
+        // }
+        // printf("]\n");
         return res; 
     }
 
@@ -825,8 +833,8 @@ public:
                     diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
                 }
                 else{
-                    // diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vec_id);
-                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
+                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vec_id);
+                    // diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
                 }
             }else{
                 diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);

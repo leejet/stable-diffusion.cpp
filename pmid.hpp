@@ -552,7 +552,10 @@ struct PhotoMakerLoraModel : public GGMLModule {
     ModelLoader model_loader;
     bool load_failed = false;
    
-    PhotoMakerLoraModel(const std::string file_path = "")
+    PhotoMakerLoraModel(){
+    }
+
+    PhotoMakerLoraModel(const std::string file_path)
         : file_path(file_path) {
         name = "photomaker lora";
         if (!model_loader.init_from_file(file_path, "pmid.")) {

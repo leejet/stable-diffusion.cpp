@@ -963,22 +963,22 @@ struct CLIPVisionModel {
         ggml_set_name(x, "id_pixel");
         ggml_set_name(temp, "temp_input");
         int64_t* ne = patch_embeddings->ne;
-        struct ggml_tensor *patch_embeddings_f16 = ggml_reshape_3d(ctx0, patch_embeddings, ne[0], ne[1], ne[2]*ne[3]);
-        patch_embeddings_f16 = ggml_cast(ctx0, patch_embeddings_f16, GGML_TYPE_F16);
-        patch_embeddings_f16 = ggml_reshape_4d(ctx0, patch_embeddings_f16, ne[0], ne[1], ne[2], ne[3]);
-
+        // struct ggml_tensor *patch_embeddings_f16 = ggml_reshape_3d(ctx0, patch_embeddings, ne[0], ne[1], ne[2]*ne[3]);
+        // patch_embeddings_f16 = ggml_cast(ctx0, patch_embeddings_f16, GGML_TYPE_F16);
+        // patch_embeddings_f16 = ggml_reshape_4d(ctx0, patch_embeddings_f16, ne[0], ne[1], ne[2], ne[3]);
+        struct ggml_tensor *patch_embeddings_f16 = ggml_cast(ctx0, patch_embeddings, GGML_TYPE_F16);
         struct ggml_tensor * inp = ggml_conv_2d(ctx0, patch_embeddings_f16, x, patch_size, patch_size, 0, 0, 1, 1);
 
         ggml_set_name(inp, "inp_conv_2d");
-        // print_ggml_tensor(inp, true, "inp_conv_2d");
+        print_ggml_tensor(inp, true, "inp_conv_2d");
 
         inp = ggml_reshape_3d(ctx0, inp, num_patches, hidden_size, batch_size);
         ggml_set_name(inp, "inp_reshape_3d");
-        // print_ggml_tensor(inp, true, "inp_reshape_3d");
+        print_ggml_tensor(inp, true, "inp_reshape_3d");
         // inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
         // print_ggml_tensor(ggml_permute(ctx0, inp, 2, 0, 1, 3), true, "inp_permute");
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 2, 0, 1, 3));
-        // print_ggml_tensor(inp, true, "inp_cont");
+        print_ggml_tensor(inp, true, "inp_cont");
         ggml_set_name(inp, "inp_cont");
         ggml_set_name(class_embedding, "class_embedding");
 
@@ -996,7 +996,7 @@ struct CLIPVisionModel {
         ggml_set_name(class_embedding_rep, "class_embedding_rep");
         // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep");
         // class_embedding_rep = ggml_cast(ctx0, class_embedding_rep, inp->type);
-        // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep_aft_casting");
+        print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep_aft_casting");
         struct ggml_tensor *embeddings =  ggml_concat(ctx0, class_embedding_rep, inp);
         ggml_set_name(embeddings, "embeddings_after_concat");
         // print_ggml_tensor(embeddings, true, "embeddings_after_concat");
@@ -1027,10 +1027,12 @@ struct CLIPVisionModel {
             embeddings = resblocks[i].forward(ctx0, embeddings);  // [N, n_token, hidden_size]
         }        
         ggml_set_name(embeddings, "embeddings_after_transformer");
+        print_ggml_tensor(embeddings, true, "embeddings_after_encoder");
 
         // get the output of cls token, e.g., 0th index
         embeddings = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, embeddings, hidden_size, num_positions * batch_size), cls);
         ggml_set_name(embeddings, "embeddings_after_cls_token");
+        print_ggml_tensor(embeddings, true, "embeddings_pooled_after_encoder");
 
         // post-layernorm      
         embeddings = ggml_nn_layer_norm(ctx0, embeddings, post_ln_w, post_ln_b);
