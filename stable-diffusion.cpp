@@ -837,8 +837,8 @@ public:
                     diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
                 }
                 else{
-                    // diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vec_id);
-                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
+                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vec_id);
+                    // diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
                 }
             }else{
                 diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
@@ -1630,7 +1630,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         int start_merge_step = -1;
         if(sd_ctx->sd->stacked_id){
-            float style_strength_ratio = 30.f;
+            float style_strength_ratio = 20.f;
             start_merge_step = int(style_strength_ratio / 100.f * sample_steps);
             if(start_merge_step > 30)
                 start_merge_step = 30;

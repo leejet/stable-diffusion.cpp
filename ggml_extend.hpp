@@ -679,6 +679,18 @@ struct GGMLModule {
 
         ggml_allocr_alloc_graph(compute_allocr, gf);
 
+        // struct ggml_init_params params = {};
+        // params.mem_size += 1024*1024*1024; // 100M  
+        // params.mem_size += 2 * ggml_tensor_overhead();
+        // params.mem_buffer = NULL;
+        // params.no_alloc   = false;
+        // struct ggml_context* obs_ctx = ggml_init(params);
+        // if (!obs_ctx) {
+        //     LOG_ERROR("ggml_init() failed");
+        //     return;
+        // }
+
+
         if (ggml_backend_is_cpu(backend)) {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
@@ -693,26 +705,40 @@ struct GGMLModule {
         struct ggml_tensor * imb = NULL;
         for (int i = 0; i < gf->n_leafs; i++) {
             struct ggml_tensor * t1 = gf->leafs[i];
-            if(strcmp(ggml_get_name(t1), "id_pixel_values_input") == 0) {                
+            if(strcmp(ggml_get_name(t1), "vision.patch_embeddings") == 0) {                
                 imb = t1;            
                 int64_t stride = imb->ne[0];
+                int64_t ne3 =  imb->ne[3];
                 float* out_data = new float[ggml_nelements(imb)];
                 ggml_backend_tensor_get(imb, out_data, 0, ggml_nbytes(imb));
-                
+                for(int l = 0; l < ne3; ++l){
+                printf("[");
                 for(int k = 0; k < 3; ++k){
-                    float mi = 100.f, mx= -100.f;
-                    for(int i = 0; i < stride; i++){
-                        printf("[");
+                    for(int i = 0; i < stride; i++){                        
                         for(int j = 0; j < stride; j++){
-                            float  val =  out_data[k*stride*stride+i*stride+j];
-                            if(mi > val) mi = val;
-                            if(mx < val) mx = val;
+                            float  val =  out_data[l*3*stride*stride+ k*stride*stride+i*stride+j];
                             printf("%f, ", val);
-                        }
-                        printf("]\n");         
+                        }                        
                     }
-                    printf("B. channel, min, max: %d, %f %f \n", k, mi, mx);
+                    // printf("B. channel, min, max: %d, %f %f \n", k, mi, mx);
                 }
+                printf("]\n");         
+                }
+                
+                // for(int k = 0; k < 3; ++k){
+                //     float mi = 100.f, mx= -100.f;
+                //     for(int i = 0; i < stride; i++){
+                //         printf("[");
+                //         for(int j = 0; j < stride; j++){
+                //             float  val =  out_data[k*stride*stride+i*stride+j];
+                //             if(mi > val) mi = val;
+                //             if(mx < val) mx = val;
+                //             printf("%f, ", val);
+                //         }
+                //         printf("]\n");         
+                //     }
+                //     printf("B. channel, min, max: %d, %f %f \n", k, mi, mx);
+                // }
                 
                 // printf("[");
                 // for(int i = 0; i < stride; i++){
@@ -722,7 +748,7 @@ struct GGMLModule {
                 delete out_data;       
             }            
         }
-        
+// #if 0        
         for (int i = 0; i < gf->n_nodes; i++) {
             struct ggml_tensor * t1 = gf->nodes[i];
             // if(strcmp(ggml_get_name(t1), "embeddings_after_add") == 0) {                
