@@ -960,7 +960,8 @@ struct CLIPVisionModel {
         int32_t n_layer = num_hidden_layers;
         const int d_head = hidden_size / n_head;
 
-        ggml_set_name(x, "id_pixel");
+        // ggml_set_name(x, "id_pixel");
+        print_ggml_tensor(x, true, "id_pixel");
         ggml_set_name(temp, "temp_input");
         int64_t* ne = patch_embeddings->ne;
         // struct ggml_tensor *patch_embeddings_f16 = ggml_reshape_3d(ctx0, patch_embeddings, ne[0], ne[1], ne[2]*ne[3]);
@@ -980,7 +981,7 @@ struct CLIPVisionModel {
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 2, 0, 1, 3));
         print_ggml_tensor(inp, true, "inp_cont");
         ggml_set_name(inp, "inp_cont");
-        ggml_set_name(class_embedding, "class_embedding");
+        // ggml_set_name(class_embedding, "class_embedding");
 
         // concat class_embeddings and patch_embeddings
         // struct ggml_tensor * embeddings = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, num_positions, batch_size);

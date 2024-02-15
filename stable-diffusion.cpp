@@ -526,6 +526,10 @@ public:
         std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
         std::vector<float>& weights = std::get<1>(tokens_and_weights);
         std::vector<bool>& clsm     = std::get<2>(tokens_and_weights);
+        printf("tokens: \n");
+        for(int i = 0; i < tokens.size(); ++i)
+           printf("%d ", tokens[i]);
+        printf("\n");
         int64_t t0                  = ggml_time_ms();
         struct ggml_tensor* pooled  = NULL;
         size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
@@ -833,8 +837,8 @@ public:
                     diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
                 }
                 else{
-                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vec_id);
-                    // diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
+                    // diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vec_id);
+                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
                 }
             }else{
                 diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
@@ -1539,6 +1543,22 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         //     free(cropped_images[i].data);
         //     cropped_images[i].data = NULL;
         // }
+        // float* out_data = (float *)(init_img->data);
+        // int64_t stride = init_img->ne[0];
+        // for(int k = 0; k < 3; ++k){
+        //     float mi = 100.f, mx= -100.f;
+        //     for(int i = 0; i < stride; i++){
+        //         printf("[");
+        //         for(int j = 0; j < stride; j++){
+        //             float  val =  out_data[k*stride*stride+i*stride+j];
+        //             if(mi > val) mi = val;
+        //             if(mx < val) mx = val;
+        //             printf("%f, ", val);
+        //         }
+        //         printf("]\n");         
+        //     }
+        //     printf(" channel, min, max: %d, %f %f \n", k, mi, mx);
+        // }
 
         auto cond_tup                = sd_ctx->sd->get_learned_condition_with_trigger(work_ctx, prompt, 
                                                    clip_skip, width, height, num_input_images );
@@ -1610,7 +1630,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         int start_merge_step = -1;
         if(sd_ctx->sd->stacked_id){
-            float style_strength_ratio = 20.f;
+            float style_strength_ratio = 30.f;
             start_merge_step = int(style_strength_ratio / 100.f * sample_steps);
             if(start_merge_step > 30)
                 start_merge_step = 30;
