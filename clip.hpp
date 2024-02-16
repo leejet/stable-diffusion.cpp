@@ -303,9 +303,14 @@ public:
                 continue;
             std::u32string ts = decoder[t];
             // printf("%d, %s \n", t,  utf32_to_utf8(ts).c_str());
-            text += " "+utf32_to_utf8(ts).replace(ts.length()-4, ts.length()-1, "") ;
+            std::string s = utf32_to_utf8(ts); 
+            if(s.length() >= 4 && ends_with(s, "</w>")){
+                text += " "+s.replace(s.length()-4, s.length()-1, "") ;
+            }else{
+                text += " "+s;
+            }
         }
-        std::vector<unsigned char> bytes;
+        // std::vector<unsigned char> bytes;
         // for (auto c : text){
         //     bytes.push_back(byte_decoder[c]);
         // }

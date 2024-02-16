@@ -547,7 +547,7 @@ struct PhotoMakerIDEncoder : public GGMLModule {
 #define PM_LORA_GRAPH_SIZE 10240
 
 struct PhotoMakerLoraModel : public GGMLModule {
-    float multiplier = 1.0f;
+    float multiplier = 1.f;
     std::map<std::string, struct ggml_tensor*> lora_tensors;
     std::vector<std::string> lora_tensors_to_be_ignored;
     std::string file_path;   

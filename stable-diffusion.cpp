@@ -493,14 +493,12 @@ public:
 
         auto image_tokens = cond_stage_model.convert_token_to_id(trigger_word);                                    
         GGML_ASSERT(image_tokens.size() == 1);
-
         auto tokens_and_weights  = cond_stage_model.tokenize(prompt, false);
-        std::vector<int>& tokens    = tokens_and_weights.first;    
+        std::vector<int> &tokens    = tokens_and_weights.first;
         auto it = std::find(tokens.begin(), tokens.end(), image_tokens[0]);
         GGML_ASSERT(it != tokens.end()); // prompt must have trigger word
         tokens.erase(it);
         return cond_stage_model.decode(tokens);
-                        
     }
 
     std::tuple<ggml_tensor*, ggml_tensor*, std::vector<bool>>
@@ -1583,7 +1581,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
 
 
-    t0                            = ggml_time_ms();    
+    t0                            = ggml_time_ms();
     auto cond_pair                = sd_ctx->sd->get_learned_condition(work_ctx, prompt, clip_skip, width, height);
     ggml_tensor* c                = cond_pair.first;
     ggml_tensor* c_vector         = cond_pair.second;  // [adm_in_channels, ]
