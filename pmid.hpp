@@ -234,6 +234,7 @@ struct FuseModule{
         // print_ggml_tensor(prompt_embeds, true, "prompt_embeds_perm");
         // class_tokens_mask = ggml_repeat(ctx, class_tokens_mask, prompt_embeds_perm);
         class_tokens_mask = ggml_cont(ctx, ggml_transpose(ctx, class_tokens_mask));
+        class_tokens_mask = ggml_repeat(ctx, class_tokens_mask, prompt_embeds);
         // print_ggml_tensor(class_tokens_mask, true, "class_tokens_mask_repeat");
         // class_tokens_mask =  ggml_cont(ctx, ggml_transpose(ctx, class_tokens_mask));
         // print_ggml_tensor(class_tokens_mask, true, "class_tokens_mask_transpose");
@@ -334,7 +335,7 @@ struct PhotoMakerIDEncoder : public GGMLModule {
                                                              class_embedding_temp,
                                                              positions
                                                              ); // [batch_size, seq_length, hidden_size]
-        print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds");
+        // print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds");
 
         // if(class_tokens_mask->backend == GGML_BACKEND_GPU){            
         //     int *ctm = (int *)malloc(class_tokens_mask->ne[0]);

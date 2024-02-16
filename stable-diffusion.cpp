@@ -1471,8 +1471,8 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     if(sd_ctx->sd->stacked_id){
-        sd_ctx->sd->pmid_lora.apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
-        sd_ctx->sd->pmid_lora.free_compute_buffer();
+        // sd_ctx->sd->pmid_lora.apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
+        // sd_ctx->sd->pmid_lora.free_compute_buffer();
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->pmid_lora.free_params_buffer();
         }
