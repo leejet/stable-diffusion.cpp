@@ -211,10 +211,10 @@ struct FuseModule{
         // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_before_concat");
 
         stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
-        // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute");
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute");
         if(left && right){
-            // print_ggml_tensor(left, true, "left");
-            // print_ggml_tensor(right, true, "right");
+            print_ggml_tensor(left, true, "left");
+            print_ggml_tensor(right, true, "right");
             stacked_id_embeds = ggml_concat(ctx, left, stacked_id_embeds);
             stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right);
         }else if(left){
@@ -474,10 +474,10 @@ struct PhotoMakerIDEncoder : public GGMLModule {
             ggml_backend_tensor_set(cls, cls_h.data(), 0, ggml_nbytes(cls));
             ggml_backend_tensor_set(positions, pos.data(), 0, ggml_nbytes(positions));
             ggml_backend_tensor_set(class_tokens_mask_pos, ctmpos.data(), 0, ggml_nbytes(class_tokens_mask_pos));
-            std::vector<float> zeros;
-            for (int i = 0; i < hidden_size; i++) {
-                zeros.push_back(0.f);
-            }
+            // std::vector<float> zeros;
+            // for (int i = 0; i < hidden_size; i++) {
+            //     zeros.push_back(0.f);
+            // }
             if(left){
                 if(type == GGML_TYPE_F16){
                     std::vector<ggml_fp16_t> zeros(ggml_nelements(left), ggml_fp32_to_fp16(0.f));
@@ -752,15 +752,23 @@ struct PhotoMakerLoraModel : public GGMLModule {
                 continue;
             }
 
-            ggml_tensor* lora_up_orig = lora_up;
+            // print_ggml_tensor(lora_down, true, lora_down_name.c_str());
+            // print_ggml_tensor(lora_up, true, lora_up_name.c_str());
+
+            // ggml_tensor* lora_up_orig = lora_up;
 
             applied_lora_tensors.insert(lora_up_name);
             applied_lora_tensors.insert(lora_down_name);
             
             // ggml_mul_mat requires tensor b transposed
+            // lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
+            // struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_down, lora_up);
+            // updown                     = ggml_cont(ctx0, updown);
+            // same as in lora.hpp
             lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
-            struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_down, lora_up);
-            updown                     = ggml_cont(ctx0, updown);
+            struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_up, lora_down);
+            updown                     = ggml_cont(ctx0, ggml_transpose(ctx0, updown));
+            updown                     = ggml_reshape(ctx0, updown, weight);
             GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
             updown = ggml_scale_inplace(ctx0, updown, multiplier);
             ggml_tensor* final_weight;

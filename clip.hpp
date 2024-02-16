@@ -973,15 +973,15 @@ struct CLIPVisionModel {
         struct ggml_tensor * inp = ggml_conv_2d(ctx0, patch_embeddings_f16, x, patch_size, patch_size, 0, 0, 1, 1);
 
         ggml_set_name(inp, "inp_conv_2d");
-        // print_ggml_tensor(inp, true, "inp_conv_2d");
+        print_ggml_tensor(inp, true, "inp_conv_2d");
 
         inp = ggml_reshape_3d(ctx0, inp, num_patches, hidden_size, batch_size);
         ggml_set_name(inp, "inp_reshape_3d");
-        // print_ggml_tensor(inp, true, "inp_reshape_3d");
+        print_ggml_tensor(inp, true, "inp_reshape_3d");
         // inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
         // print_ggml_tensor(ggml_permute(ctx0, inp, 2, 0, 1, 3), true, "inp_permute");
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 2, 0, 1, 3));
-        // print_ggml_tensor(inp, true, "inp_cont");
+        print_ggml_tensor(inp, true, "inp_cont_perm+cont");
         ggml_set_name(inp, "inp_cont");
         // ggml_set_name(class_embedding, "class_embedding");
 
@@ -991,18 +991,18 @@ struct CLIPVisionModel {
         // struct ggml_tensor * temp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, 1, batch_size);
         // ggml_tensor *class_embedding_rep = ggml_add(ctx0, cast_f32_class, class_embedding);
         // ggml_set_name(class_embedding_rep, "add_class_embedding_to_zero");
-        // print_ggml_tensor(class_embedding, true, "model.class_embedding");
+        print_ggml_tensor(class_embedding, true, "model.class_embedding");
         // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep_bef_repeat");
-        // print_ggml_tensor(temp, true, "temp");
+        print_ggml_tensor(temp, true, "temp");
         ggml_tensor *class_embedding_rep = ggml_repeat(ctx0, class_embedding, temp);
 
         ggml_set_name(class_embedding_rep, "class_embedding_rep");
-        // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep");
+        print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep");
         // class_embedding_rep = ggml_cast(ctx0, class_embedding_rep, inp->type);
         // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep_aft_casting");
         struct ggml_tensor *embeddings =  ggml_concat(ctx0, class_embedding_rep, inp);
         ggml_set_name(embeddings, "embeddings_after_concat");
-        // print_ggml_tensor(embeddings, true, "embeddings_after_concat");
+        print_ggml_tensor(embeddings, true, "embeddings_after_concat");
         // print_ggml_tensor(ggml_permute(ctx0, embeddings, 0, 3, 1, 2), true, "embeddings_after_concat_permute");
         embeddings =  ggml_cont(ctx0, ggml_permute(ctx0, embeddings, 0, 2, 1, 3));
         ggml_set_name(embeddings, "embeddings_after_permute");
@@ -1019,7 +1019,7 @@ struct CLIPVisionModel {
             // ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
             ggml_add(ctx0, embeddings, ggml_get_rows(ctx0, position_embeddings, positions));
         ggml_set_name(embeddings, "embeddings_after_add");
-        // print_ggml_tensor(embeddings, true, "embeddings_after_add");
+        print_ggml_tensor(embeddings, true, "embeddings_to_transformer");
 
         // pre-layernorm        
         embeddings = ggml_nn_layer_norm(ctx0, embeddings, pre_ln_w, pre_ln_w);
@@ -1342,11 +1342,17 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         }
 
          for(uint32_t i = 0; i < tokens.size(); i++){       
-            if(class_token_index[0] <= i && i < class_token_index[0]+num_input_imgs)
+            if(class_token_index[0]+1 <= i && i < class_token_index[0]+1+num_input_imgs)
                 class_token_mask.push_back(true);
             else
                 class_token_mask.push_back(false);
         }
+
+        printf("[");
+        for (int i = 0; i < tokens.size(); i++) {
+            printf("%d, ", class_token_mask[i] ? 1 : 0);
+        }
+        printf("]\n");
 
         // for (int i = 0; i < tokens.size(); i++) {
         //     std::cout << tokens[i] << ":" << weights[i] << ", ";
