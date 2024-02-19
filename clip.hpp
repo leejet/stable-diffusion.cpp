@@ -975,6 +975,10 @@ struct CLIPVisionModel {
         // patch_embeddings_f16 = ggml_cast(ctx0, patch_embeddings_f16, GGML_TYPE_F16);
         // patch_embeddings_f16 = ggml_reshape_4d(ctx0, patch_embeddings_f16, ne[0], ne[1], ne[2], ne[3]);
         struct ggml_tensor *patch_embeddings_f16 = ggml_cast(ctx0, patch_embeddings, GGML_TYPE_F16);
+        ggml_set_name(patch_embeddings_f16, "patch_embeddings_f16");
+        print_ggml_tensor(patch_embeddings_f16, true, "patch_embeddings_f16");
+
+
         struct ggml_tensor * inp = ggml_conv_2d(ctx0, patch_embeddings_f16, x, patch_size, patch_size, 0, 0, 1, 1);
 
         ggml_set_name(inp, "inp_conv_2d");
@@ -1023,7 +1027,7 @@ struct CLIPVisionModel {
         embeddings =
             // ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
             ggml_add(ctx0, embeddings, ggml_get_rows(ctx0, position_embeddings, positions));
-        ggml_set_name(embeddings, "embeddings_after_add");
+        ggml_set_name(embeddings, "embeddings_to_transformer");
         print_ggml_tensor(embeddings, true, "embeddings_to_transformer");
 
         // pre-layernorm        
@@ -1035,12 +1039,12 @@ struct CLIPVisionModel {
             embeddings = resblocks[i].forward(ctx0, embeddings);  // [N, n_token, hidden_size]
         }        
         ggml_set_name(embeddings, "embeddings_after_transformer");
-        // print_ggml_tensor(embeddings, true, "embeddings_after_encoder");
+        print_ggml_tensor(embeddings, true, "embeddings_after_transformer");
 
         // get the output of cls token, e.g., 0th index
         embeddings = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, embeddings, hidden_size, num_positions * batch_size), cls);
-        ggml_set_name(embeddings, "embeddings_after_cls_token");
-        // print_ggml_tensor(embeddings, true, "embeddings_pooled_after_encoder");
+        ggml_set_name(embeddings, "embeddings_pooled_after_encoder");
+        print_ggml_tensor(embeddings, true, "embeddings_pooled_after_encoder");
 
         // post-layernorm      
         embeddings = ggml_nn_layer_norm(ctx0, embeddings, post_ln_w, post_ln_b);

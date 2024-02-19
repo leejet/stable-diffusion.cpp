@@ -639,13 +639,15 @@ public:
         pmid_model.alloc_compute_buffer(work_ctx, init_img, prompts_embeds, class_tokens_mask);
         pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);        
         pmid_model.free_compute_buffer(); 
-        // printf("[");
-        // int j = 70;
-        // for(int i = 0; i < 100; i++){
-        //     float val = *((float *)(res->data)+j*total_hidden_size+i);
-        //     printf("%f, ", val);
-        // }
-        // printf("]\n");
+        
+        // for(int j = 0; j < cond_stage_model.text_model.max_position_embeddings; j++){
+        //     printf("[");
+        //     for(int i = 0; i < total_hidden_size; i++){
+        //         float val = *((float *)(res->data)+j*total_hidden_size+i);
+        //         printf("%f, ", val);
+        //     }
+        //     printf("]\n");
+        // }        
         return res; 
     }
 

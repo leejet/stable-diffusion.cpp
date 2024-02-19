@@ -205,10 +205,14 @@ struct FuseModule{
         struct ggml_tensor * valid_id_embeds = id_embeds;
         // # slice out the image token embeddings
         struct ggml_tensor * image_token_embeds = ggml_get_rows(ctx, prompt_embeds, class_tokens_mask_pos);
-        // print_ggml_tensor(image_token_embeds, true, "image_token_embeds");
-        // print_ggml_tensor(valid_id_embeds, true, "valid_id_embeds");
+        print_ggml_tensor(image_token_embeds, true, "image_token_embeds");
+        ggml_set_name(image_token_embeds, "image_token_embeds");
+        print_ggml_tensor(valid_id_embeds, true, "valid_id_embeds");
+        ggml_set_name(valid_id_embeds, "valid_id_embeds");
+
         struct ggml_tensor *stacked_id_embeds = fuse_fn(ctx, image_token_embeds, valid_id_embeds);
-        // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_before_concat");
+        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_before_concat");
+        ggml_set_name(stacked_id_embeds, "stacked_id_embeds_fuse_fn");
 
         stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
         print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute");
@@ -224,6 +228,7 @@ struct FuseModule{
         }
         // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_concat");
         stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
+        ggml_set_name(stacked_id_embeds, "stacked_id_embeds_add_zero");
         // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute_2");
         // print_ggml_tensor(class_tokens_mask, true, "class_tokens_mask");
         // print_ggml_tensor(prompt_embeds, true, "prompt_embeds");
@@ -240,6 +245,7 @@ struct FuseModule{
         // print_ggml_tensor(class_tokens_mask, true, "class_tokens_mask_transpose");
         prompt_embeds = ggml_mul(ctx, prompt_embeds, class_tokens_mask);
         // print_ggml_tensor(prompt_embeds, true, "prompt_embeds_after_mul");
+        ggml_set_name(prompt_embeds, "prompt_embeds_mul_cls");
         struct ggml_tensor * updated_prompt_embeds = ggml_add(ctx, prompt_embeds, stacked_id_embeds);
         // print_ggml_tensor(updated_prompt_embeds, true, "updated_prompt_embeds");
         // updated_prompt_embeds = prompt_embeds.view(batch_size, seq_length, -1)
@@ -335,7 +341,8 @@ struct PhotoMakerIDEncoder : public GGMLModule {
                                                              class_embedding_temp,
                                                              positions
                                                              ); // [batch_size, seq_length, hidden_size]
-        // print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds");
+        print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds_from_vision");
+        ggml_set_name(shared_id_embeds, "shared_id_embeds_from_vision");
 
         // if(class_tokens_mask->backend == GGML_BACKEND_GPU){            
         //     int *ctm = (int *)malloc(class_tokens_mask->ne[0]);
@@ -352,8 +359,11 @@ struct PhotoMakerIDEncoder : public GGMLModule {
         // id_embeds_2 = id_embeds_2.view(b, num_inputs, 1, -1)    
 
         // id_embeds = torch.cat((id_embeds, id_embeds_2), dim=-1)
-        // print_ggml_tensor(id_embeds, true, "id_embeds");
-        // print_ggml_tensor(id_embeds_2, true, "id_embeds_2");
+        print_ggml_tensor(id_embeds, true, "id_embeds_proj1");
+        print_ggml_tensor(id_embeds_2, true, "id_embeds_proj2");
+
+        ggml_set_name(id_embeds, "id_embeds_proj1");
+        ggml_set_name(id_embeds_2, "id_embeds_proj2");
        
         id_embeds = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 2, 0, 1, 3));
         id_embeds_2 = ggml_cont(ctx, ggml_permute(ctx, id_embeds_2, 2, 0, 1, 3));

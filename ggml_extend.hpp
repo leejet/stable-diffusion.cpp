@@ -701,29 +701,77 @@ struct GGMLModule {
         }
 #endif
 
-#if 0
         struct ggml_tensor * imb = NULL;
+#if 0
+        
         for (int i = 0; i < gf->n_leafs; i++) {
             struct ggml_tensor * t1 = gf->leafs[i];
-            if(strcmp(ggml_get_name(t1), "vision.patch_embeddings") == 0) {                
+            if(strcmp(ggml_get_name(t1), "class_tokens_mask_pos_input") == 0) {
                 imb = t1;            
                 int64_t stride = imb->ne[0];
-                int64_t ne3 =  imb->ne[3];
-                float* out_data = new float[ggml_nelements(imb)];
+                int* out_data = new int[ggml_nelements(imb)];
                 ggml_backend_tensor_get(imb, out_data, 0, ggml_nbytes(imb));
-                for(int l = 0; l < ne3; ++l){
                 printf("[");
-                for(int k = 0; k < 3; ++k){
-                    for(int i = 0; i < stride; i++){                        
-                        for(int j = 0; j < stride; j++){
-                            float  val =  out_data[l*3*stride*stride+ k*stride*stride+i*stride+j];
-                            printf("%f, ", val);
-                        }                        
-                    }
-                    // printf("B. channel, min, max: %d, %f %f \n", k, mi, mx);
+                for(int i = 0; i < stride; i++){
+                   printf("%d, ", out_data[i]);
                 }
                 printf("]\n");         
+                delete out_data; 
+            }
+
+            // if(strcmp(ggml_get_name(t1), "prompt_embeds_input") == 0) {
+            if(strcmp(ggml_get_name(t1), "id_pixel_values_input") == 0) {
+                
+                imb = t1;            
+                int64_t stride = imb->ne[0];
+                int64_t ne1 = imb->ne[1];
+                int64_t ne2 = imb->ne[2];
+                int64_t ne3 = imb->ne[3];
+                float* out_data = new float[ggml_nelements(imb)];
+                ggml_backend_tensor_get(imb, out_data, 0, ggml_nbytes(imb));
+                printf("%s tensor: \n", ggml_get_name(t1));
+                for(int l = 0; l < ne3; ++l){
+                    printf("l = %d: \n", l);
+                    for(int k = 0; k < ne2; ++k){
+                        // float mi = 100.f, mx= -100.f;
+                        printf("k = %d: \n", k);
+                        for(int i = 0; i < ne1; i++){
+                            printf("%d: [", i);
+                            for(int j = 0; j < stride; j++){
+                                float  val =  out_data[l*ne2*ne1*stride+k*ne1*stride+i*stride+j];
+                                // if(mi > val) mi = val;
+                                // if(mx < val) mx = val;
+                                printf("%f, ", val);
+                            }
+                            printf("]\n");         
+                        }
+                        // printf("B. channel, min, max: %d, %f %f \n", k, mi, mx);
+                    }
                 }
+                
+                // for(int l = 0; l < ne3; ++l){
+                // printf("[");
+                // for(int k = 0; k < 3; ++k){
+                //     for(int i = 0; i < stride; i++){                        
+                //         for(int j = 0; j < stride; j++){
+                //             float  val =  out_data[l*3*stride*stride+ k*stride*stride+i*stride+j];
+                //             printf("%f, ", val);
+                //         }                        
+                //     }
+                //     // printf("B. channel, min, max: %d, %f %f \n", k, mi, mx);
+                // }
+                // printf("]\n");         
+                // printf("%s tensor: \n", ggml_get_name(t1));
+                // for(int i = 0; i < ne1; i++){
+                //     printf("%d: [", i);
+                //     for(int j = 0; j < stride; j++){
+                //         float  val =  out_data[i*stride+j];
+                //         // if(mi > val) mi = val;
+                //         // if(mx < val) mx = val;
+                //         printf("%f, ", val);
+                //     }
+                //     printf("]\n");         
+                // }
                 
                 // for(int k = 0; k < 3; ++k){
                 //     float mi = 100.f, mx= -100.f;
@@ -748,22 +796,67 @@ struct GGMLModule {
                 delete out_data;       
             }            
         }
-// #if 0        
+//#if 0        
+//#endif
+        // struct ggml_tensor * imb = NULL;
         for (int i = 0; i < gf->n_nodes; i++) {
+            struct ggml_cgraph g1v = ggml_graph_view(gf, i, i + 1);
+            ggml_backend_graph_compute(backend, &g1v);
             struct ggml_tensor * t1 = gf->nodes[i];
             // if(strcmp(ggml_get_name(t1), "embeddings_after_add") == 0) {                
-            if(strcmp(ggml_get_name(t1), "pooled_output") == 0) {                
+            // if(strcmp(ggml_get_name(t1), "stacked_id_embeds_fuse_fn") == 0) {
+            // if(strcmp(ggml_get_name(t1), "embeddings_after_transformer") == 0) {
+            if(strcmp(ggml_get_name(t1), "embeddings_pooled_after_encoder") == 0) {
+            // if(strcmp(ggml_get_name(t1), "shared_id_embeds_from_vision") == 0) {        
+            // if(strcmp(ggml_get_name(t1), "embeddings_to_transformer") == 0) {
+            // if(strcmp(ggml_get_name(t1), "inp_reshape_3d") == 0) {            
+            // if(strcmp(ggml_get_name(t1), "inp_conv_2d") == 0) {            
+            // if(strcmp(ggml_get_name(t1), "inp_conv_2d") == 0) {
+            // if(strcmp(ggml_get_name(t1), "patch_embeddings_f16") == 0) {
+            // if(strcmp(ggml_get_name(t1), "im2col_as_input") == 0) {
+            // if(strcmp(ggml_get_name(t1), "image_token_embeds") == 0 ||    
+            //    strcmp(ggml_get_name(t1), "valid_id_embeds") == 0) {    
+            // if(strcmp(ggml_get_name(t1), "id_embeds_proj1") == 0 ||    
+            //    strcmp(ggml_get_name(t1), "id_embeds_proj2") == 0) {    
                 imb = t1;            
                 int64_t stride = imb->ne[0];
+                int64_t ne1 = imb->ne[1];
+                int64_t ne2 = imb->ne[2];
+                int64_t ne3 = imb->ne[3];
                 float* out_data = new float[ggml_nelements(imb)];
+                // ggml_fp16_t * out_data = new ggml_fp16_t[ggml_nelements(imb)];
                 ggml_backend_tensor_get(imb, out_data, 0, ggml_nbytes(imb));
-                
-                // for(int k = 0; k < 3; ++k){
-                //     float mi = 100.f, mx= -100.f;
-                //     for(int i = 0; i < stride; i++){
-                //         printf("[");
+                printf("%s tensor: \n", ggml_get_name(t1));
+                for(int l = 0; l < ne3; ++l){
+                    printf("l = %d: \n", l);
+                    for(int k = 0; k < ne2; ++k){
+                        // float mi = 1.e16f, mx= -1e16f;
+                        printf("k = %d: \n", k);
+                        for(int i = 0; i < ne1; i++){
+                            printf("%d: [", i);
+                            // float mi = 1.e16f, mx= -1e16f;
+                            for(int j = 0; j < stride; j++){
+                                float  val =  out_data[l*ne2*ne1*stride+k*ne1*stride+i*stride+j];
+                                // float  val = ggml_fp16_to_fp32(out_data[l*ne2*ne1*stride+k*ne1*stride+i*stride+j]);
+                                // if(mi > val) mi = val;
+                                // if(mx < val) mx = val;
+                                printf("%f, ", val);
+                            }
+                            printf("]\n");         
+                            // printf("i = %d: min, max: %f %f \n", i, mi, mx);
+                        }
+                        // printf("k = %d: min, max: %f %f \n", k, mi, mx);
+                    }
+                }
+
+
+                // for(int k = 0; k < ne2; ++k){
+                //     // float mi = 100.f, mx= -100.f;
+                //      printf("%d: \n", k);
+                //     for(int i = 0; i < ne1; i++){
+                //         printf("%d: [", i);
                 //         for(int j = 0; j < stride; j++){
-                //             float  val =  out_data[k*stride*stride+i*stride+j];
+                //             float  val =  out_data[k*ne1*stride+i*stride+j];
                 //             // if(mi > val) mi = val;
                 //             // if(mx < val) mx = val;
                 //             printf("%f, ", val);
@@ -772,27 +865,27 @@ struct GGMLModule {
                 //     }
                 //     // printf("B. channel, min, max: %d, %f %f \n", k, mi, mx);
                 // }
-                    // for(int i = 0; i < 257; i++){
-                    //     printf("[");
-                    //     for(int j = 0; j < stride; j++){
-                    //         float  val =  out_data[i*stride+j];
-                    //         // if(mi > val) mi = val;
-                    //         // if(mx < val) mx = val;
-                    //         printf("%f, ", val);
-                    //     }
-                    //     printf("]\n");         
-                    // }
+                
+                // for(int i = 0; i < ne1; i++){
+                //     printf("%d: [", i);
+                //     for(int j = 0; j < stride; j++){
+                //         float  val =  out_data[i*stride+j];
+                //         // if(mi > val) mi = val;
+                //         // if(mx < val) mx = val;
+                //         printf("%f, ", val);
+                //     }
+                //     printf("]\n");         
+                // }
                     // printf("B. channel, min, max: %d, %f %f \n", k, mi, mx);
                 
-                printf("[");
-                for(int i = 0; i < stride; i++){
-                   printf("%f, ", out_data[i]);
-                }
-                printf("]\n");         
+                // printf("[");
+                // for(int i = 0; i < stride; i++){
+                //    printf("%f, ", out_data[i]);
+                // }
+                // printf("]\n");         
                 delete out_data;       
             }
-            struct ggml_cgraph g1v = ggml_graph_view(gf, i, i + 1);
-            ggml_backend_graph_compute(backend, &g1v);
+            
         }
 #endif
         ggml_backend_graph_compute(backend, gf);
