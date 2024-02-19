@@ -74,6 +74,7 @@ struct SDParams {
     std::string prompt;
     std::string negative_prompt;
     float cfg_scale = 7.0f;
+    float style_ratio = 20.f;
     int clip_skip   = -1;  // <= 0 represents unspecified
     int width       = 512;
     int height      = 512;
@@ -105,6 +106,7 @@ void print_params(SDParams params) {
     printf("    embeddings_path:   %s\n", params.embeddings_path.c_str());
     printf("    stacked_id_embeddings_path:   %s\n", params.stacked_id_embeddings_path.c_str());
     printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
+    printf("    style ratio: %.2f\n", params.style_ratio);
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
@@ -152,6 +154,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
+    printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%%)\n");
     printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
@@ -322,6 +325,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.strength = std::stof(argv[i]);
+        }else if (arg == "--style-ratio") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.style_ratio = std::stof(argv[i]);
         } else if (arg == "--control-strength") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -664,6 +673,7 @@ int main(int argc, const char* argv[]) {
                           params.batch_count,
                           control_image,
                           params.control_strength,
+                          params.style_ratio,
                           input_id_images);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,

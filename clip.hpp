@@ -976,21 +976,21 @@ struct CLIPVisionModel {
         // patch_embeddings_f16 = ggml_reshape_4d(ctx0, patch_embeddings_f16, ne[0], ne[1], ne[2], ne[3]);
         struct ggml_tensor *patch_embeddings_f16 = ggml_cast(ctx0, patch_embeddings, GGML_TYPE_F16);
         ggml_set_name(patch_embeddings_f16, "patch_embeddings_f16");
-        print_ggml_tensor(patch_embeddings_f16, true, "patch_embeddings_f16");
+        // print_ggml_tensor(patch_embeddings_f16, true, "patch_embeddings_f16");
 
 
         struct ggml_tensor * inp = ggml_conv_2d(ctx0, patch_embeddings_f16, x, patch_size, patch_size, 0, 0, 1, 1);
 
         ggml_set_name(inp, "inp_conv_2d");
-        print_ggml_tensor(inp, true, "inp_conv_2d");
+        // print_ggml_tensor(inp, true, "inp_conv_2d");
 
         inp = ggml_reshape_3d(ctx0, inp, num_patches, hidden_size, batch_size);
         ggml_set_name(inp, "inp_reshape_3d");
-        print_ggml_tensor(inp, true, "inp_reshape_3d");
+        // print_ggml_tensor(inp, true, "inp_reshape_3d");
         // inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
         // print_ggml_tensor(ggml_permute(ctx0, inp, 2, 0, 1, 3), true, "inp_permute");
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 2, 0, 1, 3));
-        print_ggml_tensor(inp, true, "inp_cont_perm+cont");
+        // print_ggml_tensor(inp, true, "inp_cont_perm+cont");
         ggml_set_name(inp, "inp_cont");
         // ggml_set_name(class_embedding, "class_embedding");
 
@@ -1000,18 +1000,18 @@ struct CLIPVisionModel {
         // struct ggml_tensor * temp = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, 1, batch_size);
         // ggml_tensor *class_embedding_rep = ggml_add(ctx0, cast_f32_class, class_embedding);
         // ggml_set_name(class_embedding_rep, "add_class_embedding_to_zero");
-        print_ggml_tensor(class_embedding, true, "model.class_embedding");
+        // print_ggml_tensor(class_embedding, true, "model.class_embedding");
         // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep_bef_repeat");
-        print_ggml_tensor(temp, true, "temp");
+        // print_ggml_tensor(temp, true, "temp");
         ggml_tensor *class_embedding_rep = ggml_repeat(ctx0, class_embedding, temp);
 
         ggml_set_name(class_embedding_rep, "class_embedding_rep");
-        print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep");
+        // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep");
         // class_embedding_rep = ggml_cast(ctx0, class_embedding_rep, inp->type);
         // print_ggml_tensor(class_embedding_rep, true, "class_embedding_rep_aft_casting");
         struct ggml_tensor *embeddings =  ggml_concat(ctx0, class_embedding_rep, inp);
         ggml_set_name(embeddings, "embeddings_after_concat");
-        print_ggml_tensor(embeddings, true, "embeddings_after_concat");
+        // print_ggml_tensor(embeddings, true, "embeddings_after_concat");
         // print_ggml_tensor(ggml_permute(ctx0, embeddings, 0, 3, 1, 2), true, "embeddings_after_concat_permute");
         embeddings =  ggml_cont(ctx0, ggml_permute(ctx0, embeddings, 0, 2, 1, 3));
         ggml_set_name(embeddings, "embeddings_after_permute");
@@ -1028,7 +1028,7 @@ struct CLIPVisionModel {
             // ggml_add(ctx0, embeddings, ggml_repeat(ctx0, ggml_get_rows(ctx0, position_embeddings, positions), embeddings));
             ggml_add(ctx0, embeddings, ggml_get_rows(ctx0, position_embeddings, positions));
         ggml_set_name(embeddings, "embeddings_to_transformer");
-        print_ggml_tensor(embeddings, true, "embeddings_to_transformer");
+        // print_ggml_tensor(embeddings, true, "embeddings_to_transformer");
 
         // pre-layernorm        
         embeddings = ggml_nn_layer_norm(ctx0, embeddings, pre_ln_w, pre_ln_w);
@@ -1039,12 +1039,12 @@ struct CLIPVisionModel {
             embeddings = resblocks[i].forward(ctx0, embeddings);  // [N, n_token, hidden_size]
         }        
         ggml_set_name(embeddings, "embeddings_after_transformer");
-        print_ggml_tensor(embeddings, true, "embeddings_after_transformer");
+        // print_ggml_tensor(embeddings, true, "embeddings_after_transformer");
 
         // get the output of cls token, e.g., 0th index
         embeddings = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, embeddings, hidden_size, num_positions * batch_size), cls);
         ggml_set_name(embeddings, "embeddings_pooled_after_encoder");
-        print_ggml_tensor(embeddings, true, "embeddings_pooled_after_encoder");
+        // print_ggml_tensor(embeddings, true, "embeddings_pooled_after_encoder");
 
         // post-layernorm      
         embeddings = ggml_nn_layer_norm(ctx0, embeddings, post_ln_w, post_ln_b);
@@ -1291,11 +1291,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         std::vector<int> tokens;
         std::vector<float> weights;
         std::vector<bool> class_token_mask;
-        std::vector<int> clean_input_ids;
-        std::vector<int> class_token_index;
+        int32_t class_idx = -1, tokens_acc = 0;
         for (const auto& item : parsed_attention) {
+            std::vector<int> class_token_index;
+            std::vector<int> clean_input_ids;
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
+            // printf(" %s: %f \n", curr_text.c_str(), curr_weight);
             std::vector<int> curr_tokens = tokenizer.encode(curr_text, on_new_token_cb);
             int32_t clean_index = 0;           
             for(uint32_t i = 0; i < curr_tokens.size(); i++){
@@ -1307,23 +1309,29 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
                     clean_index++;
                 }     
             }
-            GGML_ASSERT(class_token_index.size() == 1); // PhotoMaker currently does not support multiple 
+            //GGML_ASSERT(class_token_index.size() == 1); // PhotoMaker currently does not support multiple
                                                         //    trigger words in a single prompt.     
-            // Expand the class word token and corresponding mask                                                        
-            int class_token = clean_input_ids[class_token_index[0]];      
-            std::vector<int> clean_input_ids_tmp;
-            for(uint32_t i = 0; i < class_token_index[0]; i++)
-                clean_input_ids_tmp.push_back(clean_input_ids[i]);
-            for(uint32_t i = 0; i < num_input_imgs; i++)
-                clean_input_ids_tmp.push_back(class_token);
-            for(uint32_t i = class_token_index[0]+1; i < clean_input_ids.size(); i++)
-                clean_input_ids_tmp.push_back(clean_input_ids[i]);
-            clean_input_ids.clear();    
-            clean_input_ids = clean_input_ids_tmp;   
-
+            if(class_token_index.size() == 1){
+                // Expand the class word token and corresponding mask
+                int class_token = clean_input_ids[class_token_index[0]];
+                class_idx = tokens_acc + class_token_index[0];
+                std::vector<int> clean_input_ids_tmp;
+                for(uint32_t i = 0; i < class_token_index[0]; i++)
+                    clean_input_ids_tmp.push_back(clean_input_ids[i]);
+                for(uint32_t i = 0; i < num_input_imgs; i++)
+                    clean_input_ids_tmp.push_back(class_token);
+                for(uint32_t i = class_token_index[0]+1; i < clean_input_ids.size(); i++)
+                    clean_input_ids_tmp.push_back(clean_input_ids[i]);
+                clean_input_ids.clear();
+                clean_input_ids = clean_input_ids_tmp;
+            }
+            tokens_acc +=  clean_index;
             //  class_tokens_mask = [True if class_token_index <= i < class_token_index+num_id_images else False \
             //          for i in range(len(clean_input_ids))]       
-           
+            // printf("[");
+            // for(int i = 0; i < clean_input_ids.size(); ++i)
+            //     printf("%d, ", clean_input_ids[i]);
+            // printf("]\n");
             tokens.insert(tokens.end(), clean_input_ids.begin(), clean_input_ids.end());
             weights.insert(weights.end(), clean_input_ids.size(), curr_weight);
         }
@@ -1351,7 +1359,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         }
 
          for(uint32_t i = 0; i < tokens.size(); i++){       
-            if(class_token_index[0]+1 <= i && i < class_token_index[0]+1+num_input_imgs)
+            if(class_idx+1 <= i && i < class_idx+1+num_input_imgs)
                 class_token_mask.push_back(true);
             else
                 class_token_mask.push_back(false);

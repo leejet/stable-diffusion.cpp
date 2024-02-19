@@ -205,20 +205,17 @@ struct FuseModule{
         struct ggml_tensor * valid_id_embeds = id_embeds;
         // # slice out the image token embeddings
         struct ggml_tensor * image_token_embeds = ggml_get_rows(ctx, prompt_embeds, class_tokens_mask_pos);
-        print_ggml_tensor(image_token_embeds, true, "image_token_embeds");
+        // print_ggml_tensor(image_token_embeds, true, "image_token_embeds");
         ggml_set_name(image_token_embeds, "image_token_embeds");
-        print_ggml_tensor(valid_id_embeds, true, "valid_id_embeds");
+        // print_ggml_tensor(valid_id_embeds, true, "valid_id_embeds");
         ggml_set_name(valid_id_embeds, "valid_id_embeds");
 
         struct ggml_tensor *stacked_id_embeds = fuse_fn(ctx, image_token_embeds, valid_id_embeds);
-        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_before_concat");
+        // print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_before_concat");
         ggml_set_name(stacked_id_embeds, "stacked_id_embeds_fuse_fn");
 
         stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
-        print_ggml_tensor(stacked_id_embeds, true, "stacked_id_embeds_after_permute");
         if(left && right){
-            print_ggml_tensor(left, true, "left");
-            print_ggml_tensor(right, true, "right");
             stacked_id_embeds = ggml_concat(ctx, left, stacked_id_embeds);
             stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right);
         }else if(left){
@@ -261,10 +258,12 @@ struct PhotoMakerIDEncoder : public GGMLModule {
     CLIPVisionModel vision_model;
     FuseModule fuse_module;
     struct ggml_tensor* visual_projection_2; 
+    float style_strength;
     
-    PhotoMakerIDEncoder(SDVersion version = VERSION_XL)
+    PhotoMakerIDEncoder(SDVersion version = VERSION_XL, float sty = 20.f)
         : version(version), 
-        fuse_module(2048) {      
+        fuse_module(2048),
+        style_strength(sty){
         vision_model = CLIPVisionModel();
         // fuse_module = FuseModule(2048);
         // wtype = GGML_TYPE_F32;
@@ -341,7 +340,7 @@ struct PhotoMakerIDEncoder : public GGMLModule {
                                                              class_embedding_temp,
                                                              positions
                                                              ); // [batch_size, seq_length, hidden_size]
-        print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds_from_vision");
+        // print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds_from_vision");
         ggml_set_name(shared_id_embeds, "shared_id_embeds_from_vision");
 
         // if(class_tokens_mask->backend == GGML_BACKEND_GPU){            
@@ -359,8 +358,6 @@ struct PhotoMakerIDEncoder : public GGMLModule {
         // id_embeds_2 = id_embeds_2.view(b, num_inputs, 1, -1)    
 
         // id_embeds = torch.cat((id_embeds, id_embeds_2), dim=-1)
-        print_ggml_tensor(id_embeds, true, "id_embeds_proj1");
-        print_ggml_tensor(id_embeds_2, true, "id_embeds_proj2");
 
         ggml_set_name(id_embeds, "id_embeds_proj1");
         ggml_set_name(id_embeds_2, "id_embeds_proj2");

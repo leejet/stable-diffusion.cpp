@@ -1445,6 +1445,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     int batch_count,
                     const sd_image_t* control_cond,
                     float control_strength,
+                    float style_ratio,
                     std::vector<sd_image_t*> &input_id_images) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
@@ -1507,6 +1508,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     // ggml_tensor* class_tokens_mask = NULL;
     std::vector<bool> class_tokens_mask;
     if(sd_ctx->sd->stacked_id){
+        sd_ctx->sd->pmid_model.style_strength = style_ratio;
         int32_t w = input_id_images[0]->width;
         int32_t h = input_id_images[0]->height;
         int32_t channels = input_id_images[0]->channel;
@@ -1630,8 +1632,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         int start_merge_step = -1;
         if(sd_ctx->sd->stacked_id){
-            float style_strength_ratio = 20.f;
-            start_merge_step = int(style_strength_ratio / 100.f * sample_steps);
+            start_merge_step = int(sd_ctx->sd->pmid_model.style_strength / 100.f * sample_steps);
             if(start_merge_step > 30)
                 start_merge_step = 30;
             LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);    

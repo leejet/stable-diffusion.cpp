@@ -46,7 +46,6 @@ struct LoraModel : public GGMLModule {
 
             struct ggml_tensor* real = ggml_new_tensor(params_ctx, tensor_storage.type, tensor_storage.n_dims, tensor_storage.ne);
             ggml_allocr_alloc(alloc, real);
-
             *dst_tensor = real;
 
             lora_tensors[name] = real;
@@ -86,6 +85,10 @@ struct LoraModel : public GGMLModule {
                 continue;
             }
             k_tensor = k_tensor.substr(0, k_pos);
+            // some lora models use 'unet' instead of "model.diffusion_model"
+            // TODO: make both work
+            if(starts_with(k_tensor, "model.diffusion_model"))
+                k_tensor.replace(0, strlen("model.diffusion_model"), "unet");
             replace_all_chars(k_tensor, '.', '_');
             std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
             std::string lora_down_name = "lora." + k_tensor + ".lora_down.weight";
