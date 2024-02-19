@@ -80,7 +80,7 @@ public:
     std::string lora_model_dir;
     // lora_name => multiplier
     std::unordered_map<std::string, float> curr_lora_state;
-    std::map<std::string, LoraModel> loras;
+    // std::map<std::string, LoraModel> loras;
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
     ggml_backend_t backend             = NULL;  // general backend
@@ -451,7 +451,7 @@ public:
 
         lora.multiplier = multiplier;
         lora.apply(tensors, n_threads);
-        loras[lora_name] = lora;
+        // loras[lora_name] = lora;
         lora.free_params_buffer();
 
         int64_t t1 = ggml_time_ms();
