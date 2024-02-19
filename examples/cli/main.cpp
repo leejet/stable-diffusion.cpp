@@ -74,7 +74,7 @@ struct SDParams {
     std::string prompt;
     std::string negative_prompt;
     float cfg_scale = 7.0f;
-    float style_ratio = 20.f;
+    float style_ratio = 10.f;
     int clip_skip   = -1;  // <= 0 represents unspecified
     int width       = 512;
     int height      = 512;
