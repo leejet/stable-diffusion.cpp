@@ -126,7 +126,8 @@ public:
                         bool vae_tiling_,
                         ggml_type wtype,
                         schedule_t schedule,
-                        bool control_net_cpu) {
+                        bool control_net_cpu,
+                        bool vae_on_cpu) {
         use_tiny_autoencoder = taesd_path.size() > 0;
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
@@ -238,9 +239,17 @@ public:
             vae_type = GGML_TYPE_F32;  // avoid nan, not work...
         }
 
-        if (!use_tiny_autoencoder && !first_stage_model.alloc_params_buffer(backend, vae_type)) {
+        ggml_backend_t vae_backend = NULL;
+        if (vae_on_cpu && !ggml_backend_is_cpu(backend)) {
+            LOG_INFO("VAE Autoencoder: Using CPU backend");
+            vae_backend = ggml_backend_cpu_init();
+        }else{
+            vae_backend = backend;
+        }
+        if (!use_tiny_autoencoder && !first_stage_model.alloc_params_buffer(vae_backend, vae_type)) {
             return false;
         }
+
 
         LOG_DEBUG("preparing memory for the weights");
         // prepare memory for the weights
@@ -1384,7 +1393,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      enum sd_type_t wtype,
                      enum rng_type_t rng_type,
                      enum schedule_t s,
-                     bool keep_control_net_cpu) {
+                     bool keep_control_net_cpu,
+                     bool keep_vae_on_cpu) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == NULL) {
         return NULL;
@@ -1415,7 +1425,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     vae_tiling,
                                     (ggml_type)wtype,
                                     s,
-                                    keep_control_net_cpu)) {
+                                    keep_control_net_cpu,
+                                    keep_vae_on_cpu)) {
         delete sd_ctx->sd;
         sd_ctx->sd = NULL;
         free(sd_ctx);
