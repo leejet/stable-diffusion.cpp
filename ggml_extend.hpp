@@ -706,18 +706,6 @@ struct GGMLModule {
         
         for (int i = 0; i < gf->n_leafs; i++) {
             struct ggml_tensor * t1 = gf->leafs[i];
-            if(strcmp(ggml_get_name(t1), "class_tokens_mask_pos_input") == 0) {
-                imb = t1;            
-                int64_t stride = imb->ne[0];
-                int* out_data = new int[ggml_nelements(imb)];
-                ggml_backend_tensor_get(imb, out_data, 0, ggml_nbytes(imb));
-                printf("[");
-                for(int i = 0; i < stride; i++){
-                   printf("%d, ", out_data[i]);
-                }
-                printf("]\n");         
-                delete out_data; 
-            }
 
             // if(strcmp(ggml_get_name(t1), "prompt_embeds_input") == 0) {
             if(strcmp(ggml_get_name(t1), "id_pixel_values_input") == 0) {
@@ -796,8 +784,9 @@ struct GGMLModule {
                 delete out_data;       
             }            
         }
-//#if 0        
-//#endif
+#endif
+#if 0        
+
         // struct ggml_tensor * imb = NULL;
         for (int i = 0; i < gf->n_nodes; i++) {
             struct ggml_cgraph g1v = ggml_graph_view(gf, i, i + 1);

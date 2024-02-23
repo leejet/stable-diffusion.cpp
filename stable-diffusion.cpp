@@ -270,7 +270,7 @@ public:
             
             if(stacked_id){
                pmid_model.init_params(GGML_TYPE_F32);
-               pmid_model.map_by_name(tensors, "pmid.");               
+               pmid_model.map_by_name(tensors, "pmid.");
             }
         }
 
@@ -648,6 +648,21 @@ public:
         pmid_model.alloc_compute_buffer(work_ctx, init_img, prompts_embeds, class_tokens_mask);
         pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);        
         pmid_model.free_compute_buffer(); 
+
+        // float original_mean = ggml_tensor_mean(res);
+        // for (int i2 = 0; i2 < res->ne[2]; i2++) {
+        //     for (int i1 = 0; i1 < res->ne[1]; i1++) {
+        //         if (class_tokens_mask[i1]){
+        //             for (int i0 = 0; i0 < res->ne[0]; i0++) {
+        //                 float value = ggml_tensor_get_f32(res, i0, i1, i2);
+        //                 value *= 1.1f;
+        //                 ggml_tensor_set_f32(res, value, i0, i1, i2);
+        //             }
+        //         }
+        //     }
+        // }
+        // float new_mean = ggml_tensor_mean(res);
+        // ggml_tensor_scale(res, (original_mean / new_mean));
         
         // for(int j = 0; j < cond_stage_model.text_model.max_position_embeddings; j++){
         //     printf("[");
@@ -1530,9 +1545,28 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         float std[]  = {0.26862954, 0.26130258, 0.27577711};
         for(int i = 0; i <  num_input_images; i++)  {
             sd_image_t* init_image = input_id_images[i];
-            sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
-            // sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
-        }        
+            // sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
+            sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
+        }
+
+        // ModelLoader model_loader;
+        // std::string img_path("examples/scarlett.safetensors");
+        // if (!model_loader.init_from_file(img_path, "scarlett.")){
+        //     LOG_ERROR("init model loader from file failed: '%s'", img_path.c_str());
+        //     return NULL;
+        // }
+        // ggml_backend_t cpu_backend = ggml_backend_cpu_init();
+
+        // std::map<std::string, struct ggml_tensor*> tensors_need_to_load;
+        // std::set<std::string> ignore_tensors;
+        // tensors_need_to_load["scarlett.img"] = init_img;
+        // bool success = model_loader.load_tensors(tensors_need_to_load, cpu_backend, ignore_tensors);
+        // if (!success) {
+        //     LOG_ERROR("load tensors from model loader failed");
+        //     ggml_free(work_ctx);
+        //     return NULL;
+        // }
+
         // sd_image_t* cropped_images = (sd_image_t*)calloc(num_input_images, sizeof(sd_image_t));
         // if (cropped_images == NULL) {
         //     ggml_free(work_ctx);
