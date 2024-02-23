@@ -520,7 +520,6 @@ public:
                                                                 bool force_zero_embeddings = false) {
         cond_stage_model.set_clip_skip(clip_skip);        
         auto image_tokens = cond_stage_model.convert_token_to_id(trigger_word);
-        // printf(" length of image tokens: %lu \n", image_tokens.size());
         // if(image_tokens.size() == 1){
         //     printf(" image token id is: %d \n", image_tokens[0]);
         // }     
@@ -533,10 +532,10 @@ public:
         std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
         std::vector<float>& weights = std::get<1>(tokens_and_weights);
         std::vector<bool>& clsm     = std::get<2>(tokens_and_weights);
-        printf("tokens: \n");
-        for(int i = 0; i < tokens.size(); ++i)
-           printf("%d ", tokens[i]);
-        printf("\n");
+        // printf("tokens: \n");
+        // for(int i = 0; i < tokens.size(); ++i)
+        //    printf("%d ", tokens[i]);
+        // printf("\n");
         int64_t t0                  = ggml_time_ms();
         struct ggml_tensor* pooled  = NULL;
         size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
@@ -554,14 +553,6 @@ public:
         // if (pooled != NULL) {
         //     print_ggml_tensor(hidden_states);
         //     print_ggml_tensor(pooled);
-        // }
-
-        // ggml_tensor *class_tokens_mask = ggml_new_tensor_1d(work_ctx, GGML_TYPE_I32, cond_stage_model.text_model.max_position_embeddings);
-        // for (int i1 = 0; i1 < hidden_states->ne[1]; i1++) {
-        //     if(clsm[i1])
-        //         ggml_set_i32_1d(class_tokens_mask, i1, 1);
-        //     else
-        //         ggml_set_i32_1d(class_tokens_mask, i1, 0);
         // }
 
         int64_t t1 = ggml_time_ms();
@@ -627,7 +618,6 @@ public:
             // print_ggml_tensor(ggml_reshape_1d(work_ctx, embed_view, out_dim * 2));
             GGML_ASSERT(offset == ggml_nbytes(vec));
         }
-        // print_ggml_tensor(result);
         return std::make_tuple(result, vec, clsm);
     }
 
@@ -648,30 +638,7 @@ public:
         pmid_model.alloc_compute_buffer(work_ctx, init_img, prompts_embeds, class_tokens_mask);
         pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);        
         pmid_model.free_compute_buffer(); 
-
-        // float original_mean = ggml_tensor_mean(res);
-        // for (int i2 = 0; i2 < res->ne[2]; i2++) {
-        //     for (int i1 = 0; i1 < res->ne[1]; i1++) {
-        //         if (class_tokens_mask[i1]){
-        //             for (int i0 = 0; i0 < res->ne[0]; i0++) {
-        //                 float value = ggml_tensor_get_f32(res, i0, i1, i2);
-        //                 value *= 1.1f;
-        //                 ggml_tensor_set_f32(res, value, i0, i1, i2);
-        //             }
-        //         }
-        //     }
-        // }
-        // float new_mean = ggml_tensor_mean(res);
-        // ggml_tensor_scale(res, (original_mean / new_mean));
         
-        // for(int j = 0; j < cond_stage_model.text_model.max_position_embeddings; j++){
-        //     printf("[");
-        //     for(int i = 0; i < total_hidden_size; i++){
-        //         float val = *((float *)(res->data)+j*total_hidden_size+i);
-        //         printf("%f, ", val);
-        //     }
-        //     printf("]\n");
-        // }        
         return res; 
     }
 
