@@ -1472,6 +1472,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     const sd_image_t* control_cond,
                     float control_strength,
                     float style_ratio,
+                    bool normalize_input,
                     std::vector<sd_image_t*> &input_id_images) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
@@ -1545,67 +1546,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         float std[]  = {0.26862954, 0.26130258, 0.27577711};
         for(int i = 0; i <  num_input_images; i++)  {
             sd_image_t* init_image = input_id_images[i];
-            // sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
-            sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
+            if(normalize_input)
+                sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
+            else
+                sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
         }
-
-        // ModelLoader model_loader;
-        // std::string img_path("examples/scarlett.safetensors");
-        // if (!model_loader.init_from_file(img_path, "scarlett.")){
-        //     LOG_ERROR("init model loader from file failed: '%s'", img_path.c_str());
-        //     return NULL;
-        // }
-        // ggml_backend_t cpu_backend = ggml_backend_cpu_init();
-
-        // std::map<std::string, struct ggml_tensor*> tensors_need_to_load;
-        // std::set<std::string> ignore_tensors;
-        // tensors_need_to_load["scarlett.img"] = init_img;
-        // bool success = model_loader.load_tensors(tensors_need_to_load, cpu_backend, ignore_tensors);
-        // if (!success) {
-        //     LOG_ERROR("load tensors from model loader failed");
-        //     ggml_free(work_ctx);
-        //     return NULL;
-        // }
-
-        // sd_image_t* cropped_images = (sd_image_t*)calloc(num_input_images, sizeof(sd_image_t));
-        // if (cropped_images == NULL) {
-        //     ggml_free(work_ctx);
-        //     return NULL;
-        // }
-        // for (size_t i = 0; i < num_input_images; i++) {
-        //     cropped_images[i].width   = 224;
-        //     cropped_images[i].height  = 224;
-        //     cropped_images[i].channel = 3;
-        //     cropped_images[i].data    = sd_tensor_to_mul_image(init_img, i);
-        // }
-        // for (int i = 0; i < num_input_images; i++) {
-        //     if (cropped_images[i].data == NULL) {
-        //         continue;
-        //     }
-        //     std::string  final_image_path = "cropped_" + std::to_string(i + 1) + ".png";
-        //     stbi_write_png(final_image_path.c_str(), cropped_images[i].width, cropped_images[i].height, 
-        //                cropped_images[i].channel,
-        //                 cropped_images[i].data, 0, "");
-        //     printf("save result image to '%s'\n", final_image_path.c_str());
-        //     free(cropped_images[i].data);
-        //     cropped_images[i].data = NULL;
-        // }
-        // float* out_data = (float *)(init_img->data);
-        // int64_t stride = init_img->ne[0];
-        // for(int k = 0; k < 3; ++k){
-        //     float mi = 100.f, mx= -100.f;
-        //     for(int i = 0; i < stride; i++){
-        //         printf("[");
-        //         for(int j = 0; j < stride; j++){
-        //             float  val =  out_data[k*stride*stride+i*stride+j];
-        //             if(mi > val) mi = val;
-        //             if(mx < val) mx = val;
-        //             printf("%f, ", val);
-        //         }
-        //         printf("]\n");         
-        //     }
-        //     printf(" channel, min, max: %d, %f %f \n", k, mi, mx);
-        // }
 
         auto cond_tup                = sd_ctx->sd->get_learned_condition_with_trigger(work_ctx, prompt, 
                                                    clip_skip, width, height, num_input_images );
@@ -1620,7 +1565,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         } 
         // Encode input prompt without the trigger word for delayed conditioning
         prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt); 
-        printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
+        // printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
         prompt = prompt_text_only; //  
         if(sample_steps < 50){
             LOG_INFO("sampling steps increases from %d to 50 for PHOTOMAKER", sample_steps);

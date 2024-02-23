@@ -90,6 +90,7 @@ struct SDParams {
     bool verbose                  = false;
     bool vae_tiling               = false;
     bool control_net_cpu          = false;
+    bool normalize_input          = false;
     bool vae_on_cpu               = false;
     bool canny_preprocess         = false;
 };
@@ -107,12 +108,13 @@ void print_params(SDParams params) {
     printf("    embeddings_path:   %s\n", params.embeddings_path.c_str());
     printf("    stacked_id_embeddings_path:   %s\n", params.stacked_id_embeddings_path.c_str());
     printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
-    printf("    style ratio: %.2f\n", params.style_ratio);
+    printf("    style ratio:       %.2f\n", params.style_ratio);
+    printf("    normzalize input image :  %s\n", params.normalize_input ? "true" : "false");
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
-    printf("    vae decoder cpu:   %s\n", params.vae_on_cpu ? "true" : "false");
+    printf("    vae decoder on cpu:%s\n", params.vae_on_cpu ? "true" : "false");
     printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
@@ -145,6 +147,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
     printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings.\n");
     printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir.\n");
+    printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
@@ -367,6 +370,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.vae_tiling = true;
         } else if (arg == "--control-net-cpu") {
             params.control_net_cpu = true;
+        } else if (arg == "--normalize-input") {
+            params.normalize_input = true;
         } else if (arg == "--vae-on-cpu") {
             params.vae_on_cpu = true; // will slow down latent decoding but necessary for low MEM GPUs
         } else if (arg == "--canny") {
@@ -679,6 +684,7 @@ int main(int argc, const char* argv[]) {
                           control_image,
                           params.control_strength,
                           params.style_ratio,
+                          params.normalize_input,
                           input_id_images);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
