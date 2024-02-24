@@ -549,6 +549,11 @@ int main(int argc, const char* argv[]) {
         }
     }
 
+    if (params.mode == IMG2VID) {
+        fprintf(stderr, "SVD support is broken, do not use it!!!\n");
+        return 1;
+    }
+
     bool vae_decode_only        = true;
     uint8_t* input_image_buffer = NULL;
     if (params.mode == IMG2IMG || params.mode == IMG2VID) {
