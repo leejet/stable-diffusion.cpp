@@ -172,6 +172,12 @@ public:
 
         if (version == VERSION_XL) {
             scale_factor = 0.13025f;
+            if (vae_path.size() == 0 && taesd_path.size() == 0) {
+                LOG_WARN("!!!It looks like you are using SDXL model. "
+                         "If you find that the generated images are completely black, "
+                         "try specifying SDXL VAE FP16 Fix with the --vae parameter. "
+                         "You can find it here: https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors");
+            }
         }
 
         if (version == VERSION_SVD) {
