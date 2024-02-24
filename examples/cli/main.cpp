@@ -96,6 +96,7 @@ struct SDParams {
     bool vae_tiling               = false;
     bool control_net_cpu          = false;
     bool canny_preprocess         = false;
+    int upscale_repeats           = 1;
 };
 
 void print_params(SDParams params) {
@@ -129,6 +130,7 @@ void print_params(SDParams params) {
     printf("    seed:              %ld\n", params.seed);
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
+    printf("    upscale_repeats:   %d\n", params.upscale_repeats);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -145,6 +147,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
+    printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
@@ -296,6 +299,16 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.prompt = argv[i];
+        } else if (arg == "--upscale-repeats") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.upscale_repeats = std::stoi(argv[i]);
+            if (params.upscale_repeats < 1) {
+                fprintf(stderr, "error: upscale multiplier must be at least 1\n");
+                exit(1);
+            }
         } else if (arg == "-n" || arg == "--negative-prompt") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -700,7 +713,7 @@ int main(int argc, const char* argv[]) {
     }
 
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
-    if (params.esrgan_path.size() > 0) {
+    if (params.esrgan_path.size() > 0 && params.upscale_repeats > 0) {
         upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
                                                         params.n_threads,
                                                         params.wtype);
@@ -712,13 +725,17 @@ int main(int argc, const char* argv[]) {
                 if (results[i].data == NULL) {
                     continue;
                 }
-                sd_image_t upscaled_image = upscale(upscaler_ctx, results[i], upscale_factor);
-                if (upscaled_image.data == NULL) {
-                    printf("upscale failed\n");
-                    continue;
+                sd_image_t current_image = results[i];
+                for (int u = 0; u < params.upscale_repeats; ++u) {
+                    sd_image_t upscaled_image = upscale(upscaler_ctx, current_image, upscale_factor);
+                    if (upscaled_image.data == NULL) {
+                        printf("upscale failed\n");
+                        break;
+                    }
+                    free(current_image.data);
+                    current_image = upscaled_image;
                 }
-                free(results[i].data);
-                results[i] = upscaled_image;
+                results[i] = current_image;  // Set the final upscaled image as the result
             }
         }
     }
