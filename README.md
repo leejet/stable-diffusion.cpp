@@ -31,6 +31,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
 - Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
 - VAE tiling processing for reduce memory usage
+- Control Net support with SD 1.5
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -53,9 +54,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - [ ] More sampling methods
 - [ ] Make inference faster
     - The current implementation of ggml_conv_2d is slow and has high memory usage
-    - Implement Winograd Convolution 2D for 3x3 kernel filtering
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
-- [ ] Implement Textual Inversion (embeddings)
 - [ ] Implement Inpainting support
 - [ ] k-quants support
 
@@ -159,16 +158,20 @@ arguments:
   -m, --model [MODEL]                path to model
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
+  --control-net [CONTROL_PATH]       path to control net model
+  --embd-dir [EMBEDDING_PATH]        path to embeddings.
   --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.
   --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
                                      If not specified, the default is the type of the weight file.
   --lora-model-dir [DIR]             lora model directory
   -i, --init-img [IMAGE]             path to the input image, required by img2img
+  --control-image [IMAGE]            path to image condition, control net
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
   --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)
   --strength STRENGTH                strength for noising/unnoising (default: 0.75)
+  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
@@ -182,6 +185,7 @@ arguments:
   --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
+  --control-net-cpu                  keep controlnet in cpu (for low vram)
   -v, --verbose                      print extra info
 ```
 

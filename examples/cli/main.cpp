@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "preprocessing.hpp"
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -62,14 +63,17 @@ struct SDParams {
     std::string vae_path;
     std::string taesd_path;
     std::string esrgan_path;
+    std::string controlnet_path;
+    std::string embeddings_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
     std::string input_path;
+    std::string control_image_path;
 
     std::string prompt;
     std::string negative_prompt;
-    float min_cfg = 1.0f;
+    float min_cfg   = 1.0f;
     float cfg_scale = 7.0f;
     int clip_skip   = -1;  // <= 0 represents unspecified
     int width       = 512;
@@ -85,23 +89,14 @@ struct SDParams {
     schedule_t schedule           = DEFAULT;
     int sample_steps              = 20;
     float strength                = 0.75f;
+    float control_strength        = 0.9f;
     rng_type_t rng_type           = CUDA_RNG;
     int64_t seed                  = 42;
     bool verbose                  = false;
     bool vae_tiling               = false;
+    bool control_net_cpu          = false;
+    bool canny_preprocess         = false;
 };
-
-static std::string sd_basename(const std::string& path) {
-    size_t pos = path.find_last_of('/');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    pos = path.find_last_of('\\');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    return path;
-}
 
 void print_params(SDParams params) {
     printf("Option: \n");
@@ -112,8 +107,13 @@ void print_params(SDParams params) {
     printf("    vae_path:          %s\n", params.vae_path.c_str());
     printf("    taesd_path:        %s\n", params.taesd_path.c_str());
     printf("    esrgan_path:       %s\n", params.esrgan_path.c_str());
+    printf("    controlnet_path:   %s\n", params.controlnet_path.c_str());
+    printf("    embeddings_path:   %s\n", params.embeddings_path.c_str());
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
+    printf("    control_image:     %s\n", params.control_image_path.c_str());
+    printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
+    printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
     printf("    min_cfg:           %.2f\n", params.min_cfg);
@@ -142,16 +142,20 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -m, --model [MODEL]                path to model\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
+    printf("  --control-net [CONTROL_PATH]       path to control net model\n");
+    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
+    printf("  --control-image [IMAGE]            path to image condition, control net\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
+    printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
@@ -165,6 +169,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
+    printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
+    printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -217,12 +223,24 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.taesd_path = argv[i];
+        } else if (arg == "--control-net") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.controlnet_path = argv[i];
         } else if (arg == "--upscale-model") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
             params.esrgan_path = argv[i];
+        } else if (arg == "--embd-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.embeddings_path = argv[i];
         } else if (arg == "--type") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -260,6 +278,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.input_path = argv[i];
+        } else if (arg == "--control-image") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.control_image_path = argv[i];
         } else if (arg == "-o" || arg == "--output") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -290,6 +314,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.strength = std::stof(argv[i]);
+        } else if (arg == "--control-strength") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.control_strength = std::stof(argv[i]);
         } else if (arg == "-H" || arg == "--height") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -316,6 +346,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.clip_skip = std::stoi(argv[i]);
         } else if (arg == "--vae-tiling") {
             params.vae_tiling = true;
+        } else if (arg == "--control-net-cpu") {
+            params.control_net_cpu = true;
+        } else if (arg == "--canny") {
+            params.canny_preprocess = true;
         } else if (arg == "-b" || arg == "--batch-count") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -546,14 +580,17 @@ int main(int argc, const char* argv[]) {
     sd_ctx_t* sd_ctx = new_sd_ctx(params.model_path.c_str(),
                                   params.vae_path.c_str(),
                                   params.taesd_path.c_str(),
+                                  params.controlnet_path.c_str(),
                                   params.lora_model_dir.c_str(),
+                                  params.embeddings_path.c_str(),
                                   vae_decode_only,
                                   params.vae_tiling,
                                   true,
                                   params.n_threads,
                                   params.wtype,
                                   params.rng_type,
-                                  params.schedule);
+                                  params.schedule,
+                                  params.control_net_cpu);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
@@ -562,6 +599,23 @@ int main(int argc, const char* argv[]) {
 
     sd_image_t* results;
     if (params.mode == TXT2IMG) {
+        sd_image_t* control_image = NULL;
+        if (params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
+            int c              = 0;
+            input_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
+            if (input_image_buffer == NULL) {
+                fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
+                return 1;
+            }
+            control_image = new sd_image_t{(uint32_t)params.width,
+                                           (uint32_t)params.height,
+                                           3,
+                                           input_image_buffer};
+            if (params.canny_preprocess) {  // apply preprocessor
+                LOG_INFO("Applying canny preprocessor");
+                control_image->data = preprocess_canny(control_image->data, control_image->width, control_image->height);
+            }
+        }
         results = txt2img(sd_ctx,
                           params.prompt.c_str(),
                           params.negative_prompt.c_str(),
@@ -572,7 +626,9 @@ int main(int argc, const char* argv[]) {
                           params.sample_method,
                           params.sample_steps,
                           params.seed,
-                          params.batch_count);
+                          params.batch_count,
+                          control_image,
+                          params.control_strength);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -607,7 +663,7 @@ int main(int argc, const char* argv[]) {
                 }
                 std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
                 stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                            results[i].data, 0, get_image_params(params, params.seed + i).c_str());
+                               results[i].data, 0, get_image_params(params, params.seed + i).c_str());
                 printf("save result image to '%s'\n", final_image_path.c_str());
                 free(results[i].data);
                 results[i].data = NULL;

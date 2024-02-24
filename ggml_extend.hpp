@@ -67,9 +67,11 @@ __STATIC_INLINE__ void ggml_tensor_set_f32(struct ggml_tensor* tensor, float val
 }
 
 __STATIC_INLINE__ float ggml_tensor_get_f32(const ggml_tensor* tensor, int l, int k = 0, int j = 0, int i = 0) {
-    // float value;
-    // ggml_backend_tensor_get(tensor, &value, i * tensor->nb[3] + j * tensor->nb[2] + k * tensor->nb[1] + l * tensor->nb[0], sizeof(float));
-    // return value;
+    if (tensor->buffer != NULL) {
+        float value;
+        ggml_backend_tensor_get(tensor, &value, i * tensor->nb[3] + j * tensor->nb[2] + k * tensor->nb[1] + l * tensor->nb[0], sizeof(float));
+        return value;
+    }
     GGML_ASSERT(tensor->nb[0] == sizeof(float));
     return *(float*)((char*)(tensor->data) + i * tensor->nb[3] + j * tensor->nb[2] + k * tensor->nb[1] + l * tensor->nb[0]);
 }
@@ -581,8 +583,12 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_group_norm(struct ggml_context* ct
 
 __STATIC_INLINE__ void ggml_backend_tensor_get_and_sync(ggml_backend_t backend, const struct ggml_tensor* tensor, void* data, size_t offset, size_t size) {
 #ifdef SD_USE_CUBLAS
-    ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
-    ggml_backend_synchronize(backend);
+    if (!ggml_backend_is_cpu(backend)) {
+        ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
+        ggml_backend_synchronize(backend);
+    } else {
+        ggml_backend_tensor_get(tensor, data, offset, size);
+    }
 #else
     ggml_backend_tensor_get(tensor, data, offset, size);
 #endif
@@ -758,7 +764,7 @@ public:
         alloc_params_ctx();
     }
 
-    ~GGMLModule() {
+    virtual ~GGMLModule() {
         free_params_buffer();
         free_compute_buffer();
         free_params_ctx();

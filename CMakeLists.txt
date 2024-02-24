@@ -28,7 +28,6 @@ option(SD_CUBLAS                     "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
 option(SD_FLASH_ATTN                 "sd: use flash attention for x4 less memory usage" OFF)
-option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
 option(BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
@@ -36,9 +35,6 @@ if(SD_CUBLAS)
 	message("Use CUBLAS as backend stable-diffusion")
     set(GGML_CUBLAS ON)
     add_definitions(-DSD_USE_CUBLAS)
-    if(SD_FAST_SOFTMAX)
-        set(GGML_CUDA_FAST_SOFTMAX ON)
-    endif()
 endif()
 
 if(SD_METAL)
@@ -64,7 +60,8 @@ endif()
 set(SD_LIB stable-diffusion)
 
 add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp model.h model.cpp util.h util.cpp upscaler.cpp tensor.hpp
-             ggml_extend.hpp clip.hpp common.hpp unet.hpp tae.hpp esrgan.hpp lora.hpp denoiser.hpp rng.hpp rng_philox.hpp)
+             ggml_extend.hpp clip.hpp common.hpp unet.hpp tae.hpp esrgan.hpp lora.hpp denoiser.hpp rng.hpp rng_philox.hpp
+             control.hpp preprocessing.hpp)
 
 if(BUILD_SHARED_LIBS)
     message("Build shared library")
