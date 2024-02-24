@@ -96,7 +96,7 @@ struct SDParams {
     bool vae_tiling               = false;
     bool control_net_cpu          = false;
     bool canny_preprocess         = false;
-    int upscale_repeats        = 1;
+    int upscale_repeats           = 1;
 };
 
 void print_params(SDParams params) {
@@ -174,7 +174,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
-    printf("  -v, --verbose                      print extra info\n"); 
+    printf("  -v, --verbose                      print extra info\n");
 }
 
 void parse_args(int argc, const char** argv, SDParams& params) {
@@ -714,34 +714,31 @@ int main(int argc, const char* argv[]) {
 
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (params.esrgan_path.size() > 0 && params.upscale_repeats > 0) {
-    upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
-                                                    params.n_threads,
-                                                    params.wtype);
+        upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
+                                                        params.n_threads,
+                                                        params.wtype);
 
-    if (upscaler_ctx == NULL) {
-        printf("new_upscaler_ctx failed\n");
-    } else {
-        for (int i = 0; i < params.batch_count; i++) {
-            if (results[i].data == NULL) {
-                continue;
-            }
-            sd_image_t current_image = results[i];
-            for (int u = 0; u < params.upscale_repeats; ++u) {
-                sd_image_t upscaled_image = upscale(upscaler_ctx, current_image, upscale_factor);
-                if (u > 0) { // Free the previous iteration's image data if not the first upscale
+        if (upscaler_ctx == NULL) {
+            printf("new_upscaler_ctx failed\n");
+        } else {
+            for (int i = 0; i < params.batch_count; i++) {
+                if (results[i].data == NULL) {
+                    continue;
+                }
+                sd_image_t current_image = results[i];
+                for (int u = 0; u < params.upscale_repeats; ++u) {
+                    sd_image_t upscaled_image = upscale(upscaler_ctx, current_image, upscale_factor);
+                    if (upscaled_image.data == NULL) {
+                        printf("upscale failed\n");
+                        break;
+                    }
                     free(current_image.data);
+                    current_image = upscaled_image;
                 }
-                if (upscaled_image.data == NULL) {
-                    printf("upscale failed\n");
-                    break;
-                }
-                current_image = upscaled_image;
+                results[i] = current_image;  // Set the final upscaled image as the result
             }
-            results[i] = current_image; // Set the final upscaled image as the result
         }
     }
-}
-
 
     size_t last            = params.output_path.find_last_of(".");
     std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;

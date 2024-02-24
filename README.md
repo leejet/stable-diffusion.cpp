@@ -94,8 +94,6 @@ git submodule update
 #### Build from scratch
 
 ```shell
-git submodule init
-git submodule update
 mkdir build
 cd build
 cmake ..
