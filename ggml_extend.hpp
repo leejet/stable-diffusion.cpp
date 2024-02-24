@@ -33,7 +33,6 @@
 #endif
 
 #include "rng.hpp"
-#include "tensor.hpp"
 #include "util.h"
 
 #define EPS 1e-05f
