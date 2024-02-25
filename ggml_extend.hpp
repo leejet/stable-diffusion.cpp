@@ -613,6 +613,13 @@ __STATIC_INLINE__ struct ggml_tensor* vector_to_ggml_tensor(struct ggml_context*
     return t;
 }
 
+__STATIC_INLINE__ struct ggml_tensor* vector_to_ggml_tensor_i32(struct ggml_context* ctx,
+                                                                const std::vector<int>& vec) {
+    struct ggml_tensor* t = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, vec.size());
+    memcpy(t->data, (const void*)vec.data(), ggml_nbytes(t));
+    return t;
+}
+
 __STATIC_INLINE__ std::vector<float> arange(float start, float end, float step = 1.f) {
     std::vector<float> result;
 
@@ -659,7 +666,6 @@ __STATIC_INLINE__ void set_timestep_embedding(std::vector<float> timesteps,
 }
 
 __STATIC_INLINE__ struct ggml_tensor* new_timestep_embedding(struct ggml_context* ctx,
-                                                             struct ggml_allocr* allocr,
                                                              std::vector<float> timesteps,
                                                              int dim,
                                                              int max_period = 10000) {
@@ -671,23 +677,19 @@ __STATIC_INLINE__ struct ggml_tensor* new_timestep_embedding(struct ggml_context
         acutual_dim = dim + 1;
     }
     struct ggml_tensor* embedding = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, acutual_dim, timesteps.size());
-    if (allocr != NULL) {
-        ggml_allocr_alloc(allocr, embedding);
-        if (!ggml_allocr_is_measure(allocr)) {
-            ggml_backend_tensor_set(embedding, embedding_vec.data(), 0, ggml_nbytes(embedding));
-        }
-    } else {
+    if (embedding->data != NULL) {
         memcpy(((char*)embedding->data), ((char*)embedding_vec.data()), ggml_nbytes(embedding));
+    } else {
+        ggml_backend_tensor_set(embedding, embedding_vec.data(), 0, ggml_nbytes(embedding));
     }
     return embedding;
 }
 
-
-__STATIC_INLINE__ struct ggml_tensor * ggml_nn_timestep_embedding(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * timesteps,
-            int                   dim,
-            int                   max_period = 10000) {
+__STATIC_INLINE__ struct ggml_tensor* ggml_nn_timestep_embedding(
+    struct ggml_context* ctx,
+    struct ggml_tensor* timesteps,
+    int dim,
+    int max_period = 10000) {
     return ggml_timestep_embedding(ctx, timesteps, dim, max_period);
 }
 
@@ -709,9 +711,10 @@ protected:
     struct ggml_context* params_ctx     = NULL;
     ggml_backend_buffer_t params_buffer = NULL;
 
-    struct ggml_context* compute_ctx     = NULL;
-    ggml_backend_buffer_t compute_buffer = NULL;  // for compute
-    struct ggml_allocr* compute_allocr   = NULL;
+    struct ggml_context* compute_ctx    = NULL;
+    struct ggml_gallocr* compute_allocr = NULL;
+
+    std::map<struct ggml_tensor*, const void*> backend_tensor_data_map;
 
     ggml_type wtype        = GGML_TYPE_F32;
     ggml_backend_t backend = NULL;
@@ -750,23 +753,37 @@ protected:
         }
     }
 
-    void alloc_compute_buffer(get_graph_cb_t get_graph) {
-        // alignment required by the backend
-        compute_allocr = ggml_allocr_new_measure_from_backend(backend);
-
+    bool alloc_compute_buffer(get_graph_cb_t get_graph) {
+        if (compute_allocr != NULL) {
+            return true;
+        }
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_graph();
+        backend_tensor_data_map.clear();
+        compute_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+
+        if (!ggml_gallocr_reserve(compute_allocr, gf)) {
+            // failed to allocate the compute buffer
+            LOG_ERROR("%s: failed to allocate the compute buffer\n", get_desc().c_str());
+            free_compute_buffer();
+            return false;
+        }
 
         // compute the required memory
-        size_t compute_buffer_size = ggml_allocr_alloc_graph(compute_allocr, gf) + 1024 * 1024;
-
-        // recreate the allocator with the required memory
-        ggml_allocr_free(compute_allocr);
-
+        size_t compute_buffer_size = ggml_gallocr_get_buffer_size(compute_allocr, 0);
         LOG_DEBUG("%s compute buffer size: %.2f MB", get_desc().c_str(), compute_buffer_size / 1024.0 / 1024.0);
+        return true;
+    }
 
-        compute_buffer = ggml_backend_alloc_buffer(backend, compute_buffer_size);
-        compute_allocr = ggml_allocr_new_from_buffer(compute_buffer);
+    void cpy_data_to_backend_tensor() {
+        for (auto& kv : backend_tensor_data_map) {
+            auto tensor = kv.first;
+            auto data   = kv.second;
+
+            ggml_backend_tensor_set(tensor, data, 0, ggml_nbytes(tensor));
+        }
+
+        backend_tensor_data_map.clear();
     }
 
 public:
@@ -791,31 +808,16 @@ public:
         alloc_compute_ctx();
     }
 
-    void reset_compute_allocr(get_graph_cb_t get_graph) {
-        if (compute_allocr != NULL) {
-            ggml_allocr_reset(compute_allocr);
-        } else {
-            alloc_compute_buffer(get_graph);
-        }
-    }
-
     bool alloc_params_buffer() {
-        size_t params_buffer_size = 10 * 1024 * 1024;  // 10 MB, for padding
-        params_buffer_size += get_params_mem_size();
         size_t num_tensors = get_params_num();
-
+        params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, backend);
+        if (params_buffer == NULL) {
+            LOG_ERROR("%s alloc params backend buffer failed", get_desc().c_str());
+            return false;
+        }
+        size_t params_buffer_size = ggml_backend_buffer_get_size(params_buffer);
         LOG_DEBUG("%s params backend buffer size = % 6.2f MB (%i tensors)",
                   get_desc().c_str(), params_buffer_size / (1024.0 * 1024.0), num_tensors);
-        params_buffer = ggml_backend_alloc_buffer(backend, params_buffer_size);
-
-        ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
-        // alloc all tensors linked to params_ctx
-        for (struct ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != NULL; t = ggml_get_next_tensor(params_ctx, t)) {
-            if (t->data == NULL) {
-                ggml_allocr_alloc(alloc, t);
-            }
-        }
-        ggml_allocr_free(alloc);
         return true;
     }
 
@@ -828,13 +830,14 @@ public:
 
     void free_compute_buffer() {
         if (compute_allocr != NULL) {
-            ggml_allocr_free(compute_allocr);
+            ggml_gallocr_free(compute_allocr);
             compute_allocr = NULL;
         }
-        if (compute_buffer != NULL) {
-            ggml_backend_buffer_free(compute_buffer);
-            compute_buffer = NULL;
-        }
+    }
+
+    // do copy after alloc graph
+    void set_backend_tensor_data(struct ggml_tensor* tensor, const void* data) {
+        backend_tensor_data_map[tensor] = data;
     }
 
     struct ggml_tensor* to_backend(struct ggml_tensor* tensor) {
@@ -843,15 +846,11 @@ public:
             return NULL;
         }
         // it's performing a compute, check if backend isn't cpu
-        if (!ggml_backend_is_cpu(backend)) {
+        if (!ggml_backend_is_cpu(backend) && tensor->backend == GGML_BACKEND_CPU) {
             // pass input tensors to gpu memory
             auto backend_tensor = ggml_dup_tensor(compute_ctx, tensor);
-            ggml_allocr_alloc(compute_allocr, backend_tensor);
 
-            // pass data to device backend
-            if (!ggml_allocr_is_measure(compute_allocr)) {
-                ggml_backend_tensor_set(backend_tensor, tensor->data, 0, ggml_nbytes(tensor));
-            }
+            set_backend_tensor_data(backend_tensor, tensor->data);
             return backend_tensor;
         } else {
             return tensor;
@@ -863,11 +862,13 @@ public:
                  bool free_compute_buffer_immediately = true,
                  struct ggml_tensor** output          = NULL,
                  struct ggml_context* output_ctx      = NULL) {
-        reset_compute_allocr(get_graph);
+        alloc_compute_buffer(get_graph);
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_graph();
 
-        ggml_allocr_alloc_graph(compute_allocr, gf);
+        GGML_ASSERT(ggml_gallocr_alloc_graph(compute_allocr, gf));
+
+        cpy_data_to_backend_tensor();
 
         if (ggml_backend_is_cpu(backend)) {
             ggml_backend_cpu_set_n_threads(backend, n_threads);

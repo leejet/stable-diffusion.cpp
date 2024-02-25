@@ -40,26 +40,31 @@ struct LoraModel : public GGMLModule {
             LOG_ERROR("init lora model loader from file failed: '%s'", file_path.c_str());
             return false;
         }
-        alloc_params_buffer();
 
-        ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
-
+        bool dry_run          = true;
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
             const std::string& name = tensor_storage.name;
 
-            struct ggml_tensor* real = ggml_new_tensor(params_ctx, tensor_storage.type, tensor_storage.n_dims, tensor_storage.ne);
-            ggml_allocr_alloc(alloc, real);
-
-            *dst_tensor = real;
-
-            lora_tensors[name] = real;
+            if (dry_run) {
+                struct ggml_tensor* real = ggml_new_tensor(params_ctx,
+                                                           tensor_storage.type,
+                                                           tensor_storage.n_dims,
+                                                           tensor_storage.ne);
+                lora_tensors[name]       = real;
+            } else {
+                auto real   = lora_tensors[name];
+                *dst_tensor = real;
+            }
             return true;
         };
 
         model_loader.load_tensors(on_new_tensor_cb, backend);
+        alloc_params_buffer();
+
+        dry_run = false;
+        model_loader.load_tensors(on_new_tensor_cb, backend);
 
         LOG_DEBUG("finished loaded lora");
-        ggml_allocr_free(alloc);
         return true;
     }
 

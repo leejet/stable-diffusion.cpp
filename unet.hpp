@@ -61,7 +61,6 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
-                                struct ggml_allocr* allocr,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* context,
                                 int timesteps) {
@@ -342,7 +341,6 @@ public:
 
     struct ggml_tensor* resblock_forward(std::string name,
                                          struct ggml_context* ctx,
-                                         struct ggml_allocr* allocr,
                                          struct ggml_tensor* x,
                                          struct ggml_tensor* emb,
                                          int num_video_frames) {
@@ -359,14 +357,13 @@ public:
 
     struct ggml_tensor* attention_layer_forward(std::string name,
                                                 struct ggml_context* ctx,
-                                                struct ggml_allocr* allocr,
                                                 struct ggml_tensor* x,
                                                 struct ggml_tensor* context,
                                                 int timesteps) {
         if (version == VERSION_SVD) {
             auto block = std::dynamic_pointer_cast<SpatialVideoTransformer>(blocks[name]);
 
-            return block->forward(ctx, allocr, x, context, timesteps);
+            return block->forward(ctx, x, context, timesteps);
         } else {
             auto block = std::dynamic_pointer_cast<SpatialTransformer>(blocks[name]);
 
@@ -375,7 +372,6 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
-                                struct ggml_allocr* allocr,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* timesteps,
                                 struct ggml_tensor* context,
@@ -451,10 +447,10 @@ public:
             for (int j = 0; j < num_res_blocks; j++) {
                 input_block_idx += 1;
                 std::string name = "input_blocks." + std::to_string(input_block_idx) + ".0";
-                h                = resblock_forward(name, ctx, allocr, h, emb, num_video_frames);  // [N, mult*model_channels, h, w]
+                h                = resblock_forward(name, ctx, h, emb, num_video_frames);  // [N, mult*model_channels, h, w]
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
-                    h                = attention_layer_forward(name, ctx, allocr, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
+                    h                = attention_layer_forward(name, ctx, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
                 }
                 hs.push_back(h);
             }
@@ -472,9 +468,9 @@ public:
         // [N, 4*model_channels, h/8, w/8]
 
         // middle_block
-        h = resblock_forward("middle_block.0", ctx, allocr, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
-        h = attention_layer_forward("middle_block.1", ctx, allocr, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
-        h = resblock_forward("middle_block.2", ctx, allocr, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
+        h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
 
         if (controls.size() > 0) {
             auto cs = ggml_scale_inplace(ctx, controls[controls.size() - 1], control_strength);
@@ -499,13 +495,13 @@ public:
 
                 std::string name = "output_blocks." + std::to_string(output_block_idx) + ".0";
 
-                h = resblock_forward(name, ctx, allocr, h, emb, num_video_frames);
+                h = resblock_forward(name, ctx, h, emb, num_video_frames);
 
                 int up_sample_idx = 1;
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + ".1";
 
-                    h = attention_layer_forward(name, ctx, allocr, h, context, num_video_frames);
+                    h = attention_layer_forward(name, ctx, h, context, num_video_frames);
 
                     up_sample_idx++;
                 }
@@ -573,9 +569,9 @@ struct UNetModel : public GGMLModule {
             num_video_frames = x->ne[3];
         }
 
-        x       = to_backend(x);
-        context = to_backend(context);
-        y       = to_backend(y);
+        x         = to_backend(x);
+        context   = to_backend(context);
+        y         = to_backend(y);
         timesteps = to_backend(timesteps);
 
         for (int i = 0; i < controls.size(); i++) {
@@ -583,7 +579,6 @@ struct UNetModel : public GGMLModule {
         }
 
         struct ggml_tensor* out = unet.forward(compute_ctx,
-                                               compute_allocr,
                                                x,
                                                timesteps,
                                                context,

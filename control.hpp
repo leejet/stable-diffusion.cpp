@@ -166,7 +166,6 @@ public:
 
     struct ggml_tensor* resblock_forward(std::string name,
                                          struct ggml_context* ctx,
-                                         struct ggml_allocr* allocr,
                                          struct ggml_tensor* x,
                                          struct ggml_tensor* emb) {
         auto block = std::dynamic_pointer_cast<ResBlock>(blocks[name]);
@@ -175,7 +174,6 @@ public:
 
     struct ggml_tensor* attention_layer_forward(std::string name,
                                                 struct ggml_context* ctx,
-                                                struct ggml_allocr* allocr,
                                                 struct ggml_tensor* x,
                                                 struct ggml_tensor* context) {
         auto block = std::dynamic_pointer_cast<SpatialTransformer>(blocks[name]);
@@ -201,7 +199,6 @@ public:
     }
 
     std::vector<struct ggml_tensor*> forward(struct ggml_context* ctx,
-                                             struct ggml_allocr* allocr,
                                              struct ggml_tensor* x,
                                              struct ggml_tensor* hint,
                                              struct ggml_tensor* guided_hint,
@@ -272,10 +269,10 @@ public:
             for (int j = 0; j < num_res_blocks; j++) {
                 input_block_idx += 1;
                 std::string name = "input_blocks." + std::to_string(input_block_idx) + ".0";
-                h                = resblock_forward(name, ctx, allocr, h, emb);  // [N, mult*model_channels, h, w]
+                h                = resblock_forward(name, ctx, h, emb);  // [N, mult*model_channels, h, w]
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
-                    h                = attention_layer_forward(name, ctx, allocr, h, context);  // [N, mult*model_channels, h, w]
+                    h                = attention_layer_forward(name, ctx, h, context);  // [N, mult*model_channels, h, w]
                 }
 
                 auto zero_conv = std::dynamic_pointer_cast<Conv2d>(blocks["zero_convs." + std::to_string(input_block_idx) + ".0"]);
@@ -299,9 +296,9 @@ public:
         // [N, 4*model_channels, h/8, w/8]
 
         // middle_block
-        h = resblock_forward("middle_block.0", ctx, allocr, h, emb);             // [N, 4*model_channels, h/8, w/8]
-        h = attention_layer_forward("middle_block.1", ctx, allocr, h, context);  // [N, 4*model_channels, h/8, w/8]
-        h = resblock_forward("middle_block.2", ctx, allocr, h, emb);             // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.0", ctx, h, emb);             // [N, 4*model_channels, h/8, w/8]
+        h = attention_layer_forward("middle_block.1", ctx, h, context);  // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.2", ctx, h, emb);             // [N, 4*model_channels, h/8, w/8]
 
         // out
         outs.push_back(middle_block_out->forward(ctx, h));
@@ -391,14 +388,17 @@ struct ControlNet : public GGMLModule {
                                     struct ggml_tensor* y = NULL) {
         struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, CONTROL_NET_GRAPH_SIZE, false);
 
-        x       = to_backend(x);
-        hint    = to_backend(hint);
-        context = to_backend(context);
-        y       = to_backend(y);
+        x         = to_backend(x);
+        if (guided_hint_cached) {
+            hint = NULL;
+        } else {
+            hint      = to_backend(hint);
+        }
+        context   = to_backend(context);
+        y         = to_backend(y);
         timesteps = to_backend(timesteps);
 
         auto outs = control_net.forward(compute_ctx,
-                                        compute_allocr,
                                         x,
                                         hint,
                                         guided_hint_cached ? guided_hint : NULL,
@@ -435,7 +435,6 @@ struct ControlNet : public GGMLModule {
         };
 
         GGMLModule::compute(get_graph, n_threads, false, output, output_ctx);
-
         guided_hint_cached = true;
     }
 
