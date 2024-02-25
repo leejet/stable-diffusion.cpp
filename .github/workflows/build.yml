@@ -152,7 +152,7 @@ jobs:
           submodules: recursive
 
       - name: Install cuda-toolkit
-        id: cuda_toolkit
+        id: cuda-toolkit
         if: ${{ matrix.build == 'cuda12' }}
         uses: Jimver/cuda-toolkit@v0.2.11
         with:
@@ -195,15 +195,6 @@ jobs:
           & $cl /O2 /GS- /kernel avx512f.c /link /nodefaultlib /entry:main
           .\avx512f.exe && echo "AVX512F: YES" && ( echo HAS_AVX512F=1 >> $env:GITHUB_ENV ) || echo "AVX512F: NO"
 
-      - name: Copy and pack Cuda runtime
-        id: pack_cuda_runtime
-        if: ${{ matrix.build == 'cuda12' }}
-        run: |
-          echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
-          $dst='.\build\bin\cudart\'
-          robocopy "${{steps.cuda-toolkit.outputs.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          7z a cudart-sd-bin-win-cu12-x64.zip $dst\*
-
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -228,6 +219,22 @@ jobs:
             throw "Can't find stable-diffusion.dll"
           }
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip $filePath
+
+      - name: Copy and pack Cuda runtime
+        id: pack_cuda_runtime
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.build == 'cuda12' && github.event.inputs.create_release == 'true' }}
+        run: |
+          echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
+          $dst='.\build\bin\cudart\'
+          robocopy "${{steps.cuda-toolkit.outputs.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-sd-bin-win-cu12-x64.zip $dst\*
+
+      - name: Upload Cuda runtime
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.build == 'cuda12' && github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v3
+        with:
+          path: |
+            cudart-sd-bin-win-cu12-x64.zip
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
