@@ -606,6 +606,13 @@ __STATIC_INLINE__ float ggml_backend_tensor_get_f32(ggml_tensor* tensor) {
     return value;
 }
 
+__STATIC_INLINE__ struct ggml_tensor* vector_to_ggml_tensor(struct ggml_context* ctx,
+                                                            const std::vector<float>& vec) {
+    struct ggml_tensor* t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, vec.size());
+    memcpy(t->data, (const void*)vec.data(), ggml_nbytes(t));
+    return t;
+}
+
 __STATIC_INLINE__ std::vector<float> arange(float start, float end, float step = 1.f) {
     std::vector<float> result;
 
@@ -673,6 +680,15 @@ __STATIC_INLINE__ struct ggml_tensor* new_timestep_embedding(struct ggml_context
         memcpy(((char*)embedding->data), ((char*)embedding_vec.data()), ggml_nbytes(embedding));
     }
     return embedding;
+}
+
+
+__STATIC_INLINE__ struct ggml_tensor * ggml_nn_timestep_embedding(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * timesteps,
+            int                   dim,
+            int                   max_period = 10000) {
+    return ggml_timestep_embedding(ctx, timesteps, dim, max_period);
 }
 
 // struct GGMLComputeGraph {

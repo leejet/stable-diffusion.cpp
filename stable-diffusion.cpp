@@ -363,7 +363,8 @@ public:
         struct ggml_tensor* c = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 1024, 2, 1, 1);
         ggml_set_f32(c, 0.5);
 
-        std::vector<float> timesteps = {999.f};  // [N, ]
+        struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);
+        ggml_set_f32(timesteps, 999);
         int64_t t0                   = ggml_time_ms();
         struct ggml_tensor* out      = ggml_dup_tensor(work_ctx, x_t);
         diffusion_model->compute(n_threads, x_t, timesteps, c, NULL, NULL, -1, {}, 0.f, &out);
@@ -675,7 +676,8 @@ public:
             }
 
             float t = denoiser->schedule->sigma_to_t(sigma);
-            std::vector<float> timesteps(x->ne[3], t);  // [N, ]
+            std::vector<float> timesteps_vec(x->ne[3], t);  // [N, ]
+            auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
 
             copy_ggml_tensor(noised_input, input);
             // noised_input = noised_input * c_in

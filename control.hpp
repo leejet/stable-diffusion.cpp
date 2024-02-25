@@ -205,7 +205,7 @@ public:
                                              struct ggml_tensor* x,
                                              struct ggml_tensor* hint,
                                              struct ggml_tensor* guided_hint,
-                                             std::vector<float> timesteps,
+                                             struct ggml_tensor* timesteps,
                                              struct ggml_tensor* context,
                                              struct ggml_tensor* y = NULL) {
         // x: [N, in_channels, h, w] or [N, in_channels/2, h, w]
@@ -231,7 +231,7 @@ public:
 
         auto middle_block_out = std::dynamic_pointer_cast<Conv2d>(blocks["middle_block_out.0"]);
 
-        auto t_emb = new_timestep_embedding(ctx, allocr, timesteps, model_channels);  // [N, model_channels]
+        auto t_emb = ggml_nn_timestep_embedding(ctx, timesteps, model_channels);  // [N, model_channels]
 
         auto emb = time_embed_0->forward(ctx, t_emb);
         emb      = ggml_silu_inplace(ctx, emb);
@@ -386,7 +386,7 @@ struct ControlNet : public GGMLModule {
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* x,
                                     struct ggml_tensor* hint,
-                                    std::vector<float> timesteps,
+                                    struct ggml_tensor* timesteps,
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* y = NULL) {
         struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, CONTROL_NET_GRAPH_SIZE, false);
@@ -395,6 +395,7 @@ struct ControlNet : public GGMLModule {
         hint    = to_backend(hint);
         context = to_backend(context);
         y       = to_backend(y);
+        timesteps = to_backend(timesteps);
 
         auto outs = control_net.forward(compute_ctx,
                                         compute_allocr,
@@ -420,7 +421,7 @@ struct ControlNet : public GGMLModule {
     void compute(int n_threads,
                  struct ggml_tensor* x,
                  struct ggml_tensor* hint,
-                 std::vector<float> timesteps,
+                 struct ggml_tensor* timesteps,
                  struct ggml_tensor* context,
                  struct ggml_tensor* y,
                  struct ggml_tensor** output     = NULL,
