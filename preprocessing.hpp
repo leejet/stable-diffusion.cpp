@@ -117,15 +117,15 @@ void non_max_supression(struct ggml_tensor* result, struct ggml_tensor* G, struc
     }
 }
 
-void threshold_hystersis(struct ggml_tensor* img, float highThreshold, float lowThreshold, float weak, float strong) {
+void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float low_threshold, float weak, float strong) {
     int n_elements = ggml_nelements(img);
     float* imd     = (float*)img->data;
     float max      = -INFINITY;
     for (int i = 0; i < n_elements; i++) {
         max = imd[i] > max ? imd[i] : max;
     }
-    float ht = max * highThreshold;
-    float lt = ht * lowThreshold;
+    float ht = max * high_threshold;
+    float lt = ht * low_threshold;
     for (int i = 0; i < n_elements; i++) {
         float img_v = imd[i];
         if (img_v >= ht) {  // strong pixel
@@ -162,7 +162,7 @@ void threshold_hystersis(struct ggml_tensor* img, float highThreshold, float low
     }
 }
 
-uint8_t* preprocess_canny(uint8_t* img, int width, int height, float highThreshold, float lowThreshold, float weak, float strong, bool inverse) {
+uint8_t* preprocess_canny(uint8_t* img, int width, int height, float high_threshold, float low_threshold, float weak, float strong, bool inverse) {
     struct ggml_init_params params;
     params.mem_size               = static_cast<size_t>(10 * 1024 * 1024);  // 10
     params.mem_buffer             = NULL;
@@ -207,7 +207,7 @@ uint8_t* preprocess_canny(uint8_t* img, int width, int height, float highThresho
     normalize_tensor(G);
     prop_arctan2(iX, iY, tetha);
     non_max_supression(image_gray, G, tetha);
-    threshold_hystersis(image_gray, highThreshold, lowThreshold, weak, strong);
+    threshold_hystersis(image_gray, high_threshold, low_threshold, weak, strong);
     // to RGB channels
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {

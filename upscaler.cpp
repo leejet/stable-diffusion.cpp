@@ -6,7 +6,7 @@
 struct UpscalerGGML {
     ggml_backend_t backend    = NULL;  // general backend
     ggml_type model_data_type = GGML_TYPE_F16;
-    ESRGAN esrgan_upscaler;
+    std::shared_ptr<ESRGAN> esrgan_upscaler;
     std::string esrgan_path;
     int n_threads;
 
@@ -30,7 +30,8 @@ struct UpscalerGGML {
             backend = ggml_backend_cpu_init();
         }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
-        if (!esrgan_upscaler.load_from_file(esrgan_path, backend)) {
+        esrgan_upscaler = std::make_shared<ESRGAN>(backend, model_data_type);
+        if (!esrgan_upscaler->load_from_file(esrgan_path)) {
             return false;
         }
         return true;
@@ -39,8 +40,8 @@ struct UpscalerGGML {
     sd_image_t upscale(sd_image_t input_image, uint32_t upscale_factor) {
         // upscale_factor, unused for RealESRGAN_x4plus_anime_6B.pth
         sd_image_t upscaled_image = {0, 0, 0, NULL};
-        int output_width          = (int)input_image.width * esrgan_upscaler.scale;
-        int output_height         = (int)input_image.height * esrgan_upscaler.scale;
+        int output_width          = (int)input_image.width * esrgan_upscaler->scale;
+        int output_height         = (int)input_image.height * esrgan_upscaler->scale;
         LOG_INFO("upscaling from (%i x %i) to (%i x %i)",
                  input_image.width, input_image.height, output_width, output_height);
 
@@ -62,15 +63,11 @@ struct UpscalerGGML {
 
         ggml_tensor* upscaled = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, 3, 1);
         auto on_tiling        = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-            if (init) {
-                esrgan_upscaler.alloc_compute_buffer(in);
-            } else {
-                esrgan_upscaler.compute(out, n_threads, in);
-            }
+            esrgan_upscaler->compute(n_threads, in, &out);
         };
         int64_t t0 = ggml_time_ms();
-        sd_tiling(input_image_tensor, upscaled, esrgan_upscaler.scale, esrgan_upscaler.tile_size, 0.25f, on_tiling);
-        esrgan_upscaler.free_compute_buffer();
+        sd_tiling(input_image_tensor, upscaled, esrgan_upscaler->scale, esrgan_upscaler->tile_size, 0.25f, on_tiling);
+        esrgan_upscaler->free_compute_buffer();
         ggml_tensor_clamp(upscaled, 0.f, 1.f);
         uint8_t* upscaled_data = sd_tensor_to_image(upscaled);
         ggml_free(upscale_ctx);
