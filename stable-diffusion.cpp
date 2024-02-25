@@ -363,9 +363,10 @@ public:
         struct ggml_tensor* c = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 1024, 2, 1, 1);
         ggml_set_f32(c, 0.5);
 
-        std::vector<float> timesteps = {999.f};  // [N, ]
-        int64_t t0                   = ggml_time_ms();
-        struct ggml_tensor* out      = ggml_dup_tensor(work_ctx, x_t);
+        struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);
+        ggml_set_f32(timesteps, 999);
+        int64_t t0              = ggml_time_ms();
+        struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
         diffusion_model->compute(n_threads, x_t, timesteps, c, NULL, NULL, -1, {}, 0.f, &out);
         diffusion_model->free_compute_buffer();
 
@@ -456,9 +457,29 @@ public:
         int64_t t0                        = ggml_time_ms();
         struct ggml_tensor* hidden_states = NULL;  // [N, n_token, hidden_size]
         struct ggml_tensor* pooled        = NULL;
-        cond_stage_model->compute(n_threads, tokens, false, &hidden_states, work_ctx);
+
+        auto input_ids                 = vector_to_ggml_tensor_i32(work_ctx, tokens);
+        struct ggml_tensor* input_ids2 = NULL;
+        size_t max_token_idx           = 0;
         if (version == VERSION_XL) {
-            cond_stage_model->compute(n_threads, tokens, true, &pooled, work_ctx);
+            auto it = std::find(tokens.begin(), tokens.end(), EOS_TOKEN_ID);
+            if (it != tokens.end()) {
+                std::fill(std::next(it), tokens.end(), 0);
+            }
+
+            max_token_idx = std::min<size_t>(std::distance(tokens.begin(), it), tokens.size() - 1);
+
+            input_ids2 = vector_to_ggml_tensor_i32(work_ctx, tokens);
+
+            // for (int i = 0; i < tokens.size(); i++) {
+            //     printf("%d ", tokens[i]);
+            // }
+            // printf("\n");
+        }
+
+        cond_stage_model->compute(n_threads, input_ids, input_ids2, max_token_idx, false, &hidden_states, work_ctx);
+        if (version == VERSION_XL) {
+            cond_stage_model->compute(n_threads, input_ids, input_ids2, max_token_idx, true, &pooled, work_ctx);
         }
         // if (pooled != NULL) {
         //     print_ggml_tensor(hidden_states);
@@ -675,7 +696,8 @@ public:
             }
 
             float t = denoiser->schedule->sigma_to_t(sigma);
-            std::vector<float> timesteps(x->ne[3], t);  // [N, ]
+            std::vector<float> timesteps_vec(x->ne[3], t);  // [N, ]
+            auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
 
             copy_ggml_tensor(noised_input, input);
             // noised_input = noised_input * c_in
