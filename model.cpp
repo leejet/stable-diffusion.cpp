@@ -108,6 +108,14 @@ std::unordered_map<std::string, std::string> open_clip_to_hf_clip_model = {
     {"model.positional_embedding", "transformer.text_model.embeddings.position_embedding.weight"},
     {"model.token_embedding.weight", "transformer.text_model.embeddings.token_embedding.weight"},
     {"model.text_projection", "transformer.text_model.text_projection"},
+    {"model.visual.class_embedding", "transformer.visual_model.embeddings.class_embedding"},
+    {"model.visual.conv1.weight", "transformer.visual_model.embeddings.patch_embedding.weight"},
+    {"model.visual.ln_post.bias", "transformer.visual_model.post_layernorm.bias"},
+    {"model.visual.ln_post.weight", "transformer.visual_model.post_layernorm.weight"},
+    {"model.visual.ln_pre.bias", "transformer.visual_model.pre_layernorm.bias"},
+    {"model.visual.ln_pre.weight", "transformer.visual_model.pre_layernorm.weight"},
+    {"model.visual.positional_embedding", "transformer.visual_model.embeddings.position_embedding.weight"},
+    {"model.visual.proj", "transformer.visual_model.visual_projection"},
 };
 
 std::unordered_map<std::string, std::string> open_clip_to_hk_clip_resblock = {
@@ -137,7 +145,10 @@ std::unordered_map<std::string, std::string> vae_decoder_name_map = {
 std::string convert_open_clip_to_hf_clip(const std::string& name) {
     std::string new_name = name;
     std::string prefix;
-    if (starts_with(new_name, "conditioner.embedders.0.")) {
+    if (starts_with(new_name, "conditioner.embedders.0.open_clip.")) {
+        prefix   = "cond_stage_model.";
+        new_name = new_name.substr(strlen("conditioner.embedders.0.open_clip."));
+    } else if (starts_with(new_name, "conditioner.embedders.0.")) {
         prefix   = "cond_stage_model.";
         new_name = new_name.substr(strlen("conditioner.embedders.0."));
     } else if (starts_with(new_name, "conditioner.embedders.1.")) {
@@ -149,25 +160,35 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
     } else {
         return new_name;
     }
-    std::string open_clip_resblock_prefix = "model.transformer.resblocks.";
-    std::string hf_clip_resblock_prefix   = "transformer.text_model.encoder.layers.";
 
     if (open_clip_to_hf_clip_model.find(new_name) != open_clip_to_hf_clip_model.end()) {
         new_name = open_clip_to_hf_clip_model[new_name];
     }
 
-    if (new_name.find(open_clip_resblock_prefix) == 0) {
-        std::string remain = new_name.substr(open_clip_resblock_prefix.length());
-        std::string idx    = remain.substr(0, remain.find("."));
-        std::string suffix = remain.substr(idx.length() + 1);
+    std::string open_clip_resblock_prefix = "model.transformer.resblocks.";
+    std::string hf_clip_resblock_prefix   = "transformer.text_model.encoder.layers.";
 
-        if (suffix == "attn.in_proj_weight" || suffix == "attn.in_proj_bias") {
-            new_name = hf_clip_resblock_prefix + idx + "." + suffix;
-        } else if (open_clip_to_hk_clip_resblock.find(suffix) != open_clip_to_hk_clip_resblock.end()) {
-            std::string new_suffix = open_clip_to_hk_clip_resblock[suffix];
-            new_name               = hf_clip_resblock_prefix + idx + "." + new_suffix;
+    auto replace_suffix = [&]() {
+        if (new_name.find(open_clip_resblock_prefix) == 0) {
+            std::string remain = new_name.substr(open_clip_resblock_prefix.length());
+            std::string idx    = remain.substr(0, remain.find("."));
+            std::string suffix = remain.substr(idx.length() + 1);
+
+            if (suffix == "attn.in_proj_weight" || suffix == "attn.in_proj_bias") {
+                new_name = hf_clip_resblock_prefix + idx + "." + suffix;
+            } else if (open_clip_to_hk_clip_resblock.find(suffix) != open_clip_to_hk_clip_resblock.end()) {
+                std::string new_suffix = open_clip_to_hk_clip_resblock[suffix];
+                new_name               = hf_clip_resblock_prefix + idx + "." + new_suffix;
+            }
         }
-    }
+    };
+
+    replace_suffix();
+
+    open_clip_resblock_prefix = "model.visual.transformer.resblocks.";
+    hf_clip_resblock_prefix   = "transformer.visual_model.encoder.layers.";
+
+    replace_suffix();
 
     return prefix + new_name;
 }
@@ -437,7 +458,7 @@ void preprocess_tensor(TensorStorage tensor_storage,
 
     tensor_storage.name = new_name;
 
-    if (new_name.find("transformer.text_model.encoder.layers.") != std::string::npos &&
+    if (new_name.find("cond_stage_model") != std::string::npos &&
         ends_with(new_name, "attn.in_proj_weight")) {
         size_t prefix_size = new_name.find("attn.in_proj_weight");
         std::string prefix = new_name.substr(0, prefix_size);
@@ -449,7 +470,7 @@ void preprocess_tensor(TensorStorage tensor_storage,
 
         processed_tensor_storages.insert(processed_tensor_storages.end(), chunks.begin(), chunks.end());
 
-    } else if (new_name.find("transformer.text_model.encoder.layers.") != std::string::npos &&
+    } else if (new_name.find("cond_stage_model") != std::string::npos &&
                ends_with(new_name, "attn.in_proj_bias")) {
         size_t prefix_size = new_name.find("attn.in_proj_bias");
         std::string prefix = new_name.substr(0, prefix_size);
@@ -477,7 +498,13 @@ void bf16_to_f32_vec(uint16_t* src, float* dst, int64_t n) {
     }
 }
 
-void convert_tensor(void* src, ggml_type src_type, void* dst, ggml_type dst_type, int n) {
+void convert_tensor(void* src,
+                    ggml_type src_type,
+                    void* dst,
+                    ggml_type dst_type,
+                    int nrows,
+                    int n_per_row) {
+    int n = nrows * n_per_row;
     if (src_type == dst_type) {
         size_t nbytes = n * ggml_type_size(src_type) / ggml_blck_size(src_type);
         memcpy(((char*)dst), ((char*)src), nbytes);
@@ -486,7 +513,9 @@ void convert_tensor(void* src, ggml_type src_type, void* dst, ggml_type dst_type
             ggml_fp32_to_fp16_row((float*)src, (ggml_fp16_t*)dst, n);
         } else {
             int64_t hist[16];
-            ggml_quantize_chunk(dst_type, (float*)src, dst, 0, n, hist);
+            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            const float* im = imatrix.data();
+            ggml_quantize_chunk(dst_type, (float*)src, dst, 0, nrows, n_per_row, hist, im);
         }
     } else if (dst_type == GGML_TYPE_F32) {
         if (src_type == GGML_TYPE_F16) {
@@ -515,7 +544,9 @@ void convert_tensor(void* src, ggml_type src_type, void* dst, ggml_type dst_type
             ggml_fp32_to_fp16_row((float*)src_data_f32, (ggml_fp16_t*)dst, n);
         } else {
             int64_t hist[16];
-            ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, n, hist);
+            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            const float* im = imatrix.data();
+            ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, nrows, n_per_row, hist, im);
         }
     }
 }
@@ -778,15 +809,24 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             return false;
         }
 
-        if (shape.size() > 4) {
+        if (shape.size() > SD_MAX_DIMS) {
             LOG_ERROR("invalid tensor '%s'", name.c_str());
             return false;
         }
 
-        int n_dims    = (int)shape.size();
-        int64_t ne[4] = {1, 1, 1, 1};
+        int n_dims              = (int)shape.size();
+        int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
         for (int i = 0; i < n_dims; i++) {
             ne[i] = shape[i].get<int64_t>();
+        }
+
+        if (n_dims == 5) {
+            if (ne[3] == 1 && ne[4] == 1) {
+                n_dims = 4;
+            } else {
+                LOG_ERROR("invalid tensor '%s'", name.c_str());
+                return false;
+            }
         }
 
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
@@ -803,6 +843,8 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         tensor_storages.push_back(tensor_storage);
+
+        // LOG_DEBUG("%s %s", tensor_storage.to_string().c_str(), dtype.c_str());
     }
 
     return true;
@@ -946,7 +988,7 @@ struct PickleTensorReader {
                 phase = READ_NAME;
             }
         } else if (phase == READ_DIMENS) {
-            if (tensor_storage.n_dims + 1 > 4) {  // too many dimens
+            if (tensor_storage.n_dims + 1 > SD_MAX_DIMS) {  // too many dimens
                 phase                 = READ_NAME;
                 tensor_storage.n_dims = 0;
             }
@@ -1181,7 +1223,6 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
 }
 
 SDVersion ModelLoader::get_sd_version() {
-    // return VERSION_1_x;
     TensorStorage token_embedding_weight;
     for (auto& tensor_storage : tensor_storages) {
         if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos) {
@@ -1190,6 +1231,10 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("cond_stage_model.1") != std::string::npos) {
             return VERSION_XL;
         }
+        if (tensor_storage.name.find("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") != std::string::npos) {
+            return VERSION_SVD;
+        }
+
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||
             tensor_storage.name == "text_model.embeddings.token_embedding.weight" ||
@@ -1317,7 +1362,6 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
             if (tensor_storage.file_index != file_index) {
                 continue;
             }
-            // LOG_DEBUG("%s", tensor_storage.name.c_str());
 
             ggml_tensor* dst_tensor = NULL;
 
@@ -1353,7 +1397,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     }
 
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
-                                   dst_tensor->type, (int)tensor_storage.nelements());
+                                   dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
                 }
             } else {
                 read_buffer.resize(tensor_storage.nbytes());
@@ -1372,7 +1416,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     convert_buffer.resize(ggml_nbytes(dst_tensor));
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type,
                                    (void*)convert_buffer.data(), dst_tensor->type,
-                                   (int)tensor_storage.nelements());
+                                   (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
                     ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
                 }
             }
@@ -1395,15 +1439,19 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
     std::set<std::string> tensor_names_in_file;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
         const std::string& name = tensor_storage.name;
+        // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
         tensor_names_in_file.insert(name);
 
         struct ggml_tensor* real;
         if (tensors.find(name) != tensors.end()) {
             real = tensors[name];
         } else {
-            if (ignore_tensors.find(name) == ignore_tensors.end()) {
-                LOG_WARN("unknown tensor '%s' in model file", name.c_str());
+            for (auto& ignore_tensor : ignore_tensors) {
+                if (starts_with(name, ignore_tensor)) {
+                    return true;
+                }
             }
+            LOG_INFO("unknown tensor '%s' in model file", tensor_storage.to_string().c_str());
             return true;
         }
 
@@ -1462,7 +1510,7 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
     auto backend    = ggml_backend_cpu_init();
     size_t mem_size = 1 * 1024 * 1024;  // for padding
     mem_size += tensor_storages.size() * ggml_tensor_overhead();
-    mem_size += cal_mem_size(backend, type);
+    mem_size += get_params_mem_size(backend, type);
     LOG_INFO("model tensors mem size: %.2fMB", mem_size / 1024.f / 1024.f);
     ggml_context* ggml_ctx = ggml_init({mem_size, NULL, false});
 
@@ -1512,7 +1560,7 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
     return success;
 }
 
-int64_t ModelLoader::cal_mem_size(ggml_backend_t backend, ggml_type type) {
+int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type) {
     size_t alignment = 128;
     if (backend != NULL) {
         alignment = ggml_backend_get_alignment(backend);

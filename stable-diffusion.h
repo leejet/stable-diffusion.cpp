@@ -72,6 +72,10 @@ enum sd_type_t {
     SD_TYPE_Q6_K    = 14,
     SD_TYPE_Q8_K    = 15,
     SD_TYPE_IQ2_XXS = 16,
+    SD_TYPE_IQ2_XS  = 17,
+    SD_TYPE_IQ3_XXS = 18,
+    SD_TYPE_IQ1_S   = 19,
+    SD_TYPE_IQ4_NL  = 20,
     SD_TYPE_I8,
     SD_TYPE_I16,
     SD_TYPE_I32,
@@ -147,6 +151,21 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            int64_t seed,
                            int batch_count);
 
+SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
+                           sd_image_t init_image,
+                           int width,
+                           int height,
+                           int video_frames,
+                           int motion_bucket_id,
+                           int fps,
+                           float augmentation_level,
+                           float min_cfg,
+                           float cfg_scale,
+                           enum sample_method_t sample_method,
+                           int sample_steps,
+                           float strength,
+                           int64_t seed);
+
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
@@ -158,11 +177,14 @@ SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, 
 
 SD_API bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type);
 
-SD_API void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
-
-SD_API std::string sd_basename(const std::string& path);
-
-SD_API uint8_t* preprocess_canny(uint8_t* img, int width, int height, float highThreshold = 0.08f, float lowThreshold = 0.08f, float weak = 0.8f, float strong = 1.0f, bool inverse = false);
+SD_API uint8_t* preprocess_canny(uint8_t* img,
+                                 int width,
+                                 int height,
+                                 float high_threshold,
+                                 float low_threshold,
+                                 float weak,
+                                 float strong,
+                                 bool inverse);
 
 #ifdef __cplusplus
 }
