@@ -964,7 +964,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
 
         input_ids2 = to_backend(input_ids2);
         if (!return_pooled) {
-            input_ids  = to_backend(input_ids);
+            input_ids = to_backend(input_ids);
         }
 
         struct ggml_tensor* embeddings = NULL;

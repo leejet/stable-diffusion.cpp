@@ -177,6 +177,15 @@ SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, 
 
 SD_API bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type);
 
+SD_API uint8_t* preprocess_canny(uint8_t* img,
+                                 int width,
+                                 int height,
+                                 float high_threshold,
+                                 float low_threshold,
+                                 float weak,
+                                 float strong,
+                                 bool inverse);
+
 #ifdef __cplusplus
 }
 #endif

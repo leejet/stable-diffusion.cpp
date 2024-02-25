@@ -175,7 +175,7 @@ std::u32string unicode_value_to_utf32(int unicode_value) {
     return utf32_string;
 }
 
-std::string sd_basename(const std::string& path) {
+static std::string sd_basename(const std::string& path) {
     size_t pos = path.find_last_of('/');
     if (pos != std::string::npos) {
         return path.substr(pos + 1);

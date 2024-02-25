@@ -388,11 +388,11 @@ struct ControlNet : public GGMLModule {
                                     struct ggml_tensor* y = NULL) {
         struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, CONTROL_NET_GRAPH_SIZE, false);
 
-        x         = to_backend(x);
+        x = to_backend(x);
         if (guided_hint_cached) {
             hint = NULL;
         } else {
-            hint      = to_backend(hint);
+            hint = to_backend(hint);
         }
         context   = to_backend(context);
         y         = to_backend(y);

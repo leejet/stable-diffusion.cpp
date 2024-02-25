@@ -499,6 +499,18 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 }
 
+static std::string sd_basename(const std::string& path) {
+    size_t pos = path.find_last_of('/');
+    if (pos != std::string::npos) {
+        return path.substr(pos + 1);
+    }
+    pos = path.find_last_of('\\');
+    if (pos != std::string::npos) {
+        return path.substr(pos + 1);
+    }
+    return path;
+}
+
 std::string get_image_params(SDParams params, int64_t seed) {
     std::string parameter_string = params.prompt + "\n";
     if (params.negative_prompt.size() != 0) {
@@ -631,7 +643,14 @@ int main(int argc, const char* argv[]) {
                                            input_image_buffer};
             if (params.canny_preprocess) {  // apply preprocessor
                 LOG_INFO("Applying canny preprocessor");
-                control_image->data = preprocess_canny(control_image->data, control_image->width, control_image->height);
+                control_image->data = preprocess_canny(control_image->data,
+                                                       control_image->width,
+                                                       control_image->height,
+                                                       0.08f,
+                                                       0.08f,
+                                                       0.8f,
+                                                       1.0f,
+                                                       false);
             }
         }
         results = txt2img(sd_ctx,
