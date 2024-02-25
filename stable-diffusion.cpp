@@ -24,6 +24,7 @@ const char* model_version_to_str[] = {
     "1.x",
     "2.x",
     "XL",
+    "SVD",
 };
 
 const char* sampling_methods_str[] = {
@@ -36,6 +37,8 @@ const char* sampling_methods_str[] = {
     "modified DPM++ (2M)",
     "LCM",
 };
+
+char GGMLBlock::temp_buffer[1024 * 1024 * 10];
 
 /*================================================== Helper Functions ================================================*/
 
@@ -58,6 +61,9 @@ void calculate_alphas_cumprod(float* alphas_cumprod,
 
 class StableDiffusionGGML {
 public:
+    ggml_backend_t backend    = NULL;  // general backend
+    ggml_type model_data_type = GGML_TYPE_COUNT;
+
     SDVersion version;
     bool vae_decode_only         = false;
     bool free_params_immediately = false;
@@ -65,12 +71,20 @@ public:
     std::shared_ptr<RNG> rng = std::make_shared<STDDefaultRNG>();
     int n_threads            = -1;
     float scale_factor       = 0.18215f;
+    
 
-    FrozenCLIPEmbedderWithCustomWords cond_stage_model;
-    UNetModel diffusion_model;
-    AutoEncoderKL first_stage_model;
-    PhotoMakerIDEncoder pmid_model;
-    PhotoMakerLoraModel pmid_lora;
+    std::shared_ptr<FrozenCLIPEmbedderWithCustomWords> cond_stage_model;
+    std::shared_ptr<FrozenCLIPVisionEmbedder> clip_vision;  // for svd
+    std::shared_ptr<UNetModel> diffusion_model;
+    std::shared_ptr<AutoEncoderKL> first_stage_model;
+    std::shared_ptr<TinyAutoEncoder> tae_first_stage;
+    std::shared_ptr<ControlNet> control_net;
+    std::shared_ptr<PhotoMakerIDEncoder> pmid_model;
+    std::shared_ptr<PhotoMakerLoraModel> pmid_lora;
+    // PhotoMakerIDEncoder pmid_model;
+    // PhotoMakerLoraModel pmid_lora;
+
+    std::string taesd_path;
     bool use_tiny_autoencoder = false;
     bool vae_tiling           = false;
     bool stacked_id           = false;
@@ -80,16 +94,8 @@ public:
     std::string lora_model_dir;
     // lora_name => multiplier
     std::unordered_map<std::string, float> curr_lora_state;
-    // std::map<std::string, LoraModel> loras;
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
-    ggml_backend_t backend             = NULL;  // general backend
-    ggml_type model_data_type          = GGML_TYPE_COUNT;
-
-    TinyAutoEncoder tae_first_stage;
-    std::string taesd_path;
-
-    ControlNet control_net;
 
     std::string trigger_word = "img"; // should be user settable
 
@@ -104,8 +110,6 @@ public:
           vae_decode_only(vae_decode_only),
           free_params_immediately(free_params_immediately),
           lora_model_dir(lora_model_dir) {
-        first_stage_model.decode_only = vae_decode_only;
-        tae_first_stage.decode_only   = vae_decode_only;
         if (rng_type == STD_DEFAULT_RNG) {
             rng = std::make_shared<STDDefaultRNG>();
         } else if (rng_type == CUDA_RNG) {
@@ -171,20 +175,8 @@ public:
         if (version == VERSION_COUNT) {
             LOG_ERROR("get sd version from file failed: '%s'", model_path.c_str());
             return false;
-        }
-        if (version == VERSION_XL) {
-            scale_factor = 0.13025f;
-        }
-        cond_stage_model = FrozenCLIPEmbedderWithCustomWords(version);
-        diffusion_model  = UNetModel(version);
-        pmid_model = PhotoMakerIDEncoder(version);
-        if (id_embeddings_path.size() > 0) {
-            pmid_lora = PhotoMakerLoraModel(id_embeddings_path);
-            if (!pmid_lora.load_from_file(backend)) {
-                LOG_WARN("load photomaker lora tensors from %s failed", id_embeddings_path.c_str());
-                return false;
-            }
-        }
+        }      
+        
 
         LOG_INFO("Stable Diffusion %s ", model_version_to_str[version]);
         if (wtype == GGML_TYPE_COUNT) {
@@ -193,85 +185,113 @@ public:
             model_data_type = wtype;
         }
         LOG_INFO("Stable Diffusion weight type: %s", ggml_type_name(model_data_type));
-
-        LOG_DEBUG("loading vocab");
-        std::string merges_utf8_str = model_loader.load_merges();
-        if (merges_utf8_str.size() == 0) {
-            LOG_ERROR("get merges failed: '%s'", model_path.c_str());
-            return false;
-        }
-        LOG_INFO("vocab loaded with size: %u", merges_utf8_str.size());
-
-        cond_stage_model.tokenizer.load_from_merges(merges_utf8_str);
-
-        // create the ggml context for network params
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
-        if (
-            !cond_stage_model.alloc_params_buffer(backend, model_data_type) ||
-            !diffusion_model.alloc_params_buffer(backend, model_data_type)) {
-            return false;
-        }
-
-        cond_stage_model.text_model.embd_dir = embeddings_path;
-
-        if (id_embeddings_path.size() > 0) {
-            LOG_INFO("loading stacked ID embedding (PHOTOMAKER) model file from '%s'", id_embeddings_path.c_str());
-            if (!model_loader.init_from_file(id_embeddings_path, "pmid.")) {                
-                LOG_WARN("loading stacked ID embedding from '%s' failed", id_embeddings_path.c_str());
-            }
-            else{
-                stacked_id = true;
-            }
-        }
-
-        if(stacked_id){
-            if (!pmid_model.alloc_params_buffer(backend, GGML_TYPE_F32)){
-                LOG_ERROR(" pmid model params buffer allocation failed");
-                return false;
-            }
-            LOG_INFO("pmid param memory buffer size = %.2fMB ",
-                 pmid_model.params_buffer_size / 1024.0 / 1024.0);
-        }
-
-        ggml_type vae_type = model_data_type;
         if (version == VERSION_XL) {
-            vae_type = GGML_TYPE_F32;  // avoid nan, not work...
+            scale_factor = 0.13025f;
+            if (vae_path.size() == 0 && taesd_path.size() == 0) {
+                LOG_WARN(
+                    "!!!It looks like you are using SDXL model. "
+                    "If you find that the generated images are completely black, "
+                    "try specifying SDXL VAE FP16 Fix with the --vae parameter. "
+                    "You can find it here: https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors");
+            }
         }
+        
+        if (version == VERSION_SVD) {
+            clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend, model_data_type);
+            clip_vision->alloc_params_buffer();
+            clip_vision->get_param_tensors(tensors, "cond_stage_model.");
 
-        ggml_backend_t vae_backend = NULL;
-        if (vae_on_cpu && !ggml_backend_is_cpu(backend)) {
-            LOG_INFO("VAE Autoencoder: Using CPU backend");
-            vae_backend = ggml_backend_cpu_init();
-        }else{
-            vae_backend = backend;
-        }
-        if (!use_tiny_autoencoder && !first_stage_model.alloc_params_buffer(vae_backend, vae_type)) {
-            return false;
-        }
+            diffusion_model = std::make_shared<UNetModel>(backend, model_data_type, version);
+            diffusion_model->alloc_params_buffer();
+            diffusion_model->get_param_tensors(tensors, "model.diffusion_model");
 
+            first_stage_model = std::make_shared<AutoEncoderKL>(backend, model_data_type, vae_decode_only, true);
+            LOG_DEBUG("vae_decode_only %d", vae_decode_only);
+            first_stage_model->alloc_params_buffer();
+            first_stage_model->get_param_tensors(tensors, "first_stage_model");
+        } else {
+            cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(backend, model_data_type, version);
+            cond_stage_model->alloc_params_buffer();
+            cond_stage_model->get_param_tensors(tensors, "cond_stage_model.");
 
-        LOG_DEBUG("preparing memory for the weights");
-        // prepare memory for the weights
-        {
-            // cond_stage_model(FrozenCLIPEmbedder)
-            cond_stage_model.init_params();
-            cond_stage_model.map_by_name(tensors, "cond_stage_model.");
+            cond_stage_model->embd_dir = embeddings_path;
 
-            // diffusion_model(UNetModel)
-            diffusion_model.init_params();
-            diffusion_model.map_by_name(tensors, "model.diffusion_model.");
+            diffusion_model = std::make_shared<UNetModel>(backend, model_data_type, version);
+            diffusion_model->alloc_params_buffer();
+            diffusion_model->get_param_tensors(tensors, "model.diffusion_model");
+
+            ggml_type vae_type = model_data_type;
+            if (version == VERSION_XL) {
+                vae_type = GGML_TYPE_F32;  // avoid nan, not work...
+            }
 
             if (!use_tiny_autoencoder) {
-                // firest_stage_model(AutoEncoderKL)
-                first_stage_model.init_params();
+                ggml_backend_t vae_backend = NULL;
+                if (vae_on_cpu && !ggml_backend_is_cpu(backend)) {
+                    LOG_INFO("VAE Autoencoder: Using CPU backend");
+                    vae_backend = ggml_backend_cpu_init();
+                }else{
+                    vae_backend = backend;
+                }
+                first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend, vae_type, vae_decode_only);
+                first_stage_model->alloc_params_buffer();
+                first_stage_model->get_param_tensors(tensors, "first_stage_model");
+            } else {
+                tae_first_stage = std::make_shared<TinyAutoEncoder>(backend, model_data_type, vae_decode_only);
             }
-            first_stage_model.map_by_name(tensors, "first_stage_model.");
+            // first_stage_model->get_param_tensors(tensors, "first_stage_model.");          
             
-            if(stacked_id){
-               pmid_model.init_params(GGML_TYPE_F32);
-               pmid_model.map_by_name(tensors, "pmid.");
+
+            if (control_net_path.size() > 0) {
+                ggml_backend_t cn_backend = NULL;
+                if (control_net_cpu && !ggml_backend_is_cpu(backend)) {
+                    LOG_DEBUG("ControlNet: Using CPU backend");
+                    cn_backend = ggml_backend_cpu_init();
+                } else {
+                    cn_backend = backend;
+                }
+                control_net = std::make_shared<ControlNet>(cn_backend, model_data_type, version);
             }
+
+            pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, GGML_TYPE_F32, version);
+            if (id_embeddings_path.size() > 0) {
+                pmid_lora = std::make_shared<PhotoMakerLoraModel>(backend, GGML_TYPE_F32, version, id_embeddings_path);
+                // if (!pmid_lora.load_from_file(backend)) {
+                if (!pmid_lora->load_from_file(backend)) {
+                    LOG_WARN("load photomaker lora tensors from %s failed", id_embeddings_path.c_str());
+                    return false;
+                }
+                LOG_INFO("loading stacked ID embedding (PHOTOMAKER) model file from '%s'", id_embeddings_path.c_str());
+                if (!model_loader.init_from_file(id_embeddings_path, "pmid.")) {                
+                    LOG_WARN("loading stacked ID embedding from '%s' failed", id_embeddings_path.c_str());
+                }
+                else{
+                    stacked_id = true;
+                }
+            }            
+            if(stacked_id){
+                if (!pmid_model->alloc_params_buffer()){
+                    LOG_ERROR(" pmid model params buffer allocation failed");
+                    return false;
+                }
+                // LOG_INFO("pmid param memory buffer size = %.2fMB ",
+                //     pmid_model->params_buffer_size / 1024.0 / 1024.0);
+                pmid_model->get_param_tensors(tensors, "pmid.");
+            }
+            // if(stacked_id){
+            //    pmid_model.init_params(GGML_TYPE_F32);
+            //    pmid_model.map_by_name(tensors, "pmid.");
+            // }
+
+            LOG_DEBUG("loading vocab");
+            std::string merges_utf8_str = model_loader.load_merges();
+            if (merges_utf8_str.size() == 0) {
+                LOG_ERROR("get merges failed: '%s'", model_path.c_str());
+                return false;
+            }
+            cond_stage_model->tokenizer.load_from_merges(merges_utf8_str);
         }
 
         struct ggml_init_params params;
@@ -280,10 +300,7 @@ public:
         params.no_alloc   = false;
         // LOG_DEBUG("mem_size %u ", params.mem_size);
         struct ggml_context* ctx = ggml_init(params);  // for  alphas_cumprod and is_using_v_parameterization check
-        if (!ctx) {
-            LOG_ERROR("ggml_init() failed");
-            return false;
-        }
+        GGML_ASSERT(ctx != NULL);
         ggml_tensor* alphas_cumprod_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, TIMESTEPS);
         calculate_alphas_cumprod((float*)alphas_cumprod_tensor->data);
 
@@ -292,32 +309,25 @@ public:
         
         int64_t t0 = ggml_time_ms();
 
-        std::map<std::string, struct ggml_tensor*> tensors_need_to_load;
         std::set<std::string> ignore_tensors;
-        tensors_need_to_load["alphas_cumprod"] = alphas_cumprod_tensor;
-        for (auto& pair : tensors) {
-            const std::string& name = pair.first;
-
-            if (use_tiny_autoencoder && starts_with(name, "first_stage_model.")) {
-                ignore_tensors.insert(name);
-                continue;
-            }
-
-            if (vae_decode_only && (starts_with(name, "first_stage_model.encoder") || starts_with(name, "first_stage_model.quant"))) {
-                ignore_tensors.insert(name);
-                continue;
-            }
-
-            tensors_need_to_load.insert(pair);
+        tensors["alphas_cumprod"] = alphas_cumprod_tensor;
+        if (use_tiny_autoencoder) {
+            ignore_tensors.insert("first_stage_model.");
         }
         if (stacked_id) {
-            for (auto& name : pmid_lora.lora_tensors_to_be_ignored){
+            for (auto& name : pmid_lora->lora_tensors_to_be_ignored){
                 ignore_tensors.insert(name);  
             }
         }
 
-
-        bool success = model_loader.load_tensors(tensors_need_to_load, backend, ignore_tensors);
+        if (vae_decode_only) {
+            ignore_tensors.insert("first_stage_model.encoder");
+            ignore_tensors.insert("first_stage_model.quant");
+        }
+        if (version == VERSION_SVD) {
+            ignore_tensors.insert("conditioner.embedders.3");
+        }
+        bool success = model_loader.load_tensors(tensors, backend, ignore_tensors);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
@@ -327,18 +337,46 @@ public:
 
         // LOG_DEBUG("model size = %.2fMB", total_size / 1024.0 / 1024.0);
 
-        size_t total_params_size =
-            cond_stage_model.params_buffer_size +
-            diffusion_model.params_buffer_size +
-            first_stage_model.params_buffer_size;
-        if(stacked_id){
-            total_params_size += pmid_model.params_buffer_size;            
+        if (version == VERSION_SVD) {
+            // diffusion_model->test();
+            // first_stage_model->test();
+            // return false;
+        } else {
+            size_t clip_params_mem_size = cond_stage_model->get_params_mem_size();
+            size_t unet_params_mem_size = diffusion_model->get_params_mem_size();
+            size_t vae_params_mem_size  = 0;
+            if (!use_tiny_autoencoder) {
+                vae_params_mem_size = first_stage_model->get_params_mem_size();
+            } else {
+                if (!tae_first_stage->load_from_file(taesd_path)) {
+                    return false;
+                }
+                vae_params_mem_size = tae_first_stage->get_params_mem_size();
+            }
+            size_t control_net_params_mem_size = 0;
+            if (control_net) {
+                if (!control_net->load_from_file(control_net_path)) {
+                    return false;
+                }
+                control_net_params_mem_size = control_net->get_params_mem_size();
+            }
+            size_t  pmid_params_mem_size = 0;
+            if(stacked_id){
+                pmid_params_mem_size = pmid_model->get_params_mem_size();
+            }
+
+            size_t total_params_size = clip_params_mem_size + clip_params_mem_size + 
+                                  clip_params_mem_size + control_net_params_mem_size 
+                                  + pmid_params_mem_size;
+            LOG_INFO("total params memory size = %.2fMB (clip %.2fMB, unet %.2fMB, vae %.2fMB, controlnet %.2fMB, pmid %.2fMB)",
+                     total_params_size / 1024.0 / 1024.0,
+                     clip_params_mem_size / 1024.0 / 1024.0,
+                     unet_params_mem_size / 1024.0 / 1024.0,
+                     vae_params_mem_size / 1024.0 / 1024.0,
+                     control_net_params_mem_size / 1024.0 / 1024.0,
+                     pmid_params_mem_size);
         }
-        LOG_INFO("total memory buffer size = %.2fMB (clip %.2fMB, unet %.2fMB, vae %.2fMB)",
-                 total_params_size / 1024.0 / 1024.0,
-                 cond_stage_model.params_buffer_size / 1024.0 / 1024.0,
-                 diffusion_model.params_buffer_size / 1024.0 / 1024.0,
-                 first_stage_model.params_buffer_size / 1024.0 / 1024.0);
+
         int64_t t1 = ggml_time_ms();
         LOG_INFO("loading model from '%s' completed, taking %.2fs", model_path.c_str(), (t1 - t0) * 1.0f / 1000);
 
@@ -348,6 +386,9 @@ public:
             if (is_using_v_parameterization_for_sd2(ctx)) {
                 is_using_v_parameterization = true;
             }
+        } else if (version == VERSION_SVD) {
+            // TODO: V_PREDICTION_EDM
+            is_using_v_parameterization = true;
         }
 
         if (is_using_v_parameterization) {
@@ -384,23 +425,6 @@ public:
 
         LOG_DEBUG("finished loaded file");
         ggml_free(ctx);
-
-        if (control_net_path.size() > 0) {
-            ggml_backend_t cn_backend = NULL;
-            if (control_net_cpu && !ggml_backend_is_cpu(backend)) {
-                LOG_DEBUG("ControlNet: Using CPU backend");
-                cn_backend = ggml_backend_cpu_init();
-            } else {
-                cn_backend = backend;
-            }
-            if (!control_net.load_from_file(control_net_path, cn_backend, GGML_TYPE_F16 /* just f16 controlnet models */)) {
-                return false;
-            }
-        }
-
-        if (use_tiny_autoencoder) {
-            return tae_first_stage.load_from_file(taesd_path, backend);
-        }
         return true;
     }
 
@@ -410,17 +434,11 @@ public:
         struct ggml_tensor* c = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 1024, 2, 1, 1);
         ggml_set_f32(c, 0.5);
 
-        struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);                                     // [N, ]
-        struct ggml_tensor* t_emb     = new_timestep_embedding(work_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
-
-        int64_t t0 = ggml_time_ms();
-        ggml_set_f32(timesteps, 999);
-        set_timestep_embedding(timesteps, t_emb, diffusion_model.model_channels);
-        struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        std::vector<struct ggml_tensor*> controls;
-        diffusion_model.alloc_compute_buffer(x_t, c, controls, t_emb);
-        diffusion_model.compute(out, n_threads, x_t, NULL, c, controls, 1.0f, t_emb);
-        diffusion_model.free_compute_buffer();
+        std::vector<float> timesteps = {999.f};  // [N, ]
+        int64_t t0                   = ggml_time_ms();
+        struct ggml_tensor* out      = ggml_dup_tensor(work_ctx, x_t);
+        diffusion_model->compute(n_threads, x_t, timesteps, c, NULL, NULL, -1, {}, 0.f, &out);
+        diffusion_model->free_compute_buffer();
 
         double result = 0.f;
         {
@@ -452,15 +470,14 @@ public:
             LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
             return;
         }
-        LoraModel lora(file_path);
-        if (!lora.load_from_file(backend)) {
+        LoraModel lora(backend, model_data_type, file_path);
+        if (!lora.load_from_file()) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
             return;
         }
 
         lora.multiplier = multiplier;
         lora.apply(tensors, n_threads);
-        // loras[lora_name] = lora;
         lora.free_params_buffer();
 
         int64_t t1 = ggml_time_ms();
@@ -500,14 +517,14 @@ public:
     std::string remove_trigger_from_prompt(ggml_context* work_ctx,
                                           const std::string& prompt){
 
-        auto image_tokens = cond_stage_model.convert_token_to_id(trigger_word);                                    
+        auto image_tokens = cond_stage_model->convert_token_to_id(trigger_word);                                    
         GGML_ASSERT(image_tokens.size() == 1);
-        auto tokens_and_weights  = cond_stage_model.tokenize(prompt, false);
+        auto tokens_and_weights  = cond_stage_model->tokenize(prompt, false);
         std::vector<int> &tokens    = tokens_and_weights.first;
         auto it = std::find(tokens.begin(), tokens.end(), image_tokens[0]);
         GGML_ASSERT(it != tokens.end()); // prompt must have trigger word
         tokens.erase(it);
-        return cond_stage_model.decode(tokens);
+        return cond_stage_model->decode(tokens);
     }
 
     std::tuple<ggml_tensor*, ggml_tensor*, std::vector<bool>>
@@ -518,14 +535,14 @@ public:
                                                                 int height,
                                                                 int num_input_imgs,
                                                                 bool force_zero_embeddings = false) {
-        cond_stage_model.set_clip_skip(clip_skip);        
-        auto image_tokens = cond_stage_model.convert_token_to_id(trigger_word);
+        cond_stage_model->set_clip_skip(clip_skip);        
+        auto image_tokens = cond_stage_model->convert_token_to_id(trigger_word);
         // if(image_tokens.size() == 1){
         //     printf(" image token id is: %d \n", image_tokens[0]);
         // }     
         GGML_ASSERT(image_tokens.size() == 1);
         // auto tokens_and_weights     = cond_stage_model.tokenize(text, true);
-        auto tokens_and_weights     = cond_stage_model.tokenize_with_trigger_token(text, 
+        auto tokens_and_weights     = cond_stage_model->tokenize_with_trigger_token(text, 
                                                                              num_input_imgs, 
                                                                              image_tokens[0], 
                                                                              true);
@@ -537,19 +554,26 @@ public:
         //    printf("%d ", tokens[i]);
         // printf("\n");
         int64_t t0                  = ggml_time_ms();
+        struct ggml_tensor* hidden_states = NULL;  // [N, n_token, hidden_size]
         struct ggml_tensor* pooled  = NULL;
-        size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
+        // size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
+        // if (version == VERSION_XL) {
+        //     total_hidden_size += cond_stage_model.text_model2.hidden_size;
+        //     pooled = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, cond_stage_model.text_model2.projection_dim);
+        // }
+        // struct ggml_tensor* hidden_states = ggml_new_tensor_2d(work_ctx,
+        //                                                        GGML_TYPE_F32,
+        //                                                        total_hidden_size,
+        //                                                        cond_stage_model.text_model.max_position_embeddings);  // [N, n_token, hidden_size]
+        // cond_stage_model.alloc_compute_buffer(work_ctx, (int)tokens.size());
+        // cond_stage_model.compute(n_threads, tokens, hidden_states, pooled);
+        // cond_stage_model.free_compute_buffer();
+
+
+        cond_stage_model->compute(n_threads, tokens, false, &hidden_states, work_ctx);
         if (version == VERSION_XL) {
-            total_hidden_size += cond_stage_model.text_model2.hidden_size;
-            pooled = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, cond_stage_model.text_model2.projection_dim);
+            cond_stage_model->compute(n_threads, tokens, true, &pooled, work_ctx);
         }
-        struct ggml_tensor* hidden_states = ggml_new_tensor_2d(work_ctx,
-                                                               GGML_TYPE_F32,
-                                                               total_hidden_size,
-                                                               cond_stage_model.text_model.max_position_embeddings);  // [N, n_token, hidden_size]
-        cond_stage_model.alloc_compute_buffer(work_ctx, (int)tokens.size());
-        cond_stage_model.compute(n_threads, tokens, hidden_states, pooled);
-        cond_stage_model.free_compute_buffer();
         // if (pooled != NULL) {
         //     print_ggml_tensor(hidden_states);
         //     print_ggml_tensor(pooled);
@@ -582,18 +606,20 @@ public:
         ggml_tensor* vec = NULL;
         if (version == VERSION_XL) {
             int out_dim = 256;
-            vec         = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model.adm_in_channels);
+            // vec         = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model.adm_in_channels);
+            vec         = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model->unet.adm_in_channels);
             // [0:1280]
             size_t offset = 0;
             memcpy(vec->data, pooled->data, ggml_nbytes(pooled));
             offset += ggml_nbytes(pooled);
 
-            struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 2);
+            // struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 2);
             // original_size_as_tuple
             float orig_width  = (float)width;
             float orig_height = (float)height;
-            ggml_tensor_set_f32(timesteps, orig_height, 0);
-            ggml_tensor_set_f32(timesteps, orig_width, 1);
+            std::vector<float> timesteps = {orig_height, orig_width};
+            // ggml_tensor_set_f32(timesteps, orig_height, 0);
+            // ggml_tensor_set_f32(timesteps, orig_width, 1);
             ggml_tensor* embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
             offset += ggml_nbytes(embed_view);
             set_timestep_embedding(timesteps, embed_view, out_dim);
@@ -601,8 +627,9 @@ public:
             // crop_coords_top_left
             float crop_coord_top  = 0.f;
             float crop_coord_left = 0.f;
-            ggml_tensor_set_f32(timesteps, crop_coord_top, 0);
-            ggml_tensor_set_f32(timesteps, crop_coord_left, 1);
+            timesteps             = {crop_coord_top, crop_coord_left};
+            // ggml_tensor_set_f32(timesteps, crop_coord_top, 0);
+            // ggml_tensor_set_f32(timesteps, crop_coord_left, 1);
             embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
             offset += ggml_nbytes(embed_view);
             set_timestep_embedding(timesteps, embed_view, out_dim);
@@ -610,8 +637,9 @@ public:
             // target_size_as_tuple
             float target_width  = (float)width;
             float target_height = (float)height;
-            ggml_tensor_set_f32(timesteps, target_height, 0);
-            ggml_tensor_set_f32(timesteps, target_width, 1);
+            // ggml_tensor_set_f32(timesteps, target_height, 0);
+            // ggml_tensor_set_f32(timesteps, target_width, 1);
+            timesteps           = {target_height, target_width};
             embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
             offset += ggml_nbytes(embed_view);
             set_timestep_embedding(timesteps, embed_view, out_dim);
@@ -626,18 +654,21 @@ public:
                             ggml_tensor* prompts_embeds, 
                             std::vector<bool> &class_tokens_mask){
 
-        size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
-        if (version == VERSION_XL) {
-            total_hidden_size += cond_stage_model.text_model2.hidden_size;         
-        }
-        ggml_tensor *res = ggml_new_tensor_2d(work_ctx,
-                                                prompts_embeds->type,
-                                                total_hidden_size,
-                                                cond_stage_model.text_model.max_position_embeddings);
+        // size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
+        // if (version == VERSION_XL) {
+        //     total_hidden_size += cond_stage_model.text_model2.hidden_size;         
+        // }
+        // ggml_tensor *res = ggml_new_tensor_2d(work_ctx,
+        //                                         prompts_embeds->type,
+        //                                         total_hidden_size,
+        //                                         cond_stage_model.text_model.max_position_embeddings);
 
-        pmid_model.alloc_compute_buffer(work_ctx, init_img, prompts_embeds, class_tokens_mask);
-        pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);        
-        pmid_model.free_compute_buffer(); 
+        // pmid_model.alloc_compute_buffer(work_ctx, init_img, prompts_embeds, class_tokens_mask);
+        // pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);        
+        // pmid_model.free_compute_buffer(); 
+
+        ggml_tensor *res = NULL;               
+        pmid_model->compute(n_threads, init_img, prompts_embeds, class_tokens_mask, &res, work_ctx);
         
         return res; 
     }
@@ -648,25 +679,17 @@ public:
                                                                 int width,
                                                                 int height,
                                                                 bool force_zero_embeddings = false) {
-        cond_stage_model.set_clip_skip(clip_skip);      
-
-        auto tokens_and_weights     = cond_stage_model.tokenize(text, true);
-        std::vector<int>& tokens    = tokens_and_weights.first;
-        std::vector<float>& weights = tokens_and_weights.second;
-        int64_t t0                  = ggml_time_ms();
-        struct ggml_tensor* pooled  = NULL;
-        size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
+        cond_stage_model->set_clip_skip(clip_skip);
+        auto tokens_and_weights           = cond_stage_model->tokenize(text, true);
+        std::vector<int>& tokens          = tokens_and_weights.first;
+        std::vector<float>& weights       = tokens_and_weights.second;
+        int64_t t0                        = ggml_time_ms();
+        struct ggml_tensor* hidden_states = NULL;  // [N, n_token, hidden_size]
+        struct ggml_tensor* pooled        = NULL;
+        cond_stage_model->compute(n_threads, tokens, false, &hidden_states, work_ctx);
         if (version == VERSION_XL) {
-            total_hidden_size += cond_stage_model.text_model2.hidden_size;
-            pooled = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, cond_stage_model.text_model2.projection_dim);
+            cond_stage_model->compute(n_threads, tokens, true, &pooled, work_ctx);
         }
-        struct ggml_tensor* hidden_states = ggml_new_tensor_2d(work_ctx,
-                                                               GGML_TYPE_F32,
-                                                               total_hidden_size,
-                                                               cond_stage_model.text_model.max_position_embeddings);  // [N, n_token, hidden_size]
-        cond_stage_model.alloc_compute_buffer(work_ctx, (int)tokens.size());
-        cond_stage_model.compute(n_threads, tokens, hidden_states, pooled);
-        cond_stage_model.free_compute_buffer();
         // if (pooled != NULL) {
         //     print_ggml_tensor(hidden_states);
         //     print_ggml_tensor(pooled);
@@ -699,18 +722,17 @@ public:
         ggml_tensor* vec = NULL;
         if (version == VERSION_XL) {
             int out_dim = 256;
-            vec         = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model.adm_in_channels);
+            vec         = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model->unet.adm_in_channels);
             // [0:1280]
             size_t offset = 0;
             memcpy(vec->data, pooled->data, ggml_nbytes(pooled));
             offset += ggml_nbytes(pooled);
 
-            struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 2);
             // original_size_as_tuple
-            float orig_width  = (float)width;
-            float orig_height = (float)height;
-            ggml_tensor_set_f32(timesteps, orig_height, 0);
-            ggml_tensor_set_f32(timesteps, orig_width, 1);
+            float orig_width             = (float)width;
+            float orig_height            = (float)height;
+            std::vector<float> timesteps = {orig_height, orig_width};
+
             ggml_tensor* embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
             offset += ggml_nbytes(embed_view);
             set_timestep_embedding(timesteps, embed_view, out_dim);
@@ -718,18 +740,16 @@ public:
             // crop_coords_top_left
             float crop_coord_top  = 0.f;
             float crop_coord_left = 0.f;
-            ggml_tensor_set_f32(timesteps, crop_coord_top, 0);
-            ggml_tensor_set_f32(timesteps, crop_coord_left, 1);
-            embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
+            timesteps             = {crop_coord_top, crop_coord_left};
+            embed_view            = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
             offset += ggml_nbytes(embed_view);
             set_timestep_embedding(timesteps, embed_view, out_dim);
             // print_ggml_tensor(ggml_reshape_1d(work_ctx, embed_view, out_dim * 2));
             // target_size_as_tuple
             float target_width  = (float)width;
             float target_height = (float)height;
-            ggml_tensor_set_f32(timesteps, target_height, 0);
-            ggml_tensor_set_f32(timesteps, target_width, 1);
-            embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
+            timesteps           = {target_height, target_width};
+            embed_view          = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
             offset += ggml_nbytes(embed_view);
             set_timestep_embedding(timesteps, embed_view, out_dim);
             // print_ggml_tensor(ggml_reshape_1d(work_ctx, embed_view, out_dim * 2));
@@ -739,21 +759,108 @@ public:
         return {result, vec};
     }
 
+    std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> get_svd_condition(ggml_context* work_ctx,
+                                                                           sd_image_t init_image,
+                                                                           int width,
+                                                                           int height,
+                                                                           int fps                    = 6,
+                                                                           int motion_bucket_id       = 127,
+                                                                           float augmentation_level   = 0.f,
+                                                                           bool force_zero_embeddings = false) {
+        // c_crossattn
+        int64_t t0                      = ggml_time_ms();
+        struct ggml_tensor* c_crossattn = NULL;
+        {
+            if (force_zero_embeddings) {
+                c_crossattn = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, clip_vision->vision_model.projection_dim);
+                ggml_set_f32(c_crossattn, 0.f);
+            } else {
+                sd_image_f32_t image         = sd_image_t_to_sd_image_f32_t(init_image);
+                sd_image_f32_t resized_image = clip_preprocess(image, clip_vision->vision_model.image_size);
+                free(image.data);
+                image.data = NULL;
+
+                ggml_tensor* pixel_values = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
+                sd_image_f32_to_tensor(resized_image.data, pixel_values, false);
+                free(resized_image.data);
+                resized_image.data = NULL;
+
+                // print_ggml_tensor(pixel_values);
+                clip_vision->compute(n_threads, pixel_values, &c_crossattn, work_ctx);
+                // print_ggml_tensor(c_crossattn);
+            }
+        }
+
+        // c_concat
+        struct ggml_tensor* c_concat = NULL;
+        {
+            if (force_zero_embeddings) {
+                c_concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 4, 1);
+                ggml_set_f32(c_concat, 0.f);
+            } else {
+                ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+
+                if (width != init_image.width || height != init_image.height) {
+                    sd_image_f32_t image         = sd_image_t_to_sd_image_f32_t(init_image);
+                    sd_image_f32_t resized_image = resize_sd_image_f32_t(image, width, height);
+                    free(image.data);
+                    image.data = NULL;
+                    sd_image_f32_to_tensor(resized_image.data, init_img, false);
+                    free(resized_image.data);
+                    resized_image.data = NULL;
+                } else {
+                    sd_image_to_tensor(init_image.data, init_img);
+                }
+                if (augmentation_level > 0.f) {
+                    struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, init_img);
+                    ggml_tensor_set_f32_randn(noise, rng);
+                    // encode_pixels += torch.randn_like(pixels) * augmentation_level
+                    ggml_tensor_scale(noise, augmentation_level);
+                    ggml_tensor_add(init_img, noise);
+                }
+                print_ggml_tensor(init_img);
+                ggml_tensor* moments = encode_first_stage(work_ctx, init_img);
+                print_ggml_tensor(moments);
+                c_concat = get_first_stage_encoding(work_ctx, moments);
+            }
+            print_ggml_tensor(c_concat);
+        }
+
+        // y
+        struct ggml_tensor* y = NULL;
+        {
+            y                            = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model->unet.adm_in_channels);
+            int out_dim                  = 256;
+            int fps_id                   = fps - 1;
+            std::vector<float> timesteps = {(float)fps_id, (float)motion_bucket_id, augmentation_level};
+            set_timestep_embedding(timesteps, y, out_dim);
+            print_ggml_tensor(y);
+        }
+        int64_t t1 = ggml_time_ms();
+        LOG_DEBUG("computing svd condition graph completed, taking %" PRId64 " ms", t1 - t0);
+        return {c_crossattn, c_concat, y};
+    }
+
     ggml_tensor* sample(ggml_context* work_ctx,
                         ggml_tensor* x_t,
                         ggml_tensor* noise,
                         ggml_tensor* c,
+                        ggml_tensor* c_concat,
                         ggml_tensor* c_vector,
                         ggml_tensor* uc,
+                        ggml_tensor* uc_concat,
                         ggml_tensor* uc_vector,
                         ggml_tensor* control_hint,
+                        float control_strength,
+                        float min_cfg,
                         float cfg_scale,
                         sample_method_t method,
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         ggml_tensor* c_id,
-                        ggml_tensor* c_vec_id,
-                        float control_strength) {
+                        ggml_tensor* c_vec_id
+                        ){
+                        
         size_t steps = sigmas.size() - 1;
         // x_t = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(x_t);
@@ -761,16 +868,7 @@ public:
         copy_ggml_tensor(x, x_t);
 
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x_t);
-        struct ggml_tensor* timesteps    = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);                                     // [N, ]
-        struct ggml_tensor* t_emb        = new_timestep_embedding(work_ctx, NULL, timesteps, diffusion_model.model_channels);  // [N, model_channels]
         struct ggml_tensor* guided_hint  = NULL;
-        if (control_hint != NULL) {
-            guided_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, noised_input->ne[0], noised_input->ne[1], diffusion_model.model_channels, 1);
-            control_net.process_hint(guided_hint, n_threads, control_hint);
-            control_net.alloc_compute_buffer(noised_input, guided_hint, c, t_emb);
-        }
-
-        diffusion_model.alloc_compute_buffer(noised_input, c, control_net.controls, t_emb, c_vector);
 
         bool has_unconditioned = cfg_scale != 1.0 && uc != NULL;
 
@@ -812,38 +910,65 @@ public:
             }
 
             float t = denoiser->schedule->sigma_to_t(sigma);
-            ggml_set_f32(timesteps, t);
-            set_timestep_embedding(timesteps, t_emb, diffusion_model.model_channels);
+            std::vector<float> timesteps(x->ne[3], t);  // [N, ]
 
             copy_ggml_tensor(noised_input, input);
             // noised_input = noised_input * c_in
             ggml_tensor_scale(noised_input, c_in);
 
-            // cond
+            std::vector<struct ggml_tensor*> controls;
+
             if (control_hint != NULL) {
-                control_net.compute(n_threads, noised_input, guided_hint, c, t_emb);
-            }
-            if (start_merge_step != -1){
-                if (step <= start_merge_step){
-                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
-                }
-                else{
-                    diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vec_id);
-                    // diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c_id, control_net.controls, control_strength, t_emb, c_vector);
-                }
-            }else{
-                diffusion_model.compute(out_cond, n_threads, noised_input, NULL, c, control_net.controls, control_strength, t_emb, c_vector);
+                control_net->compute(n_threads, noised_input, control_hint, timesteps, c, c_vector);
+                controls = control_net->controls;
+                // print_ggml_tensor(controls[12]);
+                // GGML_ASSERT(0);
             }
 
+            if (start_merge_step == -1 || step <= start_merge_step){
+                // cond
+                diffusion_model->compute(n_threads,
+                                     noised_input,
+                                     timesteps,
+                                     c,
+                                     c_concat,
+                                     c_vector,
+                                     -1,
+                                     controls,
+                                     control_strength,
+                                     &out_cond);
+            }
+            else{
+                diffusion_model->compute(n_threads,
+                                     noised_input,
+                                     timesteps,
+                                     c_id,
+                                     c_concat,
+                                     c_vec_id,
+                                     -1,
+                                     controls,
+                                     control_strength,
+                                     &out_cond);
+
+            }            
 
             float* negative_data = NULL;
             if (has_unconditioned) {
                 // uncond
                 if (control_hint != NULL) {
-                    control_net.compute(n_threads, noised_input, guided_hint, uc, t_emb);
+                    control_net->compute(n_threads, noised_input, control_hint, timesteps, uc, uc_vector);
+                    controls = control_net->controls;
                 }
-
-                diffusion_model.compute(out_uncond, n_threads, noised_input, NULL, uc, control_net.controls, control_strength, t_emb, uc_vector);
+                diffusion_model->compute(n_threads,
+                                         noised_input,
+                                         timesteps,
+                                         uc,
+                                         uc_concat,
+                                         uc_vector,
+                                         -1,
+                                         controls,
+                                         control_strength,
+                                         &out_uncond);
                 negative_data = (float*)out_uncond->data;
             }
             float* vec_denoised  = (float*)denoised->data;
@@ -854,7 +979,13 @@ public:
                 float latent_result = positive_data[i];
                 if (has_unconditioned) {
                     // out_uncond + cfg_scale * (out_cond - out_uncond)
-                    latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                    int64_t ne3 = out_cond->ne[3];
+                    if (min_cfg != cfg_scale && ne3 != 1) {
+                        int64_t i3  = i / out_cond->ne[0] * out_cond->ne[1] * out_cond->ne[2];
+                        float scale = min_cfg + (cfg_scale - min_cfg) * (i3 * 1.0f / ne3);
+                    } else {
+                        latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                    }
                 }
                 // v = latent_result, eps = latent_result
                 // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
@@ -1252,8 +1383,11 @@ public:
                 LOG_ERROR("Attempting to sample with nonexisting sample method %i", method);
                 abort();
         }
-        control_net.free_compute_buffer();
-        diffusion_model.free_compute_buffer();
+        if (control_net) {
+            control_net->free_control_ctx();
+            control_net->free_compute_buffer();
+        }
+        diffusion_model->free_compute_buffer();
         return x;
     }
 
@@ -1292,10 +1426,11 @@ public:
     ggml_tensor* compute_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode) {
         int64_t W           = x->ne[0];
         int64_t H           = x->ne[1];
-        ggml_tensor* result = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32,
-                                                 decode ? (W * 8) : (W / 8),                    // width
-                                                 decode ? (H * 8) : (H / 8),                    // height
-                                                 decode ? 3 : (use_tiny_autoencoder ? 4 : 8));  // channels
+        ggml_tensor* result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
+                                                 decode ? (W * 8) : (W / 8),  // width
+                                                 decode ? (H * 8) : (H / 8),  // height
+                                                 decode ? 3 : (use_tiny_autoencoder ? 4 : 8),
+                                                 x->ne[3]);  // channels
         int64_t t0          = ggml_time_ms();
         if (!use_tiny_autoencoder) {
             if (decode) {
@@ -1306,18 +1441,13 @@ public:
             if (vae_tiling && decode) {  // TODO: support tiling vae encode
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    if (init) {
-                        first_stage_model.alloc_compute_buffer(in, decode);
-                    } else {
-                        first_stage_model.compute(out, n_threads, in, decode);
-                    }
+                    first_stage_model->compute(n_threads, in, decode, &out);
                 };
                 sd_tiling(x, result, 8, 32, 0.5f, on_tiling);
             } else {
-                first_stage_model.alloc_compute_buffer(x, decode);
-                first_stage_model.compute(result, n_threads, x, decode);
+                first_stage_model->compute(n_threads, x, decode, &result);
             }
-            first_stage_model.free_compute_buffer();
+            first_stage_model->free_compute_buffer();
             if (decode) {
                 ggml_tensor_scale_output(result);
             }
@@ -1325,19 +1455,15 @@ public:
             if (vae_tiling && decode) {  // TODO: support tiling vae encode
                 // split latent in 64x64 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    if (init) {
-                        tae_first_stage.alloc_compute_buffer(in, decode);
-                    } else {
-                        tae_first_stage.compute(out, n_threads, in, decode);
-                    }
+                    tae_first_stage->compute(n_threads, in, decode, &out);
                 };
                 sd_tiling(x, result, 8, 64, 0.5f, on_tiling);
             } else {
-                tae_first_stage.alloc_compute_buffer(x, decode);
-                tae_first_stage.compute(result, n_threads, x, decode);
+                tae_first_stage->compute(n_threads, x, decode, &result);
             }
-            tae_first_stage.free_compute_buffer();
+            tae_first_stage->free_compute_buffer();
         }
+
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing vae [mode: %s] graph completed, taking %.2fs", decode ? "DECODE" : "ENCODE", (t1 - t0) * 1.0f / 1000);
         if (decode) {
@@ -1466,11 +1592,12 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     if(sd_ctx->sd->stacked_id){
-        sd_ctx->sd->pmid_lora.apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
-        sd_ctx->sd->pmid_lora.free_compute_buffer();
-        if (sd_ctx->sd->free_params_immediately) {
-            sd_ctx->sd->pmid_lora.free_params_buffer();
-        }
+        // sd_ctx->sd->pmid_lora.apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
+        sd_ctx->sd->pmid_lora->apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
+        // sd_ctx->sd->pmid_lora.free_compute_buffer();
+        // if (sd_ctx->sd->free_params_immediately) {
+        //     sd_ctx->sd->pmid_lora.free_params_buffer();
+        // }
     }
 
     struct ggml_init_params params;
@@ -1502,7 +1629,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     // ggml_tensor* class_tokens_mask = NULL;
     std::vector<bool> class_tokens_mask;
     if(sd_ctx->sd->stacked_id){
-        sd_ctx->sd->pmid_model.style_strength = style_ratio;
+        sd_ctx->sd->pmid_model->style_strength = style_ratio;
         int32_t w = input_id_images[0]->width;
         int32_t h = input_id_images[0]->height;
         int32_t channels = input_id_images[0]->channel;
@@ -1527,9 +1654,9 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
 
-        if (sd_ctx->sd->free_params_immediately) {
-            sd_ctx->sd->pmid_model.free_params_buffer();
-        } 
+        // if (sd_ctx->sd->free_params_immediately) {
+        //     sd_ctx->sd->pmid_model.free_params_buffer();
+        // } 
         // Encode input prompt without the trigger word for delayed conditioning
         prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt); 
         // printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
@@ -1562,7 +1689,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     LOG_INFO("get_learned_condition completed, taking %" PRId64 " ms", t1 - t0);
 
     if (sd_ctx->sd->free_params_immediately) {
-        sd_ctx->sd->cond_stage_model.free_params_buffer();
+        sd_ctx->sd->cond_stage_model->free_params_buffer();
     }
 
     struct ggml_tensor* image_hint = NULL;
@@ -1589,28 +1716,30 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         int start_merge_step = -1;
         if(sd_ctx->sd->stacked_id){
-            start_merge_step = int(sd_ctx->sd->pmid_model.style_strength / 100.f * sample_steps);
+            start_merge_step = int(sd_ctx->sd->pmid_model->style_strength / 100.f * sample_steps);
             if(start_merge_step > 30)
                 start_merge_step = 30;
             LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);    
         }
-
-
-        struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, 
-                                            x_t, 
-                                            NULL, 
-                                            c, 
-                                            c_vector, 
-                                            uc,
-                                            uc_vector,
-                                            image_hint, 
-                                            cfg_scale, 
-                                            sample_method, 
-                                            sigmas, 
-                                            start_merge_step,
-                                            prompts_embeds,
-                                            pooled_prompts_embeds,
-                                            control_strength);
+        
+        struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx,
+                                                     x_t,
+                                                     NULL,
+                                                     c,
+                                                     NULL,
+                                                     c_vector,
+                                                     uc,
+                                                     NULL,
+                                                     uc_vector,
+                                                     image_hint,
+                                                     control_strength,
+                                                     cfg_scale,
+                                                     cfg_scale,
+                                                     sample_method,
+                                                     sigmas,
+                                                     start_merge_step,
+                                                     prompts_embeds,
+                                                     pooled_prompts_embeds);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -1619,7 +1748,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     }
 
     if (sd_ctx->sd->free_params_immediately) {
-        sd_ctx->sd->diffusion_model.free_params_buffer();
+        sd_ctx->sd->diffusion_model->free_params_buffer();
     }
     int64_t t3 = ggml_time_ms();
     LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
@@ -1640,7 +1769,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     int64_t t4 = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
     if (sd_ctx->sd->free_params_immediately && !sd_ctx->sd->use_tiny_autoencoder) {
-        sd_ctx->sd->first_stage_model.free_params_buffer();
+        sd_ctx->sd->first_stage_model->free_params_buffer();
     }
     sd_image_t* result_images = (sd_image_t*)calloc(batch_count, sizeof(sd_image_t));
     if (result_images == NULL) {
@@ -1755,7 +1884,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     int64_t t2 = ggml_time_ms();
     LOG_INFO("get_learned_condition completed, taking %" PRId64 " ms", t2 - t1);
     if (sd_ctx->sd->free_params_immediately) {
-        sd_ctx->sd->cond_stage_model.free_params_buffer();
+        sd_ctx->sd->cond_stage_model->free_params_buffer();
     }
 
     sd_ctx->sd->rng->manual_seed(seed);
@@ -1763,21 +1892,35 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
 
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
-    struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx, init_latent, noise, c, c_vector, uc,
-                                                 uc_vector, NULL, cfg_scale, sample_method, sigma_sched,
-                                                 -1, NULL, NULL,
-                                                 1.0f);
+    struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx,
+                                                 init_latent,
+                                                 noise,
+                                                 c,
+                                                 NULL,
+                                                 c_vector,
+                                                 uc,
+                                                 NULL,
+                                                 uc_vector,
+                                                 {},
+                                                 0.f,
+                                                 cfg_scale,
+                                                 cfg_scale,
+                                                 sample_method,
+                                                 sigma_sched,
+                                                 -1,
+                                                 NULL,
+                                                 NULL);
     // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
     // print_ggml_tensor(x_0);
     int64_t t3 = ggml_time_ms();
     LOG_INFO("sampling completed, taking %.2fs", (t3 - t2) * 1.0f / 1000);
     if (sd_ctx->sd->free_params_immediately) {
-        sd_ctx->sd->diffusion_model.free_params_buffer();
+        sd_ctx->sd->diffusion_model->free_params_buffer();
     }
 
     struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, x_0);
     if (sd_ctx->sd->free_params_immediately && !sd_ctx->sd->use_tiny_autoencoder) {
-        sd_ctx->sd->first_stage_model.free_params_buffer();
+        sd_ctx->sd->first_stage_model->free_params_buffer();
     }
     if (img == NULL) {
         ggml_free(work_ctx);
@@ -1802,6 +1945,145 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
 
     LOG_INFO("img2img completed in %.2fs", (t4 - t0) * 1.0f / 1000);
+
+    return result_images;
+}
+
+SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
+                           sd_image_t init_image,
+                           int width,
+                           int height,
+                           int video_frames,
+                           int motion_bucket_id,
+                           int fps,
+                           float augmentation_level,
+                           float min_cfg,
+                           float cfg_scale,
+                           enum sample_method_t sample_method,
+                           int sample_steps,
+                           float strength,
+                           int64_t seed) {
+    if (sd_ctx == NULL) {
+        return NULL;
+    }
+
+    LOG_INFO("img2vid %dx%d", width, height);
+
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->schedule->get_sigmas(sample_steps);
+
+    struct ggml_init_params params;
+    params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10 MB
+    params.mem_size += width * height * 3 * sizeof(float) * video_frames;
+    params.mem_buffer = NULL;
+    params.no_alloc   = false;
+    // LOG_DEBUG("mem_size %u ", params.mem_size);
+
+    // draft context
+    struct ggml_context* work_ctx = ggml_init(params);
+    if (!work_ctx) {
+        LOG_ERROR("ggml_init() failed");
+        return NULL;
+    }
+
+    if (seed < 0) {
+        seed = (int)time(NULL);
+    }
+
+    sd_ctx->sd->rng->manual_seed(seed);
+
+    int64_t t0 = ggml_time_ms();
+
+    ggml_tensor* c_crossattn = NULL;
+    ggml_tensor* c_concat    = NULL;
+    ggml_tensor* c_vector    = NULL;
+
+    ggml_tensor* uc_crossattn = NULL;
+    ggml_tensor* uc_concat    = NULL;
+    ggml_tensor* uc_vector    = NULL;
+
+    std::tie(c_crossattn, c_concat, c_vector) = sd_ctx->sd->get_svd_condition(work_ctx,
+                                                                              init_image,
+                                                                              width,
+                                                                              height,
+                                                                              fps,
+                                                                              motion_bucket_id,
+                                                                              augmentation_level);
+
+    uc_crossattn = ggml_dup_tensor(work_ctx, c_crossattn);
+    ggml_set_f32(uc_crossattn, 0.f);
+
+    uc_concat = ggml_dup_tensor(work_ctx, c_concat);
+    ggml_set_f32(uc_concat, 0.f);
+
+    uc_vector = ggml_dup_tensor(work_ctx, c_vector);
+
+    int64_t t1 = ggml_time_ms();
+    LOG_INFO("get_learned_condition completed, taking %" PRId64 " ms", t1 - t0);
+    if (sd_ctx->sd->free_params_immediately) {
+        sd_ctx->sd->clip_vision->free_params_buffer();
+    }
+
+    sd_ctx->sd->rng->manual_seed(seed);
+    int C                   = 4;
+    int W                   = width / 8;
+    int H                   = height / 8;
+    struct ggml_tensor* x_t = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, video_frames);
+    ggml_tensor_set_f32_randn(x_t, sd_ctx->sd->rng);
+
+    LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
+    struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx,
+                                                 x_t,
+                                                 NULL,
+                                                 c_crossattn,
+                                                 c_concat,
+                                                 c_vector,
+                                                 uc_crossattn,
+                                                 uc_concat,
+                                                 uc_vector,
+                                                 {},
+                                                 0.f,
+                                                 min_cfg,
+                                                 cfg_scale,
+                                                 sample_method,
+                                                 sigmas,
+                                                 -1,
+                                                 NULL,
+                                                 NULL);
+
+    int64_t t2 = ggml_time_ms();
+    LOG_INFO("sampling completed, taking %.2fs", (t2 - t1) * 1.0f / 1000);
+    if (sd_ctx->sd->free_params_immediately) {
+        sd_ctx->sd->diffusion_model->free_params_buffer();
+    }
+
+    struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, x_0);
+    if (sd_ctx->sd->free_params_immediately) {
+        sd_ctx->sd->first_stage_model->free_params_buffer();
+    }
+    if (img == NULL) {
+        ggml_free(work_ctx);
+        return NULL;
+    }
+
+    sd_image_t* result_images = (sd_image_t*)calloc(video_frames, sizeof(sd_image_t));
+    if (result_images == NULL) {
+        ggml_free(work_ctx);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < video_frames; i++) {
+        auto img_i = ggml_view_3d(work_ctx, img, img->ne[0], img->ne[1], img->ne[2], img->nb[1], img->nb[2], img->nb[3] * i);
+
+        result_images[i].width   = width;
+        result_images[i].height  = height;
+        result_images[i].channel = 3;
+        result_images[i].data    = sd_tensor_to_image(img_i);
+    }
+    ggml_free(work_ctx);
+
+    int64_t t3 = ggml_time_ms();
+
+    LOG_INFO("img2vid completed in %.2fs", (t3 - t0) * 1.0f / 1000);
 
     return result_images;
 }

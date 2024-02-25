@@ -1,6 +1,7 @@
 #include "util.h"
 #include <stdarg.h>
 #include <algorithm>
+#include <cmath>
 #include <codecvt>
 #include <fstream>
 #include <locale>
@@ -268,6 +269,9 @@ sd_image_t *preprocess_id_image(sd_image_t *img){
 }
 
 void pretty_progress(int step, int steps, float time) {
+    if (step == 0) {
+        return;
+    }
     std::string progress = "  |";
     int max_progress     = 50;
     int32_t current      = (int32_t)(step * 1.f * max_progress / steps);
@@ -371,4 +375,153 @@ const char* sd_get_system_info() {
 
 const char* sd_type_name(enum sd_type_t type) {
     return ggml_type_name((ggml_type)type);
+}
+
+sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image) {
+    sd_image_f32_t converted_image;
+    converted_image.width   = image.width;
+    converted_image.height  = image.height;
+    converted_image.channel = image.channel;
+
+    // Allocate memory for float data
+    converted_image.data = (float*)malloc(image.width * image.height * image.channel * sizeof(float));
+
+    for (int i = 0; i < image.width * image.height * image.channel; i++) {
+        // Convert uint8_t to float
+        converted_image.data[i] = (float)image.data[i];
+    }
+
+    return converted_image;
+}
+
+// Function to perform double linear interpolation
+float interpolate(float v1, float v2, float v3, float v4, float x_ratio, float y_ratio) {
+    return v1 * (1 - x_ratio) * (1 - y_ratio) + v2 * x_ratio * (1 - y_ratio) + v3 * (1 - x_ratio) * y_ratio + v4 * x_ratio * y_ratio;
+}
+
+sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int target_height) {
+    sd_image_f32_t resized_image;
+    resized_image.width   = target_width;
+    resized_image.height  = target_height;
+    resized_image.channel = image.channel;
+
+    // Allocate memory for resized float data
+    resized_image.data = (float*)malloc(target_width * target_height * image.channel * sizeof(float));
+
+    for (int y = 0; y < target_height; y++) {
+        for (int x = 0; x < target_width; x++) {
+            float original_x = (float)x * image.width / target_width;
+            float original_y = (float)y * image.height / target_height;
+
+            int x1 = (int)original_x;
+            int y1 = (int)original_y;
+            int x2 = x1 + 1;
+            int y2 = y1 + 1;
+
+            for (int k = 0; k < image.channel; k++) {
+                float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
+                float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
+                float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
+                float v4 = *(image.data + y2 * image.width * image.channel + x2 * image.channel + k);
+
+                float x_ratio = original_x - x1;
+                float y_ratio = original_y - y1;
+
+                float value = interpolate(v1, v2, v3, v4, x_ratio, y_ratio);
+
+                *(resized_image.data + y * target_width * image.channel + x * image.channel + k) = value;
+            }
+        }
+    }
+
+    return resized_image;
+}
+
+void normalize_sd_image_f32_t(sd_image_f32_t image, float means[3], float stds[3]) {
+    for (int y = 0; y < image.height; y++) {
+        for (int x = 0; x < image.width; x++) {
+            for (int k = 0; k < image.channel; k++) {
+                int index         = (y * image.width + x) * image.channel + k;
+                image.data[index] = (image.data[index] - means[k]) / stds[k];
+            }
+        }
+    }
+}
+
+// Constants for means and std
+float means[3] = {0.48145466, 0.4578275, 0.40821073};
+float stds[3]  = {0.26862954, 0.26130258, 0.27577711};
+
+// Function to clip and preprocess sd_image_f32_t
+sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size) {
+    float scale = (float)size / fmin(image.width, image.height);
+
+    // Interpolation
+    int new_width       = (int)(scale * image.width);
+    int new_height      = (int)(scale * image.height);
+    float* resized_data = (float*)malloc(new_width * new_height * image.channel * sizeof(float));
+
+    for (int y = 0; y < new_height; y++) {
+        for (int x = 0; x < new_width; x++) {
+            float original_x = (float)x * image.width / new_width;
+            float original_y = (float)y * image.height / new_height;
+
+            int x1 = (int)original_x;
+            int y1 = (int)original_y;
+            int x2 = x1 + 1;
+            int y2 = y1 + 1;
+
+            for (int k = 0; k < image.channel; k++) {
+                float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
+                float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
+                float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
+                float v4 = *(image.data + y2 * image.width * image.channel + x2 * image.channel + k);
+
+                float x_ratio = original_x - x1;
+                float y_ratio = original_y - y1;
+
+                float value = interpolate(v1, v2, v3, v4, x_ratio, y_ratio);
+
+                *(resized_data + y * new_width * image.channel + x * image.channel + k) = value;
+            }
+        }
+    }
+
+    // Clip and preprocess
+    int h = (new_height - size) / 2;
+    int w = (new_width - size) / 2;
+
+    sd_image_f32_t result;
+    result.width   = size;
+    result.height  = size;
+    result.channel = image.channel;
+    result.data    = (float*)malloc(size * size * image.channel * sizeof(float));
+
+    for (int k = 0; k < image.channel; k++) {
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                *(result.data + i * size * image.channel + j * image.channel + k) =
+                    fmin(fmax(*(resized_data + (i + h) * new_width * image.channel + (j + w) * image.channel + k), 0.0f), 255.0f) / 255.0f;
+            }
+        }
+    }
+
+    // Free allocated memory
+    free(resized_data);
+
+    // Normalize
+    for (int k = 0; k < image.channel; k++) {
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                // *(result.data + i * size * image.channel + j * image.channel + k) = 0.5f;
+                int offset  = i * size * image.channel + j * image.channel + k;
+                float value = *(result.data + offset);
+                value       = (value - means[k]) / stds[k];
+                // value = 0.5f;
+                *(result.data + offset) = value;
+            }
+        }
+    }
+
+    return result;
 }
