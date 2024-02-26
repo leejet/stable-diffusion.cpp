@@ -542,29 +542,19 @@ public:
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, bool mask = true, bool atten1 = true) {
         // x: [N, n_token, d_model]
+        auto layer_norm1 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm1"]);
+        auto layer_norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm2"]);
+        auto mlp         = std::dynamic_pointer_cast<CLIPMLP>(blocks["mlp"]);
         if(atten1){
-            auto self_attn   = std::dynamic_pointer_cast<MultiheadAttention>(blocks["self_attn"]);                
-            auto layer_norm1 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm1"]);
-            auto layer_norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm2"]);
-            auto mlp         = std::dynamic_pointer_cast<CLIPMLP>(blocks["mlp"]);
-            
+            auto self_attn   = std::dynamic_pointer_cast<MultiheadAttention>(blocks["self_attn"]);
             x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
-            x = ggml_add(ctx, x, mlp->forward(ctx, layer_norm2->forward(ctx, x)));
-            return x;
         }
         else{
-            auto self_attn   = std::dynamic_pointer_cast<MultiheadAttention2>(blocks["self_attn"]);                
-            auto layer_norm1 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm1"]);
-            auto layer_norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm2"]);
-            auto mlp         = std::dynamic_pointer_cast<CLIPMLP>(blocks["mlp"]);
-            
-            // struct ggml_tensor* h = layer_norm1->forward(ctx, x);
-            // h = self_attn->forward(ctx, h, mask);
+            auto self_attn   = std::dynamic_pointer_cast<MultiheadAttention2>(blocks["self_attn"]);
             x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
-            // x = ggml_add(ctx, x, h);
-            x = ggml_add(ctx, x, mlp->forward(ctx, layer_norm2->forward(ctx, x)));
-            return x;
         }
+        x = ggml_add(ctx, x, mlp->forward(ctx, layer_norm2->forward(ctx, x)));
+        return x;
     }
 };
 
