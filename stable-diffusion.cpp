@@ -554,6 +554,10 @@ public:
         // for(int i = 0; i < tokens.size(); ++i)
         //    printf("%d ", tokens[i]);
         // printf("\n");
+        // printf("clsm: \n");
+        // for(int i = 0; i < clsm.size(); ++i)
+        //    printf("%d ", clsm[i]?1:0);
+        // printf("\n");
         int64_t t0                  = ggml_time_ms();
         struct ggml_tensor* hidden_states = NULL;  // [N, n_token, hidden_size]
         struct ggml_tensor* pooled  = NULL;
@@ -1691,16 +1695,16 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
             else
                 sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
         }
-
+        t0                            = ggml_time_ms();
         auto cond_tup                = sd_ctx->sd->get_learned_condition_with_trigger(work_ctx, prompt, 
                                                    clip_skip, width, height, num_input_images );
-        LOG_INFO("get_learned_condition_with_trigger finished");
         prompts_embeds                = std::get<0>(cond_tup);
         pooled_prompts_embeds         = std::get<1>(cond_tup);  // [adm_in_channels, ]
         class_tokens_mask             = std::get<2>(cond_tup);  // 
 
         prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
-        LOG_INFO("id_encoder");
+        t1 = ggml_time_ms();
+        LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->pmid_model->free_params_buffer();
         } 

@@ -225,7 +225,13 @@ public:
 
         struct ggml_tensor * valid_id_embeds = id_embeds;
         // # slice out the image token embeddings
+        // print_ggml_tensor(class_tokens_mask_pos, false);
+        ggml_set_name(class_tokens_mask_pos, "class_tokens_mask_pos");
+        ggml_set_name(prompt_embeds, "prompt_embeds");
+        // print_ggml_tensor(valid_id_embeds, true, "valid_id_embeds");
+        // print_ggml_tensor(class_tokens_mask_pos, true, "class_tokens_mask_pos");
         struct ggml_tensor * image_token_embeds = ggml_get_rows(ctx, prompt_embeds, class_tokens_mask_pos);
+        ggml_set_name(image_token_embeds, "image_token_embeds");
         struct ggml_tensor *stacked_id_embeds = fuse_fn(ctx, image_token_embeds, valid_id_embeds);
 
         stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
@@ -242,6 +248,7 @@ public:
         class_tokens_mask = ggml_repeat(ctx, class_tokens_mask, prompt_embeds);
         prompt_embeds = ggml_mul(ctx, prompt_embeds, class_tokens_mask);
         struct ggml_tensor * updated_prompt_embeds = ggml_add(ctx, prompt_embeds, stacked_id_embeds);
+        ggml_set_name(updated_prompt_embeds, "updated_prompt_embeds");
         return updated_prompt_embeds;
 
     }
@@ -288,6 +295,16 @@ public:
     // struct ggml_tensor* visual_projection_2; 
     VisualProjection visual_projection_2;
     float style_strength;
+
+
+    std::vector<float> ctm;
+    std::vector<ggml_fp16_t> ctmf16;
+    std::vector<int> ctmpos;
+
+    std::vector<ggml_fp16_t> zeros_left_16;
+    std::vector<float> zeros_left;
+    std::vector<ggml_fp16_t> zeros_right_16;
+    std::vector<float> zeros_right;
 
 public:    
     PhotoMakerIDEncoder(ggml_backend_t backend, ggml_type wtype, 
@@ -382,14 +399,14 @@ public:
         //                                                      positions
         //                                                      ); // [batch_size, seq_length, hidden_size]
         struct ggml_tensor *shared_id_embeds = vision_model.forward(ctx, id_pixel_values);     // [batch_size, seq_length, hidden_size]
-        print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds");  
+        // print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds");  
 
         struct ggml_tensor *id_embeds = vision_model.visual_project(ctx, shared_id_embeds); // [batch_size, seq_length, proj_dim(768)]
-        print_ggml_tensor(id_embeds, true, "id_embeds");  
+        // print_ggml_tensor(id_embeds, true, "id_embeds");  
         
         // struct ggml_tensor *id_embeds_2 = ggml_mul_mat(ctx, visual_projection_2, shared_id_embeds); // [batch_size, seq_length, 1280]
         struct ggml_tensor *id_embeds_2 = visual_projection_2.forward(ctx, shared_id_embeds); // [batch_size, seq_length, 1280]
-        print_ggml_tensor(id_embeds_2, true, "id_embeds_2");  
+        // print_ggml_tensor(id_embeds_2, true, "id_embeds_2");  
 
 
        
@@ -399,14 +416,14 @@ public:
         id_embeds = ggml_concat(ctx, id_embeds, id_embeds_2); // [batch_size, seq_length, 1, 2048] check whether concat at dim 2 is right
         id_embeds = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 1, 2, 0, 3));
 
-        print_ggml_tensor(id_embeds, true, "id_embeds_after_cont+perm");  
+        // print_ggml_tensor(id_embeds, true, "id_embeds_after_cont+perm");  
 
         struct ggml_tensor * updated_prompt_embeds = fuse_module.forward(ctx,
                                           prompt_embeds, id_embeds,
                                           class_tokens_mask,
                                           class_tokens_mask_pos,
                                           left, right);
-         print_ggml_tensor(updated_prompt_embeds, true, "updated_prompt_embeds");  
+        //  print_ggml_tensor(updated_prompt_embeds, true, "updated_prompt_embeds");  
 
         return updated_prompt_embeds;
 
@@ -431,6 +448,15 @@ public:
 
         // struct ggml_cgraph* gf = ggml_new_graph(ctx0);   
 
+
+        ctm.clear();
+        ctmf16.clear();
+        ctmpos.clear();
+        zeros_left.clear();
+        zeros_left_16.clear();
+        zeros_right.clear();
+        zeros_right_16.clear();
+
         ggml_context *ctx0 = compute_ctx;
 
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
@@ -450,9 +476,6 @@ public:
         struct ggml_tensor* id_pixel_values_d = to_backend(id_pixel_values);
         struct ggml_tensor* prompt_embeds_d   = to_backend(prompt_embeds);
 
-        std::vector<float> ctm;
-        std::vector<ggml_fp16_t> ctmf16;
-        std::vector<int> ctmpos;
         struct ggml_tensor*  left  = NULL;
         struct ggml_tensor*  right = NULL;
         for(int i=0; i < class_tokens_mask.size(); i++){
@@ -517,24 +540,32 @@ public:
             set_backend_tensor_data(class_tokens_mask_pos, ctmpos.data());
             if(left){
                 if(type == GGML_TYPE_F16){
-                    std::vector<ggml_fp16_t> zeros(ggml_nelements(left), ggml_fp32_to_fp16(0.f));
+                    // std::vector<ggml_fp16_t> zeros(ggml_nelements(left), ggml_fp32_to_fp16(0.f));
+                    for(int i = 0; i < ggml_nelements(left); ++i)
+                        zeros_left_16.push_back(ggml_fp32_to_fp16(0.f));
                     // ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
-                    set_backend_tensor_data(left, zeros.data());
+                    set_backend_tensor_data(left, zeros_left_16.data());
                 }else{
-                    std::vector<float> zeros(ggml_nelements(left), 0.f);
+                    // std::vector<float> zeros(ggml_nelements(left), 0.f);
+                    for(int i = 0; i < ggml_nelements(left); ++i)
+                        zeros_left.push_back(0.f);
                     // ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
-                    set_backend_tensor_data(left, zeros.data());
+                    set_backend_tensor_data(left, zeros_left.data());
                 }
             }
             if(right){
                 if(type == GGML_TYPE_F16){
-                    std::vector<ggml_fp16_t> zeros(ggml_nelements(right), ggml_fp32_to_fp16(0.f));
+                    // std::vector<ggml_fp16_t> zeros(ggml_nelements(right), ggml_fp32_to_fp16(0.f));
                     // ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
-                    set_backend_tensor_data(right, zeros.data());
+                    for(int i = 0; i < ggml_nelements(right); ++i)
+                        zeros_right_16.push_back(ggml_fp32_to_fp16(0.f));
+                    set_backend_tensor_data(right, zeros_right_16.data());
                 }else{
-                    std::vector<float> zeros(ggml_nelements(right), 0.f);
+                    // std::vector<float> zeros(ggml_nelements(right), 0.f);
+                    for(int i = 0; i < ggml_nelements(right); ++i)
+                        zeros_right.push_back(0.f);
                     // ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
-                    set_backend_tensor_data(right, zeros.data());
+                    set_backend_tensor_data(right, zeros_right.data());
                 }
             }
         }     
@@ -552,18 +583,6 @@ public:
         // ggml_free(ctx0);
 
         return gf;
-    }
-
-    void alloc_compute_buffer(ggml_context* work_ctx, 
-                              struct ggml_tensor* id_pixel_values,
-                              struct ggml_tensor* prompt_embeds,
-                              std::vector<bool> &class_tokens_mask) {
-        auto get_graph = [&]() -> struct ggml_cgraph* {            
-            
-            // return build_graph(compute_allocr, id_pixel_values, prompt_embeds, class_tokens_mask);
-            return build_graph(id_pixel_values, prompt_embeds, class_tokens_mask);
-        };
-        GGMLModule::alloc_compute_buffer(get_graph);
     }
 
     void compute(const int n_threads,
@@ -614,7 +633,7 @@ public:
     }
 
     std::string get_desc() {
-        return "pmid lora";
+        return "lora_pmid";
     }
 
     size_t get_params_num() {

@@ -548,16 +548,7 @@ public:
             auto layer_norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm2"]);
             auto mlp         = std::dynamic_pointer_cast<CLIPMLP>(blocks["mlp"]);
             
-            // struct ggml_tensor* r = x;
-            
-            struct ggml_tensor* h = layer_norm1->forward(ctx, x);
-            
-            h = self_attn->forward(ctx, h, mask);
-            
-            
-            // x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
-            x = ggml_add(ctx, x, h);
-            
+            x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
             x = ggml_add(ctx, x, mlp->forward(ctx, layer_norm2->forward(ctx, x)));
             return x;
         }
@@ -567,16 +558,10 @@ public:
             auto layer_norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm2"]);
             auto mlp         = std::dynamic_pointer_cast<CLIPMLP>(blocks["mlp"]);
             
-            // struct ggml_tensor* r = x;
-            
-            struct ggml_tensor* h = layer_norm1->forward(ctx, x);
-            
-            h = self_attn->forward(ctx, h, mask);
-            
-            
-            // x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
-            x = ggml_add(ctx, x, h);
-            
+            // struct ggml_tensor* h = layer_norm1->forward(ctx, x);
+            // h = self_attn->forward(ctx, h, mask);
+            x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
+            // x = ggml_add(ctx, x, h);
             x = ggml_add(ctx, x, mlp->forward(ctx, layer_norm2->forward(ctx, x)));
             return x;
         }
@@ -614,10 +599,8 @@ public:
                 break;
             }
             std::string name = "layers." + std::to_string(i);
-            // printf(" about to do %s\n", name.c_str());
             auto layer       = std::dynamic_pointer_cast<CLIPLayer>(blocks[name]);
             x                = layer->forward(ctx, x, mask, atten1);  // [N, n_token, d_model]
-            // print_ggml_tensor(x, true, ("layer "+std::to_string(i)).c_str());
             // LOG_DEBUG("layer %d", i);
         }
         return x;
@@ -924,21 +907,17 @@ public:
         auto post_layernorm = std::dynamic_pointer_cast<LayerNorm>(blocks["post_layernorm"]);
 
         auto x = embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
-        print_ggml_tensor(x, true, "embedding");
         x      = pre_layernorm->forward(ctx, x);
-        print_ggml_tensor(x, true, "pre_layernorm");
         x      = encoder->forward(ctx, x, -1, false, false);
-        print_ggml_tensor(x, true, "encoder");
         x      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
-        print_ggml_tensor(x, true, "post_layernorm");
 
         GGML_ASSERT(x->ne[3] == 1);
         // int64_t max_token_idx  = 0;
         // ggml_tensor* pooled    = ggml_view_1d(ctx, x, x->ne[0], x->nb[1] * max_token_idx);  // assert N == 1
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));    
-        //  ggml_view_2d(ctx, w, w->ne[0], w->ne[1] / 2, w->nb[1], 0);   
-        ggml_tensor* pooled    = ggml_view_2d(ctx, x, x->ne[0], x->ne[1], x->nb[1], 0); 
-        print_ggml_tensor(pooled, true, "pooled");
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
+        ggml_tensor* pooled    = ggml_view_2d(ctx, x, x->ne[0], x->ne[1], x->nb[0], 0);
+        pooled    = ggml_scale(ctx, ggml_cont(ctx, pooled), 1.f);
+        // print_ggml_tensor(pooled, true, "pooled");
         return pooled;  // [N, projection_dim]
     }
 

@@ -926,11 +926,8 @@ public:
         alloc_compute_buffer(get_graph);
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_graph();
-
         GGML_ASSERT(ggml_gallocr_alloc_graph(compute_allocr, gf));
-
         cpy_data_to_backend_tensor();
-
         if (ggml_backend_is_cpu(backend)) {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
@@ -1037,16 +1034,11 @@ public:
         }
         for (auto& pair : blocks) {
             auto& block = pair.second;
-            // if(starts_with(prefix, "pmid"))
-            //     printf("block pair.first: %s, %s \n", prefix.c_str(), pair.first.c_str());
-                
             block->get_param_tensors(tensors, prefix + pair.first);
         }
 
         for (auto& pair : params) {
             struct ggml_tensor* param = pair.second;
-            //  if(starts_with(prefix, "pmid"))
-            //     printf("params pair.first: %s, %s \n", prefix.c_str(), pair.first.c_str());
             tensors[prefix + pair.first] = pair.second;
         }
     }
