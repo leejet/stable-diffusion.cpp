@@ -73,6 +73,9 @@ enum sd_type_t {
     SD_TYPE_Q8_K    = 15,
     SD_TYPE_IQ2_XXS = 16,
     SD_TYPE_IQ2_XS  = 17,
+    SD_TYPE_IQ3_XXS = 18,
+    SD_TYPE_IQ1_S   = 19,
+    SD_TYPE_IQ4_NL  = 20,
     SD_TYPE_I8,
     SD_TYPE_I16,
     SD_TYPE_I32,
@@ -178,6 +181,15 @@ SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor);
 
 SD_API bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type);
+
+SD_API uint8_t* preprocess_canny(uint8_t* img,
+                                 int width,
+                                 int height,
+                                 float high_threshold,
+                                 float low_threshold,
+                                 float weak,
+                                 float strong,
+                                 bool inverse);
 
 #ifdef __cplusplus
 }

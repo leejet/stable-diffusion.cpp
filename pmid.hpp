@@ -352,9 +352,9 @@ public:
                            struct ggml_tensor* prompt_embeds,                           
                            struct ggml_tensor* class_tokens_mask,
                            struct ggml_tensor* class_tokens_mask_pos,
-                           struct ggml_tensor* cls,
-                           struct ggml_tensor* class_embedding_temp,
-                           struct ggml_tensor* positions,
+                        //    struct ggml_tensor* cls,
+                        //    struct ggml_tensor* class_embedding_temp,
+                        //    struct ggml_tensor* positions,
                            struct ggml_tensor* left,
                            struct ggml_tensor* right) {
         // x: [N, channels, h, w]
@@ -392,7 +392,7 @@ public:
 
     }
 
-     struct ggml_cgraph* build_graph(struct ggml_allocr* allocr, 
+     struct ggml_cgraph* build_graph( //struct ggml_allocr* allocr, 
                                      struct ggml_tensor* id_pixel_values,
                                      struct ggml_tensor* prompt_embeds,
                                      std::vector<bool> &class_tokens_mask
@@ -424,7 +424,7 @@ public:
         // struct ggml_tensor* prompt_embeds_d = ggml_dup_tensor(ctx0, prompt_embeds);
         // ggml_allocr_alloc(allocr, prompt_embeds_d);        
         struct ggml_tensor* class_tokens_mask_d = ggml_new_tensor_1d(ctx0, type, class_tokens_mask.size());
-        ggml_allocr_alloc(allocr, class_tokens_mask_d);
+        // ggml_allocr_alloc(allocr, class_tokens_mask_d);
 
 
         struct ggml_tensor* id_pixel_values_d = to_backend(id_pixel_values);
@@ -447,66 +447,74 @@ public:
         } 
         if(ctmpos[0] > 0){
             left = ggml_new_tensor_3d(ctx0, type, hidden_size, 1, ctmpos[0]);
-            ggml_allocr_alloc(allocr, left);
+            // ggml_allocr_alloc(allocr, left);
         }
         if(ctmpos[ctmpos.size()-1] < seq_length - 1){
             right = ggml_new_tensor_3d(ctx0, type,
                    hidden_size, 1, seq_length-ctmpos[ctmpos.size()-1]-1);
-            ggml_allocr_alloc(allocr, right);
+            // ggml_allocr_alloc(allocr, right);
         }
         struct ggml_tensor*  class_tokens_mask_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ctmpos.size());
-        ggml_allocr_alloc(allocr, class_tokens_mask_pos);
+        // ggml_allocr_alloc(allocr, class_tokens_mask_pos);
 
         const int image_size = id_pixel_values->ne[0]; 
         int batch_size = id_pixel_values->ne[3];
         const int num_patches = ((image_size / vision_model.patch_size) * (image_size / vision_model.patch_size));
         const int num_positions = num_patches + 1;
 
-        struct ggml_tensor * cls = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch_size);
+        // struct ggml_tensor * cls = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch_size);
 
-        struct ggml_tensor * class_embedding_temp = ggml_new_tensor_4d(ctx0, type, 
-                                       vision_model.hidden_size, batch_size, 1, 1);
-        struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
-        ggml_allocr_alloc(allocr, cls);
-        ggml_allocr_alloc(allocr, class_embedding_temp);
-        ggml_allocr_alloc(allocr, positions);
+        // struct ggml_tensor * class_embedding_temp = ggml_new_tensor_4d(ctx0, type, 
+        //                                vision_model.hidden_size, batch_size, 1, 1);
+        // struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
+        // ggml_allocr_alloc(allocr, cls);
+        // ggml_allocr_alloc(allocr, class_embedding_temp);
+        // ggml_allocr_alloc(allocr, positions);
+        //  set_backend_tensor_data(custom_embeddings, token_embed_custom.data());
 
 
-
-        if (!ggml_allocr_is_measure(allocr)) {
+        // if (!ggml_allocr_is_measure(allocr)) {
+        {
             // ggml_backend_tensor_set(id_pixel_values_d, id_pixel_values->data, 0,  ggml_nbytes(id_pixel_values));
             // ggml_backend_tensor_set(prompt_embeds_d, prompt_embeds->data, 0,  ggml_nbytes(prompt_embeds));
             if(type == GGML_TYPE_F16)
-                ggml_backend_tensor_set(class_tokens_mask_d, ctmf16.data(), 0,  ggml_nbytes(class_tokens_mask_d));
+                // ggml_backend_tensor_set(class_tokens_mask_d, ctmf16.data(), 0,  ggml_nbytes(class_tokens_mask_d));
+                set_backend_tensor_data(class_tokens_mask_d, ctmf16.data());
             else
-                ggml_backend_tensor_set(class_tokens_mask_d, ctm.data(), 0,  ggml_nbytes(class_tokens_mask_d));
-            std::vector<int> cls_h;
-            for (int b = 0; b < batch_size; b++) {
-                cls_h.push_back(b * num_positions);
-            }
-            std::vector<int> pos;
-            for (int i = 0; i < num_positions; i++) {
-                pos.push_back(i);
-            }
-            ggml_backend_tensor_set(cls, cls_h.data(), 0, ggml_nbytes(cls));
-            ggml_backend_tensor_set(positions, pos.data(), 0, ggml_nbytes(positions));
-            ggml_backend_tensor_set(class_tokens_mask_pos, ctmpos.data(), 0, ggml_nbytes(class_tokens_mask_pos));
+                // ggml_backend_tensor_set(class_tokens_mask_d, ctm.data(), 0,  ggml_nbytes(class_tokens_mask_d));
+                set_backend_tensor_data(class_tokens_mask_d, ctm.data());
+            // std::vector<int> cls_h;
+            // for (int b = 0; b < batch_size; b++) {
+            //     cls_h.push_back(b * num_positions);
+            // }
+            // std::vector<int> pos;
+            // for (int i = 0; i < num_positions; i++) {
+            //     pos.push_back(i);
+            // }
+            // ggml_backend_tensor_set(cls, cls_h.data(), 0, ggml_nbytes(cls));
+            // ggml_backend_tensor_set(positions, pos.data(), 0, ggml_nbytes(positions));
+            // ggml_backend_tensor_set(class_tokens_mask_pos, ctmpos.data(), 0, ggml_nbytes(class_tokens_mask_pos));
+            set_backend_tensor_data(class_tokens_mask_pos, ctmpos.data());
             if(left){
                 if(type == GGML_TYPE_F16){
                     std::vector<ggml_fp16_t> zeros(ggml_nelements(left), ggml_fp32_to_fp16(0.f));
-                    ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
+                    // ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
+                    set_backend_tensor_data(left, zeros.data());
                 }else{
                     std::vector<float> zeros(ggml_nelements(left), 0.f);
-                    ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
+                    // ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
+                    set_backend_tensor_data(left, zeros.data());
                 }
             }
             if(right){
                 if(type == GGML_TYPE_F16){
                     std::vector<ggml_fp16_t> zeros(ggml_nelements(right), ggml_fp32_to_fp16(0.f));
-                    ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
+                    // ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
+                    set_backend_tensor_data(right, zeros.data());
                 }else{
                     std::vector<float> zeros(ggml_nelements(right), 0.f);
-                    ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
+                    // ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
+                    set_backend_tensor_data(right, zeros.data());
                 }
             }
         }     
@@ -515,9 +523,9 @@ public:
                                                             prompt_embeds_d,
                                                             class_tokens_mask_d,
                                                             class_tokens_mask_pos,
-                                                            cls,
-                                                            class_embedding_temp,
-                                                            positions,
+                                                            // cls,
+                                                            // class_embedding_temp,
+                                                            // positions,
                                                             left, right
                                                             );
         ggml_build_forward_expand(gf, updated_prompt_embeds);
@@ -532,7 +540,8 @@ public:
                               std::vector<bool> &class_tokens_mask) {
         auto get_graph = [&]() -> struct ggml_cgraph* {            
             
-            return build_graph(compute_allocr, id_pixel_values, prompt_embeds, class_tokens_mask);
+            // return build_graph(compute_allocr, id_pixel_values, prompt_embeds, class_tokens_mask);
+            return build_graph(id_pixel_values, prompt_embeds, class_tokens_mask);
         };
         GGMLModule::alloc_compute_buffer(get_graph);
     }
@@ -545,7 +554,8 @@ public:
                  ggml_context* output_ctx) {
         
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(compute_allocr, id_pixel_values, prompt_embeds, class_tokens_mask);
+            // return build_graph(compute_allocr, id_pixel_values, prompt_embeds, class_tokens_mask);
+            return build_graph(id_pixel_values, prompt_embeds, class_tokens_mask);
         };
 
         // GGMLModule::compute(get_graph, n_threads, updated_prompt_embeds);
@@ -615,10 +625,11 @@ public:
             LOG_ERROR("init lora model loader from file failed: '%s'", file_path.c_str());
             return false;
         }
-        alloc_params_buffer();
+        
 
-        ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
+        // ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
 
+        bool dry_run          = true;
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
             std::string name = tensor_storage.name;
             // LOG_INFO("loading LoRA tesnor '%s'", name.c_str());
@@ -627,26 +638,38 @@ public:
                 return true;
             }
 
-               
-            // LOG_INFO("loading LoRA tesnor '%s'", name.c_str());
-            struct ggml_tensor* real = ggml_new_tensor(params_ctx, tensor_storage.type, tensor_storage.n_dims, tensor_storage.ne);
-            ggml_allocr_alloc(alloc, real);
-
-            *dst_tensor = real;
             lora_tensors_to_be_ignored.push_back(name);
             size_t k_pos = name.find(".processor");
             if(k_pos != std::string::npos)
                name.replace(k_pos, strlen(".processor"), "");
+
+             if (dry_run) {   
+            // LOG_INFO("loading LoRA tesnor '%s'", name.c_str());
+                struct ggml_tensor* real = ggml_new_tensor(params_ctx, 
+                                                            tensor_storage.type, 
+                                                            tensor_storage.n_dims, 
+                                                            tensor_storage.ne);
+                lora_tensors[name]       = real;                                           
+             }else{
+            // ggml_allocr_alloc(alloc, real);
+                auto real   = lora_tensors[name];   
+                *dst_tensor = real;
+            }
+            
             // if(starts_with(name, "pmid.unet.down_blocks.2.attentions.1.transformer_blocks.9.attn2"))
             //     print_ggml_tensor(real, true, name.c_str());
-            lora_tensors[name] = real;
+            // lora_tensors[name] = real;
             return true;
         };
 
         model_loader.load_tensors(on_new_tensor_cb, backend);
+        alloc_params_buffer();
+
+        dry_run = false;
+        model_loader.load_tensors(on_new_tensor_cb, backend);
 
         LOG_DEBUG("finished loaded lora");
-        ggml_allocr_free(alloc);
+        // ggml_allocr_free(alloc);
         return true;
     }
 

@@ -24,7 +24,7 @@ std::u32string utf8_to_utf32(const std::string& utf8_str);
 std::string utf32_to_utf8(const std::u32string& utf32_str);
 std::u32string unicode_value_to_utf32(int unicode_value);
 
-std::string sd_basename(const std::string& path);
+//std::string sd_basename(const std::string& path);
 
 sd_image_t *preprocess_id_image(sd_image_t * img);
 

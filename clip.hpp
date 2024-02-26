@@ -1025,64 +1025,32 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         return hidden_states;
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_allocr* allocr, std::vector<int> tokens, bool return_pooled = false) {
+    struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
+                                    struct ggml_tensor* input_ids2 = NULL,
+                                    size_t max_token_idx           = 0,
+                                    bool return_pooled             = false) {
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
-        struct ggml_tensor* input_ids = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, tokens.size());
-        ggml_allocr_alloc(allocr, input_ids);
-
-        if (!ggml_allocr_is_measure(allocr)) {
-            ggml_backend_tensor_set(input_ids, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids));
-        }
-
-        struct ggml_tensor* input_ids2 = NULL;
-        size_t max_token_idx           = 0;
-        if (version == VERSION_XL) {
-            input_ids2 = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, tokens.size());
-            ggml_allocr_alloc(allocr, input_ids2);
-
-            auto it = std::find(tokens.begin(), tokens.end(), EOS_TOKEN_ID);
-            if (it != tokens.end()) {
-                std::fill(std::next(it), tokens.end(), 0);
-            }
-
-            max_token_idx = std::min<size_t>(std::distance(tokens.begin(), it), tokens.size() - 1);
-
-            // for (int i = 0; i < tokens.size(); i++) {
-            //     printf("%d ", tokens[i]);
-            // }
-            // printf("\n");
-
-            if (!ggml_allocr_is_measure(allocr)) {
-                ggml_backend_tensor_set(input_ids2, tokens.data(), 0, tokens.size() * ggml_element_size(input_ids2));
-            }
+        input_ids2 = to_backend(input_ids2);
+        if (!return_pooled) {
+            input_ids = to_backend(input_ids);
         }
 
         struct ggml_tensor* embeddings = NULL;
 
         if (num_custom_embeddings > 0 && version != VERSION_XL) {
-            embeddings = ggml_new_tensor_2d(compute_ctx,
-                                            wtype,
-                                            text_model.hidden_size,
-                                            text_model.vocab_size + num_custom_embeddings /* custom placeholder */);
-            ggml_allocr_alloc(allocr, embeddings);
-            if (!ggml_allocr_is_measure(allocr)) {
-                // really bad, there is memory inflexibility (this is for host<->device memory conflicts)
-                auto token_embed_weight = text_model.get_token_embed_weight();
-                void* freeze_data       = malloc(ggml_nbytes(token_embed_weight));
-                ggml_backend_tensor_get_and_sync(backend,
-                                                 token_embed_weight,
-                                                 freeze_data,
-                                                 0,
-                                                 ggml_nbytes(token_embed_weight));
-                ggml_backend_tensor_set(embeddings, freeze_data, 0, ggml_nbytes(token_embed_weight));
-                free(freeze_data);
-                // concatenate custom embeddings
-                ggml_backend_tensor_set(embeddings,
-                                        (const void*)token_embed_custom.data(),
-                                        ggml_nbytes(token_embed_weight),
-                                        num_custom_embeddings * text_model.hidden_size * ggml_type_size(wtype));
-            }
+            auto custom_embeddings = ggml_new_tensor_3d(compute_ctx,
+                                                        wtype,
+                                                        text_model.hidden_size,
+                                                        1,
+                                                        num_custom_embeddings);
+            set_backend_tensor_data(custom_embeddings, token_embed_custom.data());
+
+            auto token_embed_weight = text_model.get_token_embed_weight();
+            token_embed_weight      = ggml_reshape_3d(compute_ctx, token_embed_weight, token_embed_weight->ne[0], 1, token_embed_weight->ne[1]);
+            // concatenate custom embeddings
+            embeddings = ggml_concat(compute_ctx, token_embed_weight, custom_embeddings);
+            embeddings = ggml_reshape_2d(compute_ctx, embeddings, embeddings->ne[0], embeddings->ne[2]);
         }
 
         struct ggml_tensor* hidden_states = forward(compute_ctx, input_ids, input_ids2, embeddings, max_token_idx, return_pooled);
@@ -1093,12 +1061,14 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
     }
 
     void compute(const int n_threads,
-                 std::vector<int> tokens,
+                 struct ggml_tensor* input_ids,
+                 struct ggml_tensor* input_ids2,
+                 size_t max_token_idx,
                  bool return_pooled,
                  ggml_tensor** output,
                  ggml_context* output_ctx = NULL) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(compute_allocr, tokens, return_pooled);
+            return build_graph(input_ids, input_ids2, max_token_idx, return_pooled);
         };
         GGMLModule::compute(get_graph, n_threads, true, output, output_ctx);
     }
@@ -1382,8 +1352,7 @@ struct FrozenCLIPVisionEmbedder : public GGMLModule {
         vision_model.get_param_tensors(tensors, prefix + "transformer.visual_model");
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_allocr* allocr,
-                                    struct ggml_tensor* pixel_values) {
+    struct ggml_cgraph* build_graph(struct ggml_tensor* pixel_values) {
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
         pixel_values = to_backend(pixel_values);
@@ -1395,19 +1364,12 @@ struct FrozenCLIPVisionEmbedder : public GGMLModule {
         return gf;
     }
 
-    void alloc_compute_buffer(ggml_context* work_ctx, ggml_tensor* pixel_values) {
-        auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(compute_allocr, pixel_values);
-        };
-        GGMLModule::alloc_compute_buffer(get_graph);
-    }
-
     void compute(const int n_threads,
                  ggml_tensor* pixel_values,
                  ggml_tensor** output,
                  ggml_context* output_ctx) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(compute_allocr, pixel_values);
+            return build_graph(pixel_values);
         };
         GGMLModule::compute(get_graph, n_threads, true, output, output_ctx);
     }
