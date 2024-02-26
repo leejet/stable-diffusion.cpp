@@ -238,7 +238,7 @@ public:
         }
 
         struct ggml_init_params params;
-        params.mem_size   = static_cast<size_t>(10 * 2048) * 1024;  // 10M
+        params.mem_size   = static_cast<size_t>(10 * 1024) * 1024;  // 10M
         params.mem_buffer = NULL;
         params.no_alloc   = false;
         // LOG_DEBUG("mem_size %u ", params.mem_size);
@@ -1332,7 +1332,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     int64_t t1 = ggml_time_ms();
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(20 * 1024 * 1024);  // 10 MB
+    params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     params.mem_size += width * height * 3 * sizeof(float);
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;
@@ -1491,7 +1491,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     sigma_sched.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
 
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(20 * 1024) * 1024;  // 10 MB
+    params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10 MB
     params.mem_size += width * height * 3 * sizeof(float) * 2;
     params.mem_buffer = NULL;
     params.no_alloc   = false;

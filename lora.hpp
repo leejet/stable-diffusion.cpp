@@ -3,7 +3,7 @@
 
 #include "ggml_extend.hpp"
 
-#define LORA_GRAPH_SIZE 40960
+#define LORA_GRAPH_SIZE 10240
 
 struct LoraModel : public GGMLModule {
     float multiplier = 1.0f;
@@ -56,7 +56,7 @@ struct LoraModel : public GGMLModule {
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
             const std::string& name = tensor_storage.name;
 
-            struct ggml_tensor* real = ggml_new_tensor(params_ctx, tensor_storage.type, this->ggml_n_dims_t(tensor_storage), tensor_storage.ne);
+            struct ggml_tensor* real = ggml_new_tensor(params_ctx, tensor_storage.type, ggml_n_dims_t(tensor_storage), tensor_storage.ne);
             ggml_allocr_alloc(alloc, real);
 
             *dst_tensor = real;
