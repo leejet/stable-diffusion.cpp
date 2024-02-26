@@ -21,8 +21,6 @@ std::u32string utf8_to_utf32(const std::string& utf8_str);
 std::string utf32_to_utf8(const std::u32string& utf32_str);
 std::u32string unicode_value_to_utf32(int unicode_value);
 
-std::string sd_basename(const std::string& path);
-
 typedef struct {
     uint32_t width;
     uint32_t height;

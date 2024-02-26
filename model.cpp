@@ -498,7 +498,13 @@ void bf16_to_f32_vec(uint16_t* src, float* dst, int64_t n) {
     }
 }
 
-void convert_tensor(void* src, ggml_type src_type, void* dst, ggml_type dst_type, int n) {
+void convert_tensor(void* src,
+                    ggml_type src_type,
+                    void* dst,
+                    ggml_type dst_type,
+                    int nrows,
+                    int n_per_row) {
+    int n = nrows * n_per_row;
     if (src_type == dst_type) {
         size_t nbytes = n * ggml_type_size(src_type) / ggml_blck_size(src_type);
         memcpy(((char*)dst), ((char*)src), nbytes);
@@ -507,7 +513,9 @@ void convert_tensor(void* src, ggml_type src_type, void* dst, ggml_type dst_type
             ggml_fp32_to_fp16_row((float*)src, (ggml_fp16_t*)dst, n);
         } else {
             int64_t hist[16];
-            ggml_quantize_chunk(dst_type, (float*)src, dst, 0, n, hist);
+            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            const float* im = imatrix.data();
+            ggml_quantize_chunk(dst_type, (float*)src, dst, 0, nrows, n_per_row, hist, im);
         }
     } else if (dst_type == GGML_TYPE_F32) {
         if (src_type == GGML_TYPE_F16) {
@@ -536,7 +544,9 @@ void convert_tensor(void* src, ggml_type src_type, void* dst, ggml_type dst_type
             ggml_fp32_to_fp16_row((float*)src_data_f32, (ggml_fp16_t*)dst, n);
         } else {
             int64_t hist[16];
-            ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, n, hist);
+            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            const float* im = imatrix.data();
+            ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, nrows, n_per_row, hist, im);
         }
     }
 }
@@ -1387,7 +1397,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     }
 
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
-                                   dst_tensor->type, (int)tensor_storage.nelements());
+                                   dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
                 }
             } else {
                 read_buffer.resize(tensor_storage.nbytes());
@@ -1406,7 +1416,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     convert_buffer.resize(ggml_nbytes(dst_tensor));
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type,
                                    (void*)convert_buffer.data(), dst_tensor->type,
-                                   (int)tensor_storage.nelements());
+                                   (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
                     ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
                 }
             }
