@@ -361,7 +361,7 @@ public:
     size_t get_params_mem_size() {
         size_t params_mem_size = vision_model.get_params_mem_size();        
         params_mem_size += fuse_module.get_params_mem_size();
-        params_mem_size += ggml_row_size(wtype, 1280*1024);
+        params_mem_size += visual_projection_2.get_params_mem_size();
         return params_mem_size;
     }
 

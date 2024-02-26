@@ -374,7 +374,7 @@ public:
                      unet_params_mem_size / 1024.0 / 1024.0,
                      vae_params_mem_size / 1024.0 / 1024.0,
                      control_net_params_mem_size / 1024.0 / 1024.0,
-                     pmid_params_mem_size);
+                     pmid_params_mem_size/ 1024.0 / 1024.0);
         }
 
         int64_t t1 = ggml_time_ms();

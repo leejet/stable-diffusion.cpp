@@ -699,10 +699,10 @@ int main(int argc, const char* argv[]) {
                 int width, height;
                 input_image_buffer = stbi_load(img_file.c_str(), &width, &height, &c, 3);
                 if (input_image_buffer == NULL) {
-                    fprintf(stderr, "load image from '%s' failed\n", img_file.c_str());
+                    LOG_ERROR("PhotoMaker load image from '%s' failed", img_file.c_str());
                     return 1;
                 }else{
-                    fprintf(stderr, "successfully loaded image from '%s' \n", img_file.c_str());
+                    LOG_INFO("PhotoMaker loaded image from '%s'", img_file.c_str());
                 }
                 sd_image_t* input_image = NULL;
                 input_image = new sd_image_t{(uint32_t)width,
@@ -711,7 +711,7 @@ int main(int argc, const char* argv[]) {
                                              input_image_buffer};
                 input_image = preprocess_id_image(input_image);
                 if(input_image == NULL){
-                    fprintf(stderr, "preprocess input id image from '%s' failed\n", img_file.c_str());
+                    LOG_ERROR("preprocess input id image from '%s' failed", img_file.c_str());
                     return 1;
                 }
                 input_id_images.push_back(input_image);
