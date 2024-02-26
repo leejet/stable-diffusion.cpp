@@ -278,7 +278,7 @@ public:
                 }
                 // LOG_INFO("pmid param memory buffer size = %.2fMB ",
                 //     pmid_model->params_buffer_size / 1024.0 / 1024.0);
-                pmid_model->get_param_tensors(tensors, "pmid.");
+                pmid_model->get_param_tensors(tensors, "pmid");
             }
             // if(stacked_id){
             //    pmid_model.init_params(GGML_TYPE_F32);
@@ -1643,6 +1643,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         // if (sd_ctx->sd->free_params_immediately) {
         //     sd_ctx->sd->pmid_lora.free_params_buffer();
         // }
+        LOG_INFO("pmid_lora apply completed");
     }
 
     struct ggml_init_params params;
@@ -1693,12 +1694,13 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
         auto cond_tup                = sd_ctx->sd->get_learned_condition_with_trigger(work_ctx, prompt, 
                                                    clip_skip, width, height, num_input_images );
+        LOG_INFO("get_learned_condition_with_trigger finished");
         prompts_embeds                = std::get<0>(cond_tup);
         pooled_prompts_embeds         = std::get<1>(cond_tup);  // [adm_in_channels, ]
         class_tokens_mask             = std::get<2>(cond_tup);  // 
 
         prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
-
+        LOG_INFO("id_encoder");
         // if (sd_ctx->sd->free_params_immediately) {
         //     sd_ctx->sd->pmid_model.free_params_buffer();
         // } 

@@ -34,7 +34,7 @@ public:
         // blocks["fc2"] = std::shared_ptr<GGMLBlock>(new Linear(intermediate_size, d_model));
         blocks["fc1"] = std::shared_ptr<GGMLBlock>(new Linear(in_dim, hidden_dim,  true));
         blocks["fc2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_dim, out_dim, true));
-        blocks["layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(in_dim));
+        blocks["layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(in_dim));
     }
     
     
@@ -97,7 +97,7 @@ public:
 
         auto fc1 = std::dynamic_pointer_cast<Linear>(blocks["fc1"]);
         auto fc2 = std::dynamic_pointer_cast<Linear>(blocks["fc2"]);
-        auto layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm"]);
+        auto layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["layernorm"]);
 
         struct ggml_tensor* r = x;
         // x = ggml_nn_layer_norm(ctx, x, ln_w, ln_b);
@@ -177,6 +177,12 @@ public:
     //     return mem_size;
     // }
 
+    // void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+    //     vision_model.get_param_tensors(tensors, prefix+".vision_model");
+    //     fuse_module.get_param_tensors(tensors, prefix+".fuse_module");
+    //     visual_projection_2.get_param_tensors(tensors, prefix);
+    // }
+
     struct ggml_tensor* fuse_fn(struct ggml_context* ctx, 
                                 struct ggml_tensor* prompt_embeds, 
                                 struct ggml_tensor* id_embeds) {
@@ -191,6 +197,7 @@ public:
         // concat is along dim 2   
         auto stacked_id_embeds = ggml_concat(ctx, prompt_embeds0, id_embeds0); 
         stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 1, 2, 0, 3));
+
 
         // stacked_id_embeds = mlp1.forward(ctx, stacked_id_embeds);
         // stacked_id_embeds = ggml_add(ctx, stacked_id_embeds, prompt_embeds);
@@ -219,7 +226,6 @@ public:
         struct ggml_tensor * valid_id_embeds = id_embeds;
         // # slice out the image token embeddings
         struct ggml_tensor * image_token_embeds = ggml_get_rows(ctx, prompt_embeds, class_tokens_mask_pos);
-
         struct ggml_tensor *stacked_id_embeds = fuse_fn(ctx, image_token_embeds, valid_id_embeds);
 
         stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
@@ -254,11 +260,18 @@ public:
         blocks["visual_projection_2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, projection_dim, false));
     }
 
+    // void init_params(struct ggml_context* ctx, ggml_type wtype) {
+    //     params["visual_projection_2.weight"] = ggml_new_tensor_2d(ctx, wtype, hidden_size, projection_dim);
+        
+    // }
+
     struct ggml_tensor* forward(struct ggml_context* ctx, 
                            struct ggml_tensor* pixel_values){
 
         auto visual_projection_2 = std::dynamic_pointer_cast<Linear>(blocks["visual_projection_2"]);
+        // auto visual_projection_2 = params["visual_projection_2.weight"];
         auto x      = visual_projection_2->forward(ctx, pixel_values);        // [N, projection_dim]
+        // auto x = ggml_mul_mat(ctx, visual_projection_2, pixel_values);
         return x;  // [N, projection_dim]
     }
 
@@ -270,7 +283,7 @@ struct PhotoMakerIDEncoder : public GGMLModule {
 
 public:    
     SDVersion version = VERSION_XL;    
-    CLIPVisionModel vision_model;
+    CLIPVisionModel2 vision_model;
     FuseModule fuse_module;
     // struct ggml_tensor* visual_projection_2; 
     VisualProjection visual_projection_2;
@@ -286,7 +299,10 @@ public:
         style_strength(sty){
         // vision_model = CLIPVisionModel();
         vision_model.init(params_ctx, wtype);
+        fuse_module.init(params_ctx, wtype);
+        visual_projection_2.init(params_ctx, wtype);  
     }
+
 
     std::string get_desc() {
         return "pmid";
@@ -342,8 +358,8 @@ public:
 
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        vision_model.get_param_tensors(tensors, prefix);
-        fuse_module.get_param_tensors(tensors, prefix);
+        vision_model.get_param_tensors(tensors, prefix+".vision_model");
+        fuse_module.get_param_tensors(tensors, prefix+".fuse_module");
         visual_projection_2.get_param_tensors(tensors, prefix);
     }
 
@@ -365,14 +381,15 @@ public:
         //                                                      class_embedding_temp,
         //                                                      positions
         //                                                      ); // [batch_size, seq_length, hidden_size]
-        struct ggml_tensor *shared_id_embeds = vision_model.forward(ctx, 
-                                        id_pixel_values, false);     // [batch_size, seq_length, hidden_size]
-
+        struct ggml_tensor *shared_id_embeds = vision_model.forward(ctx, id_pixel_values);     // [batch_size, seq_length, hidden_size]
+        print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds");  
 
         struct ggml_tensor *id_embeds = vision_model.visual_project(ctx, shared_id_embeds); // [batch_size, seq_length, proj_dim(768)]
+        print_ggml_tensor(id_embeds, true, "id_embeds");  
         
         // struct ggml_tensor *id_embeds_2 = ggml_mul_mat(ctx, visual_projection_2, shared_id_embeds); // [batch_size, seq_length, 1280]
         struct ggml_tensor *id_embeds_2 = visual_projection_2.forward(ctx, shared_id_embeds); // [batch_size, seq_length, 1280]
+        print_ggml_tensor(id_embeds_2, true, "id_embeds_2");  
 
 
        
@@ -382,11 +399,14 @@ public:
         id_embeds = ggml_concat(ctx, id_embeds, id_embeds_2); // [batch_size, seq_length, 1, 2048] check whether concat at dim 2 is right
         id_embeds = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 1, 2, 0, 3));
 
+        print_ggml_tensor(id_embeds, true, "id_embeds_after_cont+perm");  
+
         struct ggml_tensor * updated_prompt_embeds = fuse_module.forward(ctx,
                                           prompt_embeds, id_embeds,
                                           class_tokens_mask,
                                           class_tokens_mask_pos,
                                           left, right);
+         print_ggml_tensor(updated_prompt_embeds, true, "updated_prompt_embeds");  
 
         return updated_prompt_embeds;
 

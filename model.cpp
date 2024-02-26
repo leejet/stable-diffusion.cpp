@@ -828,7 +828,17 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
                 return false;
             }
         }
-
+        // fix photomaker model file to remove the following name fix
+        size_t pos = name.find("layrnorm");
+        if(pos != std::string::npos){
+            name.replace(pos, strlen("layrnorm"), "layernorm"); 
+        }
+        if(starts_with(prefix, "pmid")){
+            pos = name.find("visual_projection.w");
+            if(pos != std::string::npos){
+                name.replace(0, 0, "vision_model."); 
+            }    
+        }
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
         tensor_storage.reverse_ne();
 

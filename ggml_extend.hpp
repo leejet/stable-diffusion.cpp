@@ -1037,13 +1037,16 @@ public:
         }
         for (auto& pair : blocks) {
             auto& block = pair.second;
-
+            // if(starts_with(prefix, "pmid"))
+            //     printf("block pair.first: %s, %s \n", prefix.c_str(), pair.first.c_str());
+                
             block->get_param_tensors(tensors, prefix + pair.first);
         }
 
         for (auto& pair : params) {
             struct ggml_tensor* param = pair.second;
-
+            //  if(starts_with(prefix, "pmid"))
+            //     printf("params pair.first: %s, %s \n", prefix.c_str(), pair.first.c_str());
             tensors[prefix + pair.first] = pair.second;
         }
     }
@@ -1308,6 +1311,66 @@ public:
 
         x = ggml_reshape_2d(ctx, kqv, d_head * n_head, n_token * N);  // [N * n_token, d_head * n_head]
 
+        x = out_proj->forward(ctx, x);
+        return x;
+    }
+};
+
+
+class MultiheadAttention2 : public GGMLBlock {
+protected:
+    int64_t embed_dim;
+    int64_t n_head;
+    bool bias;
+    bool mask;
+
+public:
+    MultiheadAttention2(int64_t embed_dim,
+                       int64_t n_head,
+                       bool bias = true)
+        : embed_dim(embed_dim),
+          n_head(n_head),
+          bias(bias) {
+        // printf("MultiheadAttention2: %d, %d, %d\n", embed_dim, n_head, bias?1:0);
+        blocks["q_proj"]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, bias));
+        blocks["k_proj"]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, bias));
+        blocks["v_proj"]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, bias));
+        blocks["out_proj"] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, bias));
+    }
+
+    // x: [N, n_token, embed_dim]
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, bool mask = false) {
+        auto q_proj   = std::dynamic_pointer_cast<Linear>(blocks["q_proj"]);
+        auto k_proj   = std::dynamic_pointer_cast<Linear>(blocks["k_proj"]);
+        auto v_proj   = std::dynamic_pointer_cast<Linear>(blocks["v_proj"]);
+        auto out_proj = std::dynamic_pointer_cast<Linear>(blocks["out_proj"]);
+
+        int64_t N       = x->ne[2];
+        int64_t n_token = x->ne[1];
+        int64_t d_head  = embed_dim / n_head;
+
+        struct ggml_tensor* q = q_proj->forward(ctx, x);
+        q                     = ggml_reshape_4d(ctx, q, d_head, n_head, n_token, N);   // [N, n_token, n_head, d_head]
+        q                     = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));      // [N, n_head, n_token, d_head]
+        q                     = ggml_reshape_3d(ctx, q, d_head, n_token, n_head * N);  // [N * n_head, n_token, d_head]
+
+        struct ggml_tensor* k = k_proj->forward(ctx, x);
+        k                     = ggml_reshape_4d(ctx, k, d_head, n_head, n_token, N);  // [N, n_token, n_head, d_head]
+        k                     = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));     // [N, n_head, n_token, d_head]
+        // k                     = ggml_reshape_3d(ctx, k, d_head, n_token, n_head);     // [N * n_head, n_token, d_head] !!BUG!!
+        k                     = ggml_reshape_3d(ctx, k, d_head, n_token, n_head * N);     // [N * n_head, n_token, d_head]
+
+        struct ggml_tensor* v = v_proj->forward(ctx, x);
+        v                     = ggml_reshape_4d(ctx, v, d_head, n_head, n_token, N);   // [N, n_token, n_head, d_head]
+        v                     = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));      // [N, n_head, d_head, n_token]
+        v                     = ggml_reshape_3d(ctx, v, n_token, d_head, n_head * N);  // [N * n_head, d_head, n_token]
+
+        struct ggml_tensor* kqv = ggml_nn_attention(ctx, q, k, v, mask);  // [N * n_head, n_token, d_head]
+
+        kqv = ggml_reshape_4d(ctx, kqv, d_head, n_token, n_head, N);
+        kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, n_token, n_head, d_head]
+
+        x = ggml_reshape_3d(ctx, kqv, d_head * n_head, n_token, N);  // [N * n_token, d_head * n_head]        
         x = out_proj->forward(ctx, x);
         return x;
     }
