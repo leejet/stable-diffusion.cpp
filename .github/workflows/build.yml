@@ -30,7 +30,6 @@ jobs:
         with:
           submodules: recursive
 
-
       - name: Dependencies
         id: depends
         run: |
@@ -42,14 +41,37 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake ..
+          cmake .. -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON
           cmake --build . --config Release
 
-      #- name: Test
-        #id: cmake_test
-        #run: |
-          #cd build
-          #ctest --verbose --timeout 900
+      - name: Get commit hash
+        id: commit
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/main' ) || github.event.inputs.create_release == 'true' }}
+        uses: pr-mpt/actions-commit-hash@v2
+
+      - name: Fetch system info
+        id: system-info
+        run: |
+          echo "CPU_ARCH=`uname -m`" >> "$GITHUB_OUTPUT"
+          echo "OS_NAME=`lsb_release -s -i`" >> "$GITHUB_OUTPUT"
+          echo "OS_VERSION=`lsb_release -s -r`" >> "$GITHUB_OUTPUT"
+          echo "OS_TYPE=`uname -s`" >> "$GITHUB_OUTPUT"
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          cp ggml/LICENSE ./build/bin/ggml.txt
+          cp LICENSE ./build/bin/stable-diffusion.cpp.txt
+          zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/*
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v3
+        with:
+          path: |
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
+
 
   macOS-latest-cmake:
     runs-on: macos-latest
@@ -63,9 +85,8 @@ jobs:
 
       - name: Dependencies
         id: depends
-        continue-on-error: true
         run: |
-          brew update
+          brew install zip
 
       - name: Build
         id: cmake_build
@@ -73,14 +94,37 @@ jobs:
           sysctl -a
           mkdir build
           cd build
-          cmake ..
+          cmake .. -DGGML_AVX2=ON -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSD_BUILD_SHARED_LIBS=ON
           cmake --build . --config Release
 
-      #- name: Test
-        #id: cmake_test
-        #run: |
-          #cd build
-          #ctest --verbose --timeout 900
+      - name: Get commit hash
+        id: commit
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/main' ) || github.event.inputs.create_release == 'true' }}
+        uses: pr-mpt/actions-commit-hash@v2
+
+      - name: Fetch system info
+        id: system-info
+        run: |
+          echo "CPU_ARCH=`uname -m`" >> "$GITHUB_OUTPUT"
+          echo "OS_NAME=`sw_vers -productName`" >> "$GITHUB_OUTPUT"
+          echo "OS_VERSION=`sw_vers -productVersion`" >> "$GITHUB_OUTPUT"
+          echo "OS_TYPE=`uname -s`" >> "$GITHUB_OUTPUT"
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          cp ggml/LICENSE ./build/bin/ggml.txt
+          cp LICENSE ./build/bin/stable-diffusion.cpp.txt
+          zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/*
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v3
+        with:
+          path: |
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
+
 
   windows-latest-cmake:
     runs-on: windows-latest
@@ -89,20 +133,46 @@ jobs:
       matrix:
         include:
           - build: 'noavx'
-            defines: '-DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF'
+            defines: '-DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DSD_BUILD_SHARED_LIBS=ON'
           - build: 'avx2'
-            defines: '-DGGML_AVX2=ON'
+            defines: '-DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON'
           - build: 'avx'
-            defines: '-DGGML_AVX2=OFF'
+            defines: '-DGGML_AVX2=OFF -DSD_BUILD_SHARED_LIBS=ON'
           - build: 'avx512'
-            defines: '-DGGML_AVX512=ON'
-
+            defines: '-DGGML_AVX512=ON -DSD_BUILD_SHARED_LIBS=ON'
+          - build: 'cuda12'
+            defines: '-DSD_CUBLAS=ON -DSD_BUILD_SHARED_LIBS=ON'
+          - build: 'rocm5.5'
+            defines: '-G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS="gfx1100;gfx1102;gfx1030" -DSD_BUILD_SHARED_LIBS=ON'
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v3
         with:
           submodules: recursive
+
+      - name: Install cuda-toolkit
+        id: cuda-toolkit
+        if: ${{ matrix.build == 'cuda12' }}
+        uses: Jimver/cuda-toolkit@v0.2.11
+        with:
+          cuda: '12.2.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
+
+      - name: Install rocm-toolkit
+        id: rocm-toolkit
+        if: ${{ matrix.build == 'rocm5.5' }}
+        uses: Cyberhan123/rocm-toolkit@v0.1.0
+        with:
+          rocm: '5.5.0'
+
+      - name: Install Ninja
+        id: install-ninja
+        if: ${{ matrix.build == 'rocm5.5' }}
+        uses: urkle/action-get-ninja@v1
+        with:
+          version: 1.11.1
 
       - name: Build
         id: cmake_build
@@ -125,12 +195,6 @@ jobs:
           & $cl /O2 /GS- /kernel avx512f.c /link /nodefaultlib /entry:main
           .\avx512f.exe && echo "AVX512F: YES" && ( echo HAS_AVX512F=1 >> $env:GITHUB_ENV ) || echo "AVX512F: NO"
 
-      #- name: Test
-        #id: cmake_test
-        #run: |
-          #cd build
-          #ctest -C Release --verbose --timeout 900
-
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -140,9 +204,37 @@ jobs:
         id: pack_artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
-          Copy-Item ggml/LICENSE .\build\bin\Release\ggml.txt
-          Copy-Item LICENSE .\build\bin\Release\stable-diffusion.cpp.txt
-          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip .\build\bin\Release\*
+          $filePath = ".\build\bin\Release\*"
+          if (Test-Path $filePath) {
+            echo "Exists at path $filePath"
+            Copy-Item ggml/LICENSE .\build\bin\Release\ggml.txt
+            Copy-Item LICENSE .\build\bin\Release\stable-diffusion.cpp.txt
+          } elseif (Test-Path ".\build\bin\stable-diffusion.dll") {
+          $filePath = ".\build\bin\*"
+            echo "Exists at path $filePath"
+            Copy-Item ggml/LICENSE .\build\bin\ggml.txt
+            Copy-Item LICENSE .\build\bin\stable-diffusion.cpp.txt
+          } else {
+            ls .\build\bin
+            throw "Can't find stable-diffusion.dll"
+          }
+          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip $filePath
+
+      - name: Copy and pack Cuda runtime
+        id: pack_cuda_runtime
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.build == 'cuda12' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
+          $dst='.\build\bin\cudart\'
+          robocopy "${{steps.cuda-toolkit.outputs.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-sd-bin-win-cu12-x64.zip $dst\*
+
+      - name: Upload Cuda runtime
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.build == 'cuda12' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v3
+        with:
+          path: |
+            cudart-sd-bin-win-cu12-x64.zip
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
