@@ -33,14 +33,6 @@ struct LoraModel : public GGMLModule {
         return model_loader.get_params_mem_size(NULL);
     }
 
-    static inline int ggml_n_dims_t(const struct TensorStorage tensor) {
-        for (int i = GGML_MAX_DIMS - 1; i >= 1; --i) {
-            if (tensor.ne[i] > 1) {
-                return i + 1;
-            }
-        }
-        return 1;
-    }
 
     bool load_from_file() {
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
@@ -57,7 +49,7 @@ struct LoraModel : public GGMLModule {
             if (dry_run) {
                 struct ggml_tensor* real = ggml_new_tensor(params_ctx,
                                                            tensor_storage.type,
-                                                           ggml_n_dims_t(tensor_storage),
+                                                           tensor_storage.n_dims,
                                                            tensor_storage.ne);
                 lora_tensors[name]       = real;
             } else {
