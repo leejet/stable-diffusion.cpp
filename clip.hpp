@@ -904,10 +904,10 @@ public:
         GGML_ASSERT(x->ne[3] == 1);
         // int64_t max_token_idx  = 0;
         // ggml_tensor* pooled    = ggml_view_1d(ctx, x, x->ne[0], x->nb[1] * max_token_idx);  // assert N == 1
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
-        ggml_tensor* pooled    = ggml_view_2d(ctx, x, x->ne[0], x->ne[1], x->nb[0], 0);
-        pooled    = ggml_scale(ctx, ggml_cont(ctx, pooled), 1.f);
-        // print_ggml_tensor(pooled, true, "pooled");
+        // x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
+        // ggml_tensor* pooled    = ggml_view_2d(ctx, x, x->ne[0], x->ne[1], x->nb[0], 0);
+        // pooled  = ggml_cont(ctx, pooled);
+        ggml_tensor* pooled    = ggml_cont(ctx, ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], 0));
         return pooled;  // [N, projection_dim]
     }
 
