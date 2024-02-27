@@ -34,7 +34,7 @@ option(BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
 if(SD_CUBLAS)
 	message("Use CUBLAS as backend stable-diffusion")
     set(GGML_CUBLAS ON)
-    add_definitions(-DSD_USE_CUBLAS -DGGML_CUDA_FORCE_MMQ)
+    add_definitions(-DSD_USE_CUBLAS)
 endif()
 
 if(SD_METAL)

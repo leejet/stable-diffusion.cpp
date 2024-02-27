@@ -13,87 +13,20 @@ struct FuseBlock : public GGMLBlock {
     int hidden_dim;
     bool use_residue;
 
-    // network params
-    // in_layers
-
-    // layer norm 
-    // struct ggml_tensor* ln_w;  // [in_dim, ]
-    // struct ggml_tensor* ln_b;  // [in_dim, ]
-
-    // struct ggml_tensor* fc1_w;  // [in_dim, hidden_dim]
-    // struct ggml_tensor* fc1_b;  // [in_dim, ]
-    // struct ggml_tensor* fc2_w;  // [hidden_dim, out_dim ]
-    // struct ggml_tensor* fc2_b;  // [hidden_dim, ]
-
 public:
 
     FuseBlock(int i_d, int o_d, int h_d, bool use_residue = true)
         : in_dim(i_d), out_dim(o_d), hidden_dim(h_d), 
         use_residue(use_residue){
-        // blocks["fc1"] = std::shared_ptr<GGMLBlock>(new Linear(d_model, intermediate_size));
-        // blocks["fc2"] = std::shared_ptr<GGMLBlock>(new Linear(intermediate_size, d_model));
+
         blocks["fc1"] = std::shared_ptr<GGMLBlock>(new Linear(in_dim, hidden_dim,  true));
         blocks["fc2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_dim, out_dim, true));
         blocks["layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(in_dim));
+
     }
-    
-    
-    // size_t calculate_mem_size(ggml_type wtype) {
-    //     size_t mem_size = 0;
-    //     mem_size += 2 * ggml_row_size(wtype, in_dim);
-    //     mem_size += ggml_row_size(wtype, in_dim*hidden_dim);
-    //     mem_size += ggml_row_size(wtype, out_dim);
-    //     mem_size += ggml_row_size(wtype, hidden_dim*out_dim);
-    //     mem_size += ggml_row_size(wtype, hidden_dim);
-        
-    //     return mem_size;
-    // }
-
-    // void init_params(struct ggml_context* ctx, ggml_type wtype, ggml_allocr* alloc) {
-    //     ln_w = ggml_new_tensor_1d(ctx, wtype, in_dim);
-    //     ln_b = ggml_new_tensor_1d(ctx, wtype, in_dim);
-
-    //     fc1_b = ggml_new_tensor_1d(ctx, wtype, hidden_dim);
-    //     fc1_w = ggml_new_tensor_2d(ctx, wtype, in_dim, hidden_dim);
-    //     fc2_b = ggml_new_tensor_1d(ctx, wtype, out_dim);
-    //     fc2_w = ggml_new_tensor_2d(ctx, wtype, hidden_dim, out_dim);
-    //     // alloc all tensors linked to this context
-    //     for (struct ggml_tensor* t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-    //         if (t->data == NULL) {
-    //             ggml_allocr_alloc(alloc, t);
-    //         }
-    //     }
-
-    // }s
-
-    // size_t get_num_tensors() {
-    //     return 6;
-    // }
-
-    // void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-    //     tensors[prefix + "fc1.weight"] = fc1_w;
-    //     tensors[prefix + "fc1.bias"]   = fc1_b;
-    //     tensors[prefix + "fc2.weight"] = fc2_w;
-    //     tensors[prefix + "fc2.bias"]   = fc2_b;
-    //     tensors[prefix + "layernorm.weight"] = ln_w;
-    //     tensors[prefix + "layernorm.bias"]   = ln_b;        
-    // }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [N, channels, h, w]
-        // auto fc1 = std::dynamic_pointer_cast<Linear>(blocks["fc1"]);
-        // auto fc2 = std::dynamic_pointer_cast<Linear>(blocks["fc2"]);
-
-        // x = fc1->forward(ctx, x);
-        // if (use_gelu) {
-        //     x = ggml_gelu_inplace(ctx, x);
-        // } else {
-        //     x = ggml_gelu_quick_inplace(ctx, x);
-        // }
-        // x = fc2->forward(ctx, x);
-        // return x;
-
-        // in_layers
 
         auto fc1 = std::dynamic_pointer_cast<Linear>(blocks["fc1"]);
         auto fc2 = std::dynamic_pointer_cast<Linear>(blocks["fc2"]);
@@ -117,19 +50,6 @@ public:
 struct FuseModule : public GGMLBlock{
     // network hparams
     int embed_dim;    
-    
-    // struct FuseBlock mlp1;
-    // struct FuseBlock mlp2;
-    // layer norm 
-    // struct ggml_tensor* ln_w;  // [in_dim, ]
-    // struct ggml_tensor* ln_b;  // [in_dim, ]
-
-
-    // FuseModule(int imb_d): 
-    //     embed_dim(imb_d), 
-    //     mlp1(imb_d*2, imb_d, imb_d, false),
-    //     mlp2(imb_d, imb_d, imb_d, true) {
-    // }
 
 public:
 
@@ -140,48 +60,6 @@ public:
         blocks["layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(embed_dim));
     }
 
-
-    // void init_params(struct ggml_context* ctx, ggml_type wtype, ggml_allocr* alloc) {                  
-    //     ln_w = ggml_new_tensor_1d(ctx, wtype, embed_dim);
-    //     ln_b = ggml_new_tensor_1d(ctx, wtype, embed_dim);
-    //     // alloc all tensors linked to this context
-    //     mlp1.init_params(ctx, wtype, alloc);
-    //     mlp2.init_params(ctx, wtype, alloc);
-    //     for (struct ggml_tensor* t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-    //         if (t->data == NULL) {
-    //             ggml_allocr_alloc(alloc, t);
-    //         }
-    //     }
-    // }
-
-    // void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-
-    //     tensors[prefix + "layer_norm.weight"] = ln_w;
-    //     tensors[prefix + "layer_norm.bias"]   = ln_b;      
-    //     mlp1.map_by_name(tensors, prefix + "mlp1.");
-    //     mlp2.map_by_name(tensors, prefix + "mlp2.");
-
-    // }
-
-    // size_t get_num_tensors() {
-    //     size_t n = mlp1.get_num_tensors();
-    //     n += mlp2.get_num_tensors();
-    //     n += 2;
-    //     return n;
-    // }
-
-    // size_t calculate_mem_size(ggml_type wtype) {
-    //     size_t mem_size = mlp1.calculate_mem_size(wtype);
-    //     mem_size += mlp2.calculate_mem_size(wtype);
-    //     mem_size += 2 * ggml_row_size(wtype, embed_dim);        
-    //     return mem_size;
-    // }
-
-    // void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-    //     vision_model.get_param_tensors(tensors, prefix+".vision_model");
-    //     fuse_module.get_param_tensors(tensors, prefix+".fuse_module");
-    //     visual_projection_2.get_param_tensors(tensors, prefix);
-    // }
 
     struct ggml_tensor* fuse_fn(struct ggml_context* ctx, 
                                 struct ggml_tensor* prompt_embeds, 
@@ -267,11 +145,6 @@ public:
         blocks["visual_projection_2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, projection_dim, false));
     }
 
-    // void init_params(struct ggml_context* ctx, ggml_type wtype) {
-    //     params["visual_projection_2.weight"] = ggml_new_tensor_2d(ctx, wtype, hidden_size, projection_dim);
-        
-    // }
-
     struct ggml_tensor* forward(struct ggml_context* ctx, 
                            struct ggml_tensor* pixel_values){
 
@@ -325,39 +198,6 @@ public:
         return "pmid";
     }
 
-    // void init_params(ggml_type wtype) {               
-    //     ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
-    //     vision_model.init_params(params_ctx, backend, wtype, alloc);
-    //     fuse_module.init_params(params_ctx, wtype, alloc);
-    //     visual_projection_2 = ggml_new_tensor_2d(params_ctx, wtype, 1024, 1280); // python [1024, 1280]        
-    //     ggml_allocr_alloc(alloc, visual_projection_2);
-    //     ggml_allocr_free(alloc); 
-    // }
-
-    // void map_by_name(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-    //     vision_model.map_by_name(tensors, prefix + "vision_model.", prefix);
-    //     fuse_module.map_by_name(tensors, prefix + "fuse_module.");
-    //     tensors[prefix + "visual_projection_2.weight"] = visual_projection_2;        
-    // }
-
-    // size_t calculate_mem_size() {        
-
-    //     wtype = GGML_TYPE_F32;
-
-    //     size_t mem_size = vision_model.calculate_mem_size(wtype);
-    //     mem_size += fuse_module.calculate_mem_size(wtype);
-        
-    //     mem_size += ggml_row_size(wtype, 1280*1024);
-              
-    //     return mem_size;
-    // }
-
-    // size_t get_num_tensors() {
-    //     size_t num_tensors = (3 + 2 + 37 * vision_model.num_hidden_layers);
-    //     num_tensors += fuse_module.get_num_tensors() + 1;
-    //     return num_tensors;
-    // }
-
     size_t get_params_mem_size() {
         size_t params_mem_size = vision_model.get_params_mem_size();        
         params_mem_size += fuse_module.get_params_mem_size();
@@ -385,48 +225,27 @@ public:
                            struct ggml_tensor* prompt_embeds,                           
                            struct ggml_tensor* class_tokens_mask,
                            struct ggml_tensor* class_tokens_mask_pos,
-                        //    struct ggml_tensor* cls,
-                        //    struct ggml_tensor* class_embedding_temp,
-                        //    struct ggml_tensor* positions,
                            struct ggml_tensor* left,
                            struct ggml_tensor* right) {
         // x: [N, channels, h, w]
 
-        // struct ggml_tensor *shared_id_embeds = vision_model.forward(ctx, 
-        //                                                      id_pixel_values,
-        //                                                      cls,
-        //                                                      class_embedding_temp,
-        //                                                      positions
-        //                                                      ); // [batch_size, seq_length, hidden_size]
         struct ggml_tensor *shared_id_embeds = vision_model.forward(ctx, id_pixel_values);     // [batch_size, seq_length, hidden_size]
-        // print_ggml_tensor(shared_id_embeds, true, "shared_id_embeds");  
-
         struct ggml_tensor *id_embeds = vision_model.visual_project(ctx, shared_id_embeds); // [batch_size, seq_length, proj_dim(768)]
-        // print_ggml_tensor(id_embeds, true, "id_embeds");  
-        
-        // struct ggml_tensor *id_embeds_2 = ggml_mul_mat(ctx, visual_projection_2, shared_id_embeds); // [batch_size, seq_length, 1280]
         struct ggml_tensor *id_embeds_2 = visual_projection_2.forward(ctx, shared_id_embeds); // [batch_size, seq_length, 1280]
-        // print_ggml_tensor(id_embeds_2, true, "id_embeds_2");  
 
-
-       
         id_embeds = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 2, 0, 1, 3));
         id_embeds_2 = ggml_cont(ctx, ggml_permute(ctx, id_embeds_2, 2, 0, 1, 3));
 
         id_embeds = ggml_concat(ctx, id_embeds, id_embeds_2); // [batch_size, seq_length, 1, 2048] check whether concat at dim 2 is right
         id_embeds = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 1, 2, 0, 3));
 
-        // print_ggml_tensor(id_embeds, true, "id_embeds_after_cont+perm");  
 
         struct ggml_tensor * updated_prompt_embeds = fuse_module.forward(ctx,
                                           prompt_embeds, id_embeds,
                                           class_tokens_mask,
                                           class_tokens_mask_pos,
                                           left, right);
-        //  print_ggml_tensor(updated_prompt_embeds, true, "updated_prompt_embeds");  
-
         return updated_prompt_embeds;
-
     }
 
      struct ggml_cgraph* build_graph( //struct ggml_allocr* allocr, 
@@ -434,20 +253,6 @@ public:
                                      struct ggml_tensor* prompt_embeds,
                                      std::vector<bool> &class_tokens_mask
                               ) {
-        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
-        // static size_t buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
-        // static std::vector<uint8_t> buf(buf_size);
-
-        // struct ggml_init_params params = {
-        //     /*.mem_size   =*/buf_size,
-        //     /*.mem_buffer =*/buf.data(),
-        //     /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
-        // };
-
-        // struct ggml_context* ctx0 = ggml_init(params);
-
-        // struct ggml_cgraph* gf = ggml_new_graph(ctx0);   
-
 
         ctm.clear();
         ctmf16.clear();
@@ -465,13 +270,7 @@ public:
         int64_t seq_length  = prompt_embeds->ne[1];
         ggml_type type = GGML_TYPE_F32;
 
-        // struct ggml_tensor* id_pixel_values_d = ggml_dup_tensor(ctx0, id_pixel_values);
-        // ggml_allocr_alloc(allocr, id_pixel_values_d);
-        // struct ggml_tensor* prompt_embeds_d = ggml_dup_tensor(ctx0, prompt_embeds);
-        // ggml_allocr_alloc(allocr, prompt_embeds_d);        
         struct ggml_tensor* class_tokens_mask_d = ggml_new_tensor_1d(ctx0, type, class_tokens_mask.size());
-        // ggml_allocr_alloc(allocr, class_tokens_mask_d);
-
 
         struct ggml_tensor* id_pixel_values_d = to_backend(id_pixel_values);
         struct ggml_tensor* prompt_embeds_d   = to_backend(prompt_embeds);
@@ -490,81 +289,43 @@ public:
         } 
         if(ctmpos[0] > 0){
             left = ggml_new_tensor_3d(ctx0, type, hidden_size, 1, ctmpos[0]);
-            // ggml_allocr_alloc(allocr, left);
         }
         if(ctmpos[ctmpos.size()-1] < seq_length - 1){
             right = ggml_new_tensor_3d(ctx0, type,
                    hidden_size, 1, seq_length-ctmpos[ctmpos.size()-1]-1);
-            // ggml_allocr_alloc(allocr, right);
         }
         struct ggml_tensor*  class_tokens_mask_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ctmpos.size());
-        // ggml_allocr_alloc(allocr, class_tokens_mask_pos);
 
         const int image_size = id_pixel_values->ne[0]; 
         int batch_size = id_pixel_values->ne[3];
         const int num_patches = ((image_size / vision_model.patch_size) * (image_size / vision_model.patch_size));
         const int num_positions = num_patches + 1;
 
-        // struct ggml_tensor * cls = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch_size);
-
-        // struct ggml_tensor * class_embedding_temp = ggml_new_tensor_4d(ctx0, type, 
-        //                                vision_model.hidden_size, batch_size, 1, 1);
-        // struct ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions);
-        // ggml_allocr_alloc(allocr, cls);
-        // ggml_allocr_alloc(allocr, class_embedding_temp);
-        // ggml_allocr_alloc(allocr, positions);
-        //  set_backend_tensor_data(custom_embeddings, token_embed_custom.data());
-
-
-        // if (!ggml_allocr_is_measure(allocr)) {
         {
-            // ggml_backend_tensor_set(id_pixel_values_d, id_pixel_values->data, 0,  ggml_nbytes(id_pixel_values));
-            // ggml_backend_tensor_set(prompt_embeds_d, prompt_embeds->data, 0,  ggml_nbytes(prompt_embeds));
             if(type == GGML_TYPE_F16)
-                // ggml_backend_tensor_set(class_tokens_mask_d, ctmf16.data(), 0,  ggml_nbytes(class_tokens_mask_d));
                 set_backend_tensor_data(class_tokens_mask_d, ctmf16.data());
             else
-                // ggml_backend_tensor_set(class_tokens_mask_d, ctm.data(), 0,  ggml_nbytes(class_tokens_mask_d));
                 set_backend_tensor_data(class_tokens_mask_d, ctm.data());
-            // std::vector<int> cls_h;
-            // for (int b = 0; b < batch_size; b++) {
-            //     cls_h.push_back(b * num_positions);
-            // }
-            // std::vector<int> pos;
-            // for (int i = 0; i < num_positions; i++) {
-            //     pos.push_back(i);
-            // }
-            // ggml_backend_tensor_set(cls, cls_h.data(), 0, ggml_nbytes(cls));
-            // ggml_backend_tensor_set(positions, pos.data(), 0, ggml_nbytes(positions));
-            // ggml_backend_tensor_set(class_tokens_mask_pos, ctmpos.data(), 0, ggml_nbytes(class_tokens_mask_pos));
             set_backend_tensor_data(class_tokens_mask_pos, ctmpos.data());
             if(left){
                 if(type == GGML_TYPE_F16){
-                    // std::vector<ggml_fp16_t> zeros(ggml_nelements(left), ggml_fp32_to_fp16(0.f));
                     for(int i = 0; i < ggml_nelements(left); ++i)
                         zeros_left_16.push_back(ggml_fp32_to_fp16(0.f));
-                    // ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
                     set_backend_tensor_data(left, zeros_left_16.data());
                 }else{
-                    // std::vector<float> zeros(ggml_nelements(left), 0.f);
                     for(int i = 0; i < ggml_nelements(left); ++i)
                         zeros_left.push_back(0.f);
-                    // ggml_backend_tensor_set(left, zeros.data(), 0, ggml_nbytes(left));
                     set_backend_tensor_data(left, zeros_left.data());
                 }
             }
             if(right){
                 if(type == GGML_TYPE_F16){
-                    // std::vector<ggml_fp16_t> zeros(ggml_nelements(right), ggml_fp32_to_fp16(0.f));
-                    // ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
                     for(int i = 0; i < ggml_nelements(right); ++i)
                         zeros_right_16.push_back(ggml_fp32_to_fp16(0.f));
                     set_backend_tensor_data(right, zeros_right_16.data());
                 }else{
-                    // std::vector<float> zeros(ggml_nelements(right), 0.f);
                     for(int i = 0; i < ggml_nelements(right); ++i)
                         zeros_right.push_back(0.f);
-                    // ggml_backend_tensor_set(right, zeros.data(), 0, ggml_nbytes(right));
                     set_backend_tensor_data(right, zeros_right.data());
                 }
             }
@@ -574,13 +335,9 @@ public:
                                                             prompt_embeds_d,
                                                             class_tokens_mask_d,
                                                             class_tokens_mask_pos,
-                                                            // cls,
-                                                            // class_embedding_temp,
-                                                            // positions,
                                                             left, right
                                                             );
         ggml_build_forward_expand(gf, updated_prompt_embeds);
-        // ggml_free(ctx0);
 
         return gf;
     }
@@ -644,20 +401,7 @@ public:
         return model_loader.get_params_mem_size(NULL);
     }
 
-
-    // size_t get_num_tensors() {
-    //     return PM_LORA_GRAPH_SIZE;
-    // }
-
-    // size_t calculate_mem_size() {
-    //     return model_loader.cal_mem_size(NULL);
-    // }
-   
-
     bool load_from_file(ggml_backend_t backend) {
-        // if (!alloc_params_buffer(backend)) {
-        //     return false;
-        // }
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
 
         if (load_failed) {
@@ -665,9 +409,6 @@ public:
             return false;
         }
         
-
-        // ggml_allocr* alloc = ggml_allocr_new_from_buffer(params_buffer);
-
         bool dry_run          = true;
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
             std::string name = tensor_storage.name;
@@ -690,7 +431,6 @@ public:
                                                             tensor_storage.ne);
                 lora_tensors[name]       = real;                                           
              }else{
-            // ggml_allocr_alloc(alloc, real);
                 auto real   = lora_tensors[name];   
                 *dst_tensor = real;
             }
@@ -708,7 +448,6 @@ public:
         model_loader.load_tensors(on_new_tensor_cb, backend);
 
         LOG_DEBUG("finished loaded lora");
-        // ggml_allocr_free(alloc);
         return true;
     }
 
@@ -846,18 +585,10 @@ public:
                 continue;
             }
 
-            // print_ggml_tensor(lora_down, true, lora_down_name.c_str());
-            // print_ggml_tensor(lora_up, true, lora_up_name.c_str());
-
-            // ggml_tensor* lora_up_orig = lora_up;
 
             applied_lora_tensors.insert(lora_up_name);
             applied_lora_tensors.insert(lora_down_name);
             
-            // ggml_mul_mat requires tensor b transposed
-            // lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
-            // struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_down, lora_up);
-            // updown                     = ggml_cont(ctx0, updown);
             // same as in lora.hpp
             lora_down                  = ggml_cont(ctx0, ggml_transpose(ctx0, lora_down));
             struct ggml_tensor* updown = ggml_mul_mat(ctx0, lora_up, lora_down);

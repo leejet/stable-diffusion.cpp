@@ -302,14 +302,17 @@ You can use [PhotoMaker](https://github.com/TencentARC/PhotoMaker) to personaliz
 
 **NOTE**, currently PhotoMaker **ONLY** works with **SDXL** (any SDXL model files will work).
 
-Download PhotoMaker model file (in safetensor format) [here](https://huggingface.co/bssrdf/PhotoMaker). The official version (in .bin format) does not work with ```stablediffusion.cpp```.
+Download PhotoMaker model file (in safetensor format) [here](https://huggingface.co/bssrdf/PhotoMaker). The official release of the model file (in .bin format) does not work with ```stablediffusion.cpp```.
 
 - Specify the PhotoMaker model path using the `--stacked-id-embd-dir PATH` parameter. 
 - Specify the input images path using the `--input-id-images-dir PATH` parameter. 
 
-Another relevant cli parameter for PhotoMaker:
+In prompt, make sure you have a class word followed by the trigger word ```"img"``` (hard-coded for now). The class word could be one of ```"man, woman, girl, boy"```. If input ID images contain asian faces, add ```Asian``` before the class 
+word.
 
-- ```--style-ratio  (0-100)%```  default is 20 and 10-20 typically gets good results. Lower ratio means more faithfully following input ID (not necessarily better quality).
+Another PhotoMaker specific parameter:
+
+- ```--style-ratio  (0-100)%```: default is 20 and 10-20 typically gets good results. Lower ratio means more faithfully following input ID (not necessarily better quality).
 
 Other parameters recommended for running Photomaker:
 
