@@ -306,8 +306,9 @@ Download PhotoMaker model file (in safetensor format) [here](https://huggingface
 
 - Specify the PhotoMaker model path using the `--stacked-id-embd-dir PATH` parameter. 
 - Specify the input images path using the `--input-id-images-dir PATH` parameter. 
+  - input images **must** have the same width and height for preprocessing (to be improved)
 
-In prompt, make sure you have a class word followed by the trigger word ```"img"``` (hard-coded for now). The class word could be one of ```"man, woman, girl, boy"```. If input ID images contain asian faces, add ```Asian``` before the class 
+In prompt, make sure you have a class word followed by the trigger word ```"img"``` (hard-coded for now). The class word could be one of ```"man, woman, girl, boy"```. If input ID images contain asian faces, add ```Asian``` before the class
 word.
 
 Another PhotoMaker specific parameter:
