@@ -706,9 +706,9 @@ int main(int argc, const char* argv[]) {
                 }
                 sd_image_t* input_image = NULL;
                 input_image = new sd_image_t{(uint32_t)width,
-                                             (uint32_t)height,
-                                             3,
-                                             input_image_buffer};
+                                            (uint32_t)height,
+                                            3,
+                                            input_image_buffer};
                 input_image = preprocess_id_image(input_image);
                 if(input_image == NULL){
                     LOG_ERROR("preprocess input id image from '%s' failed", img_file.c_str());

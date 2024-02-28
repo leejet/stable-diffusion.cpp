@@ -1679,45 +1679,50 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     // ggml_tensor* class_tokens_mask = NULL;
     std::vector<bool> class_tokens_mask;
     if(sd_ctx->sd->stacked_id){
-        sd_ctx->sd->pmid_model->style_strength = style_ratio;
-        int32_t w = input_id_images[0]->width;
-        int32_t h = input_id_images[0]->height;
-        int32_t channels = input_id_images[0]->channel;
-        int32_t num_input_images = input_id_images.size();
-        init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, w, h, channels, num_input_images);
-        // TODO: move these to somewhere else and be user settable
-        float mean[] = {0.48145466, 0.4578275, 0.40821073};
-        float std[]  = {0.26862954, 0.26130258, 0.27577711};
-        for(int i = 0; i <  num_input_images; i++)  {
-            sd_image_t* init_image = input_id_images[i];
-            if(normalize_input)
-                sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
-            else
-                sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
-        }
-        t0                            = ggml_time_ms();
-        auto cond_tup                = sd_ctx->sd->get_learned_condition_with_trigger(work_ctx, prompt, 
-                                                   clip_skip, width, height, num_input_images );
-        prompts_embeds                = std::get<0>(cond_tup);
-        pooled_prompts_embeds         = std::get<1>(cond_tup);  // [adm_in_channels, ]
-        class_tokens_mask             = std::get<2>(cond_tup);  // 
+        if(input_id_images.size() > 0){
+            sd_ctx->sd->pmid_model->style_strength = style_ratio;
+            int32_t w = input_id_images[0]->width;
+            int32_t h = input_id_images[0]->height;
+            int32_t channels = input_id_images[0]->channel;
+            int32_t num_input_images = input_id_images.size();
+            init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, w, h, channels, num_input_images);
+            // TODO: move these to somewhere else and be user settable
+            float mean[] = {0.48145466, 0.4578275, 0.40821073};
+            float std[]  = {0.26862954, 0.26130258, 0.27577711};
+            for(int i = 0; i <  num_input_images; i++)  {
+                sd_image_t* init_image = input_id_images[i];
+                if(normalize_input)
+                    sd_mul_images_to_tensor(init_image->data, init_img, i, mean, std);
+                else
+                    sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
+            }
+            t0                            = ggml_time_ms();
+            auto cond_tup                = sd_ctx->sd->get_learned_condition_with_trigger(work_ctx, prompt,
+                                                    clip_skip, width, height, num_input_images );
+            prompts_embeds                = std::get<0>(cond_tup);
+            pooled_prompts_embeds         = std::get<1>(cond_tup);  // [adm_in_channels, ]
+            class_tokens_mask             = std::get<2>(cond_tup);  //
 
-        prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
-        t1 = ggml_time_ms();
-        LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
-        if (sd_ctx->sd->free_params_immediately) {
-            sd_ctx->sd->pmid_model->free_params_buffer();
-        } 
-        // Encode input prompt without the trigger word for delayed conditioning
-        prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt); 
-        // printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
-        prompt = prompt_text_only; //  
-        if(sample_steps < 50){
-            LOG_INFO("sampling steps increases from %d to 50 for PHOTOMAKER", sample_steps);
-            sample_steps  = 50;
+            prompts_embeds = sd_ctx->sd->id_encoder(work_ctx, init_img, prompts_embeds, class_tokens_mask);
+            t1 = ggml_time_ms();
+            LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
+            if (sd_ctx->sd->free_params_immediately) {
+                sd_ctx->sd->pmid_model->free_params_buffer();
+            }
+            // Encode input prompt without the trigger word for delayed conditioning
+            prompt_text_only = sd_ctx->sd->remove_trigger_from_prompt(work_ctx, prompt);
+            // printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
+            prompt = prompt_text_only; //
+            if(sample_steps < 50){
+                LOG_INFO("sampling steps increases from %d to 50 for PHOTOMAKER", sample_steps);
+                sample_steps  = 50;
+            }
+        }else{
+            LOG_WARN("Provided PhotoMaker model file, but NO input ID images");
+            LOG_WARN("Turn off PhotoMaker");
+            sd_ctx->sd->stacked_id = false;
         }
     }
-
 
 
     t0                            = ggml_time_ms();
