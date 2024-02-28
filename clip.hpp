@@ -530,29 +530,23 @@ public:
         : d_model(d_model),
           n_head(n_head),
           intermediate_size(intermediate_size) {
-        if(atten1)
-            blocks["self_attn"]   = std::shared_ptr<GGMLBlock>(new MultiheadAttention(d_model, n_head));
-        else
-            blocks["self_attn"]   = std::shared_ptr<GGMLBlock>(new MultiheadAttention2(d_model, n_head));
+
+        blocks["self_attn"]   = std::shared_ptr<GGMLBlock>(new MultiheadAttention(d_model, n_head, true, atten1));
+
         blocks["layer_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_model));
         blocks["layer_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_model));
 
         blocks["mlp"] = std::shared_ptr<GGMLBlock>(new CLIPMLP(d_model, intermediate_size));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, bool mask = true, bool atten1 = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, bool mask = true) {
         // x: [N, n_token, d_model]
+        auto self_attn   = std::dynamic_pointer_cast<MultiheadAttention>(blocks["self_attn"]);
         auto layer_norm1 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm1"]);
         auto layer_norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm2"]);
         auto mlp         = std::dynamic_pointer_cast<CLIPMLP>(blocks["mlp"]);
-        if(atten1){
-            auto self_attn   = std::dynamic_pointer_cast<MultiheadAttention>(blocks["self_attn"]);
-            x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
-        }
-        else{
-            auto self_attn   = std::dynamic_pointer_cast<MultiheadAttention2>(blocks["self_attn"]);
-            x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
-        }
+
+        x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
         x = ggml_add(ctx, x, mlp->forward(ctx, layer_norm2->forward(ctx, x)));
         return x;
     }
@@ -575,7 +569,7 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, int clip_skip = -1, bool mask = true, bool atten1 = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, int clip_skip = -1, bool mask = true) {
         // x: [N, n_token, d_model]
         int layer_idx = n_layer - 1;
         LOG_DEBUG("clip_skip %d", clip_skip);
@@ -590,7 +584,7 @@ public:
             }
             std::string name = "layers." + std::to_string(i);
             auto layer       = std::dynamic_pointer_cast<CLIPLayer>(blocks[name]);
-            x                = layer->forward(ctx, x, mask, atten1);  // [N, n_token, d_model]
+            x                = layer->forward(ctx, x, mask);  // [N, n_token, d_model]
             // LOG_DEBUG("layer %d", i);
         }
         return x;
@@ -898,7 +892,7 @@ public:
 
         auto x = embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
         x      = pre_layernorm->forward(ctx, x);
-        x      = encoder->forward(ctx, x, -1, false, false);
+        x      = encoder->forward(ctx, x, -1, false);
         x      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
 
         GGML_ASSERT(x->ne[3] == 1);
