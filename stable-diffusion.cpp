@@ -124,7 +124,7 @@ public:
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
-        ggml_metal_log_set_callback(ggml_log_callback_default, nullptr);
+        ggml_backend_metal_log_set_callback(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
 
@@ -451,64 +451,82 @@ public:
                                                                 int height,
                                                                 bool force_zero_embeddings = false) {
         cond_stage_model->set_clip_skip(clip_skip);
-        auto tokens_and_weights           = cond_stage_model->tokenize(text, true);
-        std::vector<int>& tokens          = tokens_and_weights.first;
-        std::vector<float>& weights       = tokens_and_weights.second;
-        int64_t t0                        = ggml_time_ms();
-        struct ggml_tensor* hidden_states = NULL;  // [N, n_token, hidden_size]
-        struct ggml_tensor* pooled        = NULL;
+        auto tokens_and_weights                 = cond_stage_model->tokenize(text, true);
+        std::vector<int>& tokens                = tokens_and_weights.first;
+        std::vector<float>& weights             = tokens_and_weights.second;
+        int64_t t0                              = ggml_time_ms();
+        struct ggml_tensor* hidden_states       = NULL;  // [N, n_token, hidden_size]
+        struct ggml_tensor* chunk_hidden_states = NULL;  // [n_token, hidden_size]
+        struct ggml_tensor* pooled              = NULL;
+        std::vector<float> hidden_states_vec;
 
-        auto input_ids                 = vector_to_ggml_tensor_i32(work_ctx, tokens);
-        struct ggml_tensor* input_ids2 = NULL;
-        size_t max_token_idx           = 0;
-        if (version == VERSION_XL) {
-            auto it = std::find(tokens.begin(), tokens.end(), EOS_TOKEN_ID);
-            if (it != tokens.end()) {
-                std::fill(std::next(it), tokens.end(), 0);
+        size_t chunk_len   = 77;
+        size_t chunk_count = tokens.size() / chunk_len;
+        for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
+            std::vector<int> chunk_tokens(tokens.begin() + chunk_idx * chunk_len,
+                                          tokens.begin() + (chunk_idx + 1) * chunk_len);
+            std::vector<float> chunk_weights(weights.begin() + chunk_idx * chunk_len,
+                                           weights.begin() + (chunk_idx + 1) * chunk_len);
+
+            auto input_ids                 = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
+            struct ggml_tensor* input_ids2 = NULL;
+            size_t max_token_idx           = 0;
+            if (version == VERSION_XL) {
+                auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), EOS_TOKEN_ID);
+                if (it != chunk_tokens.end()) {
+                    std::fill(std::next(it), chunk_tokens.end(), 0);
+                }
+
+                max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
+
+                input_ids2 = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
+
+                // for (int i = 0; i < chunk_tokens.size(); i++) {
+                //     printf("%d ", chunk_tokens[i]);
+                // }
+                // printf("\n");
             }
 
-            max_token_idx = std::min<size_t>(std::distance(tokens.begin(), it), tokens.size() - 1);
-
-            input_ids2 = vector_to_ggml_tensor_i32(work_ctx, tokens);
-
-            // for (int i = 0; i < tokens.size(); i++) {
-            //     printf("%d ", tokens[i]);
+            cond_stage_model->compute(n_threads, input_ids, input_ids2, max_token_idx, false, &chunk_hidden_states, work_ctx);
+            if (version == VERSION_XL && chunk_idx == 0) {
+                cond_stage_model->compute(n_threads, input_ids, input_ids2, max_token_idx, true, &pooled, work_ctx);
+            }
+            // if (pooled != NULL) {
+            //     print_ggml_tensor(chunk_hidden_states);
+            //     print_ggml_tensor(pooled);
             // }
-            // printf("\n");
-        }
 
-        cond_stage_model->compute(n_threads, input_ids, input_ids2, max_token_idx, false, &hidden_states, work_ctx);
-        if (version == VERSION_XL) {
-            cond_stage_model->compute(n_threads, input_ids, input_ids2, max_token_idx, true, &pooled, work_ctx);
-        }
-        // if (pooled != NULL) {
-        //     print_ggml_tensor(hidden_states);
-        //     print_ggml_tensor(pooled);
-        // }
-
-        int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
-        ggml_tensor* result = ggml_dup_tensor(work_ctx, hidden_states);
-        {
-            float original_mean = ggml_tensor_mean(hidden_states);
-            for (int i2 = 0; i2 < hidden_states->ne[2]; i2++) {
-                for (int i1 = 0; i1 < hidden_states->ne[1]; i1++) {
-                    for (int i0 = 0; i0 < hidden_states->ne[0]; i0++) {
-                        float value = ggml_tensor_get_f32(hidden_states, i0, i1, i2);
-                        value *= weights[i1];
-                        ggml_tensor_set_f32(result, value, i0, i1, i2);
+            int64_t t1 = ggml_time_ms();
+            LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+            ggml_tensor* result = ggml_dup_tensor(work_ctx, chunk_hidden_states);
+            {
+                float original_mean = ggml_tensor_mean(chunk_hidden_states);
+                for (int i2 = 0; i2 < chunk_hidden_states->ne[2]; i2++) {
+                    for (int i1 = 0; i1 < chunk_hidden_states->ne[1]; i1++) {
+                        for (int i0 = 0; i0 < chunk_hidden_states->ne[0]; i0++) {
+                            float value = ggml_tensor_get_f32(chunk_hidden_states, i0, i1, i2);
+                            value *= chunk_weights[i1];
+                            ggml_tensor_set_f32(result, value, i0, i1, i2);
+                        }
                     }
                 }
+                float new_mean = ggml_tensor_mean(result);
+                ggml_tensor_scale(result, (original_mean / new_mean));
             }
-            float new_mean = ggml_tensor_mean(result);
-            ggml_tensor_scale(result, (original_mean / new_mean));
-        }
-        if (force_zero_embeddings) {
-            float* vec = (float*)result->data;
-            for (int i = 0; i < ggml_nelements(result); i++) {
-                vec[i] = 0;
+            if (force_zero_embeddings) {
+                float* vec = (float*)result->data;
+                for (int i = 0; i < ggml_nelements(result); i++) {
+                    vec[i] = 0;
+                }
             }
+            hidden_states_vec.insert(hidden_states_vec.end(), (float*)result->data, ((float*)result->data) + ggml_nelements(result));
         }
+
+        hidden_states = vector_to_ggml_tensor(work_ctx, hidden_states_vec);
+        hidden_states = ggml_reshape_2d(work_ctx,
+                                        hidden_states,
+                                        chunk_hidden_states->ne[0],
+                                        ggml_nelements(hidden_states) / chunk_hidden_states->ne[0]);
 
         ggml_tensor* vec = NULL;
         if (version == VERSION_XL) {
@@ -547,7 +565,7 @@ public:
             GGML_ASSERT(offset == ggml_nbytes(vec));
         }
         // print_ggml_tensor(result);
-        return {result, vec};
+        return {hidden_states, vec};
     }
 
     std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> get_svd_condition(ggml_context* work_ctx,

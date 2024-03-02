@@ -28,7 +28,8 @@ option(SD_CUBLAS                     "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
 option(SD_FLASH_ATTN                 "sd: use flash attention for x4 less memory usage" OFF)
-option(BUILD_SHARED_LIBS             "sd: build shared libs" OFF)
+option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
+option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
 if(SD_CUBLAS)
@@ -59,17 +60,24 @@ endif()
 
 set(SD_LIB stable-diffusion)
 
-add_library(${SD_LIB} stable-diffusion.h stable-diffusion.cpp model.h model.cpp util.h util.cpp upscaler.cpp
-             ggml_extend.hpp clip.hpp common.hpp unet.hpp tae.hpp esrgan.hpp lora.hpp denoiser.hpp rng.hpp rng_philox.hpp
-             control.hpp preprocessing.hpp)
+file(GLOB SD_LIB_SOURCES 
+    "*.h"
+    "*.cpp"
+    "*.hpp"
+)
 
-if(BUILD_SHARED_LIBS)
+# we can get only one share lib
+if(SD_BUILD_SHARED_LIBS)
     message("Build shared library")
+    set(BUILD_SHARED_LIBS OFF)
+    message(${SD_LIB_SOURCES})
+    add_library(${SD_LIB} SHARED ${SD_LIB_SOURCES})
     add_definitions(-DSD_BUILD_SHARED_LIB)
     target_compile_definitions(${SD_LIB} PRIVATE -DSD_BUILD_DLL)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
     message("Build static library")
+    add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
 endif()
 
 

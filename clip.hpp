@@ -558,11 +558,14 @@ public:
         auto token_embed_weight    = params["token_embedding.weight"];
         auto position_embed_weight = params["position_embedding.weight"];
 
-        GGML_ASSERT(input_ids->ne[0] <= position_embed_weight->ne[0]);
+        GGML_ASSERT(input_ids->ne[0] == position_embed_weight->ne[1]);
+        input_ids            = ggml_reshape_3d(ctx, input_ids, input_ids->ne[0], 1, input_ids->ne[1]);
+        auto token_embedding = ggml_get_rows(ctx, custom_embed_weight != NULL ? custom_embed_weight : token_embed_weight, input_ids);
+        token_embedding      = ggml_reshape_3d(ctx, token_embedding, token_embedding->ne[0], token_embedding->ne[1], token_embedding->ne[3]);
 
         // token_embedding + position_embedding
         auto x = ggml_add(ctx,
-                          ggml_get_rows(ctx, custom_embed_weight != NULL ? custom_embed_weight : token_embed_weight, input_ids),
+                          token_embedding,
                           position_embed_weight);  // [N, n_token, embed_dim]
         return x;
     }
@@ -700,7 +703,7 @@ public:
         auto final_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer_norm"]);
 
         auto x = embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
-        x      = encoder->forward(ctx, x, return_pooled ? -1 : clip_skip, true);
+        x = encoder->forward(ctx, x, return_pooled ? -1 : clip_skip, true);
         if (return_pooled || with_final_ln) {
             x = final_layer_norm->forward(ctx, x);
         }
@@ -893,7 +896,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             return true;
         }
         struct ggml_init_params params;
-        params.mem_size               = 1 * 1024 * 1024;  // 1MB
+        params.mem_size               = 10 * 1024 * 1024;  // max for custom embeddings 10 MB
         params.mem_buffer             = NULL;
         params.no_alloc               = false;
         struct ggml_context* embd_ctx = ggml_init(params);
@@ -928,9 +931,21 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
                                 struct ggml_tensor* embeddings,
                                 size_t max_token_idx = 0,
                                 bool return_pooled   = false) {
+        size_t N       = input_ids->ne[1];
+        size_t n_token = input_ids->ne[0];
+        if (input_ids != NULL && input_ids->ne[0] > text_model.n_token) {
+            GGML_ASSERT(input_ids->ne[0] % text_model.n_token == 0);
+            input_ids = ggml_reshape_2d(ctx, input_ids, text_model.n_token, input_ids->ne[0] / text_model.n_token);
+        }
+        if (input_ids2 != NULL && input_ids2->ne[0] > text_model2.n_token) {
+            GGML_ASSERT(input_ids2->ne[0] % text_model2.n_token == 0);
+            input_ids2 = ggml_reshape_2d(ctx, input_ids2, text_model2.n_token, input_ids2->ne[0] / text_model2.n_token);
+        }
+
         if (return_pooled) {
             return text_model2.forward(ctx, input_ids2, NULL, max_token_idx, return_pooled);
         }
+
         auto hidden_states = text_model.forward(ctx, input_ids, embeddings);  // [N, n_token, hidden_size]
         // LOG_DEBUG("hidden_states: %d %d %d %d", hidden_states->ne[0], hidden_states->ne[1], hidden_states->ne[2], hidden_states->ne[3]);
         if (version == VERSION_XL) {
@@ -956,6 +971,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
 
             hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 1, 2, 0, 3));
         }
+        hidden_states = ggml_reshape_3d(ctx, hidden_states, hidden_states->ne[0], n_token, N);
         // LOG_DEBUG("hidden_states: %d %d %d %d", hidden_states->ne[0], hidden_states->ne[1], hidden_states->ne[2], hidden_states->ne[3]);
         return hidden_states;
     }
@@ -1061,26 +1077,48 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);
         }
-        tokens.insert(tokens.begin(), BOS_TOKEN_ID);
-        weights.insert(weights.begin(), 1.0);
 
-        if (max_length > 0) {
-            if (tokens.size() > max_length - 1) {
-                tokens.resize(max_length - 1);
-                weights.resize(max_length - 1);
-                tokens.push_back(EOS_TOKEN_ID);
-                weights.push_back(1.0);
-            } else {
-                tokens.push_back(EOS_TOKEN_ID);
-                weights.push_back(1.0);
-                if (padding) {
-                    int pad_token_id = PAD_TOKEN_ID;
-                    if (version == VERSION_2_x) {
-                        pad_token_id = 0;
-                    }
-                    tokens.insert(tokens.end(), max_length - tokens.size(), pad_token_id);
-                    weights.insert(weights.end(), max_length - weights.size(), 1.0);
+        if (max_length > 0 && padding) {
+            size_t n = std::ceil(tokens.size() * 1.0 / (max_length - 2));
+            if (n == 0) {
+                n = 1;
+            }
+            size_t length = max_length * n;
+            LOG_DEBUG("token length: %llu", length);
+            std::vector<int> new_tokens;
+            std::vector<float> new_weights;
+            new_tokens.push_back(BOS_TOKEN_ID);
+            new_weights.push_back(1.0);
+            int token_idx = 0;
+            for (int i = 1; i < length; i++) {
+                if (token_idx >= tokens.size()) {
+                    break;
                 }
+                if (i % max_length == 0) {
+                    new_tokens.push_back(BOS_TOKEN_ID);
+                    new_weights.push_back(1.0);
+                } else if (i % max_length == max_length - 1) {
+                    new_tokens.push_back(EOS_TOKEN_ID);
+                    new_weights.push_back(1.0);
+                } else {
+                    new_tokens.push_back(tokens[token_idx]);
+                    new_weights.push_back(weights[token_idx]);
+                    token_idx++;
+                }
+            }
+
+            new_tokens.push_back(EOS_TOKEN_ID);
+            new_weights.push_back(1.0);
+            tokens  = new_tokens;
+            weights = new_weights;
+
+            if (padding) {
+                int pad_token_id = PAD_TOKEN_ID;
+                if (version == VERSION_2_x) {
+                    pad_token_id = 0;
+                }
+                tokens.insert(tokens.end(), length - tokens.size(), pad_token_id);
+                weights.insert(weights.end(), length - weights.size(), 1.0);
             }
         }
 

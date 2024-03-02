@@ -10,6 +10,7 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#include "preprocessing.hpp"
 
 #if defined(__APPLE__) && defined(__MACH__)
 #include <sys/sysctl.h>
@@ -273,14 +274,14 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
         level_str = "ERROR";
     }
 
-    static char log_buffer[LOG_BUFFER_SIZE];
+    static char log_buffer[LOG_BUFFER_SIZE + 1];
 
     int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "[%s] %s:%-4d - ", level_str, sd_basename(file).c_str(), line);
 
     if (written >= 0 && written < LOG_BUFFER_SIZE) {
         vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
-        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - strlen(log_buffer) - 1);
     }
+    strncat(log_buffer, "\n", LOG_BUFFER_SIZE - strlen(log_buffer));
 
     if (sd_log_cb) {
         sd_log_cb(level, log_buffer, sd_log_cb_data);
