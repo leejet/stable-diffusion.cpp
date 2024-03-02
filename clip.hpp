@@ -891,6 +891,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             LOG_ERROR("embedding '%s' failed", embd_name.c_str());
             return false;
         }
+        if (std::find(readed_embeddings.begin(), readed_embeddings.end(), embd_name) != readed_embeddings.end()) {
+            LOG_DEBUG("embedding already read in: %s", embd_name.c_str());
+            return true;
+        }
         struct ggml_init_params params;
         params.mem_size               = 10 * 1024 * 1024;  // max for custom embeddings 10 MB
         params.mem_buffer             = NULL;

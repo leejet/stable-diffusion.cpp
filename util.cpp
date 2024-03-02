@@ -161,6 +161,9 @@ int32_t get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
+static sd_progress_cb_t sd_progress_cb  = NULL;
+void* sd_progress_cb_data               = NULL;
+
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
     return converter.from_bytes(utf8_str);
@@ -205,6 +208,10 @@ std::string path_join(const std::string& p1, const std::string& p2) {
 }
 
 void pretty_progress(int step, int steps, float time) {
+    if (sd_progress_cb) {
+        sd_progress_cb(step,steps,time, sd_progress_cb_data);
+        return;
+    }
     if (step == 0) {
         return;
     }
@@ -248,8 +255,9 @@ std::string trim(const std::string& s) {
     return rtrim(ltrim(s));
 }
 
-static sd_log_cb_t sd_log_cb = NULL;
-void* sd_log_cb_data         = NULL;
+static sd_log_cb_t sd_log_cb            = NULL;
+void* sd_log_cb_data                    = NULL;
+
 
 #define LOG_BUFFER_SIZE 1024
 
@@ -286,7 +294,10 @@ void sd_set_log_callback(sd_log_cb_t cb, void* data) {
     sd_log_cb      = cb;
     sd_log_cb_data = data;
 }
-
+void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
+    sd_progress_cb      = cb;
+    sd_progress_cb_data = data;
+}
 const char* sd_get_system_info() {
     static char buffer[1024];
     std::stringstream ss;
