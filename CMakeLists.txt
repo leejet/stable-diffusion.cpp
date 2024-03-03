@@ -69,14 +69,15 @@ file(GLOB SD_LIB_SOURCES
 # we can get only one share lib
 if(SD_BUILD_SHARED_LIBS)
     message("Build shared library")
-    set(BUILD_SHARED_LIBS OFF)
     message(${SD_LIB_SOURCES})
+    set(BUILD_SHARED_LIBS OFF)
     add_library(${SD_LIB} SHARED ${SD_LIB_SOURCES})
     add_definitions(-DSD_BUILD_SHARED_LIB)
     target_compile_definitions(${SD_LIB} PRIVATE -DSD_BUILD_DLL)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
     message("Build static library")
+    set(BUILD_SHARED_LIBS OFF)
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
 endif()
 
