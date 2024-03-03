@@ -533,13 +533,11 @@ public:
                                        int height,
                                        int num_input_imgs,
                                        bool force_zero_embeddings = false) {
-        cond_stage_model->set_clip_skip(clip_skip);
         auto image_tokens = cond_stage_model->convert_token_to_id(trigger_word);
         // if(image_tokens.size() == 1){
         //     printf(" image token id is: %d \n", image_tokens[0]);
         // }
         GGML_ASSERT(image_tokens.size() == 1);
-        // auto tokens_and_weights     = cond_stage_model.tokenize(text, true);
         auto tokens_and_weights     = cond_stage_model->tokenize_with_trigger_token(text,
                                                                                     num_input_imgs,
                                                                                     image_tokens[0],
@@ -555,142 +553,14 @@ public:
         // for(int i = 0; i < clsm.size(); ++i)
         //    printf("%d ", clsm[i]?1:0);
         // printf("\n");
-        int64_t t0                        = ggml_time_ms();
-        struct ggml_tensor* hidden_states = NULL;  // [N, n_token, hidden_size]
-        struct ggml_tensor* pooled        = NULL;
-        // size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
-        // if (version == VERSION_XL) {
-        //     total_hidden_size += cond_stage_model.text_model2.hidden_size;
-        //     pooled = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, cond_stage_model.text_model2.projection_dim);
-        // }
-        // struct ggml_tensor* hidden_states = ggml_new_tensor_2d(work_ctx,
-        //                                                        GGML_TYPE_F32,
-        //                                                        total_hidden_size,
-        //                                                        cond_stage_model.text_model.max_position_embeddings);  // [N, n_token, hidden_size]
-        // cond_stage_model.alloc_compute_buffer(work_ctx, (int)tokens.size());
-        // cond_stage_model.compute(n_threads, tokens, hidden_states, pooled);
-        // cond_stage_model.free_compute_buffer();
-
-        auto input_ids                 = vector_to_ggml_tensor_i32(work_ctx, tokens);
-        struct ggml_tensor* input_ids2 = NULL;
-        size_t max_token_idx           = 0;
-        if (version == VERSION_XL) {
-            auto it = std::find(tokens.begin(), tokens.end(), EOS_TOKEN_ID);
-            if (it != tokens.end()) {
-                std::fill(std::next(it), tokens.end(), 0);
-            }
-
-            max_token_idx = std::min<size_t>(std::distance(tokens.begin(), it), tokens.size() - 1);
-
-            input_ids2 = vector_to_ggml_tensor_i32(work_ctx, tokens);
-
-            // for (int i = 0; i < tokens.size(); i++) {
-            //     printf("%d ", tokens[i]);
-            // }
-            // printf("\n");
-        }
-
-        cond_stage_model->compute(n_threads, input_ids, input_ids2, max_token_idx, false, &hidden_states, work_ctx);
-        if (version == VERSION_XL) {
-            cond_stage_model->compute(n_threads, input_ids, input_ids2, max_token_idx, true, &pooled, work_ctx);
-        }
-
-        // cond_stage_model->compute(n_threads, tokens, false, &hidden_states, work_ctx);
-        // if (version == VERSION_XL) {
-        //     cond_stage_model->compute(n_threads, tokens, true, &pooled, work_ctx);
-        // }
-        // if (pooled != NULL) {
-        //     print_ggml_tensor(hidden_states);
-        //     print_ggml_tensor(pooled);
-        // }
-
-        int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
-        ggml_tensor* result = ggml_dup_tensor(work_ctx, hidden_states);
-        {
-            float original_mean = ggml_tensor_mean(hidden_states);
-            for (int i2 = 0; i2 < hidden_states->ne[2]; i2++) {
-                for (int i1 = 0; i1 < hidden_states->ne[1]; i1++) {
-                    for (int i0 = 0; i0 < hidden_states->ne[0]; i0++) {
-                        float value = ggml_tensor_get_f32(hidden_states, i0, i1, i2);
-                        value *= weights[i1];
-                        ggml_tensor_set_f32(result, value, i0, i1, i2);
-                    }
-                }
-            }
-            float new_mean = ggml_tensor_mean(result);
-            ggml_tensor_scale(result, (original_mean / new_mean));
-        }
-        if (force_zero_embeddings) {
-            float* vec = (float*)result->data;
-            for (int i = 0; i < ggml_nelements(result); i++) {
-                vec[i] = 0;
-            }
-        }
-
-        ggml_tensor* vec = NULL;
-        if (version == VERSION_XL) {
-            int out_dim = 256;
-            // vec         = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model.adm_in_channels);
-            vec = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model->unet.adm_in_channels);
-            // [0:1280]
-            size_t offset = 0;
-            memcpy(vec->data, pooled->data, ggml_nbytes(pooled));
-            offset += ggml_nbytes(pooled);
-
-            // struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 2);
-            // original_size_as_tuple
-            float orig_width             = (float)width;
-            float orig_height            = (float)height;
-            std::vector<float> timesteps = {orig_height, orig_width};
-            // ggml_tensor_set_f32(timesteps, orig_height, 0);
-            // ggml_tensor_set_f32(timesteps, orig_width, 1);
-            ggml_tensor* embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
-            offset += ggml_nbytes(embed_view);
-            set_timestep_embedding(timesteps, embed_view, out_dim);
-            // print_ggml_tensor(ggml_reshape_1d(work_ctx, embed_view, out_dim * 2));
-            // crop_coords_top_left
-            float crop_coord_top  = 0.f;
-            float crop_coord_left = 0.f;
-            timesteps             = {crop_coord_top, crop_coord_left};
-            // ggml_tensor_set_f32(timesteps, crop_coord_top, 0);
-            // ggml_tensor_set_f32(timesteps, crop_coord_left, 1);
-            embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
-            offset += ggml_nbytes(embed_view);
-            set_timestep_embedding(timesteps, embed_view, out_dim);
-            // print_ggml_tensor(ggml_reshape_1d(work_ctx, embed_view, out_dim * 2));
-            // target_size_as_tuple
-            float target_width  = (float)width;
-            float target_height = (float)height;
-            // ggml_tensor_set_f32(timesteps, target_height, 0);
-            // ggml_tensor_set_f32(timesteps, target_width, 1);
-            timesteps  = {target_height, target_width};
-            embed_view = ggml_view_2d(work_ctx, vec, out_dim, 2, ggml_type_size(GGML_TYPE_F32) * out_dim, offset);
-            offset += ggml_nbytes(embed_view);
-            set_timestep_embedding(timesteps, embed_view, out_dim);
-            // print_ggml_tensor(ggml_reshape_1d(work_ctx, embed_view, out_dim * 2));
-            GGML_ASSERT(offset == ggml_nbytes(vec));
-        }
-        return std::make_tuple(result, vec, clsm);
+        auto cond = get_learned_condition_common(work_ctx, tokens, weights, clip_skip, width, height, force_zero_embeddings);
+        return std::make_tuple(cond.first, cond.second, clsm);
     }
 
     ggml_tensor* id_encoder(ggml_context* work_ctx,
                             ggml_tensor* init_img,
                             ggml_tensor* prompts_embeds,
                             std::vector<bool>& class_tokens_mask) {
-        // size_t total_hidden_size    = cond_stage_model.text_model.hidden_size;
-        // if (version == VERSION_XL) {
-        //     total_hidden_size += cond_stage_model.text_model2.hidden_size;
-        // }
-        // ggml_tensor *res = ggml_new_tensor_2d(work_ctx,
-        //                                         prompts_embeds->type,
-        //                                         total_hidden_size,
-        //                                         cond_stage_model.text_model.max_position_embeddings);
-
-        // pmid_model.alloc_compute_buffer(work_ctx, init_img, prompts_embeds, class_tokens_mask);
-        // pmid_model.compute(n_threads, init_img, prompts_embeds, class_tokens_mask, res);
-        // pmid_model.free_compute_buffer();
-
         ggml_tensor* res = NULL;
         pmid_model->compute(n_threads, init_img, prompts_embeds, class_tokens_mask, &res, work_ctx);
 
@@ -703,10 +573,20 @@ public:
                                                                 int width,
                                                                 int height,
                                                                 bool force_zero_embeddings = false) {
-        cond_stage_model->set_clip_skip(clip_skip);
         auto tokens_and_weights                 = cond_stage_model->tokenize(text, true);
         std::vector<int>& tokens                = tokens_and_weights.first;
         std::vector<float>& weights             = tokens_and_weights.second;
+        return get_learned_condition_common(work_ctx, tokens, weights, clip_skip, width, height, force_zero_embeddings);
+    }
+
+    std::pair<ggml_tensor*, ggml_tensor*> get_learned_condition_common(ggml_context* work_ctx,
+                                                                std::vector<int>& tokens,
+                                                                std::vector<float>& weights,
+                                                                int clip_skip,
+                                                                int width,
+                                                                int height,
+                                                                bool force_zero_embeddings = false) {
+        cond_stage_model->set_clip_skip(clip_skip);
         int64_t t0                              = ggml_time_ms();
         struct ggml_tensor* hidden_states       = NULL;  // [N, n_token, hidden_size]
         struct ggml_tensor* chunk_hidden_states = NULL;  // [n_token, hidden_size]
@@ -1691,6 +1571,9 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
+    if (sd_ctx->sd->stacked_id) {
+        params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
+    }
     params.mem_size += width * height * 3 * sizeof(float);
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;

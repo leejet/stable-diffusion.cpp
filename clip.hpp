@@ -172,9 +172,9 @@ public:
 
         auto it = encoder.find(utf8_to_utf32("img</w>"));
         if (it != encoder.end()) {
-            LOG_DEBUG(" trigger word img already in vocab \n");
+            LOG_DEBUG(" trigger word img already in vocab");
         } else {
-            LOG_DEBUG(" trigger word img not in vocab yet\n");
+            LOG_DEBUG(" trigger word img not in vocab yet");
         }
 
         int rank = 0;
