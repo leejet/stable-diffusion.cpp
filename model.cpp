@@ -1170,7 +1170,7 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                         reader.tensor_storage.file_index = file_index;
                         // if(strcmp(prefix.c_str(), "scarlett") == 0)
                         // printf(" got tensor %s \n ", reader.tensor_storage.name.c_str());
-                        reader.tensor_storage.name       = prefix + reader.tensor_storage.name;
+                        reader.tensor_storage.name = prefix + reader.tensor_storage.name;
                         tensor_storages.push_back(reader.tensor_storage);
                         // LOG_DEBUG("%s", reader.tensor_storage.name.c_str());
                         // reset
@@ -1274,7 +1274,6 @@ std::string ModelLoader::load_merges() {
 }
 
 std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& vec) {
-
     std::vector<TensorStorage> res;
     std::unordered_map<std::string, size_t> name_to_index_map;
 
@@ -1307,7 +1306,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
         preprocess_tensor(tensor_storage, processed_tensor_storages);
     }
     std::vector<TensorStorage> dedup = remove_duplicates(processed_tensor_storages);
-    processed_tensor_storages = dedup;
+    processed_tensor_storages        = dedup;
 
     bool success = true;
     for (size_t file_index = 0; file_index < file_paths_.size(); file_index++) {

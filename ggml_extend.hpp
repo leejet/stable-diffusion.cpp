@@ -80,29 +80,26 @@ __STATIC_INLINE__ ggml_fp16_t ggml_tensor_get_f16(const ggml_tensor* tensor, int
     return *(ggml_fp16_t*)((char*)(tensor->data) + i * tensor->nb[3] + j * tensor->nb[2] + k * tensor->nb[1] + l * tensor->nb[0]);
 }
 
-static struct ggml_tensor * get_tensor_from_graph(struct ggml_cgraph * gf, const char *name){
-
-    struct ggml_tensor * res = NULL;
-    for(int i = 0; i < gf->n_nodes; i++) {
+static struct ggml_tensor* get_tensor_from_graph(struct ggml_cgraph* gf, const char* name) {
+    struct ggml_tensor* res = NULL;
+    for (int i = 0; i < gf->n_nodes; i++) {
         // printf("%d, %s \n", i, gf->nodes[i]->name);
-        if(strcmp(ggml_get_name(gf->nodes[i]), name) == 0) {
+        if (strcmp(ggml_get_name(gf->nodes[i]), name) == 0) {
             res = gf->nodes[i];
             break;
-        } 
+        }
     }
-    for(int i = 0; i < gf->n_leafs; i++) {
+    for (int i = 0; i < gf->n_leafs; i++) {
         // printf("%d, %s \n", i, gf->leafs[i]->name);
-        if(strcmp(ggml_get_name(gf->leafs[i]), name) == 0) {
+        if (strcmp(ggml_get_name(gf->leafs[i]), name) == 0) {
             res = gf->leafs[i];
             break;
-        } 
+        }
     }
     return res;
 }
 
-
-
-__STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false, const char *mark = "") {
+__STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false, const char* mark = "") {
     printf("%s (%s): shape(%zu, %zu, %zu, %zu)\n", mark, ggml_type_name(tensor->type), tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     fflush(stdout);
     if (shape_only) {
@@ -276,11 +273,11 @@ __STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
     }
 }
 
-
 __STATIC_INLINE__ void sd_mul_images_to_tensor(const uint8_t* image_data,
-                                              struct ggml_tensor* output,
-                                              int idx,
-                                              float *mean = NULL, float *std = NULL) {
+                                               struct ggml_tensor* output,
+                                               int idx,
+                                               float* mean = NULL,
+                                               float* std  = NULL) {
     int64_t width    = output->ne[0];
     int64_t height   = output->ne[1];
     int64_t channels = output->ne[2];
@@ -288,9 +285,9 @@ __STATIC_INLINE__ void sd_mul_images_to_tensor(const uint8_t* image_data,
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                int value = *(image_data + iy * width * channels + ix * channels + k);
+                int value       = *(image_data + iy * width * channels + ix * channels + k);
                 float pixel_val = value / 255.0f;
-                if(mean != NULL && std != NULL)
+                if (mean != NULL && std != NULL)
                     pixel_val = (pixel_val - mean[k]) / std[k];
                 ggml_tensor_set_f32(output, pixel_val, ix, iy, k, idx);
             }
@@ -308,7 +305,7 @@ __STATIC_INLINE__ void sd_image_f32_to_tensor(const float* image_data,
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                int value = *(image_data + iy * width * channels + ix * channels + k);                
+                int value = *(image_data + iy * width * channels + ix * channels + k);
                 if (scale) {
                     value /= 255.f;
                 }
@@ -984,7 +981,6 @@ protected:
 
             block->init(ctx, wtype);
         }
-        
     }
 
     virtual void init_params(struct ggml_context* ctx, ggml_type wtype) {}
@@ -1038,7 +1034,7 @@ public:
         }
 
         for (auto& pair : params) {
-            struct ggml_tensor* param = pair.second;
+            struct ggml_tensor* param    = pair.second;
             tensors[prefix + pair.first] = pair.second;
         }
     }
@@ -1261,7 +1257,7 @@ public:
     MultiheadAttention(int64_t embed_dim,
                        int64_t n_head,
                        bool bias = true,
-                       bool r2d = true)
+                       bool r2d  = true)
         : embed_dim(embed_dim),
           n_head(n_head),
           bias(bias),
@@ -1302,7 +1298,7 @@ public:
 
         kqv = ggml_reshape_4d(ctx, kqv, d_head, n_token, n_head, N);
         kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, n_token, n_head, d_head]
-        if(reshape2d)
+        if (reshape2d)
             x = ggml_reshape_2d(ctx, kqv, d_head * n_head, n_token * N);  // [N * n_token, d_head * n_head]
         else
             x = ggml_reshape_3d(ctx, kqv, d_head * n_head, n_token, N);  // [N, n_token, d_head * n_head]
@@ -1311,6 +1307,5 @@ public:
         return x;
     }
 };
-
 
 #endif  // __GGML_EXTEND__HPP__

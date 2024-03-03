@@ -25,9 +25,8 @@
 #include "ggml/ggml.h"
 #include "stable-diffusion.h"
 
- #define STB_IMAGE_RESIZE_IMPLEMENTATION
- #include "stb_image_resize.h"
-
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize.h"
 
 bool ends_with(const std::string& str, const std::string& ending) {
     if (str.length() >= ending.length()) {
@@ -93,7 +92,6 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
 }
 
 std::vector<std::string> get_files_from_dir(const std::string& dir) {
-
     std::vector<std::string> files;
 
     WIN32_FIND_DATA findFileData;
@@ -102,7 +100,7 @@ std::vector<std::string> get_files_from_dir(const std::string& dir) {
     char currentDirectory[MAX_PATH];
     GetCurrentDirectory(MAX_PATH, currentDirectory);
 
-    char directoryPath[MAX_PATH]; // this is absolute path
+    char directoryPath[MAX_PATH];  // this is absolute path
     sprintf(directoryPath, "%s\\%s\\*", currentDirectory, dir.c_str());
 
     // Find the first file in the directory
@@ -124,7 +122,6 @@ std::vector<std::string> get_files_from_dir(const std::string& dir) {
 
     // Close the handle
     FindClose(hFind);
-
 
     sort(files.begin(), files.end());
 
@@ -165,8 +162,7 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
     return "";
 }
 
-std::vector<std::string> get_files_from_dir(const std::string &dir){
-
+std::vector<std::string> get_files_from_dir(const std::string& dir) {
     std::vector<std::string> files;
 
     DIR* dp = opendir(dir.c_str());
@@ -185,7 +181,6 @@ std::vector<std::string> get_files_from_dir(const std::string &dir){
     sort(files.begin(), files.end());
 
     return files;
-
 }
 
 #endif
@@ -228,8 +223,8 @@ int32_t get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
-static sd_progress_cb_t sd_progress_cb  = NULL;
-void* sd_progress_cb_data               = NULL;
+static sd_progress_cb_t sd_progress_cb = NULL;
+void* sd_progress_cb_data              = NULL;
 
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
@@ -274,22 +269,20 @@ std::string path_join(const std::string& p1, const std::string& p2) {
     return p1 + "/" + p2;
 }
 
-
-sd_image_t *preprocess_id_image(sd_image_t *img){
-    int shortest_edge = 224;
-    int size = shortest_edge;
-    sd_image_t * resized = NULL;
-    uint32_t w = img->width;
-    uint32_t h = img->height;
-    uint32_t c = img->channel;
-
+sd_image_t* preprocess_id_image(sd_image_t* img) {
+    int shortest_edge   = 224;
+    int size            = shortest_edge;
+    sd_image_t* resized = NULL;
+    uint32_t w          = img->width;
+    uint32_t h          = img->height;
+    uint32_t c          = img->channel;
 
     // 1. do resize using stb_resize functions
 
-    unsigned char *buf = (unsigned char*)malloc(sizeof(unsigned char)*3*size*size);
-    if(!stbir_resize_uint8(img->data, w, h , 0,
-                                 buf, size, size, 0,
-                                 c)){
+    unsigned char* buf = (unsigned char*)malloc(sizeof(unsigned char) * 3 * size * size);
+    if (!stbir_resize_uint8(img->data, w, h, 0,
+                            buf, size, size, 0,
+                            c)) {
         fprintf(stderr, "%s: resize operation failed \n ", __func__);
         return resized;
     }
@@ -302,18 +295,16 @@ sd_image_t *preprocess_id_image(sd_image_t *img){
 
     // 3 and 4 will need to be done in float format.
 
-
-
     resized = new sd_image_t{(uint32_t)shortest_edge,
                              (uint32_t)shortest_edge,
-                              3,
+                             3,
                              buf};
     return resized;
 }
 
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
-        sd_progress_cb(step,steps,time, sd_progress_cb_data);
+        sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;
     }
     if (step == 0) {
@@ -359,9 +350,8 @@ std::string trim(const std::string& s) {
     return rtrim(ltrim(s));
 }
 
-static sd_log_cb_t sd_log_cb            = NULL;
-void* sd_log_cb_data                    = NULL;
-
+static sd_log_cb_t sd_log_cb = NULL;
+void* sd_log_cb_data         = NULL;
 
 #define LOG_BUFFER_SIZE 1024
 

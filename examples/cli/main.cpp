@@ -76,13 +76,13 @@ struct SDParams {
 
     std::string prompt;
     std::string negative_prompt;
-    float min_cfg   = 1.0f;
-    float cfg_scale = 7.0f;
+    float min_cfg     = 1.0f;
+    float cfg_scale   = 7.0f;
     float style_ratio = 20.f;
-    int clip_skip   = -1;  // <= 0 represents unspecified
-    int width       = 512;
-    int height      = 512;
-    int batch_count = 1;
+    int clip_skip     = -1;  // <= 0 represents unspecified
+    int width         = 512;
+    int height        = 512;
+    int batch_count   = 1;
 
     int video_frames         = 6;
     int motion_bucket_id     = 127;
@@ -354,7 +354,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.strength = std::stof(argv[i]);
-        }else if (arg == "--style-ratio") {
+        } else if (arg == "--style-ratio") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
@@ -397,7 +397,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         } else if (arg == "--normalize-input") {
             params.normalize_input = true;
         } else if (arg == "--vae-on-cpu") {
-            params.vae_on_cpu = true; // will slow down latent decoding but necessary for low MEM GPUs
+            params.vae_on_cpu = true;  // will slow down latent decoding but necessary for low MEM GPUs
         } else if (arg == "--canny") {
             params.canny_preprocess = true;
         } else if (arg == "-b" || arg == "--batch-count") {

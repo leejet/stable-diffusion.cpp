@@ -123,9 +123,9 @@ public:
     void load_from_merges(const std::string& merges_utf8_str) {
         auto byte_unicode_pairs = bytes_to_unicode();
         // printf("byte_unicode_pairs have %lu pairs \n", byte_unicode_pairs.size());
-        byte_encoder            = std::map<int, std::u32string>(byte_unicode_pairs.begin(), byte_unicode_pairs.end());
-        for (auto & pair: byte_unicode_pairs) {
-           byte_decoder[pair.second] = pair.first;
+        byte_encoder = std::map<int, std::u32string>(byte_unicode_pairs.begin(), byte_unicode_pairs.end());
+        for (auto& pair : byte_unicode_pairs) {
+            byte_decoder[pair.second] = pair.first;
         }
         // for (auto & pair: byte_unicode_pairs) {
         //     std::cout << pair.first << ": " << pair.second << std::endl;
@@ -146,7 +146,7 @@ public:
             size_t space_pos = merge.find(' ');
             merge_pairs.emplace_back(merge.substr(0, space_pos), merge.substr(space_pos + 1));
             // LOG_DEBUG("%s", utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
-            // printf("%s :: %s | %s \n", utf32_to_utf8(merge).c_str(), utf32_to_utf8(merge.substr(0, space_pos)).c_str(), 
+            // printf("%s :: %s | %s \n", utf32_to_utf8(merge).c_str(), utf32_to_utf8(merge.substr(0, space_pos)).c_str(),
             //                     utf32_to_utf8(merge.substr(space_pos + 1)).c_str());
         }
         std::vector<std::u32string> vocab;
@@ -165,7 +165,7 @@ public:
         int i = 0;
         for (const auto& token : vocab) {
             encoder[token] = i;
-            decoder[i] = token;
+            decoder[i]     = token;
             i++;
         }
         encoder_len = i;
@@ -173,7 +173,7 @@ public:
         auto it = encoder.find(utf8_to_utf32("img</w>"));
         if (it != encoder.end()) {
             LOG_DEBUG(" trigger word img already in vocab \n");
-        }else{
+        } else {
             LOG_DEBUG(" trigger word img not in vocab yet\n");
         }
 
@@ -184,14 +184,13 @@ public:
         bpe_len = rank;
     };
 
-
-    void add_token(const std::string &text){
+    void add_token(const std::string& text) {
         std::u32string token = utf8_to_utf32(text);
-        auto it = encoder.find(token);
+        auto it              = encoder.find(token);
         if (it != encoder.end()) {
-            encoder[token] = encoder_len;
+            encoder[token]       = encoder_len;
             decoder[encoder_len] = token;
-            encoder_len++;            
+            encoder_len++;
         }
     }
 
@@ -275,7 +274,7 @@ public:
                               size_t max_length = 0,
                               bool padding      = false) {
         std::vector<int32_t> tokens = encode(text, on_new_token_cb);
-        
+
         tokens.insert(tokens.begin(), BOS_TOKEN_ID);
         if (max_length > 0) {
             if (tokens.size() > max_length - 1) {
@@ -292,22 +291,22 @@ public:
                 }
             }
         }
-        
+
         return tokens;
     }
 
-    std::string decode(const std::vector<int> &tokens){
+    std::string decode(const std::vector<int>& tokens) {
         std::string text = "";
-        for(int t : tokens){
-            if(t == 49406 || t == 49407)
+        for (int t : tokens) {
+            if (t == 49406 || t == 49407)
                 continue;
             std::u32string ts = decoder[t];
             // printf("%d, %s \n", t,  utf32_to_utf8(ts).c_str());
-            std::string s = utf32_to_utf8(ts); 
-            if(s.length() >= 4 && ends_with(s, "</w>")){
-                text += " "+s.replace(s.length()-4, s.length()-1, "") ;
-            }else{
-                text += " "+s;
+            std::string s = utf32_to_utf8(ts);
+            if (s.length() >= 4 && ends_with(s, "</w>")) {
+                text += " " + s.replace(s.length() - 4, s.length() - 1, "");
+            } else {
+                text += " " + s;
             }
         }
         // std::vector<unsigned char> bytes;
@@ -315,11 +314,10 @@ public:
         //     bytes.push_back(byte_decoder[c]);
         // }
 
-        // std::string s((char *)bytes.data());  
+        // std::string s((char *)bytes.data());
         // std::string s = "";
         return trim(text);
     }
-
 
     std::vector<int> encode(std::string text, on_new_token_cb_t on_new_token_cb) {
         std::string original_text = text;
@@ -530,8 +528,7 @@ public:
         : d_model(d_model),
           n_head(n_head),
           intermediate_size(intermediate_size) {
-
-        blocks["self_attn"]   = std::shared_ptr<GGMLBlock>(new MultiheadAttention(d_model, n_head, true, atten1));
+        blocks["self_attn"] = std::shared_ptr<GGMLBlock>(new MultiheadAttention(d_model, n_head, true, atten1));
 
         blocks["layer_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_model));
         blocks["layer_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_model));
@@ -564,7 +561,7 @@ public:
                 bool atten1 = true)
         : n_layer(n_layer) {
         for (int i = 0; i < n_layer; i++) {
-            std::string name = "layers." + std::to_string(i);            
+            std::string name = "layers." + std::to_string(i);
             blocks[name]     = std::shared_ptr<GGMLBlock>(new CLIPLayer(d_model, n_head, intermediate_size, atten1));
         }
     }
@@ -767,7 +764,7 @@ public:
         auto final_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer_norm"]);
 
         auto x = embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
-        x = encoder->forward(ctx, x, return_pooled ? -1 : clip_skip, true);
+        x      = encoder->forward(ctx, x, return_pooled ? -1 : clip_skip, true);
         if (return_pooled || with_final_ln) {
             x = final_layer_norm->forward(ctx, x);
         }
@@ -836,9 +833,9 @@ public:
         x      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
 
         GGML_ASSERT(x->ne[2] == 1);
-        int64_t max_token_idx  = 0;
-        ggml_tensor* pooled    = ggml_view_1d(ctx, x, x->ne[0], x->nb[1] * max_token_idx);  // assert N == 1
-        if(proj){
+        int64_t max_token_idx = 0;
+        ggml_tensor* pooled   = ggml_view_1d(ctx, x, x->ne[0], x->nb[1] * max_token_idx);  // assert N == 1
+        if (proj) {
             auto visual_projection = params["visual_projection"];
             pooled                 = ggml_mul_mat(ctx, ggml_cont(ctx, ggml_transpose(ctx, visual_projection)), pooled);
         }
@@ -904,16 +901,15 @@ public:
         // x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
         // ggml_tensor* pooled    = ggml_view_2d(ctx, x, x->ne[0], x->ne[1], x->nb[0], 0);
         // pooled  = ggml_cont(ctx, pooled);
-        ggml_tensor* pooled    = ggml_cont(ctx, ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], 0));
+        ggml_tensor* pooled = ggml_cont(ctx, ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], 0));
         return pooled;  // [N, projection_dim]
     }
 
-    struct ggml_tensor* visual_project(struct ggml_context* ctx, struct ggml_tensor* input){ 
+    struct ggml_tensor* visual_project(struct ggml_context* ctx, struct ggml_tensor* input) {
         auto visual_projection = params["visual_projection.weight"];
-        auto pooled = ggml_mul_mat(ctx, visual_projection, input);
+        auto pooled            = ggml_mul_mat(ctx, visual_projection, input);
         return pooled;
     }
-
 };
 
 class CLIPVisionModelProjection : public GGMLBlock {
@@ -1165,15 +1161,14 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         return tokenize(text, text_model.n_token, padding);
     }
 
-    std::tuple<std::vector<int>, std::vector<float>, std::vector<bool>> 
-            tokenize_with_trigger_token(std::string text, 
-                                        int num_input_imgs,
-                                        int32_t image_token,
-                                        bool padding = false) {
-        return tokenize_with_trigger_token(text, num_input_imgs, image_token, 
-                                 text_model.n_token, padding);
+    std::tuple<std::vector<int>, std::vector<float>, std::vector<bool>>
+    tokenize_with_trigger_token(std::string text,
+                                int num_input_imgs,
+                                int32_t image_token,
+                                bool padding = false) {
+        return tokenize_with_trigger_token(text, num_input_imgs, image_token,
+                                           text_model.n_token, padding);
     }
-
 
     std::vector<int> convert_token_to_id(std::string text) {
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
@@ -1203,17 +1198,16 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         return curr_tokens;
     }
 
-    std::string decode(const std::vector<int> &tokens){
+    std::string decode(const std::vector<int>& tokens) {
         return tokenizer.decode(tokens);
     }
 
-
-    std::tuple<std::vector<int>, std::vector<float>, std::vector<bool>> 
-                tokenize_with_trigger_token(std::string text,
-                                            int num_input_imgs,
-                                            int32_t image_token,
-                                            size_t max_length = 0,
-                                            bool padding      = false) {
+    std::tuple<std::vector<int>, std::vector<float>, std::vector<bool>>
+    tokenize_with_trigger_token(std::string text,
+                                int num_input_imgs,
+                                int32_t image_token,
+                                size_t max_length = 0,
+                                bool padding      = false) {
         auto parsed_attention = parse_prompt_attention(text);
 
         {
@@ -1261,33 +1255,33 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             float curr_weight            = item.second;
             // printf(" %s: %f \n", curr_text.c_str(), curr_weight);
             std::vector<int> curr_tokens = tokenizer.encode(curr_text, on_new_token_cb);
-            int32_t clean_index = 0;           
-            for(uint32_t i = 0; i < curr_tokens.size(); i++){
-                int token_id = curr_tokens[i];                
+            int32_t clean_index          = 0;
+            for (uint32_t i = 0; i < curr_tokens.size(); i++) {
+                int token_id = curr_tokens[i];
                 if (token_id == image_token)
                     class_token_index.push_back(clean_index - 1);
-                else{
+                else {
                     clean_input_ids.push_back(token_id);
                     clean_index++;
-                }     
+                }
             }
-            //GGML_ASSERT(class_token_index.size() == 1); // PhotoMaker currently does not support multiple
-                                                        //    trigger words in a single prompt.     
-            if(class_token_index.size() == 1){
+            // GGML_ASSERT(class_token_index.size() == 1); // PhotoMaker currently does not support multiple
+            //     trigger words in a single prompt.
+            if (class_token_index.size() == 1) {
                 // Expand the class word token and corresponding mask
                 int class_token = clean_input_ids[class_token_index[0]];
-                class_idx = tokens_acc + class_token_index[0];
+                class_idx       = tokens_acc + class_token_index[0];
                 std::vector<int> clean_input_ids_tmp;
-                for(uint32_t i = 0; i < class_token_index[0]; i++)
+                for (uint32_t i = 0; i < class_token_index[0]; i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
-                for(uint32_t i = 0; i < num_input_imgs; i++)
+                for (uint32_t i = 0; i < num_input_imgs; i++)
                     clean_input_ids_tmp.push_back(class_token);
-                for(uint32_t i = class_token_index[0]+1; i < clean_input_ids.size(); i++)
+                for (uint32_t i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
                 clean_input_ids.clear();
                 clean_input_ids = clean_input_ids_tmp;
             }
-            tokens_acc +=  clean_index;
+            tokens_acc += clean_index;
             tokens.insert(tokens.end(), clean_input_ids.begin(), clean_input_ids.end());
             weights.insert(weights.end(), clean_input_ids.size(), curr_weight);
         }
@@ -1314,8 +1308,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             }
         }
 
-         for(uint32_t i = 0; i < tokens.size(); i++){       
-            if(class_idx+1 <= i && i < class_idx+1+num_input_imgs)
+        for (uint32_t i = 0; i < tokens.size(); i++) {
+            if (class_idx + 1 <= i && i < class_idx + 1 + num_input_imgs)
                 class_token_mask.push_back(true);
             else
                 class_token_mask.push_back(false);

@@ -33,7 +33,6 @@ struct LoraModel : public GGMLModule {
         return model_loader.get_params_mem_size(NULL);
     }
 
-
     bool load_from_file() {
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
 
@@ -66,7 +65,6 @@ struct LoraModel : public GGMLModule {
         dry_run = false;
         model_loader.load_tensors(on_new_tensor_cb, backend);
 
-
         LOG_DEBUG("finished loaded lora");
         return true;
     }
@@ -86,7 +84,7 @@ struct LoraModel : public GGMLModule {
             k_tensor = k_tensor.substr(0, k_pos);
             // some lora models use 'unet' instead of "model.diffusion_model"
             // TODO: make both work
-            if(starts_with(k_tensor, "model.diffusion_model"))
+            if (starts_with(k_tensor, "model.diffusion_model"))
                 k_tensor.replace(0, strlen("model.diffusion_model"), "unet");
             replace_all_chars(k_tensor, '.', '_');
             std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
