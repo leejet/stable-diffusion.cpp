@@ -573,19 +573,19 @@ public:
                                                                 int width,
                                                                 int height,
                                                                 bool force_zero_embeddings = false) {
-        auto tokens_and_weights                 = cond_stage_model->tokenize(text, true);
-        std::vector<int>& tokens                = tokens_and_weights.first;
-        std::vector<float>& weights             = tokens_and_weights.second;
+        auto tokens_and_weights     = cond_stage_model->tokenize(text, true);
+        std::vector<int>& tokens    = tokens_and_weights.first;
+        std::vector<float>& weights = tokens_and_weights.second;
         return get_learned_condition_common(work_ctx, tokens, weights, clip_skip, width, height, force_zero_embeddings);
     }
 
     std::pair<ggml_tensor*, ggml_tensor*> get_learned_condition_common(ggml_context* work_ctx,
-                                                                std::vector<int>& tokens,
-                                                                std::vector<float>& weights,
-                                                                int clip_skip,
-                                                                int width,
-                                                                int height,
-                                                                bool force_zero_embeddings = false) {
+                                                                       std::vector<int>& tokens,
+                                                                       std::vector<float>& weights,
+                                                                       int clip_skip,
+                                                                       int width,
+                                                                       int height,
+                                                                       bool force_zero_embeddings = false) {
         cond_stage_model->set_clip_skip(clip_skip);
         int64_t t0                              = ggml_time_ms();
         struct ggml_tensor* hidden_states       = NULL;  // [N, n_token, hidden_size]

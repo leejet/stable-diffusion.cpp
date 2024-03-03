@@ -1202,6 +1202,55 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         return tokenizer.decode(tokens);
     }
 
+    void pad_tokens(std::vector<int>& tokens,
+                    std::vector<float>& weights,
+                    size_t max_length = 0,
+                    bool padding      = false) {
+        if (max_length > 0 && padding) {
+            size_t n = std::ceil(tokens.size() * 1.0 / (max_length - 2));
+            if (n == 0) {
+                n = 1;
+            }
+            size_t length = max_length * n;
+            LOG_DEBUG("token length: %llu", length);
+            std::vector<int> new_tokens;
+            std::vector<float> new_weights;
+            new_tokens.push_back(BOS_TOKEN_ID);
+            new_weights.push_back(1.0);
+            int token_idx = 0;
+            for (int i = 1; i < length; i++) {
+                if (token_idx >= tokens.size()) {
+                    break;
+                }
+                if (i % max_length == 0) {
+                    new_tokens.push_back(BOS_TOKEN_ID);
+                    new_weights.push_back(1.0);
+                } else if (i % max_length == max_length - 1) {
+                    new_tokens.push_back(EOS_TOKEN_ID);
+                    new_weights.push_back(1.0);
+                } else {
+                    new_tokens.push_back(tokens[token_idx]);
+                    new_weights.push_back(weights[token_idx]);
+                    token_idx++;
+                }
+            }
+
+            new_tokens.push_back(EOS_TOKEN_ID);
+            new_weights.push_back(1.0);
+            tokens  = new_tokens;
+            weights = new_weights;
+
+            if (padding) {
+                int pad_token_id = PAD_TOKEN_ID;
+                if (version == VERSION_2_x) {
+                    pad_token_id = 0;
+                }
+                tokens.insert(tokens.end(), length - tokens.size(), pad_token_id);
+                weights.insert(weights.end(), length - weights.size(), 1.0);
+            }
+        }
+    }
+
     std::tuple<std::vector<int>, std::vector<float>, std::vector<bool>>
     tokenize_with_trigger_token(std::string text,
                                 int num_input_imgs,
@@ -1288,25 +1337,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         tokens.insert(tokens.begin(), BOS_TOKEN_ID);
         weights.insert(weights.begin(), 1.0);
 
-        if (max_length > 0) {
-            if (tokens.size() > max_length - 1) {
-                tokens.resize(max_length - 1);
-                weights.resize(max_length - 1);
-                tokens.push_back(EOS_TOKEN_ID);
-                weights.push_back(1.0);
-            } else {
-                tokens.push_back(EOS_TOKEN_ID);
-                weights.push_back(1.0);
-                if (padding) {
-                    int pad_token_id = PAD_TOKEN_ID;
-                    if (version == VERSION_2_x) {
-                        pad_token_id = 0;
-                    }
-                    tokens.insert(tokens.end(), max_length - tokens.size(), pad_token_id);
-                    weights.insert(weights.end(), max_length - weights.size(), 1.0);
-                }
-            }
-        }
+        pad_tokens(tokens, weights, max_length, padding);
 
         for (uint32_t i = 0; i < tokens.size(); i++) {
             if (class_idx + 1 <= i && i < class_idx + 1 + num_input_imgs)
@@ -1378,49 +1409,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);
         }
 
-        if (max_length > 0 && padding) {
-            size_t n = std::ceil(tokens.size() * 1.0 / (max_length - 2));
-            if (n == 0) {
-                n = 1;
-            }
-            size_t length = max_length * n;
-            LOG_DEBUG("token length: %llu", length);
-            std::vector<int> new_tokens;
-            std::vector<float> new_weights;
-            new_tokens.push_back(BOS_TOKEN_ID);
-            new_weights.push_back(1.0);
-            int token_idx = 0;
-            for (int i = 1; i < length; i++) {
-                if (token_idx >= tokens.size()) {
-                    break;
-                }
-                if (i % max_length == 0) {
-                    new_tokens.push_back(BOS_TOKEN_ID);
-                    new_weights.push_back(1.0);
-                } else if (i % max_length == max_length - 1) {
-                    new_tokens.push_back(EOS_TOKEN_ID);
-                    new_weights.push_back(1.0);
-                } else {
-                    new_tokens.push_back(tokens[token_idx]);
-                    new_weights.push_back(weights[token_idx]);
-                    token_idx++;
-                }
-            }
-
-            new_tokens.push_back(EOS_TOKEN_ID);
-            new_weights.push_back(1.0);
-            tokens  = new_tokens;
-            weights = new_weights;
-
-            if (padding) {
-                int pad_token_id = PAD_TOKEN_ID;
-                if (version == VERSION_2_x) {
-                    pad_token_id = 0;
-                }
-                tokens.insert(tokens.end(), length - tokens.size(), pad_token_id);
-                weights.insert(weights.end(), length - weights.size(), 1.0);
-            }
-        }
+        pad_tokens(tokens, weights, max_length, padding);
 
         // for (int i = 0; i < tokens.size(); i++) {
         //     std::cout << tokens[i] << ":" << weights[i] << ", ";
