@@ -9,81 +9,12 @@
 // #include "preprocessing.hpp"
 #include "stable-diffusion.h"
 
-#define STB_IMAGE_IMPLEMENTATION
+// #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_STATIC
 #include "stb_image_write.h"
-
-#ifdef _WIN32  // code for windows
-#include <windows.h>
-std::vector<std::string> get_files_from_dir(const std::string& dir) {
-
-    std::vector<std::string> files;
-
-    WIN32_FIND_DATA findFileData;
-    HANDLE hFind;
-
-    char currentDirectory[MAX_PATH];
-    GetCurrentDirectory(MAX_PATH, currentDirectory);
-
-    char directoryPath[MAX_PATH]; // this is absolute path
-    sprintf(directoryPath, "%s\\%s\\*", currentDirectory, dir.c_str());
-
-    // Find the first file in the directory
-    hFind = FindFirstFile(directoryPath, &findFileData);
-
-    // Check if the directory was found
-    if (hFind == INVALID_HANDLE_VALUE) {
-        printf("Unable to find directory %s.\n", dir.c_str());
-        return files;
-    }
-
-    // Loop through all files in the directory
-    do {
-        // Check if the found file is a regular file (not a directory)
-        if (!(findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            files.push_back(std::string(currentDirectory) + "\\" + dir + "\\" + std::string(findFileData.cFileName));
-        }
-    } while (FindNextFile(hFind, &findFileData) != 0);
-
-    // Close the handle
-    FindClose(hFind);
-
-
-    sort(files.begin(), files.end());
-
-    return files;
-}
-#else // UNIX
-#include <dirent.h>
-#include <sys/stat.h>
-
-std::vector<std::string> get_files_from_dir(const std::string &dir){
-
-    std::vector<std::string> files;
-
-    DIR* dp = opendir(dir.c_str());
-
-    if (dp != nullptr) {
-        struct dirent* entry;
-
-        while ((entry = readdir(dp)) != nullptr) {
-            std::string fname = dir + "/" + entry->d_name;
-            if (!is_directory(fname))
-                files.push_back(fname);
-        }
-        closedir(dp);
-    }
-
-    sort(files.begin(), files.end());
-
-    return files;
-
-}
-
-#endif
 
 const char* rng_type_to_str[] = {
     "std_default",
@@ -759,32 +690,6 @@ int main(int argc, const char* argv[]) {
                                                        false);
             }
         }
-        std::vector<sd_image_t*> input_id_images;
-        if (params.stacked_id_embeddings_path.size() > 0 && params.input_id_images_path.size() > 0) {
-            std::vector<std::string> img_files = get_files_from_dir(params.input_id_images_path);
-            for(std::string img_file : img_files){
-                int c = 0;
-                int width, height;
-                input_image_buffer = stbi_load(img_file.c_str(), &width, &height, &c, 3);
-                if (input_image_buffer == NULL) {
-                    printf("PhotoMaker load image from '%s' failed\n", img_file.c_str());
-                    return 1;
-                }else{
-                    printf("PhotoMaker loaded image from '%s'\n", img_file.c_str());
-                }
-                sd_image_t* input_image = NULL;
-                input_image = new sd_image_t{(uint32_t)width,
-                                            (uint32_t)height,
-                                            3,
-                                            input_image_buffer};
-                input_image = preprocess_id_image(input_image);
-                if(input_image == NULL){
-                    printf("preprocess input id image from '%s' failed\n", img_file.c_str());
-                    return 1;
-                }
-                input_id_images.push_back(input_image);
-            }
-        }
         results = txt2img(sd_ctx,
                           params.prompt.c_str(),
                           params.negative_prompt.c_str(),
@@ -800,7 +705,7 @@ int main(int argc, const char* argv[]) {
                           params.control_strength,
                           params.style_ratio,
                           params.normalize_input,
-                          input_id_images);
+                          params.input_id_images_path.c_str());
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,

@@ -16,6 +16,9 @@
 #include "unet.hpp"
 #include "vae.hpp"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 // #define STB_IMAGE_WRITE_IMPLEMENTATION
 // #define STB_IMAGE_WRITE_STATIC
 // #include "stb_image_write.h"
@@ -1633,7 +1636,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    std::vector<sd_image_t*> &input_id_images) {
+                    const char* input_id_images_path_c_str) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1641,6 +1644,36 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     // LOG_DEBUG("%s %s %f %d %d %d", prompt_c_str, negative_prompt_c_str, cfg_scale, sample_steps, seed, batch_count);
     std::string prompt(prompt_c_str);
     std::string negative_prompt(negative_prompt_c_str);
+    std::string input_id_images_path(input_id_images_path_c_str);
+
+
+    // preprocess input id images
+    std::vector<sd_image_t*> input_id_images;
+    if (sd_ctx->sd->pmid_model && input_id_images_path.size() > 0) {
+        std::vector<std::string> img_files = get_files_from_dir(input_id_images_path);
+        for(std::string img_file : img_files){
+            int c = 0;
+            int width, height;
+            uint8_t* input_image_buffer = stbi_load(img_file.c_str(), &width, &height, &c, 3);
+            if (input_image_buffer == NULL) {
+                LOG_ERROR("PhotoMaker load image from '%s' failed", img_file.c_str());
+                continue;
+            }else{
+                LOG_INFO("PhotoMaker loaded image from '%s'", img_file.c_str());
+            }
+            sd_image_t* input_image = NULL;
+            input_image = new sd_image_t{(uint32_t)width,
+                                        (uint32_t)height,
+                                        3,
+                                        input_image_buffer};
+            input_image = preprocess_id_image(input_image);
+            if(input_image == NULL){
+                LOG_ERROR("preprocess input id image from '%s' failed", img_file.c_str());
+                continue;
+            }
+            input_id_images.push_back(input_image);
+        }
+    }
 
     // extract and remove lora
     auto result_pair                                = extract_and_remove_lora(prompt);
@@ -1741,6 +1774,10 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
             sd_ctx->sd->stacked_id = false;
         }
     }
+    for (sd_image_t* img : input_id_images) {
+        free(img->data);
+    }
+    input_id_images.clear();
 
 
     t0                            = ggml_time_ms();

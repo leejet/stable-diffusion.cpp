@@ -145,7 +145,7 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            float control_strength,
                            float style_strength,
                            bool normalize_input,
-                           std::vector<sd_image_t*> &input_id_images);
+                           const char* input_id_images_path);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
@@ -175,8 +175,6 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            int sample_steps,
                            float strength,
                            int64_t seed);
-
-sd_image_t *preprocess_id_image(sd_image_t * img);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
