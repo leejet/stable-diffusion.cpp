@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "preprocessing.hpp"
+// #include "preprocessing.hpp"
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -749,7 +749,6 @@ int main(int argc, const char* argv[]) {
                                            3,
                                            input_image_buffer};
             if (params.canny_preprocess) {  // apply preprocessor
-                LOG_INFO("Applying canny preprocessor");
                 control_image->data = preprocess_canny(control_image->data,
                                                        control_image->width,
                                                        control_image->height,

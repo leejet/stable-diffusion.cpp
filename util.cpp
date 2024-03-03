@@ -10,6 +10,7 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#include "preprocessing.hpp"
 
 #if defined(__APPLE__) && defined(__MACH__)
 #include <sys/sysctl.h>
@@ -165,6 +166,9 @@ int32_t get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
+static sd_progress_cb_t sd_progress_cb  = NULL;
+void* sd_progress_cb_data               = NULL;
+
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
     return converter.from_bytes(utf8_str);
@@ -246,6 +250,10 @@ sd_image_t *preprocess_id_image(sd_image_t *img){
 }
 
 void pretty_progress(int step, int steps, float time) {
+    if (sd_progress_cb) {
+        sd_progress_cb(step,steps,time, sd_progress_cb_data);
+        return;
+    }
     if (step == 0) {
         return;
     }
@@ -289,8 +297,9 @@ std::string trim(const std::string& s) {
     return rtrim(ltrim(s));
 }
 
-static sd_log_cb_t sd_log_cb = NULL;
-void* sd_log_cb_data         = NULL;
+static sd_log_cb_t sd_log_cb            = NULL;
+void* sd_log_cb_data                    = NULL;
+
 
 #define LOG_BUFFER_SIZE 1024
 
@@ -307,14 +316,14 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
         level_str = "ERROR";
     }
 
-    static char log_buffer[LOG_BUFFER_SIZE];
+    static char log_buffer[LOG_BUFFER_SIZE + 1];
 
     int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "[%s] %s:%-4d - ", level_str, sd_basename(file).c_str(), line);
 
     if (written >= 0 && written < LOG_BUFFER_SIZE) {
         vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
-        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - strlen(log_buffer) - 1);
     }
+    strncat(log_buffer, "\n", LOG_BUFFER_SIZE - strlen(log_buffer));
 
     if (sd_log_cb) {
         sd_log_cb(level, log_buffer, sd_log_cb_data);
@@ -327,7 +336,10 @@ void sd_set_log_callback(sd_log_cb_t cb, void* data) {
     sd_log_cb      = cb;
     sd_log_cb_data = data;
 }
-
+void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
+    sd_progress_cb      = cb;
+    sd_progress_cb_data = data;
+}
 const char* sd_get_system_info() {
     static char buffer[1024];
     std::stringstream ss;

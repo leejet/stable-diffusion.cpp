@@ -65,17 +65,20 @@ enum sd_type_t {
     SD_TYPE_Q8_0 = 8,
     SD_TYPE_Q8_1 = 9,
     // k-quantizations
-    SD_TYPE_Q2_K    = 10,
-    SD_TYPE_Q3_K    = 11,
-    SD_TYPE_Q4_K    = 12,
-    SD_TYPE_Q5_K    = 13,
-    SD_TYPE_Q6_K    = 14,
-    SD_TYPE_Q8_K    = 15,
+    SD_TYPE_Q2_K = 10,
+    SD_TYPE_Q3_K = 11,
+    SD_TYPE_Q4_K = 12,
+    SD_TYPE_Q5_K = 13,
+    SD_TYPE_Q6_K = 14,
+    SD_TYPE_Q8_K = 15,
     SD_TYPE_IQ2_XXS = 16,
     SD_TYPE_IQ2_XS  = 17,
     SD_TYPE_IQ3_XXS = 18,
     SD_TYPE_IQ1_S   = 19,
     SD_TYPE_IQ4_NL  = 20,
+    SD_TYPE_IQ3_S   = 21,
+    SD_TYPE_IQ2_S   = 22,
+    SD_TYPE_IQ4_XS  = 23,
     SD_TYPE_I8,
     SD_TYPE_I16,
     SD_TYPE_I32,
@@ -92,8 +95,10 @@ enum sd_log_level_t {
 };
 
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
+typedef void (*sd_progress_cb_t)(int step,int steps,float time, void* data);
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
+SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
 SD_API int32_t get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 
@@ -170,6 +175,8 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            int sample_steps,
                            float strength,
                            int64_t seed);
+
+sd_image_t *preprocess_id_image(sd_image_t * img);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

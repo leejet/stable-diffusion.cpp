@@ -33,6 +33,7 @@ struct LoraModel : public GGMLModule {
         return model_loader.get_params_mem_size(NULL);
     }
 
+
     bool load_from_file() {
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
 
@@ -55,6 +56,7 @@ struct LoraModel : public GGMLModule {
                 auto real   = lora_tensors[name];
                 *dst_tensor = real;
             }
+
             return true;
         };
 
@@ -63,6 +65,7 @@ struct LoraModel : public GGMLModule {
 
         dry_run = false;
         model_loader.load_tensors(on_new_tensor_cb, backend);
+
 
         LOG_DEBUG("finished loaded lora");
         return true;

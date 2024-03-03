@@ -907,7 +907,7 @@ public:
             return NULL;
         }
         // it's performing a compute, check if backend isn't cpu
-        if (!ggml_backend_is_cpu(backend) && tensor->backend == GGML_BACKEND_CPU) {
+        if (!ggml_backend_is_cpu(backend) && tensor->backend == GGML_BACKEND_TYPE_CPU) {
             // pass input tensors to gpu memory
             auto backend_tensor = ggml_dup_tensor(compute_ctx, tensor);
 
@@ -1289,10 +1289,9 @@ public:
         q                     = ggml_reshape_3d(ctx, q, d_head, n_token, n_head * N);  // [N * n_head, n_token, d_head]
 
         struct ggml_tensor* k = k_proj->forward(ctx, x);
-        k                     = ggml_reshape_4d(ctx, k, d_head, n_head, n_token, N);  // [N, n_token, n_head, d_head]
-        k                     = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));     // [N, n_head, n_token, d_head]
-        // k                     = ggml_reshape_3d(ctx, k, d_head, n_token, n_head);     // [N * n_head, n_token, d_head] !!BUG!!
-        k                     = ggml_reshape_3d(ctx, k, d_head, n_token, n_head * N);     // [N * n_head, n_token, d_head]
+        k                     = ggml_reshape_4d(ctx, k, d_head, n_head, n_token, N);   // [N, n_token, n_head, d_head]
+        k                     = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));      // [N, n_head, n_token, d_head]
+        k                     = ggml_reshape_3d(ctx, k, d_head, n_token, n_head * N);  // [N * n_head, n_token, d_head]
 
         struct ggml_tensor* v = v_proj->forward(ctx, x);
         v                     = ggml_reshape_4d(ctx, v, d_head, n_head, n_token, N);   // [N, n_token, n_head, d_head]

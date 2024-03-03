@@ -61,6 +61,9 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 
 ## Usage
 
+For most users, you can download the built executable program from the latest [release](https://github.com/leejet/stable-diffusion.cpp/releases/latest).
+If the built product does not meet your requirements, you can choose to build it manually.
+
 ### Get the Code
 
 ```
@@ -356,6 +359,13 @@ docker run -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
 | ----         | ----  |----  |----  |----  |----  |----  |----  |
 |  **Memory** (txt2img - 512 x 512) | ~2.8G | ~2.3G | ~2.1G | ~2.0G | ~2.0G | ~2.0G | ~2.0G |
 |  **Memory** (txt2img - 512 x 512) *with Flash Attention* | ~2.4G | ~1.9G | ~1.6G | ~1.5G | ~1.5G | ~1.5G | ~1.5G |
+
+## Bindings
+
+These projects wrap `stable-diffusion.cpp` for easier use in other languages/frameworks.
+
+* Golang: [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
+* C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
 
 ## Contributors
 
