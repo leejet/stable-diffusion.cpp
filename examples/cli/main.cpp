@@ -16,6 +16,75 @@
 #define STB_IMAGE_WRITE_STATIC
 #include "stb_image_write.h"
 
+#ifdef _WIN32  // code for windows
+#include <windows.h>
+std::vector<std::string> get_files_from_dir(const std::string& dir) {
+
+    std::vector<std::string> files;
+
+    WIN32_FIND_DATA findFileData;
+    HANDLE hFind;
+
+    char currentDirectory[MAX_PATH];
+    GetCurrentDirectory(MAX_PATH, currentDirectory);
+
+    char directoryPath[MAX_PATH]; // this is absolute path
+    sprintf(directoryPath, "%s\\%s\\*", currentDirectory, dir.c_str());
+
+    // Find the first file in the directory
+    hFind = FindFirstFile(directoryPath, &findFileData);
+
+    // Check if the directory was found
+    if (hFind == INVALID_HANDLE_VALUE) {
+        printf("Unable to find directory %s.\n", dir.c_str());
+        return files;
+    }
+
+    // Loop through all files in the directory
+    do {
+        // Check if the found file is a regular file (not a directory)
+        if (!(findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            files.push_back(std::string(currentDirectory) + "\\" + dir + "\\" + std::string(findFileData.cFileName));
+        }
+    } while (FindNextFile(hFind, &findFileData) != 0);
+
+    // Close the handle
+    FindClose(hFind);
+
+
+    sort(files.begin(), files.end());
+
+    return files;
+}
+#else // UNIX
+#include <dirent.h>
+#include <sys/stat.h>
+
+std::vector<std::string> get_files_from_dir(const std::string &dir){
+
+    std::vector<std::string> files;
+
+    DIR* dp = opendir(dir.c_str());
+
+    if (dp != nullptr) {
+        struct dirent* entry;
+
+        while ((entry = readdir(dp)) != nullptr) {
+            std::string fname = dir + "/" + entry->d_name;
+            if (!is_directory(fname))
+                files.push_back(fname);
+        }
+        closedir(dp);
+    }
+
+    sort(files.begin(), files.end());
+
+    return files;
+
+}
+
+#endif
+
 const char* rng_type_to_str[] = {
     "std_default",
     "cuda",
@@ -699,10 +768,10 @@ int main(int argc, const char* argv[]) {
                 int width, height;
                 input_image_buffer = stbi_load(img_file.c_str(), &width, &height, &c, 3);
                 if (input_image_buffer == NULL) {
-                    LOG_ERROR("PhotoMaker load image from '%s' failed", img_file.c_str());
+                    printf("PhotoMaker load image from '%s' failed\n", img_file.c_str());
                     return 1;
                 }else{
-                    LOG_INFO("PhotoMaker loaded image from '%s'", img_file.c_str());
+                    printf("PhotoMaker loaded image from '%s'\n", img_file.c_str());
                 }
                 sd_image_t* input_image = NULL;
                 input_image = new sd_image_t{(uint32_t)width,
@@ -711,7 +780,7 @@ int main(int argc, const char* argv[]) {
                                             input_image_buffer};
                 input_image = preprocess_id_image(input_image);
                 if(input_image == NULL){
-                    LOG_ERROR("preprocess input id image from '%s' failed", img_file.c_str());
+                    printf("preprocess input id image from '%s' failed\n", img_file.c_str());
                     return 1;
                 }
                 input_id_images.push_back(input_image);
