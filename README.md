@@ -14,6 +14,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
 
 - [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) and [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo) support
+- [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
 - 16-bit, 32-bit float support
 - 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
@@ -148,7 +149,7 @@ cmake --build . --config Release
 ### Run
 
 ```
-usage: ./build/bin/sd [arguments]
+usage: ./bin/sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
@@ -160,6 +161,9 @@ arguments:
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
   --embd-dir [EMBEDDING_PATH]        path to embeddings.
+  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings.
+  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir.
+  --normalize-input                  normalize PHOTOMAKER input id images
   --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.
   --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)
   --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
@@ -172,6 +176,7 @@ arguments:
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
   --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)
   --strength STRENGTH                strength for noising/unnoising (default: 0.75)
+  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%)
   --control-strength STRENGTH        strength to apply Control Net (default: 0.9)
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
@@ -326,7 +331,7 @@ If on low memory GPUs (<= 8GB), recommend running with ```--vae-on-cpu``` option
 Example:
 
 ```bash
-bin/sd -m ../models/sdxlUnstableDiffusers_v11.safetensors  --vae ../models/sdxl_vae.safetensors --stacked-id-embd-dir ../models/photomaker-v1.safetensors --input-id-images-dir examples/scarletthead_woman -p "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed" -n "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text" --cfg-scale 5.0  --sampling-method euler -H 1024 -W 1024 --style-ratio 10 --vae-on-cpu -o output.png
+bin/sd -m ../models/sdxlUnstableDiffusers_v11.safetensors  --vae ../models/sdxl_vae.safetensors --stacked-id-embd-dir ../models/photomaker-v1.safetensors --input-id-images-dir ../assets/examples/scarletthead_woman -p "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed" -n "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text" --cfg-scale 5.0  --sampling-method euler -H 1024 -W 1024 --style-ratio 10 --vae-on-cpu -o output.png
 ```
 
 ### Docker
@@ -368,3 +373,4 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 - [k-diffusion](https://github.com/crowsonkb/k-diffusion)
 - [latent-consistency-model](https://github.com/luosiallen/latent-consistency-model)
 - [generative-models](https://github.com/Stability-AI/generative-models/)
+- [PhotoMaker](https://github.com/TencentARC/PhotoMaker)
