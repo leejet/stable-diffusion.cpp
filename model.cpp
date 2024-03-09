@@ -108,14 +108,14 @@ std::unordered_map<std::string, std::string> open_clip_to_hf_clip_model = {
     {"model.positional_embedding", "transformer.text_model.embeddings.position_embedding.weight"},
     {"model.token_embedding.weight", "transformer.text_model.embeddings.token_embedding.weight"},
     {"model.text_projection", "transformer.text_model.text_projection"},
-    {"model.visual.class_embedding", "transformer.visual_model.embeddings.class_embedding"},
-    {"model.visual.conv1.weight", "transformer.visual_model.embeddings.patch_embedding.weight"},
-    {"model.visual.ln_post.bias", "transformer.visual_model.post_layernorm.bias"},
-    {"model.visual.ln_post.weight", "transformer.visual_model.post_layernorm.weight"},
-    {"model.visual.ln_pre.bias", "transformer.visual_model.pre_layernorm.bias"},
-    {"model.visual.ln_pre.weight", "transformer.visual_model.pre_layernorm.weight"},
-    {"model.visual.positional_embedding", "transformer.visual_model.embeddings.position_embedding.weight"},
-    {"model.visual.proj", "transformer.visual_model.visual_projection"},
+    {"model.visual.class_embedding", "transformer.vision_model.embeddings.class_embedding"},
+    {"model.visual.conv1.weight", "transformer.vision_model.embeddings.patch_embedding.weight"},
+    {"model.visual.ln_post.bias", "transformer.vision_model.post_layernorm.bias"},
+    {"model.visual.ln_post.weight", "transformer.vision_model.post_layernorm.weight"},
+    {"model.visual.ln_pre.bias", "transformer.vision_model.pre_layernorm.bias"},
+    {"model.visual.ln_pre.weight", "transformer.vision_model.pre_layernorm.weight"},
+    {"model.visual.positional_embedding", "transformer.vision_model.embeddings.position_embedding.weight"},
+    {"model.visual.proj", "transformer.visual_projection.weight"},
 };
 
 std::unordered_map<std::string, std::string> open_clip_to_hk_clip_resblock = {
@@ -157,6 +157,10 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
     } else if (starts_with(new_name, "cond_stage_model.")) {
         prefix   = "cond_stage_model.";
         new_name = new_name.substr(strlen("cond_stage_model."));
+    } else if (ends_with(new_name, "vision_model.visual_projection.weight")) {
+        prefix   = new_name.substr(0, new_name.size() - strlen("vision_model.visual_projection.weight"));
+        new_name = prefix + "visual_projection.weight";
+        return new_name;
     } else {
         return new_name;
     }
@@ -186,7 +190,7 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
     replace_suffix();
 
     open_clip_resblock_prefix = "model.visual.transformer.resblocks.";
-    hf_clip_resblock_prefix   = "transformer.visual_model.encoder.layers.";
+    hf_clip_resblock_prefix   = "transformer.vision_model.encoder.layers.";
 
     replace_suffix();
 
@@ -392,7 +396,7 @@ std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) 
 
 std::string convert_tensor_name(const std::string& name) {
     std::string new_name;
-    if (starts_with(name, "cond_stage_model.") || starts_with(name, "conditioner.embedders.")) {
+    if (starts_with(name, "cond_stage_model.") || starts_with(name, "conditioner.embedders.") || ends_with(name, ".vision_model.visual_projection.weight")) {
         new_name = convert_open_clip_to_hf_clip(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
         new_name = convert_vae_decoder_name(name);

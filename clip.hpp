@@ -523,12 +523,11 @@ protected:
 public:
     CLIPLayer(int64_t d_model,
               int64_t n_head,
-              int64_t intermediate_size,
-              bool atten1 = true)
+              int64_t intermediate_size)
         : d_model(d_model),
           n_head(n_head),
           intermediate_size(intermediate_size) {
-        blocks["self_attn"] = std::shared_ptr<GGMLBlock>(new MultiheadAttention(d_model, n_head, true, atten1));
+        blocks["self_attn"] = std::shared_ptr<GGMLBlock>(new MultiheadAttention(d_model, n_head, true));
 
         blocks["layer_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_model));
         blocks["layer_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_model));
@@ -557,12 +556,11 @@ public:
     CLIPEncoder(int64_t n_layer,
                 int64_t d_model,
                 int64_t n_head,
-                int64_t intermediate_size,
-                bool atten1 = true)
+                int64_t intermediate_size)
         : n_layer(n_layer) {
         for (int i = 0; i < n_layer; i++) {
             std::string name = "layers." + std::to_string(i);
-            blocks[name]     = std::shared_ptr<GGMLBlock>(new CLIPLayer(d_model, n_head, intermediate_size, atten1));
+            blocks[name]     = std::shared_ptr<GGMLBlock>(new CLIPLayer(d_model, n_head, intermediate_size));
         }
     }
 
@@ -781,11 +779,6 @@ public:
 };
 
 class CLIPVisionModel : public GGMLBlock {
-protected:
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["visual_projection.weight"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, projection_dim, hidden_size);
-    }
-
 public:
     // network hparams
     int32_t num_channels      = 3;
@@ -796,7 +789,6 @@ public:
     int32_t intermediate_size = 4096;
     int32_t n_head            = 16;
     int32_t n_layer           = 24;
-    int32_t projection_dim    = 768;
 
 public:
     CLIPVisionModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14) {
@@ -805,7 +797,6 @@ public:
             intermediate_size = 5120;
             n_head            = 16;
             n_layer           = 32;
-            projection_dim    = 1024;
         } else if (version == OPEN_CLIP_VIT_BIGG_14) {
             hidden_size       = 1664;
             intermediate_size = 8192;
@@ -819,72 +810,8 @@ public:
         blocks["post_layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values, bool proj = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values, bool return_pooled = true) {
         // pixel_values: [N, num_channels, image_size, image_size]
-        // return: // [N, projection_dim]
-        auto embeddings     = std::dynamic_pointer_cast<CLIPVisionEmbeddings>(blocks["embeddings"]);
-        auto pre_layernorm  = std::dynamic_pointer_cast<LayerNorm>(blocks["pre_layernorm"]);
-        auto encoder        = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
-        auto post_layernorm = std::dynamic_pointer_cast<LayerNorm>(blocks["post_layernorm"]);
-
-        auto x = embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
-        x      = pre_layernorm->forward(ctx, x);
-        x      = encoder->forward(ctx, x, -1, true);
-        x      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
-
-        GGML_ASSERT(x->ne[2] == 1);
-        int64_t max_token_idx = 0;
-        ggml_tensor* pooled   = ggml_view_1d(ctx, x, x->ne[0], x->nb[1] * max_token_idx);  // assert N == 1
-        if (proj) {
-            auto visual_projection = params["visual_projection"];
-            pooled                 = ggml_mul_mat(ctx, ggml_cont(ctx, ggml_transpose(ctx, visual_projection)), pooled);
-        }
-        return pooled;  // [N, projection_dim]
-    }
-};
-
-class CLIPVisionModel2 : public GGMLBlock {
-protected:
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["visual_projection.weight"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden_size, projection_dim);
-    }
-
-public:
-    // network hparams
-    int32_t num_channels      = 3;
-    int32_t patch_size        = 14;
-    int32_t image_size        = 224;
-    int32_t num_positions     = 257;  // (image_size / patch_size)^2 + 1
-    int32_t hidden_size       = 1024;
-    int32_t intermediate_size = 4096;
-    int32_t n_head            = 16;
-    int32_t n_layer           = 24;
-    int32_t projection_dim    = 768;
-
-public:
-    CLIPVisionModel2(CLIPVersion version = OPENAI_CLIP_VIT_L_14) {
-        if (version == OPEN_CLIP_VIT_H_14) {
-            hidden_size       = 1280;
-            intermediate_size = 5120;
-            n_head            = 16;
-            n_layer           = 32;
-            projection_dim    = 1024;
-        } else if (version == OPEN_CLIP_VIT_BIGG_14) {
-            hidden_size       = 1664;
-            intermediate_size = 8192;
-            n_head            = 16;
-            n_layer           = 48;
-        }
-
-        blocks["embeddings"]     = std::shared_ptr<GGMLBlock>(new CLIPVisionEmbeddings(hidden_size, num_channels, patch_size, image_size));
-        blocks["pre_layernorm"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
-        blocks["encoder"]        = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size, false));
-        blocks["post_layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
-    }
-
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values) {
-        // pixel_values: [N, num_channels, image_size, image_size]
-        // return: // [N, projection_dim]
         auto embeddings     = std::dynamic_pointer_cast<CLIPVisionEmbeddings>(blocks["embeddings"]);
         auto pre_layernorm  = std::dynamic_pointer_cast<LayerNorm>(blocks["pre_layernorm"]);
         auto encoder        = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
@@ -896,30 +823,56 @@ public:
         x      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
 
         GGML_ASSERT(x->ne[3] == 1);
-        // int64_t max_token_idx  = 0;
-        // ggml_tensor* pooled    = ggml_view_1d(ctx, x, x->ne[0], x->nb[1] * max_token_idx);  // assert N == 1
-        // x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
-        // ggml_tensor* pooled    = ggml_view_2d(ctx, x, x->ne[0], x->ne[1], x->nb[0], 0);
-        // pooled  = ggml_cont(ctx, pooled);
-        ggml_tensor* pooled = ggml_cont(ctx, ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], 0));
-        return pooled;  // [N, projection_dim]
+        if (return_pooled) {
+            ggml_tensor* pooled = ggml_cont(ctx, ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], 0));
+            return pooled;  // [N, hidden_size]
+        } else {
+            return x;  // [N, n_token, hidden_size]
+        }
+    }
+};
+
+class CLIPProjection : public UnaryBlock {
+protected:
+    int64_t in_features;
+    int64_t out_features;
+    bool transpose_weight;
+
+    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+        if (transpose_weight) {
+            LOG_ERROR("transpose_weight");
+            params["weight"] = ggml_new_tensor_2d(ctx, wtype, out_features, in_features);
+        } else {
+            params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
+        }
     }
 
-    struct ggml_tensor* visual_project(struct ggml_context* ctx, struct ggml_tensor* input) {
-        auto visual_projection = params["visual_projection.weight"];
-        auto pooled            = ggml_mul_mat(ctx, visual_projection, input);
-        return pooled;
+public:
+    CLIPProjection(int64_t in_features,
+                   int64_t out_features,
+                   bool transpose_weight = false)
+        : in_features(in_features),
+          out_features(out_features),
+          transpose_weight(transpose_weight) {}
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* w = params["weight"];
+        if (transpose_weight) {
+            w = ggml_cont(ctx, ggml_transpose(ctx, w));
+        }
+        return ggml_nn_linear(ctx, x, w, NULL);
     }
 };
 
 class CLIPVisionModelProjection : public GGMLBlock {
 public:
     int32_t hidden_size    = 1024;
-    int32_t projection_dim = 1024;
+    int32_t projection_dim = 768;
     int32_t image_size     = 224;
 
 public:
-    CLIPVisionModelProjection(CLIPVersion version = OPEN_CLIP_VIT_H_14) {
+    CLIPVisionModelProjection(CLIPVersion version   = OPENAI_CLIP_VIT_L_14,
+                              bool transpose_proj_w = false) {
         if (version == OPEN_CLIP_VIT_H_14) {
             hidden_size    = 1280;
             projection_dim = 1024;
@@ -927,17 +880,17 @@ public:
             hidden_size = 1664;
         }
 
-        blocks["visual_model"]      = std::shared_ptr<GGMLBlock>(new CLIPVisionModel(version));
-        blocks["visual_projection"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, projection_dim, false));
+        blocks["vision_model"]      = std::shared_ptr<GGMLBlock>(new CLIPVisionModel(version));
+        blocks["visual_projection"] = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, projection_dim, transpose_proj_w));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values) {
         // pixel_values: [N, num_channels, image_size, image_size]
-        // return: [N, num_positions, projection_dim]
-        auto visual_model      = std::dynamic_pointer_cast<CLIPVisionModel>(blocks["visual_model"]);
-        auto visual_projection = std::dynamic_pointer_cast<Linear>(blocks["visual_projection"]);
+        // return: [N, projection_dim]
+        auto vision_model      = std::dynamic_pointer_cast<CLIPVisionModel>(blocks["vision_model"]);
+        auto visual_projection = std::dynamic_pointer_cast<CLIPProjection>(blocks["visual_projection"]);
 
-        auto x = visual_model->forward(ctx, pixel_values);  // [N, embed_dim]
+        auto x = vision_model->forward(ctx, pixel_values);  // [N, hidden_size]
         x      = visual_projection->forward(ctx, x);        // [N, projection_dim]
 
         return x;  // [N, projection_dim]
@@ -1421,10 +1374,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
 };
 
 struct FrozenCLIPVisionEmbedder : public GGMLModule {
-    CLIPVisionModel vision_model;
+    CLIPVisionModelProjection vision_model;
 
     FrozenCLIPVisionEmbedder(ggml_backend_t backend, ggml_type wtype)
-        : GGMLModule(backend, wtype) {
+        : vision_model(OPEN_CLIP_VIT_H_14, true), GGMLModule(backend, wtype) {
         vision_model.init(params_ctx, wtype);
     }
 
@@ -1441,7 +1394,7 @@ struct FrozenCLIPVisionEmbedder : public GGMLModule {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        vision_model.get_param_tensors(tensors, prefix + "transformer.visual_model");
+        vision_model.get_param_tensors(tensors, prefix + "transformer");
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* pixel_values) {

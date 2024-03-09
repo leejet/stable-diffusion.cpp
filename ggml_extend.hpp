@@ -1251,17 +1251,14 @@ protected:
     int64_t n_head;
     bool bias;
     bool mask;
-    bool reshape2d;
 
 public:
     MultiheadAttention(int64_t embed_dim,
                        int64_t n_head,
-                       bool bias = true,
-                       bool r2d  = true)
+                       bool bias = true)
         : embed_dim(embed_dim),
           n_head(n_head),
-          bias(bias),
-          reshape2d(r2d) {
+          bias(bias) {
         blocks["q_proj"]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, bias));
         blocks["k_proj"]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, bias));
         blocks["v_proj"]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, bias));
@@ -1297,13 +1294,10 @@ public:
         struct ggml_tensor* kqv = ggml_nn_attention(ctx, q, k, v, mask);  // [N * n_head, n_token, d_head]
 
         kqv = ggml_reshape_4d(ctx, kqv, d_head, n_token, n_head, N);
-        kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, n_token, n_head, d_head]
-        if (reshape2d)
-            x = ggml_reshape_2d(ctx, kqv, d_head * n_head, n_token * N);  // [N * n_token, d_head * n_head]
-        else
-            x = ggml_reshape_3d(ctx, kqv, d_head * n_head, n_token, N);  // [N, n_token, d_head * n_head]
+        kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));      // [N, n_token, n_head, d_head]
+        x   = ggml_reshape_3d(ctx, kqv, d_head * n_head, n_token, N);  // [N, n_token, d_head * n_head]
 
-        x = out_proj->forward(ctx, x);
+        x = out_proj->forward(ctx, x);  // [N, n_token, embed_dim]
         return x;
     }
 };

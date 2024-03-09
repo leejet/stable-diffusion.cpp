@@ -43,6 +43,13 @@ bool starts_with(const std::string& str, const std::string& start) {
     return false;
 }
 
+bool contains(const std::string& str, const std::string& substr) {
+    if (str.find(substr) != std::string::npos) {
+        return true;
+    }
+    return false;
+}
+
 void replace_all_chars(std::string& str, char target, char replacement) {
     for (size_t i = 0; i < str.length(); ++i) {
         if (str[i] == target) {
