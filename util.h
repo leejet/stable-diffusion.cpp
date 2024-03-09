@@ -9,6 +9,7 @@
 
 bool ends_with(const std::string& str, const std::string& ending);
 bool starts_with(const std::string& str, const std::string& start);
+bool contains(const std::string& str, const std::string& substr);
 
 std::string format(const char* fmt, ...);
 

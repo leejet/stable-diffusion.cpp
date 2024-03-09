@@ -252,7 +252,7 @@ std::unordered_map<std::string, std::unordered_map<std::string, std::string>> su
     },
 };
 
-std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) {
+std::string convert_diffusers_name_to_compvis(std::string key, char seq) {
     std::vector<std::string> m;
 
     auto match = [](std::vector<std::string>& match_list, const std::regex& regex, const std::string& key) {
@@ -285,6 +285,11 @@ std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) 
         }
         return inner_key;
     };
+
+    // convert attn to out
+    if (ends_with(key, "to_out")) {
+        key += format("%c0", seq);
+    }
 
     // unet
     if (match(m, std::regex(format("unet%cconv_in(.*)", seq)), key)) {
@@ -395,7 +400,7 @@ std::string convert_diffusers_name_to_compvis(const std::string& key, char seq) 
 }
 
 std::string convert_tensor_name(const std::string& name) {
-    std::string new_name;
+    std::string new_name = name;
     if (starts_with(name, "cond_stage_model.") || starts_with(name, "conditioner.embedders.") || ends_with(name, ".vision_model.visual_projection.weight")) {
         new_name = convert_open_clip_to_hf_clip(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
@@ -419,6 +424,26 @@ std::string convert_tensor_name(const std::string& name) {
             }
         } else {
             new_name = name;
+        }
+    } else if (contains(name, "lora_up") || contains(name, "lora_down") || contains(name, "lora.up") || contains(name, "lora.down")) {
+        size_t pos = new_name.find(".processor");
+        if (pos != std::string::npos) {
+            new_name.replace(pos, strlen(".processor"), "");
+        }
+        pos = new_name.find_last_of('_');
+        if (pos != std::string::npos) {
+            std::string name_without_network_parts = new_name.substr(0, pos);
+            std::string network_part               = new_name.substr(pos + 1);
+            // LOG_DEBUG("%s %s", name_without_network_parts.c_str(), network_part.c_str());
+            std::string new_key = convert_diffusers_name_to_compvis(name_without_network_parts, '.');
+            replace_all_chars(new_key, '.', '_');
+            if (starts_with(network_part, "lora.")) {
+                network_part = "lora_" + network_part.substr(5);
+            }
+            if (new_key.size() > 0) {
+                new_name = "lora." + new_key + "." + network_part;
+            }
+            // LOG_DEBUG("new name: %s", new_name.c_str());
         }
     } else if (starts_with(name, "unet") || starts_with(name, "vae") || starts_with(name, "te")) {  // for diffuser
         size_t pos = name.find_last_of('.');

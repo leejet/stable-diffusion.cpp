@@ -83,9 +83,7 @@ public:
     std::shared_ptr<TinyAutoEncoder> tae_first_stage;
     std::shared_ptr<ControlNet> control_net;
     std::shared_ptr<PhotoMakerIDEncoder> pmid_model;
-    std::shared_ptr<PhotoMakerLoraModel> pmid_lora;
-    // PhotoMakerIDEncoder pmid_model;
-    // PhotoMakerLoraModel pmid_lora;
+    std::shared_ptr<LoraModel> pmid_lora;
 
     std::string taesd_path;
     bool use_tiny_autoencoder = false;
@@ -258,9 +256,8 @@ public:
 
             pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, GGML_TYPE_F32, version);
             if (id_embeddings_path.size() > 0) {
-                pmid_lora = std::make_shared<PhotoMakerLoraModel>(backend, GGML_TYPE_F32, version, id_embeddings_path);
-                // if (!pmid_lora.load_from_file(backend)) {
-                if (!pmid_lora->load_from_file(backend)) {
+                pmid_lora = std::make_shared<LoraModel>(backend, GGML_TYPE_F32, id_embeddings_path, "");
+                if (!pmid_lora->load_from_file(true)) {
                     LOG_WARN("load photomaker lora tensors from %s failed", id_embeddings_path.c_str());
                     return false;
                 }
@@ -315,9 +312,7 @@ public:
             ignore_tensors.insert("first_stage_model.");
         }
         if (stacked_id) {
-            for (auto& name : pmid_lora->lora_tensors_to_be_ignored) {
-                ignore_tensors.insert(name);
-            }
+            ignore_tensors.insert("lora.");
         }
 
         if (vae_decode_only) {
