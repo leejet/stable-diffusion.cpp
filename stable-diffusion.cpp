@@ -65,8 +65,11 @@ void calculate_alphas_cumprod(float* alphas_cumprod,
 
 class StableDiffusionGGML {
 public:
-    ggml_backend_t backend    = NULL;  // general backend
-    ggml_type model_data_type = GGML_TYPE_COUNT;
+    ggml_backend_t backend             = NULL;  // general backend
+    ggml_backend_t clip_backend        = NULL;
+    ggml_backend_t control_net_backend = NULL;
+    ggml_backend_t vae_backend         = NULL;
+    ggml_type model_data_type          = GGML_TYPE_COUNT;
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -120,6 +123,9 @@ public:
 
     ~StableDiffusionGGML() {
         ggml_backend_free(backend);
+        ggml_backend_free(clip_backend);
+        ggml_backend_free(control_net_backend);
+        ggml_backend_free(vae_backend);
     }
 
     bool load_from_file(const std::string& model_path,
@@ -131,6 +137,7 @@ public:
                         bool vae_tiling_,
                         ggml_type wtype,
                         schedule_t schedule,
+                        bool clip_on_cpu,
                         bool control_net_cpu,
                         bool vae_on_cpu) {
         use_tiny_autoencoder = taesd_path.size() > 0;
@@ -212,7 +219,12 @@ public:
             first_stage_model->alloc_params_buffer();
             first_stage_model->get_param_tensors(tensors, "first_stage_model");
         } else {
-            cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(backend, model_data_type, version);
+            clip_backend = backend;
+            if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
+                LOG_INFO("CLIP: Using CPU backend");
+                clip_backend = ggml_backend_cpu_init();
+            }
+            cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_data_type, version);
             cond_stage_model->alloc_params_buffer();
             cond_stage_model->get_param_tensors(tensors, "cond_stage_model.");
 
@@ -228,7 +240,6 @@ public:
             }
 
             if (!use_tiny_autoencoder) {
-                ggml_backend_t vae_backend = NULL;
                 if (vae_on_cpu && !ggml_backend_is_cpu(backend)) {
                     LOG_INFO("VAE Autoencoder: Using CPU backend");
                     vae_backend = ggml_backend_cpu_init();
@@ -244,19 +255,19 @@ public:
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
 
             if (control_net_path.size() > 0) {
-                ggml_backend_t cn_backend = NULL;
+                ggml_backend_t controlnet_backend = NULL;
                 if (control_net_cpu && !ggml_backend_is_cpu(backend)) {
                     LOG_DEBUG("ControlNet: Using CPU backend");
-                    cn_backend = ggml_backend_cpu_init();
+                    controlnet_backend = ggml_backend_cpu_init();
                 } else {
-                    cn_backend = backend;
+                    controlnet_backend = backend;
                 }
-                control_net = std::make_shared<ControlNet>(cn_backend, model_data_type, version);
+                control_net = std::make_shared<ControlNet>(controlnet_backend, model_data_type, version);
             }
 
-            pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, GGML_TYPE_F32, version);
+            pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_data_type, version);
             if (id_embeddings_path.size() > 0) {
-                pmid_lora = std::make_shared<LoraModel>(backend, GGML_TYPE_F32, id_embeddings_path, "");
+                pmid_lora = std::make_shared<LoraModel>(backend, model_data_type, id_embeddings_path, "");
                 if (!pmid_lora->load_from_file(true)) {
                     LOG_WARN("load photomaker lora tensors from %s failed", id_embeddings_path.c_str());
                     return false;
@@ -359,15 +370,49 @@ public:
                 pmid_params_mem_size = pmid_model->get_params_mem_size();
             }
 
-            size_t total_params_size = clip_params_mem_size + clip_params_mem_size +
-                                       clip_params_mem_size + control_net_params_mem_size + pmid_params_mem_size;
-            LOG_INFO("total params memory size = %.2fMB (clip %.2fMB, unet %.2fMB, vae %.2fMB, controlnet %.2fMB, pmid %.2fMB)",
-                     total_params_size / 1024.0 / 1024.0,
-                     clip_params_mem_size / 1024.0 / 1024.0,
-                     unet_params_mem_size / 1024.0 / 1024.0,
-                     vae_params_mem_size / 1024.0 / 1024.0,
-                     control_net_params_mem_size / 1024.0 / 1024.0,
-                     pmid_params_mem_size / 1024.0 / 1024.0);
+            size_t total_params_ram_size  = 0;
+            size_t total_params_vram_size = 0;
+            if (ggml_backend_is_cpu(clip_backend)) {
+                total_params_ram_size += clip_params_mem_size + pmid_params_mem_size;
+            } else {
+                total_params_vram_size += clip_params_mem_size + pmid_params_mem_size;
+            }
+
+            if (ggml_backend_is_cpu(backend)) {
+                total_params_ram_size += unet_params_mem_size;
+            } else {
+                total_params_vram_size += unet_params_mem_size;
+            }
+
+            if (ggml_backend_is_cpu(vae_backend)) {
+                total_params_ram_size += vae_params_mem_size;
+            } else {
+                total_params_vram_size += vae_params_mem_size;
+            }
+
+            if (ggml_backend_is_cpu(control_net_backend)) {
+                total_params_ram_size += control_net_params_mem_size;
+            } else {
+                total_params_vram_size += control_net_params_mem_size;
+            }
+
+            size_t total_params_size = total_params_ram_size + total_params_vram_size;
+            LOG_INFO(
+                "total params memory size = %.2fMB (VRAM %.2fMB, RAM %.2fMB): "
+                "clip %.2fMB(%s), unet %.2fMB(%s), vae %.2fMB(%s), controlnet %.2fMB(%s), pmid %.2fMB(%s)",
+                total_params_size / 1024.0 / 1024.0,
+                total_params_vram_size / 1024.0 / 1024.0,
+                total_params_ram_size / 1024.0 / 1024.0,
+                clip_params_mem_size / 1024.0 / 1024.0,
+                ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM",
+                unet_params_mem_size / 1024.0 / 1024.0,
+                ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
+                vae_params_mem_size / 1024.0 / 1024.0,
+                ggml_backend_is_cpu(vae_backend) ? "RAM" : "VRAM",
+                control_net_params_mem_size / 1024.0 / 1024.0,
+                ggml_backend_is_cpu(control_net_backend) ? "RAM" : "VRAM",
+                pmid_params_mem_size / 1024.0 / 1024.0,
+                ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM");
         }
 
         int64_t t1 = ggml_time_ms();
@@ -1435,6 +1480,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      enum sd_type_t wtype,
                      enum rng_type_t rng_type,
                      enum schedule_t s,
+                     bool keep_clip_on_cpu,
                      bool keep_control_net_cpu,
                      bool keep_vae_on_cpu) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
@@ -1467,6 +1513,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     vae_tiling,
                                     (ggml_type)wtype,
                                     s,
+                                    keep_clip_on_cpu,
                                     keep_control_net_cpu,
                                     keep_vae_on_cpu)) {
         delete sd_ctx->sd;
@@ -1601,11 +1648,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
             int32_t w                              = input_id_images[0]->width;
             int32_t h                              = input_id_images[0]->height;
             int32_t channels                       = input_id_images[0]->channel;
-            int32_t num_input_images               = input_id_images.size();
+            int32_t num_input_images               = (int32_t)input_id_images.size();
             init_img                               = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, w, h, channels, num_input_images);
             // TODO: move these to somewhere else and be user settable
-            float mean[] = {0.48145466, 0.4578275, 0.40821073};
-            float std[]  = {0.26862954, 0.26130258, 0.27577711};
+            float mean[] = {0.48145466f, 0.4578275f, 0.40821073f};
+            float std[]  = {0.26862954f, 0.26130258f, 0.27577711f};
             for (int i = 0; i < num_input_images; i++) {
                 sd_image_t* init_image = input_id_images[i];
                 if (normalize_input)

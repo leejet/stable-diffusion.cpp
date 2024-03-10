@@ -829,7 +829,10 @@ protected:
 
         // compute the required memory
         size_t compute_buffer_size = ggml_gallocr_get_buffer_size(compute_allocr, 0);
-        LOG_DEBUG("%s compute buffer size: %.2f MB", get_desc().c_str(), compute_buffer_size / 1024.0 / 1024.0);
+        LOG_DEBUG("%s compute buffer size: %.2f MB(%s)",
+                  get_desc().c_str(),
+                  compute_buffer_size / 1024.0 / 1024.0,
+                  ggml_backend_is_cpu(backend) ? "RAM" : "VRAM");
         return true;
     }
 
@@ -874,8 +877,11 @@ public:
             return false;
         }
         size_t params_buffer_size = ggml_backend_buffer_get_size(params_buffer);
-        LOG_DEBUG("%s params backend buffer size = % 6.2f MB (%i tensors)",
-                  get_desc().c_str(), params_buffer_size / (1024.0 * 1024.0), num_tensors);
+        LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)",
+                  get_desc().c_str(),
+                  params_buffer_size / (1024.0 * 1024.0),
+                  ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
+                  num_tensors);
         return true;
     }
 

@@ -567,7 +567,7 @@ public:
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, int clip_skip = -1, bool mask = true) {
         // x: [N, n_token, d_model]
         int layer_idx = n_layer - 1;
-        LOG_DEBUG("clip_skip %d", clip_skip);
+        // LOG_DEBUG("clip_skip %d", clip_skip);
         if (clip_skip > 0) {
             layer_idx = n_layer - clip_skip;
         }

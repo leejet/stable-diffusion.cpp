@@ -100,6 +100,7 @@ struct SDParams {
     bool vae_tiling               = false;
     bool control_net_cpu          = false;
     bool normalize_input          = false;
+    bool clip_on_cpu              = false;
     bool vae_on_cpu               = false;
     bool canny_preprocess         = false;
     int upscale_repeats           = 1;
@@ -123,6 +124,7 @@ void print_params(SDParams params) {
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
+    printf("    clip on cpu:       %s\n", params.clip_on_cpu ? "true" : "false");
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
     printf("    vae decoder on cpu:%s\n", params.vae_on_cpu ? "true" : "false");
     printf("    strength(control): %.2f\n", params.control_strength);
@@ -396,6 +398,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.control_net_cpu = true;
         } else if (arg == "--normalize-input") {
             params.normalize_input = true;
+        } else if (arg == "--clip-on-cpu") {
+            params.clip_on_cpu = true;  // will slow down get_learned_condiotion but necessary for low MEM GPUs
         } else if (arg == "--vae-on-cpu") {
             params.vae_on_cpu = true;  // will slow down latent decoding but necessary for low MEM GPUs
         } else if (arg == "--canny") {
@@ -658,6 +662,7 @@ int main(int argc, const char* argv[]) {
                                   params.wtype,
                                   params.rng_type,
                                   params.schedule,
+                                  params.clip_on_cpu,
                                   params.control_net_cpu,
                                   params.vae_on_cpu);
 
