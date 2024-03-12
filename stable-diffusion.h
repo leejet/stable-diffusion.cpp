@@ -65,12 +65,12 @@ enum sd_type_t {
     SD_TYPE_Q8_0 = 8,
     SD_TYPE_Q8_1 = 9,
     // k-quantizations
-    SD_TYPE_Q2_K = 10,
-    SD_TYPE_Q3_K = 11,
-    SD_TYPE_Q4_K = 12,
-    SD_TYPE_Q5_K = 13,
-    SD_TYPE_Q6_K = 14,
-    SD_TYPE_Q8_K = 15,
+    SD_TYPE_Q2_K    = 10,
+    SD_TYPE_Q3_K    = 11,
+    SD_TYPE_Q4_K    = 12,
+    SD_TYPE_Q5_K    = 13,
+    SD_TYPE_Q6_K    = 14,
+    SD_TYPE_Q8_K    = 15,
     SD_TYPE_IQ2_XXS = 16,
     SD_TYPE_IQ2_XS  = 17,
     SD_TYPE_IQ3_XXS = 18,
@@ -95,7 +95,7 @@ enum sd_log_level_t {
 };
 
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
-typedef void (*sd_progress_cb_t)(int step,int steps,float time, void* data);
+typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
@@ -117,6 +117,7 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             const char* control_net_path_c_str,
                             const char* lora_model_dir,
                             const char* embed_dir_c_str,
+                            const char* stacked_id_embed_dir_c_str,
                             bool vae_decode_only,
                             bool vae_tiling,
                             bool free_params_immediately,
@@ -124,7 +125,9 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             enum sd_type_t wtype,
                             enum rng_type_t rng_type,
                             enum schedule_t s,
-                            bool keep_control_net_cpu);
+                            bool keep_clip_on_cpu,
+                            bool keep_control_net_cpu,
+                            bool keep_vae_on_cpu);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
@@ -140,7 +143,10 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            int64_t seed,
                            int batch_count,
                            const sd_image_t* control_cond,
-                           float control_strength);
+                           float control_strength,
+                           float style_strength,
+                           bool normalize_input,
+                           const char* input_id_images_path);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,

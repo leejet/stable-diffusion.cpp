@@ -7,6 +7,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "ggml/ggml-backend.h"

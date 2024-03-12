@@ -25,6 +25,9 @@
 #include "ggml/ggml.h"
 #include "stable-diffusion.h"
 
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize.h"
+
 bool ends_with(const std::string& str, const std::string& ending) {
     if (str.length() >= ending.length()) {
         return (str.compare(str.length() - ending.length(), ending.length(), ending) == 0);
@@ -35,6 +38,13 @@ bool ends_with(const std::string& str, const std::string& ending) {
 
 bool starts_with(const std::string& str, const std::string& start) {
     if (str.find(start) == 0) {
+        return true;
+    }
+    return false;
+}
+
+bool contains(const std::string& str, const std::string& substr) {
+    if (str.find(substr) != std::string::npos) {
         return true;
     }
     return false;
@@ -88,6 +98,43 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
     }
 }
 
+std::vector<std::string> get_files_from_dir(const std::string& dir) {
+    std::vector<std::string> files;
+
+    WIN32_FIND_DATA findFileData;
+    HANDLE hFind;
+
+    char currentDirectory[MAX_PATH];
+    GetCurrentDirectory(MAX_PATH, currentDirectory);
+
+    char directoryPath[MAX_PATH];  // this is absolute path
+    sprintf(directoryPath, "%s\\%s\\*", currentDirectory, dir.c_str());
+
+    // Find the first file in the directory
+    hFind = FindFirstFile(directoryPath, &findFileData);
+
+    // Check if the directory was found
+    if (hFind == INVALID_HANDLE_VALUE) {
+        printf("Unable to find directory.\n");
+        return files;
+    }
+
+    // Loop through all files in the directory
+    do {
+        // Check if the found file is a regular file (not a directory)
+        if (!(findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            files.push_back(std::string(currentDirectory) + "\\" + dir + "\\" + std::string(findFileData.cFileName));
+        }
+    } while (FindNextFile(hFind, &findFileData) != 0);
+
+    // Close the handle
+    FindClose(hFind);
+
+    sort(files.begin(), files.end());
+
+    return files;
+}
+
 #else  // Unix
 #include <dirent.h>
 #include <sys/stat.h>
@@ -102,6 +149,7 @@ bool is_directory(const std::string& path) {
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
 }
 
+// TODO: add windows version
 std::string get_full_path(const std::string& dir, const std::string& filename) {
     DIR* dp = opendir(dir.c_str());
 
@@ -119,6 +167,27 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
     }
 
     return "";
+}
+
+std::vector<std::string> get_files_from_dir(const std::string& dir) {
+    std::vector<std::string> files;
+
+    DIR* dp = opendir(dir.c_str());
+
+    if (dp != nullptr) {
+        struct dirent* entry;
+
+        while ((entry = readdir(dp)) != nullptr) {
+            std::string fname = dir + "/" + entry->d_name;
+            if (!is_directory(fname))
+                files.push_back(fname);
+        }
+        closedir(dp);
+    }
+
+    sort(files.begin(), files.end());
+
+    return files;
 }
 
 #endif
@@ -161,8 +230,8 @@ int32_t get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
-static sd_progress_cb_t sd_progress_cb  = NULL;
-void* sd_progress_cb_data               = NULL;
+static sd_progress_cb_t sd_progress_cb = NULL;
+void* sd_progress_cb_data              = NULL;
 
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
@@ -207,9 +276,42 @@ std::string path_join(const std::string& p1, const std::string& p2) {
     return p1 + "/" + p2;
 }
 
+sd_image_t* preprocess_id_image(sd_image_t* img) {
+    int shortest_edge   = 224;
+    int size            = shortest_edge;
+    sd_image_t* resized = NULL;
+    uint32_t w          = img->width;
+    uint32_t h          = img->height;
+    uint32_t c          = img->channel;
+
+    // 1. do resize using stb_resize functions
+
+    unsigned char* buf = (unsigned char*)malloc(sizeof(unsigned char) * 3 * size * size);
+    if (!stbir_resize_uint8(img->data, w, h, 0,
+                            buf, size, size, 0,
+                            c)) {
+        fprintf(stderr, "%s: resize operation failed \n ", __func__);
+        return resized;
+    }
+
+    // 2. do center crop (likely unnecessary due to step 1)
+
+    // 3. do rescale
+
+    // 4. do normalize
+
+    // 3 and 4 will need to be done in float format.
+
+    resized = new sd_image_t{(uint32_t)shortest_edge,
+                             (uint32_t)shortest_edge,
+                             3,
+                             buf};
+    return resized;
+}
+
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
-        sd_progress_cb(step,steps,time, sd_progress_cb_data);
+        sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;
     }
     if (step == 0) {
@@ -255,9 +357,8 @@ std::string trim(const std::string& s) {
     return rtrim(ltrim(s));
 }
 
-static sd_log_cb_t sd_log_cb            = NULL;
-void* sd_log_cb_data                    = NULL;
-
+static sd_log_cb_t sd_log_cb = NULL;
+void* sd_log_cb_data         = NULL;
 
 #define LOG_BUFFER_SIZE 1024
 

@@ -14,9 +14,10 @@ struct LoraModel : public GGMLModule {
 
     LoraModel(ggml_backend_t backend,
               ggml_type wtype,
-              const std::string file_path = "")
+              const std::string& file_path = "",
+              const std::string& prefix    = "")
         : file_path(file_path), GGMLModule(backend, wtype) {
-        if (!model_loader.init_from_file(file_path)) {
+        if (!model_loader.init_from_file(file_path, prefix)) {
             load_failed = true;
         }
     }
@@ -33,8 +34,7 @@ struct LoraModel : public GGMLModule {
         return model_loader.get_params_mem_size(NULL);
     }
 
-
-    bool load_from_file() {
+    bool load_from_file(bool filter_tensor = false) {
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
 
         if (load_failed) {
@@ -45,6 +45,11 @@ struct LoraModel : public GGMLModule {
         bool dry_run          = true;
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
             const std::string& name = tensor_storage.name;
+
+            if (filter_tensor && !contains(name, "lora")) {
+                // LOG_INFO("skipping LoRA tesnor '%s'", name.c_str());
+                return true;
+            }
 
             if (dry_run) {
                 struct ggml_tensor* real = ggml_new_tensor(params_ctx,
@@ -66,7 +71,6 @@ struct LoraModel : public GGMLModule {
         dry_run = false;
         model_loader.load_tensors(on_new_tensor_cb, backend);
 
-
         LOG_DEBUG("finished loaded lora");
         return true;
     }
@@ -85,6 +89,10 @@ struct LoraModel : public GGMLModule {
             }
             k_tensor = k_tensor.substr(0, k_pos);
             replace_all_chars(k_tensor, '.', '_');
+            // LOG_DEBUG("k_tensor %s", k_tensor.c_str());
+            if (k_tensor == "model_diffusion_model_output_blocks_2_2_conv") { // fix for SDXL
+                k_tensor = "model_diffusion_model_output_blocks_2_1_conv";
+            }
             std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
             std::string lora_down_name = "lora." + k_tensor + ".lora_down.weight";
             std::string alpha_name     = "lora." + k_tensor + ".alpha";

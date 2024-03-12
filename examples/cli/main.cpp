@@ -10,6 +10,7 @@
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
 #include "stb_image.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -65,6 +66,8 @@ struct SDParams {
     std::string esrgan_path;
     std::string controlnet_path;
     std::string embeddings_path;
+    std::string stacked_id_embeddings_path;
+    std::string input_id_images_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
@@ -73,12 +76,13 @@ struct SDParams {
 
     std::string prompt;
     std::string negative_prompt;
-    float min_cfg   = 1.0f;
-    float cfg_scale = 7.0f;
-    int clip_skip   = -1;  // <= 0 represents unspecified
-    int width       = 512;
-    int height      = 512;
-    int batch_count = 1;
+    float min_cfg     = 1.0f;
+    float cfg_scale   = 7.0f;
+    float style_ratio = 20.f;
+    int clip_skip     = -1;  // <= 0 represents unspecified
+    int width         = 512;
+    int height        = 512;
+    int batch_count   = 1;
 
     int video_frames         = 6;
     int motion_bucket_id     = 127;
@@ -95,6 +99,9 @@ struct SDParams {
     bool verbose                  = false;
     bool vae_tiling               = false;
     bool control_net_cpu          = false;
+    bool normalize_input          = false;
+    bool clip_on_cpu              = false;
+    bool vae_on_cpu               = false;
     bool canny_preprocess         = false;
     int upscale_repeats           = 1;
 };
@@ -110,10 +117,16 @@ void print_params(SDParams params) {
     printf("    esrgan_path:       %s\n", params.esrgan_path.c_str());
     printf("    controlnet_path:   %s\n", params.controlnet_path.c_str());
     printf("    embeddings_path:   %s\n", params.embeddings_path.c_str());
+    printf("    stacked_id_embeddings_path:   %s\n", params.stacked_id_embeddings_path.c_str());
+    printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
+    printf("    style ratio:       %.2f\n", params.style_ratio);
+    printf("    normzalize input image :  %s\n", params.normalize_input ? "true" : "false");
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
+    printf("    clip on cpu:       %s\n", params.clip_on_cpu ? "true" : "false");
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
+    printf("    vae decoder on cpu:%s\n", params.vae_on_cpu ? "true" : "false");
     printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
@@ -146,6 +159,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
+    printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings.\n");
+    printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir.\n");
+    printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
@@ -158,6 +174,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
+    printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%%)\n");
     printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
@@ -244,6 +261,18 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.embeddings_path = argv[i];
+        } else if (arg == "--stacked-id-embd-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.stacked_id_embeddings_path = argv[i];
+        } else if (arg == "--input-id-images-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.input_id_images_path = argv[i];
         } else if (arg == "--type") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -327,6 +356,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.strength = std::stof(argv[i]);
+        } else if (arg == "--style-ratio") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.style_ratio = std::stof(argv[i]);
         } else if (arg == "--control-strength") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -361,6 +396,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.vae_tiling = true;
         } else if (arg == "--control-net-cpu") {
             params.control_net_cpu = true;
+        } else if (arg == "--normalize-input") {
+            params.normalize_input = true;
+        } else if (arg == "--clip-on-cpu") {
+            params.clip_on_cpu = true;  // will slow down get_learned_condiotion but necessary for low MEM GPUs
+        } else if (arg == "--vae-on-cpu") {
+            params.vae_on_cpu = true;  // will slow down latent decoding but necessary for low MEM GPUs
         } else if (arg == "--canny") {
             params.canny_preprocess = true;
         } else if (arg == "-b" || arg == "--batch-count") {
@@ -613,6 +654,7 @@ int main(int argc, const char* argv[]) {
                                   params.controlnet_path.c_str(),
                                   params.lora_model_dir.c_str(),
                                   params.embeddings_path.c_str(),
+                                  params.stacked_id_embeddings_path.c_str(),
                                   vae_decode_only,
                                   params.vae_tiling,
                                   true,
@@ -620,7 +662,9 @@ int main(int argc, const char* argv[]) {
                                   params.wtype,
                                   params.rng_type,
                                   params.schedule,
-                                  params.control_net_cpu);
+                                  params.clip_on_cpu,
+                                  params.control_net_cpu,
+                                  params.vae_on_cpu);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
@@ -664,7 +708,10 @@ int main(int argc, const char* argv[]) {
                           params.seed,
                           params.batch_count,
                           control_image,
-                          params.control_strength);
+                          params.control_strength,
+                          params.style_ratio,
+                          params.normalize_input,
+                          params.input_id_images_path.c_str());
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,

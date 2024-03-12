@@ -80,8 +80,27 @@ __STATIC_INLINE__ ggml_fp16_t ggml_tensor_get_f16(const ggml_tensor* tensor, int
     return *(ggml_fp16_t*)((char*)(tensor->data) + i * tensor->nb[3] + j * tensor->nb[2] + k * tensor->nb[1] + l * tensor->nb[0]);
 }
 
-__STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false) {
-    printf("shape(%zu, %zu, %zu, %zu)\n", tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+static struct ggml_tensor* get_tensor_from_graph(struct ggml_cgraph* gf, const char* name) {
+    struct ggml_tensor* res = NULL;
+    for (int i = 0; i < gf->n_nodes; i++) {
+        // printf("%d, %s \n", i, gf->nodes[i]->name);
+        if (strcmp(ggml_get_name(gf->nodes[i]), name) == 0) {
+            res = gf->nodes[i];
+            break;
+        }
+    }
+    for (int i = 0; i < gf->n_leafs; i++) {
+        // printf("%d, %s \n", i, gf->leafs[i]->name);
+        if (strcmp(ggml_get_name(gf->leafs[i]), name) == 0) {
+            res = gf->leafs[i];
+            break;
+        }
+    }
+    return res;
+}
+
+__STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false, const char* mark = "") {
+    printf("%s (%s): shape(%zu, %zu, %zu, %zu)\n", mark, ggml_type_name(tensor->type), tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     fflush(stdout);
     if (shape_only) {
         return;
@@ -217,6 +236,23 @@ __STATIC_INLINE__ uint8_t* sd_tensor_to_image(struct ggml_tensor* input) {
     return image_data;
 }
 
+__STATIC_INLINE__ uint8_t* sd_tensor_to_mul_image(struct ggml_tensor* input, int idx) {
+    int64_t width    = input->ne[0];
+    int64_t height   = input->ne[1];
+    int64_t channels = input->ne[2];
+    GGML_ASSERT(channels == 3 && input->type == GGML_TYPE_F32);
+    uint8_t* image_data = (uint8_t*)malloc(width * height * channels);
+    for (int iy = 0; iy < height; iy++) {
+        for (int ix = 0; ix < width; ix++) {
+            for (int k = 0; k < channels; k++) {
+                float value                                               = ggml_tensor_get_f32(input, ix, iy, k, idx);
+                *(image_data + iy * width * channels + ix * channels + k) = (uint8_t)(value * 255.0f);
+            }
+        }
+    }
+    return image_data;
+}
+
 __STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
                                           struct ggml_tensor* output,
                                           bool scale = true) {
@@ -237,6 +273,28 @@ __STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
     }
 }
 
+__STATIC_INLINE__ void sd_mul_images_to_tensor(const uint8_t* image_data,
+                                               struct ggml_tensor* output,
+                                               int idx,
+                                               float* mean = NULL,
+                                               float* std  = NULL) {
+    int64_t width    = output->ne[0];
+    int64_t height   = output->ne[1];
+    int64_t channels = output->ne[2];
+    GGML_ASSERT(channels == 3 && output->type == GGML_TYPE_F32);
+    for (int iy = 0; iy < height; iy++) {
+        for (int ix = 0; ix < width; ix++) {
+            for (int k = 0; k < channels; k++) {
+                int value       = *(image_data + iy * width * channels + ix * channels + k);
+                float pixel_val = value / 255.0f;
+                if (mean != NULL && std != NULL)
+                    pixel_val = (pixel_val - mean[k]) / std[k];
+                ggml_tensor_set_f32(output, pixel_val, ix, iy, k, idx);
+            }
+        }
+    }
+}
+
 __STATIC_INLINE__ void sd_image_f32_to_tensor(const float* image_data,
                                               struct ggml_tensor* output,
                                               bool scale = true) {
@@ -247,7 +305,7 @@ __STATIC_INLINE__ void sd_image_f32_to_tensor(const float* image_data,
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
-                float value = *(image_data + iy * width * channels + ix * channels + k);
+                int value = *(image_data + iy * width * channels + ix * channels + k);
                 if (scale) {
                     value /= 255.f;
                 }
@@ -771,7 +829,10 @@ protected:
 
         // compute the required memory
         size_t compute_buffer_size = ggml_gallocr_get_buffer_size(compute_allocr, 0);
-        LOG_DEBUG("%s compute buffer size: %.2f MB", get_desc().c_str(), compute_buffer_size / 1024.0 / 1024.0);
+        LOG_DEBUG("%s compute buffer size: %.2f MB(%s)",
+                  get_desc().c_str(),
+                  compute_buffer_size / 1024.0 / 1024.0,
+                  ggml_backend_is_cpu(backend) ? "RAM" : "VRAM");
         return true;
     }
 
@@ -816,8 +877,11 @@ public:
             return false;
         }
         size_t params_buffer_size = ggml_backend_buffer_get_size(params_buffer);
-        LOG_DEBUG("%s params backend buffer size = % 6.2f MB (%i tensors)",
-                  get_desc().c_str(), params_buffer_size / (1024.0 * 1024.0), num_tensors);
+        LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)",
+                  get_desc().c_str(),
+                  params_buffer_size / (1024.0 * 1024.0),
+                  ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
+                  num_tensors);
         return true;
     }
 
@@ -865,11 +929,8 @@ public:
         alloc_compute_buffer(get_graph);
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_graph();
-
         GGML_ASSERT(ggml_gallocr_alloc_graph(compute_allocr, gf));
-
         cpy_data_to_backend_tensor();
-
         if (ggml_backend_is_cpu(backend)) {
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
@@ -879,13 +940,11 @@ public:
             ggml_backend_metal_set_n_cb(backend, n_threads);
         }
 #endif
-
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
-
         if (output != NULL) {
             auto result = gf->nodes[gf->n_nodes - 1];
             if (*output == NULL && output_ctx != NULL) {
@@ -977,13 +1036,11 @@ public:
         }
         for (auto& pair : blocks) {
             auto& block = pair.second;
-
             block->get_param_tensors(tensors, prefix + pair.first);
         }
 
         for (auto& pair : params) {
-            struct ggml_tensor* param = pair.second;
-
+            struct ggml_tensor* param    = pair.second;
             tensors[prefix + pair.first] = pair.second;
         }
     }
@@ -1243,11 +1300,10 @@ public:
         struct ggml_tensor* kqv = ggml_nn_attention(ctx, q, k, v, mask);  // [N * n_head, n_token, d_head]
 
         kqv = ggml_reshape_4d(ctx, kqv, d_head, n_token, n_head, N);
-        kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, n_token, n_head, d_head]
+        kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));      // [N, n_token, n_head, d_head]
+        x   = ggml_reshape_3d(ctx, kqv, d_head * n_head, n_token, N);  // [N, n_token, d_head * n_head]
 
-        x = ggml_reshape_3d(ctx, kqv, d_head * n_head, n_token, N);  // [N * n_token, d_head * n_head]
-
-        x = out_proj->forward(ctx, x);
+        x = out_proj->forward(ctx, x);  // [N, n_token, embed_dim]
         return x;
     }
 };
