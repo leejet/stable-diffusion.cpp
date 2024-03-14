@@ -122,10 +122,20 @@ public:
     }
 
     ~StableDiffusionGGML() {
+	if (!!clip_backend && ggml_backend_is_cpu(clip_backend) == false) {
+		LOG_DEBUG("Freeing CLIP Backend");
+		ggml_backend_free(clip_backend);
+	}
+	if (!!control_net_backend && ggml_backend_is_cpu(control_net_backend) == false) {
+		LOG_DEBUG("Freeing Control Net Backend");
+		ggml_backend_free(control_net_backend);
+	}
+	if (!!vae_backend && ggml_backend_is_cpu(vae_backend) == false) {
+		LOG_DEBUG("Freeing VAE Backend");
+		ggml_backend_free(vae_backend);
+	}
+    	LOG_DEBUG("Freeing General Backend");
         ggml_backend_free(backend);
-        ggml_backend_free(clip_backend);
-        ggml_backend_free(control_net_backend);
-        ggml_backend_free(vae_backend);
     }
 
     bool load_from_file(const std::string& model_path,
