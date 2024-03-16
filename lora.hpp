@@ -75,7 +75,7 @@ struct LoraModel : public GGMLModule {
         return true;
     }
 
-    struct ggml_cgraph* build_graph(std::map<std::string, struct ggml_tensor*> model_tensors) {
+    struct ggml_cgraph* build_lora_graph(std::map<std::string, struct ggml_tensor*> model_tensors) {
         struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, LORA_GRAPH_SIZE, false);
 
         std::set<std::string> applied_lora_tensors;
@@ -155,18 +155,34 @@ struct LoraModel : public GGMLModule {
             ggml_build_forward_expand(gf, final_weight);
         }
 
+	size_t total_lora_tensors_count = 0;
+	size_t applied_lora_tensors_count = 0;
+
         for (auto& kv : lora_tensors) {
+	    total_lora_tensors_count++;
             if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
                 LOG_WARN("unused lora tensor %s", kv.first.c_str());
-            }
+            } else {
+	    	applied_lora_tensors_count++;
+	    }
         }
+	/* Don't worry if this message shows up twice in the logs per LoRA, 
+	 * this function is called once to calculate the required buffer size
+	 * and then again to actually generate a graph to be used */
+	if (applied_lora_tensors_count != total_lora_tensors_count) {
+		LOG_WARN("Only (%lu / %lu) LoRA tensors have been applied",
+			applied_lora_tensors_count, total_lora_tensors_count);
+	} else {
+		LOG_DEBUG("(%lu / %lu) LoRA tensors applied successfully",
+			applied_lora_tensors_count, total_lora_tensors_count);
+	}
 
         return gf;
     }
 
     void apply(std::map<std::string, struct ggml_tensor*> model_tensors, int n_threads) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(model_tensors);
+            return build_lora_graph(model_tensors);
         };
         GGMLModule::compute(get_graph, n_threads, true);
     }

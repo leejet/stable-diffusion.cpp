@@ -759,8 +759,13 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_timestep_embedding(
 //     virtual struct ggml_cgraph* get_ggml_cgraph() = 0;
 // };
 
+/*
 #define MAX_PARAMS_TENSOR_NUM 10240
 #define MAX_GRAPH_SIZE 10240
+*/
+/* SDXL with LoRA requires more space */
+#define MAX_PARAMS_TENSOR_NUM 15360
+#define MAX_GRAPH_SIZE 15360
 
 struct GGMLModule {
 protected:

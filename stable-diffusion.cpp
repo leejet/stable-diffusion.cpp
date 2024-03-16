@@ -531,9 +531,7 @@ public:
 
         int64_t t1 = ggml_time_ms();
 
-        LOG_INFO("lora '%s' applied, taking %.2fs",
-                 lora_name.c_str(),
-                 (t1 - t0) * 1.0f / 1000);
+        LOG_INFO("lora '%s' applied, taking %.2fs", lora_name.c_str(), (t1 - t0) * 1.0f / 1000);
     }
 
     void apply_loras(const std::unordered_map<std::string, float>& lora_state) {
@@ -555,6 +553,8 @@ public:
                 lora_state_diff[lora_name] = multiplier;
             }
         }
+
+	LOG_INFO("Attempting to apply %lu LoRAs", lora_state.size());
 
         for (auto& kv : lora_state_diff) {
             apply_lora(kv.first, kv.second);
