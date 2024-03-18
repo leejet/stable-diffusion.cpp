@@ -1516,9 +1516,6 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     keep_clip_on_cpu,
                                     keep_control_net_cpu,
                                     keep_vae_on_cpu)) {
-        delete sd_ctx->sd;
-        sd_ctx->sd = NULL;
-        free(sd_ctx);
         return NULL;
     }
     return sd_ctx;
