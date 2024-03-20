@@ -122,19 +122,15 @@ public:
     }
 
     ~StableDiffusionGGML() {
-	if (!!clip_backend && ggml_backend_is_cpu(clip_backend) == false) {
-		LOG_DEBUG("Freeing CLIP Backend");
-		ggml_backend_free(clip_backend);
-	}
-	if (!!control_net_backend && ggml_backend_is_cpu(control_net_backend) == false) {
-		LOG_DEBUG("Freeing Control Net Backend");
-		ggml_backend_free(control_net_backend);
-	}
-	if (!!vae_backend && ggml_backend_is_cpu(vae_backend) == false) {
-		LOG_DEBUG("Freeing VAE Backend");
-		ggml_backend_free(vae_backend);
-	}
-    	LOG_DEBUG("Freeing General Backend");
+        if (clip_backend != backend) {
+            ggml_backend_free(clip_backend);
+        }
+        if (control_net_backend != backend) {
+            ggml_backend_free(control_net_backend);
+        }
+        if (vae_backend != backend) {
+            ggml_backend_free(vae_backend);
+        }
         ggml_backend_free(backend);
     }
 
@@ -554,7 +550,7 @@ public:
             }
         }
 
-	LOG_INFO("Attempting to apply %lu LoRAs", lora_state.size());
+        LOG_INFO("Attempting to apply %lu LoRAs", lora_state.size());
 
         for (auto& kv : lora_state_diff) {
             apply_lora(kv.first, kv.second);

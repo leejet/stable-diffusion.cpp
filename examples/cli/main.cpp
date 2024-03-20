@@ -470,8 +470,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             exit(0);
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
-	} else if (arg == "--color") {
-	    params.color = true;
+        } else if (arg == "--color") {
+            params.color = true;
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -580,14 +580,14 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     SDParams* params = (SDParams*)data;
     int tag_color;
     const char* level_str;
-    FILE *out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
+    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
 
     if (!log || (!params->verbose && level <= SD_LOG_DEBUG)) {
         return;
     }
 
     switch (level) {
-        case SD_LOG_DEBUG: 
+        case SD_LOG_DEBUG:
             tag_color = 37;
             level_str = "DEBUG";
             break;

@@ -90,7 +90,7 @@ struct LoraModel : public GGMLModule {
             k_tensor = k_tensor.substr(0, k_pos);
             replace_all_chars(k_tensor, '.', '_');
             // LOG_DEBUG("k_tensor %s", k_tensor.c_str());
-            if (k_tensor == "model_diffusion_model_output_blocks_2_2_conv") { // fix for SDXL
+            if (k_tensor == "model_diffusion_model_output_blocks_2_2_conv") {  // fix for SDXL
                 k_tensor = "model_diffusion_model_output_blocks_2_1_conv";
             }
             std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
@@ -155,27 +155,27 @@ struct LoraModel : public GGMLModule {
             ggml_build_forward_expand(gf, final_weight);
         }
 
-	size_t total_lora_tensors_count = 0;
-	size_t applied_lora_tensors_count = 0;
+        size_t total_lora_tensors_count   = 0;
+        size_t applied_lora_tensors_count = 0;
 
         for (auto& kv : lora_tensors) {
-	    total_lora_tensors_count++;
+            total_lora_tensors_count++;
             if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
                 LOG_WARN("unused lora tensor %s", kv.first.c_str());
             } else {
-	    	applied_lora_tensors_count++;
-	    }
+                applied_lora_tensors_count++;
+            }
         }
-	/* Don't worry if this message shows up twice in the logs per LoRA, 
-	 * this function is called once to calculate the required buffer size
-	 * and then again to actually generate a graph to be used */
-	if (applied_lora_tensors_count != total_lora_tensors_count) {
-		LOG_WARN("Only (%lu / %lu) LoRA tensors have been applied",
-			applied_lora_tensors_count, total_lora_tensors_count);
-	} else {
-		LOG_DEBUG("(%lu / %lu) LoRA tensors applied successfully",
-			applied_lora_tensors_count, total_lora_tensors_count);
-	}
+        /* Don't worry if this message shows up twice in the logs per LoRA,
+         * this function is called once to calculate the required buffer size
+         * and then again to actually generate a graph to be used */
+        if (applied_lora_tensors_count != total_lora_tensors_count) {
+            LOG_WARN("Only (%lu / %lu) LoRA tensors have been applied",
+                     applied_lora_tensors_count, total_lora_tensors_count);
+        } else {
+            LOG_DEBUG("(%lu / %lu) LoRA tensors applied successfully",
+                      applied_lora_tensors_count, total_lora_tensors_count);
+        }
 
         return gf;
     }
