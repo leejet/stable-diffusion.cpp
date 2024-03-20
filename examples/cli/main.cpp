@@ -103,6 +103,7 @@ struct SDParams {
     bool clip_on_cpu              = false;
     bool vae_on_cpu               = false;
     bool canny_preprocess         = false;
+    bool color                    = false;
     int upscale_repeats           = 1;
 };
 
@@ -469,6 +470,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             exit(0);
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
+        } else if (arg == "--color") {
+            params.color = true;
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -572,18 +575,47 @@ std::string get_image_params(SDParams params, int64_t seed) {
     return parameter_string;
 }
 
+/* Enables Printing the log level tag in color using ANSI escape codes */
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     SDParams* params = (SDParams*)data;
-    if (!params->verbose && level <= SD_LOG_DEBUG) {
+    int tag_color;
+    const char* level_str;
+    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
+
+    if (!log || (!params->verbose && level <= SD_LOG_DEBUG)) {
         return;
     }
-    if (level <= SD_LOG_INFO) {
-        fputs(log, stdout);
-        fflush(stdout);
-    } else {
-        fputs(log, stderr);
-        fflush(stderr);
+
+    switch (level) {
+        case SD_LOG_DEBUG:
+            tag_color = 37;
+            level_str = "DEBUG";
+            break;
+        case SD_LOG_INFO:
+            tag_color = 34;
+            level_str = "INFO";
+            break;
+        case SD_LOG_WARN:
+            tag_color = 35;
+            level_str = "WARN";
+            break;
+        case SD_LOG_ERROR:
+            tag_color = 31;
+            level_str = "ERROR";
+            break;
+        default: /* Potential future-proofing */
+            tag_color = 33;
+            level_str = "?????";
+            break;
     }
+
+    if (params->color == true) {
+        fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
+    } else {
+        fprintf(out_stream, "[%-5s] ", level_str);
+    }
+    fputs(log, out_stream);
+    fflush(out_stream);
 }
 
 int main(int argc, const char* argv[]) {

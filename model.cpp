@@ -204,6 +204,23 @@ std::string convert_vae_decoder_name(const std::string& name) {
     return name;
 }
 
+/* If not a SDXL LoRA the unet" prefix will have already been replaced by this
+ * point and "te2" and "te1" don't seem to appear in non-SDXL only "te_" */
+std::string convert_sdxl_lora_name(std::string tensor_name) {
+    const std::pair<std::string, std::string> sdxl_lora_name_lookup[] = {
+        {"unet", "model_diffusion_model"},
+        {"te2", "cond_stage_model_1_transformer"},
+        {"te1", "cond_stage_model_transformer"},
+    };
+    for (auto& pair_i : sdxl_lora_name_lookup) {
+        if (tensor_name.compare(0, pair_i.first.length(), pair_i.first) == 0) {
+            tensor_name = std::regex_replace(tensor_name, std::regex(pair_i.first), pair_i.second);
+            break;
+        }
+    }
+    return tensor_name;
+}
+
 std::unordered_map<std::string, std::unordered_map<std::string, std::string>> suffix_conversion_underline = {
     {
         "attentions",
@@ -415,8 +432,12 @@ std::string convert_tensor_name(const std::string& name) {
         if (pos != std::string::npos) {
             std::string name_without_network_parts = name.substr(5, pos - 5);
             std::string network_part               = name.substr(pos + 1);
+
             // LOG_DEBUG("%s %s", name_without_network_parts.c_str(), network_part.c_str());
             std::string new_key = convert_diffusers_name_to_compvis(name_without_network_parts, '_');
+            /* For dealing with the new SDXL LoRA tensor naming convention */
+            new_key = convert_sdxl_lora_name(new_key);
+
             if (new_key.empty()) {
                 new_name = name;
             } else {

@@ -366,18 +366,8 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     va_list args;
     va_start(args, format);
 
-    const char* level_str = "DEBUG";
-    if (level == SD_LOG_INFO) {
-        level_str = "INFO ";
-    } else if (level == SD_LOG_WARN) {
-        level_str = "WARN ";
-    } else if (level == SD_LOG_ERROR) {
-        level_str = "ERROR";
-    }
-
     static char log_buffer[LOG_BUFFER_SIZE + 1];
-
-    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "[%s] %s:%-4d - ", level_str, sd_basename(file).c_str(), line);
+    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "%s:%-4d - ", sd_basename(file).c_str(), line);
 
     if (written >= 0 && written < LOG_BUFFER_SIZE) {
         vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
