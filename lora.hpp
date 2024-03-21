@@ -11,6 +11,7 @@ struct LoraModel : public GGMLModule {
     std::string file_path;
     ModelLoader model_loader;
     bool load_failed = false;
+    bool applied = false;
 
     LoraModel(ggml_backend_t backend,
               ggml_type wtype,
