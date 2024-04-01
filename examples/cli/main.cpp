@@ -736,7 +736,7 @@ int main(int argc, const char* argv[]) {
     }
 
     sd_image_t* input_image = NULL;
-    if (params.mode == IMG2VID) {
+    if (params.mode == IMG2IMG) {
         input_image = new sd_image_t{(uint32_t)params.width,
                                        (uint32_t)params.height,
                                        3,
