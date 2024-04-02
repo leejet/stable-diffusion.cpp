@@ -306,14 +306,14 @@ sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --upscale-mode
 
 #### Using PhotoMaker to personalize image generation
 
-You can use [PhotoMaker](https://github.com/TencentARC/PhotoMaker) to personalize generated images with your own ID. 
+You can use [PhotoMaker](https://github.com/TencentARC/PhotoMaker) to personalize generated images with your own ID.
 
 **NOTE**, currently PhotoMaker **ONLY** works with **SDXL** (any SDXL model files will work).
 
 Download PhotoMaker model file (in safetensor format) [here](https://huggingface.co/bssrdf/PhotoMaker). The official release of the model file (in .bin format) does not work with ```stablediffusion.cpp```.
 
-- Specify the PhotoMaker model path using the `--stacked-id-embd-dir PATH` parameter. 
-- Specify the input images path using the `--input-id-images-dir PATH` parameter. 
+- Specify the PhotoMaker model path using the `--stacked-id-embd-dir PATH` parameter.
+- Specify the input images path using the `--input-id-images-dir PATH` parameter.
   - input images **must** have the same width and height for preprocessing (to be improved)
 
 In prompt, make sure you have a class word followed by the trigger word ```"img"``` (hard-coded for now). The class word could be one of ```"man, woman, girl, boy"```. If input ID images contain asian faces, add ```Asian``` before the class
@@ -366,6 +366,12 @@ These projects wrap `stable-diffusion.cpp` for easier use in other languages/fra
 
 * Golang: [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
 * C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
+
+## UIs
+
+These projects use `stable-diffusion.cpp` as a backend for their image generation.
+
+- [Jellybox](https://jellybox.com)
 
 ## Contributors
 
