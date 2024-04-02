@@ -666,7 +666,7 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
         if (c < 3) {
-            fprintf(stderr, "input image must be a 3 channels RGB image, but got %d channels\n", c);
+            fprintf(stderr, "the number of channels for the input image must be >= 3, but got %d channels\n", c);
             free(input_image_buffer);
             return 1;
         }
