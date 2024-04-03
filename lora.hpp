@@ -91,9 +91,9 @@ struct LoraModel : public GGMLModule {
             k_tensor = k_tensor.substr(0, k_pos);
             replace_all_chars(k_tensor, '.', '_');
             // LOG_DEBUG("k_tensor %s", k_tensor.c_str());
-            if (k_tensor == "model_diffusion_model_output_blocks_2_2_conv") {  // fix for SDXL
-                k_tensor = "model_diffusion_model_output_blocks_2_1_conv";
-            }
+            // if (k_tensor == "model_diffusion_model_output_blocks_2_2_conv") {  // fix for SDXL
+            //     k_tensor = "model_diffusion_model_output_blocks_2_1_conv";
+            // }
             std::string lora_up_name   = "lora." + k_tensor + ".lora_up.weight";
             std::string lora_down_name = "lora." + k_tensor + ".lora_down.weight";
             std::string alpha_name     = "lora." + k_tensor + ".alpha";
