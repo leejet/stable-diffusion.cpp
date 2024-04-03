@@ -11,3 +11,14 @@ test/
 output*.png
 models*
 *.log
+
+
+cmake-build-*
+io-test
+sd-control-lora
+sd-control-net
+sd-embeddings
+sd-models
+sd-video
+.idea
+._*

@@ -103,18 +103,18 @@ bool is_unused_tensor(std::string name) {
 }
 
 std::unordered_map<std::string, std::string> open_clip_to_hf_clip_model = {
-    {"model.ln_final.bias", "transformer.text_model.final_layer_norm.bias"},
-    {"model.ln_final.weight", "transformer.text_model.final_layer_norm.weight"},
-    {"model.positional_embedding", "transformer.text_model.embeddings.position_embedding.weight"},
-    {"model.token_embedding.weight", "transformer.text_model.embeddings.token_embedding.weight"},
-    {"model.text_projection", "transformer.text_model.text_projection"},
-    {"model.visual.class_embedding", "transformer.vision_model.embeddings.class_embedding"},
-    {"model.visual.conv1.weight", "transformer.vision_model.embeddings.patch_embedding.weight"},
-    {"model.visual.ln_post.bias", "transformer.vision_model.post_layernorm.bias"},
-    {"model.visual.ln_post.weight", "transformer.vision_model.post_layernorm.weight"},
-    {"model.visual.ln_pre.bias", "transformer.vision_model.pre_layernorm.bias"},
-    {"model.visual.ln_pre.weight", "transformer.vision_model.pre_layernorm.weight"},
-    {"model.visual.positional_embedding", "transformer.vision_model.embeddings.position_embedding.weight"},
+    {"model.ln_final.bias", "transformer.text_layer_norm.bias"},
+    {"model.ln_final.weight", "transformer.text_layer_norm.weight"},
+    {"model.positional_embedding", "transformer.text_embeddings.position_embedding.weight"},
+    {"model.token_embedding.weight", "transformer.text_embeddings.token_embedding.weight"},
+    {"model.text_projection", "transformer.text_projection.weight"},
+    {"model.visual.class_embedding", "transformer.visual_embeddings.class_embedding"},
+    {"model.visual.conv1.weight", "transformer.visual_embeddings.patch_embedding.weight"},
+    {"model.visual.ln_post.bias", "transformer.visual_post_layernorm.bias"},
+    {"model.visual.ln_post.weight", "transformer.visual_post_layernorm.weight"},
+    {"model.visual.ln_pre.bias", "transformer.visual_pre_layernorm.bias"},
+    {"model.visual.ln_pre.weight", "transformer.visual_pre_layernorm.weight"},
+    {"model.visual.positional_embedding", "transformer.visual_embeddings.position_embedding.weight"},
     {"model.visual.proj", "transformer.visual_projection.weight"},
 };
 
@@ -157,25 +157,21 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
     } else if (starts_with(new_name, "cond_stage_model.")) {
         prefix   = "cond_stage_model.";
         new_name = new_name.substr(strlen("cond_stage_model."));
-    } else if (ends_with(new_name, "vision_model.visual_projection.weight")) {
-        prefix   = new_name.substr(0, new_name.size() - strlen("vision_model.visual_projection.weight"));
-        new_name = prefix + "visual_projection.weight";
-        return new_name;
     } else {
         return new_name;
-    }
-
+    }/*else if (ends_with(new_name, "vision_model.visual_projection.weight")) {
+ prefix   = new_name.substr(0, new_name.size() - strlen("vision_model.visual_projection.weight"));
+ new_name = prefix + "visual_projection.weight";
+ return new_name;
+}*/
     if (open_clip_to_hf_clip_model.find(new_name) != open_clip_to_hf_clip_model.end()) {
         new_name = open_clip_to_hf_clip_model[new_name];
     }
 
-    std::string open_clip_resblock_prefix = "model.transformer.resblocks.";
-    std::string hf_clip_resblock_prefix   = "transformer.text_model.encoder.layers.";
-
-    auto replace_suffix = [&]() {
+    auto replace_suffix = [&](const std::string& open_clip_resblock_prefix, const std::string& hf_clip_resblock_prefix) {
         if (new_name.find(open_clip_resblock_prefix) == 0) {
             std::string remain = new_name.substr(open_clip_resblock_prefix.length());
-            std::string idx    = remain.substr(0, remain.find("."));
+            std::string idx    = remain.substr(0, remain.find('.'));
             std::string suffix = remain.substr(idx.length() + 1);
 
             if (suffix == "attn.in_proj_weight" || suffix == "attn.in_proj_bias") {
@@ -186,13 +182,8 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
             }
         }
     };
-
-    replace_suffix();
-
-    open_clip_resblock_prefix = "model.visual.transformer.resblocks.";
-    hf_clip_resblock_prefix   = "transformer.vision_model.encoder.layers.";
-
-    replace_suffix();
+    replace_suffix("model.transformer.resblocks.", "transformer.text_encoder.layers.");
+    replace_suffix("model.visual.transformer.resblocks.", "transformer.visual_encoder.layers.");
 
     return prefix + new_name;
 }
@@ -367,6 +358,21 @@ std::string convert_diffusers_name_to_compvis(std::string key, char seq) {
         return format("first_stage_model%c%s%cnorm_out%s", seq, m[0].c_str(), seq, m[1].c_str());
     }
 
+    if (match(m, std::regex(format("vae%c(.*)%cmid_block%c(attentions|resnets)%c(\\d+)%c(.*)[%c](.\\w+)", seq, seq, seq, seq, seq, seq)), key)) {
+        std::string suffix;
+        std::string block_name;
+        int block_offset = 0;
+        if (m[1] == "attentions") {
+            block_name = "attn";
+            suffix     = get_converted_suffix(m[1], m[4]);
+        } else {
+            block_name = "block";
+            suffix     = m[4];
+        }
+        return format("first_stage_model%c%s%cmid%c%s_%d%c%s%c%s",
+                      seq, m[0].c_str(), seq, seq, block_name.c_str(), std::stoi(m[2]) + 1, seq, m[3].c_str(), seq, suffix.c_str());
+    }
+
     if (match(m, std::regex(format("vae%c(.*)%cmid_block%c(attentions|resnets)%c(\\d+)%c(.+)", seq, seq, seq, seq, seq)), key)) {
         std::string suffix;
         std::string block_name;
@@ -379,6 +385,15 @@ std::string convert_diffusers_name_to_compvis(std::string key, char seq) {
         }
         return format("first_stage_model%c%s%cmid%c%s_%d%c%s",
                       seq, m[0].c_str(), seq, seq, block_name.c_str(), std::stoi(m[2]) + 1, seq, suffix.c_str());
+    }
+
+    if (match(m, std::regex(format("vae%c(.*)%cup_blocks%c(\\d+)%cresnets%c(\\d+)%c(.*)[%c](.\\w+)", seq, seq, seq, seq, seq, seq, seq)), key)) {
+        std::string suffix = m[4];
+        if (suffix == "conv_shortcut") {
+            suffix = "nin_shortcut";
+        }
+        return format("first_stage_model%c%s%cup%c%d%cblock%c%s%c%s%c%s",
+                      seq, m[0].c_str(), seq, seq, 3 - std::stoi(m[1]), seq, seq, m[2].c_str(), seq, m[3].c_str(), seq, suffix.c_str());
     }
 
     if (match(m, std::regex(format("vae%c(.*)%cup_blocks%c(\\d+)%cresnets%c(\\d+)%c(.+)", seq, seq, seq, seq, seq, seq)), key)) {

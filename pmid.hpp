@@ -139,9 +139,9 @@ struct PhotoMakerIDEncoderBlock : public CLIPVisionModelProjection {
         auto visual_projection_2 = std::dynamic_pointer_cast<Linear>(blocks["visual_projection_2"]);
         auto fuse_module         = std::dynamic_pointer_cast<FuseModule>(blocks["fuse_module"]);
 
-        struct ggml_tensor* shared_id_embeds = vision_model->forward(ctx, id_pixel_values);          // [N, hidden_size]
-        struct ggml_tensor* id_embeds        = visual_projection->forward(ctx, shared_id_embeds);    // [N, proj_dim(768)]
-        struct ggml_tensor* id_embeds_2      = visual_projection_2->forward(ctx, shared_id_embeds);  // [N, 1280]
+        struct ggml_tensor* shared_id_embeds = vision_model->forward(ctx, nullptr, nullptr, id_pixel_values);  // [N, hidden_size]
+        struct ggml_tensor* id_embeds        = visual_projection->forward(ctx, shared_id_embeds);              // [N, proj_dim(768)]
+        struct ggml_tensor* id_embeds_2      = visual_projection_2->forward(ctx, shared_id_embeds);            // [N, 1280]
 
         id_embeds   = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 2, 0, 1, 3));
         id_embeds_2 = ggml_cont(ctx, ggml_permute(ctx, id_embeds_2, 2, 0, 1, 3));

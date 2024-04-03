@@ -22,6 +22,7 @@ enum SDVersion {
     VERSION_2_x,
     VERSION_XL,
     VERSION_SVD,
+    VERSION_SVD1_1,
     VERSION_COUNT,
 };
 

@@ -15,15 +15,16 @@ protected:
 
 public:
     ResnetBlock(int64_t in_channels,
-                int64_t out_channels)
+                int64_t out_channels,
+                std::pair<int, int> kernel_size)
         : in_channels(in_channels),
           out_channels(out_channels) {
         // temb_channels is always 0
         blocks["norm1"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, kernel_size, {1, 1}, {1, 1}));
 
         blocks["norm2"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(out_channels));
-        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, kernel_size, {1, 1}, {1, 1}));
 
         if (out_channels != in_channels) {
             blocks["nin_shortcut"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, {1, 1}));
@@ -118,8 +119,8 @@ class AE3DConv : public Conv2d {
 public:
     AE3DConv(int64_t in_channels,
              int64_t out_channels,
+             int64_t video_kernel_size,
              std::pair<int, int> kernel_size,
-             int64_t video_kernel_size    = 3,
              std::pair<int, int> stride   = {1, 1},
              std::pair<int, int> padding  = {0, 0},
              std::pair<int, int> dilation = {1, 1},
@@ -176,9 +177,15 @@ public:
     VideoResnetBlock(int64_t in_channels,
                      int64_t out_channels,
                      int video_kernel_size = 3)
-        : ResnetBlock(in_channels, out_channels) {
+        : ResnetBlock(in_channels, out_channels, {3, 3}) {
         // merge_strategy is always learned
+        if (in_channels!=out_channels){
+            LOG_DEBUG("in_channels!=out_channels");
+        }
+        blocks["spatial_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels, {3, 3}));
+        blocks["temporal_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(out_channels, out_channels, {3, 1}));
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));
+        blocks["time_mixer"] = std::shared_ptr<GGMLBlock>(new AlphaBlender());
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -187,7 +194,13 @@ public:
         // t_emb is always None
         // skip_video is always False
         // timesteps is always None
+        auto spatial_res_block = std::dynamic_pointer_cast<ResnetBlock>(blocks["spatial_res_block"]);
+        auto temporal_res_block = std::dynamic_pointer_cast<ResnetBlock>(blocks["temporal_res_block"]);
         auto time_stack = std::dynamic_pointer_cast<ResBlock>(blocks["time_stack"]);
+        auto time_mixer = std::dynamic_pointer_cast<AlphaBlender>(blocks["time_mixer"]);
+
+        x = spatial_res_block->forward(ctx, x);
+        x = temporal_res_block->forward(ctx, x);
 
         x = ResnetBlock::forward(ctx, x);  // [N, out_channels, h, w]
         // return x;
@@ -204,10 +217,14 @@ public:
 
         x = time_stack->forward(ctx, x);  // b t c (h w)
 
+        x = time_mixer->forward(ctx, x_mix, x);  // b t c (h w)
+
         float alpha = get_alpha();
-        x           = ggml_add(ctx,
-                               ggml_scale(ctx, x, alpha),
-                               ggml_scale(ctx, x_mix, 1.0f - alpha));
+        if (alpha<1.0f) {
+            x = ggml_add(ctx,
+                         ggml_scale(ctx, x, alpha),
+                         ggml_scale(ctx, x_mix, 1.0f - alpha));
+        }
 
         x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
         x = ggml_reshape_4d(ctx, x, W, H, C, T * B);           // b t c (h w) -> (b t) c h w
@@ -253,7 +270,7 @@ public:
             int block_out = ch * ch_mult[i];
             for (int j = 0; j < num_res_blocks; j++) {
                 std::string name = "down." + std::to_string(i) + ".block." + std::to_string(j);
-                blocks[name]     = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_out));
+                blocks[name]     = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_out, {3, 3}));
                 block_in         = block_out;
             }
             if (i != num_resolutions - 1) {
@@ -262,9 +279,9 @@ public:
             }
         }
 
-        blocks["mid.block_1"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in));
+        blocks["mid.block_1"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in, {3, 3}));
         blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in));
-        blocks["mid.block_2"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in));
+        blocks["mid.block_2"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in, {3, 3}));
 
         blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(block_in));
         blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(block_in, double_z ? z_channels * 2 : z_channels, {3, 3}, {1, 1}, {1, 1}));
@@ -323,24 +340,24 @@ protected:
     bool video_decoder       = false;
     int video_kernel_size    = 3;
 
-    virtual std::shared_ptr<GGMLBlock> get_conv_out(int64_t in_channels,
-                                                    int64_t out_channels,
-                                                    std::pair<int, int> kernel_size,
-                                                    std::pair<int, int> stride  = {1, 1},
-                                                    std::pair<int, int> padding = {0, 0}) {
+    std::shared_ptr<GGMLBlock> get_conv_out(int64_t in_channels,
+                                            int64_t out_channels,
+                                            std::pair<int, int> kernel_size,
+                                            std::pair<int, int> stride  = {1, 1},
+                                            std::pair<int, int> padding = {0, 0}) const {
         if (video_decoder) {
-            return std::shared_ptr<GGMLBlock>(new AE3DConv(in_channels, out_channels, kernel_size, video_kernel_size, stride, padding));
+            return std::shared_ptr<GGMLBlock>(new AE3DConv(in_channels, out_channels, video_kernel_size, kernel_size, stride, padding));
         } else {
             return std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, kernel_size, stride, padding));
         }
     }
 
-    virtual std::shared_ptr<GGMLBlock> get_resnet_block(int64_t in_channels,
-                                                        int64_t out_channels) {
+    std::shared_ptr<GGMLBlock> get_resnet_block(int64_t in_channels,
+                                                int64_t out_channels) const {
         if (video_decoder) {
             return std::shared_ptr<GGMLBlock>(new VideoResnetBlock(in_channels, out_channels, video_kernel_size));
         } else {
-            return std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels));
+            return std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels, {3, 3}));
         }
     }
 
@@ -368,7 +385,11 @@ public:
         blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in));
         blocks["mid.block_2"] = get_resnet_block(block_in, block_in);
 
-        for (int i = num_resolutions - 1; i >= 0; i--) {
+        if (video_decoder) {
+            blocks["time_conv_out"] = std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(out_ch, out_ch, video_kernel_size, 1, video_kernel_size / 2));
+        }
+
+        for (int i = int(num_resolutions - 1); i >= 0; i--) {
             int mult      = ch_mult[i];
             int block_out = ch * mult;
             for (int j = 0; j < num_res_blocks + 1; j++) {
@@ -399,6 +420,7 @@ public:
         auto mid_block_2 = std::dynamic_pointer_cast<ResnetBlock>(blocks["mid.block_2"]);
         auto norm_out    = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm_out"]);
         auto conv_out    = std::dynamic_pointer_cast<Conv2d>(blocks["conv_out"]);
+        auto time_conv_out= video_decoder? std::dynamic_pointer_cast<Conv3dnx1x1>(blocks["time_conv_out"]) : nullptr;
 
         // conv_in
         auto h = conv_in->forward(ctx, z);  // [N, block_in, h, w]
@@ -410,9 +432,13 @@ public:
         h = mid_attn_1->forward(ctx, h);
         h = mid_block_2->forward(ctx, h);  // [N, block_in, h, w]
 
+        if (time_conv_out) {
+            h = time_conv_out->forward(ctx, h);
+        }
+
         // upsampling
         size_t num_resolutions = ch_mult.size();
-        for (int i = num_resolutions - 1; i >= 0; i--) {
+        for (int i = int(num_resolutions - 1); i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
                 std::string name = "up." + std::to_string(i) + ".block." + std::to_string(j);
                 auto up_block    = std::dynamic_pointer_cast<ResnetBlock>(blocks[name]);
@@ -473,7 +499,7 @@ public:
                                                                        dd_config.in_channels,
                                                                        dd_config.z_channels,
                                                                        dd_config.double_z));
-            if (!use_video_decoder) {
+            {
                 int factor = dd_config.double_z ? 2 : 1;
 
                 blocks["quant_conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(embed_dim * factor,
@@ -502,7 +528,7 @@ public:
         auto encoder = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
 
         auto h = encoder->forward(ctx, x);  // [N, 2*z_channels, h/8, w/8]
-        if (!use_video_decoder) {
+        {
             auto quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["quant_conv"]);
             h               = quant_conv->forward(ctx, h);  // [N, 2*embed_dim, h/8, w/8]
         }

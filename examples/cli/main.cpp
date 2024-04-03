@@ -142,6 +142,9 @@ void print_params(SDParams params) {
     printf("    strength(img2img): %.2f\n", params.strength);
     printf("    rng:               %s\n", rng_type_to_str[params.rng_type]);
     printf("    seed:              %ld\n", params.seed);
+    printf("    video-total-frames: %d\n", params.video_frames);
+    printf("    video-fps:          %d\n", params.fps);
+    printf("    motion-bucket-id:   %d\n", params.motion_bucket_id);
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
@@ -192,6 +195,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
+    printf("  --video-total-frames               number of frames to generate, required by img2vid\n");
+    printf("  --video-fps                        fps for output video, required by img2vid\n");
+    printf("  --motion-bucket-id                 SVD Motion bucket id, required by img2vid\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -405,6 +411,24 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.vae_on_cpu = true;  // will slow down latent decoding but necessary for low MEM GPUs
         } else if (arg == "--canny") {
             params.canny_preprocess = true;
+        } else if (arg == "--video-total-frames") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.video_frames = std::stoi(argv[i]);
+        } else if (arg == "--video-fps") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.fps = std::stoi(argv[i]);
+        } else if (arg == "--motion-bucket-id") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.motion_bucket_id = std::stoi(argv[i]);
         } else if (arg == "-b" || arg == "--batch-count") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -647,10 +671,10 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    if (params.mode == IMG2VID) {
-        fprintf(stderr, "SVD support is broken, do not use it!!!\n");
-        return 1;
-    }
+    //if (params.mode == IMG2VID) {
+    //    fprintf(stderr, "SVD support is broken, do not use it!!!\n");
+    //    return 1;
+    //}
 
     bool vae_decode_only        = true;
     uint8_t* input_image_buffer = NULL;
