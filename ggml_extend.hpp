@@ -484,6 +484,7 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
     if (tile_count < num_tiles) {
         pretty_progress(num_tiles, num_tiles, last_time);
     }
+    ggml_free(tiles_ctx);
 }
 
 __STATIC_INLINE__ struct ggml_tensor* ggml_group_norm_32(struct ggml_context* ctx,
