@@ -457,11 +457,11 @@ std::string convert_tensor_name(const std::string& name) {
         }
         pos = new_name.rfind("lora");
         if (pos != std::string::npos) {
-            std::string name_without_network_parts = new_name.substr(0, pos-1);
+            std::string name_without_network_parts = new_name.substr(0, pos - 1);
             std::string network_part               = new_name.substr(pos);
             // LOG_DEBUG("%s %s", name_without_network_parts.c_str(), network_part.c_str());
             std::string new_key = convert_diffusers_name_to_compvis(name_without_network_parts, '.');
-            new_key = convert_sdxl_lora_name(new_key);
+            new_key             = convert_sdxl_lora_name(new_key);
             replace_all_chars(new_key, '.', '_');
             size_t npos = network_part.rfind("_linear_layer");
             if (npos != std::string::npos) {
