@@ -211,6 +211,8 @@ std::string convert_sdxl_lora_name(std::string tensor_name) {
         {"unet", "model_diffusion_model"},
         {"te2", "cond_stage_model_1_transformer"},
         {"te1", "cond_stage_model_transformer"},
+        {"text_encoder_2", "cond_stage_model_1_transformer"},
+        {"text_encoder", "cond_stage_model_transformer"},
     };
     for (auto& pair_i : sdxl_lora_name_lookup) {
         if (tensor_name.compare(0, pair_i.first.length(), pair_i.first) == 0) {
@@ -446,18 +448,25 @@ std::string convert_tensor_name(const std::string& name) {
         } else {
             new_name = name;
         }
-    } else if (contains(name, "lora_up") || contains(name, "lora_down") || contains(name, "lora.up") || contains(name, "lora.down")) {
+    } else if (contains(name, "lora_up") || contains(name, "lora_down") ||
+               contains(name, "lora.up") || contains(name, "lora.down") ||
+               contains(name, "lora_linear")) {
         size_t pos = new_name.find(".processor");
         if (pos != std::string::npos) {
             new_name.replace(pos, strlen(".processor"), "");
         }
-        pos = new_name.find_last_of('_');
+        pos = new_name.rfind("lora");
         if (pos != std::string::npos) {
-            std::string name_without_network_parts = new_name.substr(0, pos);
-            std::string network_part               = new_name.substr(pos + 1);
+            std::string name_without_network_parts = new_name.substr(0, pos - 1);
+            std::string network_part               = new_name.substr(pos);
             // LOG_DEBUG("%s %s", name_without_network_parts.c_str(), network_part.c_str());
             std::string new_key = convert_diffusers_name_to_compvis(name_without_network_parts, '.');
+            new_key             = convert_sdxl_lora_name(new_key);
             replace_all_chars(new_key, '.', '_');
+            size_t npos = network_part.rfind("_linear_layer");
+            if (npos != std::string::npos) {
+                network_part.replace(npos, strlen("_linear_layer"), "");
+            }
             if (starts_with(network_part, "lora.")) {
                 network_part = "lora_" + network_part.substr(5);
             }

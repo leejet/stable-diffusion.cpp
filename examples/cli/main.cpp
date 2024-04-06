@@ -686,27 +686,26 @@ int main(int argc, const char* argv[]) {
         // Resize input image ...
         if (params.height % 64 != 0 || params.width % 64 != 0) {
             int resized_height = params.height + (64 - params.height % 64);
-            int resized_width = params.width + (64 - params.width % 64);
+            int resized_width  = params.width + (64 - params.width % 64);
 
-            uint8_t *resized_image_buffer = (uint8_t *)malloc(resized_height * resized_width * 3);
+            uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * 3);
             if (resized_image_buffer == NULL) {
                 fprintf(stderr, "error: allocate memory for resize input image\n");
                 free(input_image_buffer);
                 return 1;
             }
-            stbir_resize(input_image_buffer, params.width, params.height, 0, 
-                resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8, 
-                3 /*RGB channel*/, STBIR_ALPHA_CHANNEL_NONE, 0,
-                STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
-                STBIR_FILTER_BOX, STBIR_FILTER_BOX,
-                STBIR_COLORSPACE_SRGB, nullptr
-            );
+            stbir_resize(input_image_buffer, params.width, params.height, 0,
+                         resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
+                         3 /*RGB channel*/, STBIR_ALPHA_CHANNEL_NONE, 0,
+                         STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
+                         STBIR_FILTER_BOX, STBIR_FILTER_BOX,
+                         STBIR_COLORSPACE_SRGB, nullptr);
 
             // Save resized result
             free(input_image_buffer);
             input_image_buffer = resized_image_buffer;
-            params.height = resized_height;
-            params.width = resized_width;
+            params.height      = resized_height;
+            params.width       = resized_width;
         }
     }
 
