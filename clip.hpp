@@ -873,10 +873,10 @@ public:
                                 size_t max_token_idx = 0,
                                 bool return_pooled   = true) {
         // pixel_values: [N, num_channels, image_size, image_size]
-        auto embeddings       = std::dynamic_pointer_cast<CLIPEmbeddings>(blocks["text_embeddings"]);
-        auto text_projection  = std::dynamic_pointer_cast<CLIPProjection>(blocks["text_projection"]);
-        //auto text_encoder     = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
-        auto final_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["text_layer_norm"]);
+        auto embeddings      = std::dynamic_pointer_cast<CLIPEmbeddings>(blocks["text_embeddings"]);
+        auto text_projection = std::dynamic_pointer_cast<CLIPProjection>(blocks["text_projection"]);
+        // auto text_encoder     = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
+        auto text_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["text_layer_norm"]);
 
         auto visual_embeddings = std::dynamic_pointer_cast<CLIPVisionEmbeddings>(blocks["visual_embeddings"]);
         auto pre_layernorm     = std::dynamic_pointer_cast<LayerNorm>(blocks["visual_pre_layernorm"]);
@@ -889,8 +889,8 @@ public:
             txt_x = embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
             //txt_x = text_encoder->forward(ctx, txt_x, return_pooled ? -1 : clip_skip, true);
             if (return_pooled) {
-                txt_x = final_layer_norm->forward(ctx, txt_x);
-                txt_x = ggml_view_1d(ctx, txt_x, hidden_size, txt_x->nb[1] * max_token_idx);
+                txt_x = text_layer_norm->forward(ctx, txt_x);
+                txt_x = ggml_view_1d(ctx, txt_x, projection_dim, txt_x->nb[1] * max_token_idx);
                 text_projection->forward(ctx, txt_x);
             }
         }
@@ -907,7 +907,7 @@ public:
             }
         }
 
-        auto x = ggml_mul_mat(ctx, txt_x, vis_x);
+        auto x = ggml_out_prod(ctx, txt_x, vis_x);
 
         return x;  // [N, n_token, hidden_size]
     }
@@ -1098,11 +1098,22 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         size_t n_token = input_ids->ne[0];
         struct ggml_tensor* hidden_states = NULL;
 
-        if (version == VERSION_SVD) {
-            if (input_ids != NULL && input_ids->ne[0] > vision_model->n_token) {
-                GGML_ASSERT(input_ids->ne[0] % vision_model->n_token == 0);
-                input_ids = ggml_reshape_2d(ctx, input_ids, vision_model->n_token, input_ids->ne[0] / vision_model->n_token);
+        if (input_ids != NULL && input_ids->ne[0] > vision_model->n_token) {
+            GGML_ASSERT(input_ids->ne[0] % vision_model->n_token == 0);
+            input_ids = ggml_reshape_2d(ctx, input_ids, vision_model->n_token, input_ids->ne[0] / vision_model->n_token);
+        }
+
+        if (version == VERSION_XL) {
+            if (input_ids2 != NULL && input_ids2->ne[0] > text_model2->n_token) {
+                GGML_ASSERT(input_ids2->ne[0] % text_model2->n_token == 0);
+                input_ids2 = ggml_reshape_2d(ctx, input_ids2, text_model2->n_token, input_ids2->ne[0] / text_model2->n_token);
             }
+
+            if (return_pooled) {
+                return text_model2->forward(ctx, input_ids2, NULL, max_token_idx, return_pooled);
+            }
+
+            hidden_states = text_model->forward(ctx, input_ids, embeddings);  // [N, n_token, hidden_size]
 
             hidden_states = ggml_reshape_4d(ctx,
                                             hidden_states,
@@ -1112,7 +1123,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
                                             hidden_states->ne[3]);
             hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 2, 0, 1, 3));
 
-            auto hidden_states2 = vision_model->forward(ctx, input_ids, embeddings, pixel_values, return_pooled);  // [N, n_token, hidden_size2]
+            auto hidden_states2 = text_model2->forward(ctx, input_ids2, NULL);  // [N, n_token, hidden_size2]
             // LOG_DEBUG("hidden_states: %d %d %d %d", hidden_states->ne[0], hidden_states->ne[1], hidden_states->ne[2], hidden_states->ne[3]);
             hidden_states2 = ggml_reshape_4d(ctx,
                                              hidden_states2,
@@ -1120,54 +1131,15 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
                                              hidden_states2->ne[1],
                                              hidden_states2->ne[2],
                                              hidden_states2->ne[3]);
-
             hidden_states2 = ggml_cont(ctx, ggml_permute(ctx, hidden_states2, 2, 0, 1, 3));
 
             hidden_states = ggml_concat(ctx, hidden_states, hidden_states2);  // [N, n_token, hidden_size + hidden_size2]
 
             hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 1, 2, 0, 3));
+        } else if (version == VERSION_SVD) {
+            hidden_states = vision_model->forward(ctx, input_ids, embeddings, pixel_values, return_pooled);  // [N, n_token, hidden_size]
         } else {
-            if (input_ids != NULL && input_ids->ne[0] > text_model->n_token) {
-                GGML_ASSERT(input_ids->ne[0] % text_model->n_token == 0);
-                input_ids = ggml_reshape_2d(ctx, input_ids, text_model->n_token, input_ids->ne[0] / text_model->n_token);
-            }
-
-            if (version == VERSION_XL) {
-                if (input_ids2 != NULL && input_ids2->ne[0] > text_model2->n_token) {
-                    GGML_ASSERT(input_ids2->ne[0] % text_model2->n_token == 0);
-                    input_ids2 = ggml_reshape_2d(ctx, input_ids2, text_model2->n_token, input_ids2->ne[0] / text_model2->n_token);
-                }
-
-                if (return_pooled) {
-                    return text_model2->forward(ctx, input_ids2, NULL, max_token_idx, return_pooled);
-                }
-
-                hidden_states = text_model->forward(ctx, input_ids, embeddings);  // [N, n_token, hidden_size]
-
-                hidden_states = ggml_reshape_4d(ctx,
-                                                hidden_states,
-                                                hidden_states->ne[0],
-                                                hidden_states->ne[1],
-                                                hidden_states->ne[2],
-                                                hidden_states->ne[3]);
-                hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 2, 0, 1, 3));
-
-                auto hidden_states2 = text_model2->forward(ctx, input_ids2, NULL);  // [N, n_token, hidden_size2]
-                // LOG_DEBUG("hidden_states: %d %d %d %d", hidden_states->ne[0], hidden_states->ne[1], hidden_states->ne[2], hidden_states->ne[3]);
-                hidden_states2 = ggml_reshape_4d(ctx,
-                                                 hidden_states2,
-                                                 hidden_states2->ne[0],
-                                                 hidden_states2->ne[1],
-                                                 hidden_states2->ne[2],
-                                                 hidden_states2->ne[3]);
-                hidden_states2 = ggml_cont(ctx, ggml_permute(ctx, hidden_states2, 2, 0, 1, 3));
-
-                hidden_states = ggml_concat(ctx, hidden_states, hidden_states2);  // [N, n_token, hidden_size + hidden_size2]
-
-                hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 1, 2, 0, 3));
-            } else {
-                hidden_states = text_model->forward(ctx, input_ids, embeddings);  // [N, n_token, hidden_size]
-            }
+            hidden_states = text_model->forward(ctx, input_ids, embeddings);  // [N, n_token, hidden_size]
         }
 
         // LOG_DEBUG("hidden_states: %d %d %d %d", hidden_states->ne[0], hidden_states->ne[1], hidden_states->ne[2], hidden_states->ne[3]);

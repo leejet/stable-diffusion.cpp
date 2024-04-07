@@ -179,9 +179,6 @@ public:
                      int video_kernel_size = 3)
         : ResnetBlock(in_channels, out_channels, {3, 3}) {
         // merge_strategy is always learned
-        if (in_channels!=out_channels){
-            LOG_DEBUG("in_channels!=out_channels");
-        }
         blocks["spatial_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels, {3, 3}));
         blocks["temporal_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(out_channels, out_channels, {3, 1}));
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));

@@ -654,13 +654,14 @@ public:
                                                                 int width,
                                                                 int height,
                                                                 int fps                    = 6,
+                                                                int total_frames           = 14,
                                                                 int motion_bucket_id       = 127,
                                                                 float augmentation_level   = 0.f,
                                                                 bool force_zero_embeddings = false) {
         auto tokens_and_weights     = cond_stage_model->tokenize(text, true);
         std::vector<int>& tokens    = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
-        return get_svd_condition(work_ctx, tokens, weights, init_image, clip_skip, width, height, fps, motion_bucket_id, augmentation_level, force_zero_embeddings);
+        return get_svd_condition(work_ctx, tokens, weights, init_image, clip_skip, width, height, fps, total_frames, motion_bucket_id, augmentation_level, force_zero_embeddings);
     }
 
     std::pair<ggml_tensor*, ggml_tensor*> get_learned_condition_common(ggml_context* work_ctx,
@@ -794,6 +795,7 @@ public:
                                                                            int width,
                                                                            int height,
                                                                            int fps                    = 6,
+                                                                           int total_frames           = 14,
                                                                            int motion_bucket_id       = 127,
                                                                            float augmentation_level   = 0.f,
                                                                            bool force_zero_embeddings = false) {
@@ -872,10 +874,10 @@ public:
         struct ggml_tensor* c_concat = NULL;
         {
             if (force_zero_embeddings) {
-                c_concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 4, 1);
+                c_concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 4, total_frames);
                 ggml_set_f32(c_concat, 0.f);
             } else {
-                ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+                ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, total_frames);
 
                 if (width != init_image.width || height != init_image.height) {
                     sd_image_f32_t image         = sd_image_t_to_sd_image_f32_t(init_image);
@@ -895,12 +897,12 @@ public:
                     ggml_tensor_scale(noise, augmentation_level);
                     ggml_tensor_add(init_img, noise);
                 }
-                print_ggml_tensor(init_img);
+                //print_ggml_tensor(init_img);
                 ggml_tensor* moments = encode_first_stage(work_ctx, init_img);
-                print_ggml_tensor(moments);
+                //print_ggml_tensor(moments);
                 c_concat = get_first_stage_encoding(work_ctx, moments);
             }
-            print_ggml_tensor(c_concat);
+            //print_ggml_tensor(c_concat);
         }
 
         // y
@@ -911,7 +913,7 @@ public:
             int fps_id                   = fps - 1;
             std::vector<float> timesteps = {(float)fps_id, (float)motion_bucket_id, augmentation_level};
             set_timestep_embedding(timesteps, y, out_dim);
-            print_ggml_tensor(y);
+            //print_ggml_tensor(y);
         }
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing svd condition graph completed, taking %" PRId64 " ms", t1 - t0);
@@ -1689,7 +1691,7 @@ void config_sd_ctx(sd_ctx_t* sd_ctx,
         (width!=0 && height!=0)){
         LOG_INFO("update ggml_context with img_size %u x %u ", width, height);
         struct ggml_init_params gglm_ctx_params;
-        gglm_ctx_params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10 MB
+        gglm_ctx_params.mem_size = static_cast<size_t>(10 * 1024) * 1024 * 2;  // 20 MB
         if (sd_ctx->sd->stacked_id) {
             gglm_ctx_params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
         }
@@ -1915,6 +1917,7 @@ void config_sd_ctx(sd_ctx_t* sd_ctx,
             sd_ctx->engine_meta.engine_env_w,
             sd_ctx->engine_meta.engine_env_h,
             video_config.fps,
+            video_config.total_frames,
             video_config.motion_bucket_id,
             video_config.augmentation_level
         );
@@ -1931,6 +1934,7 @@ void config_sd_ctx(sd_ctx_t* sd_ctx,
             sd_ctx->engine_meta.engine_env_w,
             sd_ctx->engine_meta.engine_env_h,
             video_config.fps,
+            video_config.total_frames,
             video_config.motion_bucket_id,
             video_config.augmentation_level
         );
