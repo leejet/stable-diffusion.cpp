@@ -109,13 +109,6 @@ typedef struct {
     uint8_t* data;
 } sd_image_t;
 
-typedef struct {
-    int fps;
-    int total_frames;
-    int motion_bucket_id;
-    float augmentation_level;
-} sd_video_t;
-
 typedef struct sd_ctx_t sd_ctx_t;
 
 SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
@@ -136,34 +129,58 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             bool keep_control_net_cpu,
                             bool keep_vae_on_cpu);
 
-SD_API void config_sd_ctx(sd_ctx_t* sd_ctx,
-                          const char* positive_prompt_c_str,
-                          const char* negative_prompt_c_str,
-                          const char* input_id_images_path_c_str,
-                          const sd_image_t* initvid_image,
-                          const sd_image_t* control_image,
-                          float control_strength,
-                          int clip_skip,
-                          float cfg_minor,
-                          float cfg_scale,
-                          int width,
-                          int height,
-                          sample_method_t sample_method,
-                          int sample_steps,
-                          float strength,
-                          int64_t seed,
-                          float pm_style_ratio,
-                          bool normalize_input,
-                          int batch_count,
-                          sd_video_t video_config);
-
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
-SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx);
+SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
+                           const char* prompt,
+                           const char* negative_prompt,
+                           int clip_skip,
+                           float cfg_scale,
+                           int width,
+                           int height,
+                           enum sample_method_t sample_method,
+                           int sample_steps,
+                           float sample_strength,
+                           int64_t seed,
+                           int batch_count,
+                           const sd_image_t* control_cond,
+                           float control_strength,
+                           float style_strength,
+                           bool normalize_input,
+                           const char* input_id_images_path);
 
-SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx, sd_image_t* init_image);
+SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
+                           sd_image_t* init_image,
+                           const char* prompt,
+                           const char* negative_prompt,
+                           int clip_skip,
+                           float cfg_scale,
+                           int width,
+                           int height,
+                           enum sample_method_t sample_method,
+                           int sample_steps,
+                           float sample_strength,
+                           int64_t seed,
+                           int batch_count,
+                           const sd_image_t* control_cond,
+                           float control_strength);
 
-SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx);
+SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
+                           sd_image_t* init_image,
+                           const char* prompt,
+                           const char* negative_prompt,
+                           int width,
+                           int height,
+                           float min_cfg,
+                           float cfg_scale,
+                           enum sample_method_t sample_method,
+                           int sample_steps,
+                           float sample_strength,
+                           int64_t seed,
+                           int video_frames,
+                           int motion_bucket_id,
+                           int fps,
+                           float augmentation_level);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

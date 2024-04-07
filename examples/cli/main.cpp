@@ -796,39 +796,58 @@ int main(int argc, const char* argv[]) {
                                        input_image_buffer};
     }
 
-    config_sd_ctx(sd_ctx,
-                  params.prompt.c_str(),
-                  params.negative_prompt.c_str(),
-                  params.input_id_images_path.c_str(),
-                  initvid_image,
-                  control_image,
-                  params.control_strength,
-                  params.clip_skip,
-                  params.min_cfg,
-                  params.cfg_scale,
-                  params.width,
-                  params.height,
-                  params.sample_method,
-                  params.sample_steps,
-                  params.strength,
-                  params.seed,
-                  params.style_ratio,
-                  params.normalize_input,
-                  params.batch_count,
-                  {
-                      params.fps,
-                      params.video_frames,
-                      params.motion_bucket_id,
-                      params.augmentation_level
-                  });
-
     sd_image_t* results = nullptr;
     if (params.mode == TXT2IMG) {
-        results = txt2img(sd_ctx);
+        results = txt2img(sd_ctx,
+                          params.prompt.c_str(),
+                          params.negative_prompt.c_str(),
+                          params.clip_skip,
+                          params.cfg_scale,
+                          params.width,
+                          params.height,
+                          params.sample_method,
+                          params.sample_steps,
+                          params.strength,
+                          params.seed,
+                          params.batch_count,
+                          control_image,
+                          params.control_strength,
+                          params.style_ratio,
+                          params.normalize_input,
+                          params.input_id_images_path.c_str());
     } else if (params.mode == IMG2VID) {
-        results = img2vid(sd_ctx);
+        results = img2vid(sd_ctx,
+                          input_image,
+                          params.prompt.c_str(),
+                          params.negative_prompt.c_str(),
+                          params.width,
+                          params.height,
+                          params.min_cfg,
+                          params.cfg_scale,
+                          params.sample_method,
+                          params.sample_steps,
+                          params.strength,
+                          params.seed,
+                          params.video_frames,
+                          params.motion_bucket_id,
+                          params.fps,
+                          params.augmentation_level);
     } else if (params.mode == IMG2IMG) {
-        results = img2img(sd_ctx, input_image);
+        results = img2img(sd_ctx,
+                          input_image,
+                          params.prompt.c_str(),
+                          params.negative_prompt.c_str(),
+                          params.clip_skip,
+                          params.cfg_scale,
+                          params.width,
+                          params.height,
+                          params.sample_method,
+                          params.sample_steps,
+                          params.strength,
+                          params.seed,
+                          params.batch_count,
+                          control_image,
+                          params.control_strength);
     }
 
     if (results == NULL) {

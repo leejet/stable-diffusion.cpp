@@ -64,6 +64,54 @@ void calculate_alphas_cumprod(float* alphas_cumprod,
 /*=============================================== StableDiffusionGGML ================================================*/
 
 class StableDiffusionGGML {
+protected:
+    struct sd_video_t{
+        int fps;
+        int total_frames;
+        int motion_bucket_id;
+        float augmentation_level;
+    };
+
+    struct ggml_meta_t {
+        sample_method_t engine_sample_method;
+        int engine_sample_steps = -1;
+        int engine_merge_start = -1;
+        int engine_env_w = -1;
+        int engine_env_h = -1;
+        int engine_clip_skip = -1;
+        float engine_cfg_minor = -1.0f;
+        float engine_cfg_scale = -1.0f;
+        float engine_control_strength = -1.0f;
+        int64_t engine_seed = -1;
+        std::string env_positive_prompt;
+        std::string env_negative_prompt;
+        std::string env_input_id_images_path;
+        std::vector<float> env_sigma_scheduler;
+        int env_batch_count = -1;
+    };
+
+    struct ggml_keep_t {
+        ggml_tensor* p_c  = nullptr;    // positive conact
+        ggml_tensor* p_ca = nullptr;    // positive crossattn
+        ggml_tensor* p_cv = nullptr;    // positive vector
+        ggml_tensor* n_c  = nullptr;    // negative conact
+        ggml_tensor* n_ca = nullptr;    // negative crossattn
+        ggml_tensor* n_cv = nullptr;    // negative vector
+        ggml_tensor* image_latent          = nullptr;
+        ggml_tensor* prompts_embeds_concat = nullptr;
+        ggml_tensor* prompts_embeds_vector = nullptr;
+        ggml_tensor* image_hint = nullptr;
+        sd_video_t tag_video_config = {};
+    };
+
+    struct ggml_ctx_t {
+        ggml_context* engine_ctx = NULL;
+        ggml_meta_t engine_meta;
+        ggml_keep_t engine_keep;
+    };
+
+    ggml_ctx_t* gglm_ctx_local;
+
 public:
     ggml_backend_t backend             = NULL;  // general backend
     ggml_backend_t clip_backend        = NULL;
@@ -129,6 +177,10 @@ public:
         }
         if (vae_backend != backend) {
             ggml_backend_free(vae_backend);
+        }
+        if (gglm_ctx_local->engine_ctx != NULL) {
+            ggml_free(gglm_ctx_local->engine_ctx);
+            gglm_ctx_local->engine_ctx = NULL;
         }
         ggml_backend_free(backend);
     }
@@ -553,14 +605,16 @@ public:
         return cond_stage_model->decode(tokens);
     }
 
-    std::tuple<ggml_tensor*, ggml_tensor*, std::vector<bool>>
-    get_learned_condition_with_trigger(ggml_context* work_ctx,
-                                       const std::string& text,
-                                       int clip_skip,
-                                       int width,
-                                       int height,
-                                       int num_input_imgs,
-                                       bool force_zero_embeddings = false) {
+    std::pair<ggml_tensor*, ggml_tensor*>
+    get_learned_condition_pmid(ggml_context* work_ctx,
+                               const std::string& text,
+                               ggml_tensor* ref_input_imgs,
+                               int num_input_imgs,
+                               int clip_skip,
+                               int width,
+                               int height,
+                               bool force_zero_embeddings = false) {
+
         auto image_tokens = cond_stage_model->convert_token_to_id(trigger_word);
         // if(image_tokens.size() == 1){
         //     printf(" image token id is: %d \n", image_tokens[0]);
@@ -570,9 +624,9 @@ public:
                                                                                     num_input_imgs,
                                                                                     image_tokens[0],
                                                                                     true);
-        std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
-        std::vector<float>& weights = std::get<1>(tokens_and_weights);
-        std::vector<bool>& clsm     = std::get<2>(tokens_and_weights);
+        std::vector<int>& tokens             = std::get<0>(tokens_and_weights);
+        std::vector<float>& weights          = std::get<1>(tokens_and_weights);
+        std::vector<bool>& class_tokens_mask = std::get<2>(tokens_and_weights);
         // printf("tokens: \n");
         // for(int i = 0; i < tokens.size(); ++i)
         //    printf("%d ", tokens[i]);
@@ -581,54 +635,15 @@ public:
         // for(int i = 0; i < clsm.size(); ++i)
         //    printf("%d ", clsm[i]?1:0);
         // printf("\n");
-        auto cond = get_learned_condition_common(work_ctx, tokens, weights, clip_skip, width, height, force_zero_embeddings);
-        return std::make_tuple(cond.first, cond.second, clsm);
-    }
+        auto cond_tup = get_condition_norm(work_ctx, tokens, weights, clip_skip, width, height, force_zero_embeddings);
 
-    std::tuple<ggml_tensor*, ggml_tensor*, std::vector<bool>>
-    get_learned_condition_vid(ggml_context* work_ctx,
-                              const std::string& text,
-                              int clip_skip,
-                              int width,
-                              int height,
-                              int num_input_imgs,
-                              sd_image_t init_image,
-                              int fps                    = 6,
-                              int motion_bucket_id       = 127,
-                              float augmentation_level   = 0.f,
-                              bool force_zero_embeddings = false) {
-        auto image_tokens = cond_stage_model->convert_token_to_id(trigger_word);
-        // if(image_tokens.size() == 1){
-        //     printf(" image token id is: %d \n", image_tokens[0]);
-        // }
-        GGML_ASSERT(image_tokens.size() == 1);
-        auto tokens_and_weights     = cond_stage_model->tokenize_with_trigger_token(text,
-                                                                                    num_input_imgs,
-                                                                                    image_tokens[0],
-                                                                                    true);
-        std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
-        std::vector<float>& weights = std::get<1>(tokens_and_weights);
-        std::vector<bool>& clsm     = std::get<2>(tokens_and_weights);
-        // printf("tokens: \n");
-        // for(int i = 0; i < tokens.size(); ++i)
-        //    printf("%d ", tokens[i]);
-        // printf("\n");
-        // printf("clsm: \n");
-        // for(int i = 0; i < clsm.size(); ++i)
-        //    printf("%d ", clsm[i]?1:0);
-        // printf("\n");
-        auto cond = get_learned_condition_common(work_ctx, tokens, weights, clip_skip, width, height, force_zero_embeddings);
-        return std::make_tuple(cond.first, cond.second, clsm);
-    }
 
-    ggml_tensor* id_encoder(ggml_context* work_ctx,
-                            ggml_tensor* init_img,
-                            ggml_tensor* prompts_embeds,
-                            std::vector<bool>& class_tokens_mask) {
-        ggml_tensor* res = NULL;
-        pmid_model->compute(n_threads, init_img, prompts_embeds, class_tokens_mask, &res, work_ctx);
+        ggml_tensor* prompts_embeds_norm_c = std::get<0>(cond_tup);
+        ggml_tensor* prompts_embeds_vector = std::get<1>(cond_tup);  // [adm_in_channels, ]
+        ggml_tensor* prompts_embeds_concat = NULL;
+        pmid_model->compute(n_threads, ref_input_imgs, prompts_embeds_norm_c, class_tokens_mask, &prompts_embeds_concat, work_ctx);
 
-        return res;
+        return {prompts_embeds_concat, prompts_embeds_vector};
     }
 
     std::pair<ggml_tensor*, ggml_tensor*>
@@ -641,13 +656,13 @@ public:
         auto tokens_and_weights     = cond_stage_model->tokenize(text, true);
         std::vector<int>& tokens    = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
-        return get_learned_condition_common(work_ctx, tokens, weights, clip_skip, width, height, force_zero_embeddings);
+        return get_condition_norm(work_ctx, tokens, weights, clip_skip, width, height, force_zero_embeddings);
     }
 
     std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*>
     get_learned_condition_svd(ggml_context* work_ctx,
                               const std::string& text,
-                              sd_image_t init_image,
+                              const sd_image_t* init_image,
                               int clip_skip,
                               int width,
                               int height,
@@ -659,17 +674,17 @@ public:
         auto tokens_and_weights     = cond_stage_model->tokenize(text, true);
         std::vector<int>& tokens    = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
-        return get_svd_condition(work_ctx, tokens, weights, init_image, clip_skip, width, height, fps, total_frames, motion_bucket_id, augmentation_level, force_zero_embeddings);
+        return get_condition_svds(work_ctx, tokens, weights, init_image, clip_skip, width, height, fps, total_frames, motion_bucket_id, augmentation_level, force_zero_embeddings);
     }
 
     std::pair<ggml_tensor*, ggml_tensor*>
-    get_learned_condition_common(ggml_context* work_ctx,
-                                 std::vector<int>& tokens,
-                                 std::vector<float>& weights,
-                                 int clip_skip,
-                                 int width,
-                                 int height,
-                                 bool force_zero_embeddings = false) {
+    get_condition_norm(ggml_context* work_ctx,
+                       std::vector<int>& tokens,
+                       std::vector<float>& weights,
+                       int clip_skip,
+                       int width,
+                       int height,
+                       bool force_zero_embeddings = false) {
         cond_stage_model->set_clip_skip(clip_skip);
         int64_t t0                              = ggml_time_ms();
         struct ggml_tensor* hidden_states       = NULL;  // [N, n_token, hidden_size]
@@ -787,18 +802,18 @@ public:
     }
 
     std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*>
-    get_svd_condition(ggml_context* work_ctx,
-                      std::vector<int>& tokens,
-                      std::vector<float>& weights,
-                      sd_image_t init_image,
-                      int clip_skip,
-                      int width,
-                      int height,
-                      int fps                    = 6,
-                      int total_frames           = 14,
-                      int motion_bucket_id       = 127,
-                      float augmentation_level   = 0.f,
-                      bool force_zero_embeddings = false) {
+    get_condition_svds(ggml_context* work_ctx,
+                       std::vector<int>& tokens,
+                       std::vector<float>& weights,
+                       const sd_image_t* init_image,
+                       int clip_skip,
+                       int width,
+                       int height,
+                       int fps                    = 6,
+                       int total_frames           = 14,
+                       int motion_bucket_id       = 127,
+                       float augmentation_level   = 0.f,
+                       bool force_zero_embeddings = false) {
         // c_crossattn
         int64_t t0 = ggml_time_ms();
         cond_stage_model->set_clip_skip(clip_skip);
@@ -809,8 +824,8 @@ public:
             struct ggml_tensor* pixel_values        = NULL;
             std::vector<float> hidden_states_vec;
 
-            if (init_image.data) {
-                sd_image_f32_t image         = sd_image_t_to_sd_image_f32_t(init_image);
+            if (init_image && init_image->data) {
+                sd_image_f32_t image         = sd_image_t_to_sd_image_f32_t(*init_image);
                 sd_image_f32_t resized_image = clip_preprocess(image, cond_stage_model->vision_model->image_size);
                 free(image.data);
                 image.data = NULL;
@@ -875,11 +890,11 @@ public:
             if (force_zero_embeddings) {
                 c_concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 4, total_frames);
                 ggml_set_f32(c_concat, 0.f);
-            } else {
+            } else if (init_image){
                 ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, total_frames);
 
-                if (width != init_image.width || height != init_image.height) {
-                    sd_image_f32_t image         = sd_image_t_to_sd_image_f32_t(init_image);
+                if (width != init_image->width || height != init_image->height) {
+                    sd_image_f32_t image         = sd_image_t_to_sd_image_f32_t(*init_image);
                     sd_image_f32_t resized_image = resize_sd_image_f32_t(image, width, height);
                     free(image.data);
                     image.data = NULL;
@@ -887,7 +902,7 @@ public:
                     free(resized_image.data);
                     resized_image.data = NULL;
                 } else {
-                    sd_image_to_tensor(init_image.data, init_img);
+                    sd_image_to_tensor(init_image->data, init_img);
                 }
                 if (augmentation_level > 0.f) {
                     struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, init_img);
@@ -897,7 +912,7 @@ public:
                     ggml_tensor_add(init_img, noise);
                 }
                 //print_ggml_tensor(init_img);
-                ggml_tensor* moments = encode_first_stage(work_ctx, init_img);
+                ggml_tensor* moments = compute_first_stage(gglm_ctx_local->engine_ctx, init_img, false);
                 //print_ggml_tensor(moments);
                 c_concat = get_first_stage_encoding(work_ctx, moments);
             }
@@ -1547,57 +1562,566 @@ public:
         return result;
     }
 
-    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x) {
-        return compute_first_stage(work_ctx, x, false);
+    /*================================================ SD Lifecycle =============================================*/
+
+    bool config_common(ggml_init_params gglm_ctx_params,
+                       sample_method_t sample_method,
+                       float sample_strength,
+                       int sample_steps,
+                       int width,
+                       int height,
+                       int clip_skip,
+                       float cfg_minor,
+                       float cfg_scale,
+                       int64_t seed,
+                       int batch_count) {
+        if (width <= 0 || height <= 0) {
+            LOG_ERROR("config_sd_ctx() with unavailable params");
+            return false;
+        }
+        bool mark_force_update = false;
+
+        LOG_INFO("output size %dx%d", width, height);
+        if ((gglm_ctx_local->engine_meta.engine_env_w != width || gglm_ctx_local->engine_meta.engine_env_h != height) &&
+            (width != 0 && height != 0)) {
+            LOG_INFO("update ggml_context with img_size %u x %u ", width, height);
+            gglm_ctx_local->engine_ctx = ggml_init(gglm_ctx_params);
+            if (!gglm_ctx_local->engine_ctx) {
+                LOG_ERROR("ggml_init() failed");
+                return false;
+            }
+            gglm_ctx_local->engine_meta.engine_env_w = width;
+            gglm_ctx_local->engine_meta.engine_env_h = height;
+            LOG_INFO("update ggml_context success, current mem_size %u", gglm_ctx_params.mem_size);
+        }
+
+        if ((gglm_ctx_local->engine_meta.env_sigma_scheduler.empty()) ||
+            (gglm_ctx_local->engine_meta.engine_sample_steps != sample_steps)){
+            int64_t t0 = ggml_time_ms();
+            std::vector<float> sigmas = denoiser->schedule->get_sigmas(sample_steps);
+            size_t t_enc = int64_t(sample_steps * sample_strength);
+            LOG_INFO("target t_enc is %zu steps", t_enc);
+            gglm_ctx_local->engine_meta.env_sigma_scheduler.clear();
+            gglm_ctx_local->engine_meta.env_sigma_scheduler.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
+            gglm_ctx_local->engine_meta.engine_sample_steps = sample_steps;
+            gglm_ctx_local->engine_meta.engine_merge_start = -1;
+            int64_t t1 = ggml_time_ms();
+            LOG_INFO("sigma scheduler completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+        }
+
+        if ((gglm_ctx_local->engine_meta.engine_sample_method != sample_method)){
+            gglm_ctx_local->engine_meta.engine_sample_method = sample_method;
+            LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
+        }
+
+        if ((gglm_ctx_local->engine_meta.engine_seed!=seed)){
+            if (seed < 0) {
+                seed = (int)time(nullptr);
+            }
+            gglm_ctx_local->engine_meta.engine_seed = seed;
+        }
+
+        if ((gglm_ctx_local->engine_meta.engine_clip_skip != clip_skip)){
+            gglm_ctx_local->engine_meta.engine_clip_skip = clip_skip;
+            mark_force_update = true;
+        }
+
+        if ((gglm_ctx_local->engine_meta.engine_cfg_minor != cfg_minor)) {
+            gglm_ctx_local->engine_meta.engine_cfg_minor = (cfg_minor < 0) ? cfg_scale : cfg_minor;
+            mark_force_update = true;
+        }
+
+        if ((gglm_ctx_local->engine_meta.engine_cfg_scale != cfg_scale)){
+            gglm_ctx_local->engine_meta.engine_cfg_scale = cfg_scale;
+            mark_force_update = true;
+        }
+
+        // update batch count for output
+        if ((gglm_ctx_local->engine_meta.env_batch_count!=batch_count)){
+            gglm_ctx_local->engine_meta.env_batch_count = batch_count;
+            LOG_INFO("current batch count set to: %u", batch_count);
+        }
+
+        return mark_force_update;
     }
 
-    ggml_tensor* decode_first_stage(ggml_context* work_ctx, ggml_tensor* x) {
-        return compute_first_stage(work_ctx, x, true);
+    void config_control_net(const sd_image_t* control_image,
+                            float control_strength) {
+        if (!control_image) {
+            LOG_INFO("config_control_net() with NULL control_image, ControlNet disabled");
+            return;
+        }
+
+        if ((gglm_ctx_local->engine_meta.engine_control_strength!=control_strength)){
+            gglm_ctx_local->engine_meta.engine_control_strength = control_strength;
+        }
+
+        // deal ControlNet image hint
+        if (control_image) {
+            int64_t t0 = ggml_time_ms();
+            gglm_ctx_local->engine_keep.image_hint = ggml_new_tensor_4d(
+                gglm_ctx_local->engine_ctx, GGML_TYPE_F32,
+                gglm_ctx_local->engine_meta.engine_env_w,
+                gglm_ctx_local->engine_meta.engine_env_h, 3, 1);
+            sd_image_to_tensor(control_image->data, gglm_ctx_local->engine_keep.image_hint);
+            int64_t t1 = ggml_time_ms();
+            LOG_INFO("generate Control Image completed, taking %" PRId64 " ms", t1 - t0);
+        }
+    }
+
+    std::string config_photo_maker(const std::string& positive_prompt,
+                                   const std::string& input_id_images_path,
+                                   float pm_style_ratio,
+                                   bool normalize_input) {
+        if (positive_prompt.empty()) {
+            LOG_INFO("config_photo_maker() with NULL reference_images, PhotoMaker disabled");
+            return positive_prompt;
+        }
+        std::string modified_prompt = positive_prompt;
+
+        // make PhotoMaker embeddings
+        if (!input_id_images_path.empty() &&
+            (input_id_images_path != gglm_ctx_local->engine_meta.env_input_id_images_path) &&
+            (stacked_id && pmid_model)) {
+            // preprocess reference input id-images
+            int64_t pm_s = ggml_time_ms();
+            int32_t ref_imgs_num = -1;
+            ggml_tensor* ref_input_imgs = nullptr;
+            std::vector<sd_image_t*> input_id_images;
+            {
+                int64_t t0 = ggml_time_ms();
+                std::vector<std::string> img_files = get_files_from_dir(input_id_images_path);
+                for (const std::string& img_file : img_files) {
+                    int c = 0;
+                    int id_img_w, id_img_h;
+                    uint8_t* input_image_buffer = stbi_load(img_file.c_str(), &id_img_w, &id_img_h, &c, 3);
+                    if (!input_image_buffer) {
+                        LOG_ERROR("PhotoMaker load image from '%s' failed", img_file.c_str());
+                        continue;
+                    } else {
+                        LOG_INFO("PhotoMaker loaded image from '%s'", img_file.c_str());
+                    }
+                    sd_image_t* pmid_img = NULL;
+                    pmid_img             = new sd_image_t{(uint32_t)id_img_w,
+                                              (uint32_t)id_img_h,
+                                              3,
+                                              input_image_buffer};
+                    pmid_img             = preprocess_id_image(pmid_img);
+                    if (!pmid_img) {
+                        LOG_ERROR("preprocess input id image from '%s' failed", img_file.c_str());
+                        continue;
+                    }
+                    input_id_images.push_back(pmid_img);
+                }
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("preprocess input id images, taking %" PRId64 " ms", t1 - t0);
+            }
+
+            if (!input_id_images.empty()) {
+                ref_imgs_num = (int32_t)input_id_images.size();
+                int32_t ref_first_w  = input_id_images[0]->width;
+                int32_t ref_first_h  = input_id_images[0]->height;
+                int32_t channels     = input_id_images[0]->channel;
+                ref_input_imgs = ggml_new_tensor_4d(
+                    gglm_ctx_local->engine_ctx, GGML_TYPE_F32, ref_first_w, ref_first_h, channels, ref_imgs_num
+                );
+
+                // TODO: move these to somewhere else and be user settable
+                float mean[] = {0.48145466f, 0.4578275f, 0.40821073f};
+                float std[]  = {0.26862954f, 0.26130258f, 0.27577711f};
+                for (int i = 0; i < ref_imgs_num; i++) {
+                    sd_image_t* init_image = input_id_images[i];
+                    if (normalize_input) {
+                        sd_mul_images_to_tensor(init_image->data, ref_input_imgs, i, mean, std);
+                    } else {
+                        sd_mul_images_to_tensor(init_image->data, ref_input_imgs, i, NULL, NULL);
+                    }
+                }
+
+                if (gglm_ctx_local->engine_meta.engine_sample_steps < 50) {
+                    LOG_INFO("sampling steps increases from %d to 50 for PHOTOMAKER", gglm_ctx_local->engine_meta.engine_sample_steps);
+                    gglm_ctx_local->engine_meta.engine_sample_steps = 50;
+                }
+            } else {
+                LOG_WARN("Provided PhotoMaker model file, but NO input ID images");
+                LOG_WARN("Turn off PhotoMaker");
+                stacked_id = false;
+            }
+
+            // deal lora stacked for PhotoMaker using
+            if (stacked_id && !pmid_lora->applied) {
+                int64_t t0 = ggml_time_ms();
+                pmid_lora->apply(tensors, n_threads);
+                pmid_lora->applied = true;
+                int64_t  t1 = ggml_time_ms();
+                LOG_INFO("pmid_lora apply completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+            }
+
+            // generating embeddings
+            if (ref_input_imgs && ref_imgs_num > 0) {
+                int64_t t0 = ggml_time_ms();
+                ggml_tensor* prompts_embeds_concat = NULL;
+                ggml_tensor* prompts_embeds_vector = NULL;
+                std::vector<bool> class_tokens_mask;      // ggml_tensor* class_tokens_mask = NULL;
+
+                std::tie(
+                    gglm_ctx_local->engine_keep.prompts_embeds_concat,
+                    gglm_ctx_local->engine_keep.prompts_embeds_vector
+                    ) = get_learned_condition_pmid(
+                    gglm_ctx_local->engine_ctx,
+                    positive_prompt,
+                    ref_input_imgs,
+                    ref_imgs_num,
+                    gglm_ctx_local->engine_meta.engine_clip_skip,
+                    gglm_ctx_local->engine_meta.engine_env_w,
+                    gglm_ctx_local->engine_meta.engine_env_h
+                );
+
+                // make sure encoding input prompt without PMID trigger word for delayed conditioning
+                modified_prompt = remove_trigger_from_prompt(gglm_ctx_local->engine_ctx, positive_prompt);
+
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
+            }
+
+            // check necessary for start_merge_step
+            if (stacked_id) {
+                int start_merge_step = -1;
+                start_merge_step = int(pm_style_ratio / 100.f * float(gglm_ctx_local->engine_meta.engine_sample_steps));
+                if (start_merge_step > 30) {
+                    start_merge_step = 30;
+                }
+                pmid_model->style_strength    = pm_style_ratio;
+                gglm_ctx_local->engine_meta.engine_merge_start = start_merge_step;
+                LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);
+            }
+
+            // recycling reference input id-images
+            for (sd_image_t* img : input_id_images) {
+                free(img->data);
+            }
+            input_id_images.clear();
+            int64_t pm_e = ggml_time_ms();
+            LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", pm_e - pm_s);
+        }
+
+        // unnecessary tempo-model resources recycle
+        if (free_params_immediately && pmid_lora) {
+            pmid_lora->free_params_buffer();
+        }
+        if (free_params_immediately && pmid_model) {
+            pmid_model->free_params_buffer();
+        }
+
+        return modified_prompt;
+    }
+
+    std::string config_by_lora(const std::string &positive_prompt) {
+        if (positive_prompt.empty()) {
+            LOG_ERROR("config_by_lora() with empty positive_prompt");
+            return positive_prompt;
+        }
+        std::string modified_prompt = positive_prompt;
+        bool mark_force_update = false;
+
+        // preprocess positive-prompt with lora extract and remove
+        if (!positive_prompt.empty() &&
+            (positive_prompt != gglm_ctx_local->engine_meta.env_positive_prompt || mark_force_update)) {
+            int64_t t0                                      = ggml_time_ms();
+            auto result_pair                                = extract_and_remove_lora(positive_prompt);
+            std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
+            for (auto& kv : lora_f2m) {
+                LOG_DEBUG("lora %s:%.2f", kv.first.c_str(), kv.second);
+            }
+            modified_prompt = result_pair.second;
+            int64_t t1      = ggml_time_ms();
+            LOG_DEBUG("prompt after extract and remove lora: \"%s\" , taking %.2fs", positive_prompt.c_str(), (t1 - t0) * 1.0f / 1000);
+
+            // load lora from file
+            int64_t t2 = ggml_time_ms();
+            apply_loras(lora_f2m);
+            int64_t t3 = ggml_time_ms();
+            LOG_INFO("apply_loras completed, taking %.2fs", (t3 - t2) * 1.0f / 1000);
+        }
+
+        return modified_prompt;
+    }
+
+    void generate_input_latent(const std::string& positive_prompt,
+                               const std::string& negative_prompt,
+                               const sd_image_t* initvid_image,
+                               sd_video_t video_config,
+                               bool mark_force_update) {
+        if (positive_prompt.empty() && !initvid_image) {
+            LOG_ERROR("config_sd_ctx() with unavailable params");
+            return;
+        }
+
+        if( (version == VERSION_SVD || version == VERSION_SVD1_1 )){
+            int64_t t0 = ggml_time_ms();
+            std::tie(
+                gglm_ctx_local->engine_keep.p_ca,
+                gglm_ctx_local->engine_keep.p_c,
+                gglm_ctx_local->engine_keep.p_cv
+                ) = get_learned_condition_svd(
+                gglm_ctx_local->engine_ctx,
+                positive_prompt,
+                initvid_image,
+                gglm_ctx_local->engine_meta.engine_clip_skip,
+                gglm_ctx_local->engine_meta.engine_env_w,
+                gglm_ctx_local->engine_meta.engine_env_h,
+                video_config.fps,
+                video_config.total_frames,
+                video_config.motion_bucket_id,
+                video_config.augmentation_level
+            );
+
+            std::tie(
+                gglm_ctx_local->engine_keep.n_ca,
+                gglm_ctx_local->engine_keep.n_c,
+                gglm_ctx_local->engine_keep.n_cv
+                ) = get_learned_condition_svd(
+                gglm_ctx_local->engine_ctx,
+                negative_prompt,
+                initvid_image,
+                gglm_ctx_local->engine_meta.engine_clip_skip,
+                gglm_ctx_local->engine_meta.engine_env_w,
+                gglm_ctx_local->engine_meta.engine_env_h,
+                video_config.fps,
+                video_config.total_frames,
+                video_config.motion_bucket_id,
+                video_config.augmentation_level
+            );
+            gglm_ctx_local->engine_keep.tag_video_config = video_config;
+            int64_t t1 = ggml_time_ms();
+            LOG_INFO("get_learned_condition VID completed, taking %" PRId64 " ms", t1 - t0);
+        } else {
+            // deal input_image
+            if (initvid_image){
+                ggml_tensor* init_moments = nullptr;
+                ggml_tensor* init_img     = nullptr;
+                ggml_tensor* init_latent  = nullptr;
+                init_img = ggml_new_tensor_4d(gglm_ctx_local->engine_ctx, GGML_TYPE_F32,
+                                                               gglm_ctx_local->engine_meta.engine_env_w,
+                                                               gglm_ctx_local->engine_meta.engine_env_h,
+                                                               3, 1);
+                sd_image_to_tensor(initvid_image->data, init_img);
+                if (!use_tiny_autoencoder) {
+                    init_moments = compute_first_stage(gglm_ctx_local->engine_ctx, init_img, false);
+                    init_latent  = get_first_stage_encoding(gglm_ctx_local->engine_ctx, init_moments);
+                } else {
+                    init_latent = compute_first_stage(gglm_ctx_local->engine_ctx, init_img, false);
+                }
+                gglm_ctx_local->engine_keep.image_latent = init_latent;
+            }
+
+            // deal positive-prompt
+            if (!positive_prompt.empty() &&
+                (positive_prompt != gglm_ctx_local->engine_meta.env_positive_prompt || mark_force_update)) {
+                int64_t t0 = ggml_time_ms();
+                {
+                    auto cond_pair = get_learned_condition(
+                        gglm_ctx_local->engine_ctx,
+                        positive_prompt,
+                        gglm_ctx_local->engine_meta.engine_clip_skip,
+                        gglm_ctx_local->engine_meta.engine_env_w,
+                        gglm_ctx_local->engine_meta.engine_env_h
+                    );
+                    gglm_ctx_local->engine_keep.p_c  = cond_pair.first;
+                    gglm_ctx_local->engine_keep.p_cv = cond_pair.second;  // [adm_in_channels, ]
+                    gglm_ctx_local->engine_meta.env_positive_prompt = positive_prompt;
+                }
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("get_learned_condition POSITIVE completed, taking %" PRId64 " ms", t1 - t0);
+            }
+
+            // deal negative-prompt
+            if (!negative_prompt.empty() &&
+                (negative_prompt != gglm_ctx_local->engine_meta.env_negative_prompt || mark_force_update)) {
+                int64_t t0 = ggml_time_ms();
+                if ( gglm_ctx_local->engine_meta.engine_cfg_scale != 1.0) {
+                    bool force_zero_embeddings = (version == VERSION_XL);
+                    auto uncond_pair = get_learned_condition(
+                        gglm_ctx_local->engine_ctx,
+                        negative_prompt,
+                        gglm_ctx_local->engine_meta.engine_clip_skip,
+                        gglm_ctx_local->engine_meta.engine_env_w,
+                        gglm_ctx_local->engine_meta.engine_env_h,
+                        force_zero_embeddings
+                    );
+                    gglm_ctx_local->engine_keep.n_c  = uncond_pair.first;
+                    gglm_ctx_local->engine_keep.n_cv = uncond_pair.second;  // [adm_in_channels, ]
+                    gglm_ctx_local->engine_meta.env_negative_prompt = negative_prompt;
+                }
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("get_learned_condition NEGATIVE completed, taking %" PRId64 " ms", t1 - t0);
+            }
+        }
+
+        // unnecessary tempo-model resources recycle
+        if (free_params_immediately && cond_stage_model) {
+            cond_stage_model->free_params_buffer();
+        }
+    }
+
+    void encode_first_stage(const char* positive_prompt_c_str,
+                            const char* negative_prompt_c_str,
+                            const char* input_id_images_path_c_str,
+                            const sd_image_t* initvid_image,
+                            const sd_image_t* control_image,
+                            float control_strength,
+                            int clip_skip,
+                            float cfg_minor,
+                            float cfg_scale,
+                            int width,
+                            int height,
+                            sample_method_t sample_method,
+                            int sample_steps,
+                            float strength,
+                            int64_t seed,
+                            float pm_style_ratio,
+                            bool normalize_input,
+                            int batch_count,
+                            sd_video_t video_config) {
+        if (width <= 0 || height <= 0) {
+            LOG_ERROR("config_sd_ctx() with unavailable params");
+            return;
+        }
+        bool mark_mid_update = false;
+        std::string positive_prompt(positive_prompt_c_str);
+        std::string negative_prompt(negative_prompt_c_str);
+        std::string input_id_images_path(input_id_images_path_c_str);
+
+        struct ggml_init_params gglm_ctx_params{};
+        {
+            gglm_ctx_params.mem_size = static_cast<size_t>(10 * 1024) * 1024 * 2;  // 20 MB
+            if (stacked_id) {
+                gglm_ctx_params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
+            }
+            if (control_image) {
+                gglm_ctx_params.mem_size += control_image->width * control_image->height * control_image->channel * sizeof(float);
+            }
+            if (initvid_image && video_config.fps > 1) {
+                gglm_ctx_params.mem_size += width * height * 3 * sizeof(float) * (video_config.total_frames);
+            }
+            gglm_ctx_params.mem_size += width * height * 3 * sizeof(float) * (batch_count + 1);
+            gglm_ctx_params.mem_buffer = NULL;
+            gglm_ctx_params.no_alloc   = false;
+        }
+
+        // true-config session
+        {
+            mark_mid_update = config_common(
+                gglm_ctx_params,
+                sample_method,
+                strength,
+                sample_steps,
+                width,
+                height,
+                clip_skip,
+                cfg_minor,
+                cfg_scale,
+                seed,
+                batch_count);
+
+            config_control_net(control_image, control_strength);
+
+            positive_prompt = config_photo_maker(positive_prompt, input_id_images_path, pm_style_ratio, normalize_input);
+
+            positive_prompt = config_by_lora(positive_prompt);
+
+            generate_input_latent(positive_prompt, negative_prompt, initvid_image, video_config, mark_mid_update);
+        }
+
+        input_id_images_path.clear();
+        negative_prompt.clear();
+        positive_prompt.clear();
+    }
+
+    void generate_stable_latents(ggml_tensor** init_latent,
+                                 ggml_tensor** init_noised,
+                                 int output_w,
+                                 int output_h,
+                                 int output_c,
+                                 int cur_seed_offset = 0){
+        ggml_tensor* image_latent = gglm_ctx_local->engine_keep.image_latent;
+        int result_frames = gglm_ctx_local->engine_keep.tag_video_config.total_frames;
+        int64_t cur_seed = gglm_ctx_local->engine_meta.engine_seed + cur_seed_offset;
+        rng->manual_seed(cur_seed);
+        LOG_INFO("current seed %i", cur_seed);
+        if (image_latent) {
+            *init_latent = image_latent;
+            *init_noised = ggml_dup_tensor(
+                gglm_ctx_local->engine_ctx, image_latent
+            );
+            ggml_tensor_set_f32_randn(*init_noised, rng);
+        } else {
+            *init_noised = nullptr;
+            *init_latent = ggml_new_tensor_4d(
+                gglm_ctx_local->engine_ctx, GGML_TYPE_F32, output_w, output_h, output_c, result_frames
+            );
+            ggml_tensor_set_f32_randn(*init_latent, rng);
+        }
+        // print_ggml_tensor(init_latent);
+        // print_ggml_tensor(init_noised);
+    }
+
+    ggml_tensor* generate_batch_result(ggml_tensor* init_latent,
+                                       ggml_tensor* init_noised) {
+        return sample(
+            gglm_ctx_local->engine_ctx,
+            init_latent,
+            init_noised,
+            gglm_ctx_local->engine_keep.p_c,
+            gglm_ctx_local->engine_keep.p_ca,
+            gglm_ctx_local->engine_keep.p_cv,
+            gglm_ctx_local->engine_keep.n_c,
+            gglm_ctx_local->engine_keep.n_ca,
+            gglm_ctx_local->engine_keep.n_cv,
+            gglm_ctx_local->engine_keep.image_hint,
+            gglm_ctx_local->engine_meta.engine_control_strength,
+            gglm_ctx_local->engine_meta.engine_cfg_minor,
+            gglm_ctx_local->engine_meta.engine_cfg_scale,
+            gglm_ctx_local->engine_meta.engine_sample_method,
+            gglm_ctx_local->engine_meta.env_sigma_scheduler,
+            gglm_ctx_local->engine_meta.engine_merge_start,
+            gglm_ctx_local->engine_keep.prompts_embeds_concat,
+            gglm_ctx_local->engine_keep.prompts_embeds_vector);
+    }
+
+    ggml_tensor* decode_first_stage(ggml_tensor* x) {
+        return compute_first_stage(gglm_ctx_local->engine_ctx, x, true);
+    }
+
+    void extract_output_images(sd_image_t** result_images, std::vector<struct ggml_tensor*> decoded_images) {
+        uint32_t result_w    = gglm_ctx_local->engine_meta.engine_env_w;
+        uint32_t result_h    = gglm_ctx_local->engine_meta.engine_env_h;
+        uint32_t result_c    = 3;
+        size_t result_groups = gglm_ctx_local->engine_meta.env_batch_count;
+        size_t result_frames = gglm_ctx_local->engine_keep.tag_video_config.total_frames;
+
+        *result_images = (sd_image_t*)calloc(result_groups * result_frames, sizeof(sd_image_t));
+        for (size_t g = 0; g < decoded_images.size(); g++) {
+            ggml_tensor* img = decoded_images[g];
+            for (size_t i = 0; i < result_frames; i++) {
+                int offset = g * result_frames;
+                auto img_i = ggml_view_3d(gglm_ctx_local->engine_ctx, img, img->ne[0], img->ne[1], img->ne[2], img->nb[1], img->nb[2], img->nb[3] * i);
+                {
+                    (*result_images[i + offset]).width   = result_w;
+                    (*result_images[i + offset]).height  = result_h;
+                    (*result_images[i + offset]).channel = result_c;
+                    (*result_images[i + offset]).data    = sd_tensor_to_image(img_i);
+                }
+            }
+        }
     }
 };
 
 /*================================================= SD API ==================================================*/
 
-struct ggml_meta_t {
-    sample_method_t engine_sample_method;
-    int engine_sample_steps = -1;
-    int engine_merge_start = -1;
-    int engine_env_w = -1;
-    int engine_env_h = -1;
-    int engine_clip_skip = -1;
-    float engine_cfg_minor = -1.0f;
-    float engine_cfg_scale = -1.0f;
-    float engine_control_strength = -1.0f;
-    int64_t engine_seed = -1;
-    std::string env_positive_prompt;
-    std::string env_negative_prompt;
-    std::string env_input_id_images_path;
-    std::vector<float> env_sigma_scheduler;
-    int env_batch_count = -1;
-};
-
-struct ggml_keep_t {
-    ggml_tensor* image_input  = nullptr;
-    ggml_tensor* p_c  = nullptr;    // positive conact
-    ggml_tensor* p_ca = nullptr;    // positive crossattn
-    ggml_tensor* p_cv = nullptr;    // positive vector
-    ggml_tensor* n_c  = nullptr;    // negative conact
-    ggml_tensor* n_ca = nullptr;    // negative crossattn
-    ggml_tensor* n_cv = nullptr;    // negative vector
-    ggml_tensor* prompts_embeds_concat = nullptr;
-    ggml_tensor* prompts_embeds_vector = nullptr;
-    ggml_tensor* image_hint = nullptr;
-    sd_video_t tag_video_config = {};
-};
-
 struct sd_ctx_t {
     StableDiffusionGGML* sd = NULL;
-    ggml_context* engine_ctx = NULL;
-    ggml_meta_t engine_meta;
-    ggml_keep_t engine_keep;
 };
-
-/*============================================= SD API (Lifecycle) ==========================================*/
 
 sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      const char* vae_path_c_str,
@@ -1657,373 +2181,6 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
     return sd_ctx;
 }
 
-void config_sd_ctx(sd_ctx_t* sd_ctx,
-                   const char* positive_prompt_c_str,
-                   const char* negative_prompt_c_str,
-                   const char* input_id_images_path_c_str,
-                   const sd_image_t* initvid_image,
-                   const sd_image_t* control_image,
-                   float control_strength,
-                   int clip_skip,
-                   float cfg_minor,
-                   float cfg_scale,
-                   int width,
-                   int height,
-                   sample_method_t sample_method,
-                   int sample_steps,
-                   float strength,
-                   int64_t seed,
-                   float pm_style_ratio,
-                   bool normalize_input,
-                   int batch_count,
-                   sd_video_t video_config) {
-    if (!sd_ctx || !sd_ctx->sd || width<=0 || height<=0) {
-        LOG_ERROR("config_sd_ctx() with unavailable params");
-        return;
-    }
-    bool mark_force_update = false;
-    std::string positive_prompt(positive_prompt_c_str);
-    std::string negative_prompt(negative_prompt_c_str);
-    std::string input_id_images_path(input_id_images_path_c_str);
-
-    LOG_INFO("output size %dx%d", width, height);
-    if ((sd_ctx->engine_meta.engine_env_w!=width || sd_ctx->engine_meta.engine_env_h!=height) &&
-        (width!=0 && height!=0)){
-        LOG_INFO("update ggml_context with img_size %u x %u ", width, height);
-        struct ggml_init_params gglm_ctx_params;
-        gglm_ctx_params.mem_size = static_cast<size_t>(10 * 1024) * 1024 * 2;  // 20 MB
-        if (sd_ctx->sd->stacked_id) {
-            gglm_ctx_params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-        }
-        if (control_image){
-            gglm_ctx_params.mem_size += control_image->width * control_image->height * control_image->channel * sizeof(float);
-        }
-        if(initvid_image && video_config.fps > 1){
-            gglm_ctx_params.mem_size += width * height * 3 * sizeof(float) * (video_config.total_frames);
-        }
-        gglm_ctx_params.mem_size += width * height * 3 * sizeof(float) * (batch_count + 1);
-        gglm_ctx_params.mem_buffer = NULL;
-        gglm_ctx_params.no_alloc   = false;
-        sd_ctx->engine_ctx = ggml_init(gglm_ctx_params);
-        if (!sd_ctx->engine_ctx) {
-            LOG_ERROR("ggml_init() failed");
-            return;
-        }
-        sd_ctx->engine_meta.engine_env_w = width;
-        sd_ctx->engine_meta.engine_env_h = height;
-        LOG_INFO("update ggml_context success, current mem_size %u", gglm_ctx_params.mem_size);
-    }
-
-    if ((sd_ctx->engine_meta.env_sigma_scheduler.empty()) ||
-        (sd_ctx->engine_meta.engine_sample_steps != sample_steps)){
-        int64_t t0 = ggml_time_ms();
-        std::vector<float> sigmas = sd_ctx->sd->denoiser->schedule->get_sigmas(sample_steps);
-        size_t t_enc = int64_t(sample_steps * strength);
-        LOG_INFO("target t_enc is %zu steps", t_enc);
-        sd_ctx->engine_meta.env_sigma_scheduler.clear();
-        sd_ctx->engine_meta.env_sigma_scheduler.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
-        sd_ctx->engine_meta.engine_sample_steps = sample_steps;
-        sd_ctx->engine_meta.engine_merge_start = -1;
-        int64_t t1 = ggml_time_ms();
-        LOG_INFO("sigma scheduler completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-    }
-
-    if ((sd_ctx->engine_meta.engine_sample_method != sample_method)){
-        sd_ctx->engine_meta.engine_sample_method = sample_method;
-        LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
-    }
-
-    if ((sd_ctx->engine_meta.engine_control_strength!=control_strength)){
-        sd_ctx->engine_meta.engine_control_strength = control_strength;
-    }
-
-    if ((sd_ctx->engine_meta.engine_seed!=seed)){
-        if (seed < 0) {
-            seed = (int)time(nullptr);
-        }
-        sd_ctx->engine_meta.engine_seed = seed;
-    }
-
-    if ((sd_ctx->engine_meta.engine_clip_skip != clip_skip)){
-        sd_ctx->engine_meta.engine_clip_skip = clip_skip;
-        mark_force_update = true;
-    }
-
-    if ((sd_ctx->engine_meta.engine_cfg_minor != cfg_minor)) {
-        sd_ctx->engine_meta.engine_cfg_minor = (cfg_minor < 0) ? cfg_scale : cfg_minor;
-        mark_force_update = true;
-    }
-
-    if ((sd_ctx->engine_meta.engine_cfg_scale != cfg_scale)){
-        sd_ctx->engine_meta.engine_cfg_scale = cfg_scale;
-        mark_force_update = true;
-    }
-
-    // preprocess positive-prompt with lora extract and remove
-    if (!positive_prompt.empty() &&
-        (positive_prompt != sd_ctx->engine_meta.env_positive_prompt || mark_force_update)) {
-        int64_t t0                                      = ggml_time_ms();
-        auto result_pair                                = extract_and_remove_lora(positive_prompt);
-        std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
-        for (auto& kv : lora_f2m) {
-            LOG_DEBUG("lora %s:%.2f", kv.first.c_str(), kv.second);
-        }
-        positive_prompt = result_pair.second;
-        int64_t t1      = ggml_time_ms();
-        LOG_DEBUG("prompt after extract and remove lora: \"%s\" , taking %.2fs", positive_prompt.c_str(), (t1 - t0) * 1.0f / 1000);
-
-        // load lora from file
-        int64_t t2 = ggml_time_ms();
-        sd_ctx->sd->apply_loras(lora_f2m);
-        int64_t t3 = ggml_time_ms();
-        LOG_INFO("apply_loras completed, taking %.2fs", (t3 - t2) * 1.0f / 1000);
-    }
-
-    // make PhotoMaker embeddings
-    if (!input_id_images_path.empty() &&
-        (input_id_images_path != sd_ctx->engine_meta.env_input_id_images_path) &&
-        (sd_ctx->sd->stacked_id && sd_ctx->sd->pmid_model)) {
-        // preprocess reference input id-images
-        int64_t pm_s = ggml_time_ms();
-        int32_t ref_imgs_num = -1;
-        ggml_tensor* ref_input_imgs = nullptr;
-        std::vector<sd_image_t*> input_id_images;
-        {
-            int64_t t0 = ggml_time_ms();
-            std::vector<std::string> img_files = get_files_from_dir(input_id_images_path);
-            for (const std::string& img_file : img_files) {
-                int c = 0;
-                int id_img_w, id_img_h;
-                uint8_t* input_image_buffer = stbi_load(img_file.c_str(), &id_img_w, &id_img_h, &c, 3);
-                if (!input_image_buffer) {
-                    LOG_ERROR("PhotoMaker load image from '%s' failed", img_file.c_str());
-                    continue;
-                } else {
-                    LOG_INFO("PhotoMaker loaded image from '%s'", img_file.c_str());
-                }
-                sd_image_t* pmid_img = NULL;
-                pmid_img             = new sd_image_t{(uint32_t)id_img_w,
-                                             (uint32_t)id_img_h,
-                                             3,
-                                             input_image_buffer};
-                pmid_img             = preprocess_id_image(pmid_img);
-                if (!pmid_img) {
-                    LOG_ERROR("preprocess input id image from '%s' failed", img_file.c_str());
-                    continue;
-                }
-                input_id_images.push_back(pmid_img);
-            }
-            int64_t t1 = ggml_time_ms();
-            LOG_INFO("preprocess input id images, taking %" PRId64 " ms", t1 - t0);
-        }
-
-        if (!input_id_images.empty()) {
-            ref_imgs_num = (int32_t)input_id_images.size();
-            int32_t ref_first_w  = input_id_images[0]->width;
-            int32_t ref_first_h  = input_id_images[0]->height;
-            int32_t channels     = input_id_images[0]->channel;
-            ref_input_imgs = ggml_new_tensor_4d(
-                sd_ctx->engine_ctx, GGML_TYPE_F32, ref_first_w, ref_first_h, channels, ref_imgs_num
-            );
-
-            // TODO: move these to somewhere else and be user settable
-            float mean[] = {0.48145466f, 0.4578275f, 0.40821073f};
-            float std[]  = {0.26862954f, 0.26130258f, 0.27577711f};
-            for (int i = 0; i < ref_imgs_num; i++) {
-                sd_image_t* init_image = input_id_images[i];
-                if (normalize_input) {
-                    sd_mul_images_to_tensor(init_image->data, ref_input_imgs, i, mean, std);
-                } else {
-                    sd_mul_images_to_tensor(init_image->data, ref_input_imgs, i, NULL, NULL);
-                }
-            }
-
-            if (sample_steps < 50) {
-                LOG_INFO("sampling steps increases from %d to 50 for PHOTOMAKER", sample_steps);
-                sample_steps = 50;
-            }
-        } else {
-            LOG_WARN("Provided PhotoMaker model file, but NO input ID images");
-            LOG_WARN("Turn off PhotoMaker");
-            sd_ctx->sd->stacked_id = false;
-        }
-
-        // generating embeddings
-        if (ref_input_imgs && ref_imgs_num > 0) {
-            int64_t t0 = ggml_time_ms();
-            ggml_tensor* prompts_embeds_concat = NULL;
-            ggml_tensor* prompts_embeds_vector = NULL;
-            std::vector<bool> class_tokens_mask;      // ggml_tensor* class_tokens_mask = NULL;
-
-            // deal lora stacked for PhotoMaker using
-            if (sd_ctx->sd->stacked_id && !sd_ctx->sd->pmid_lora->applied) {
-                int64_t t0 = ggml_time_ms();
-                sd_ctx->sd->pmid_lora->apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
-                sd_ctx->sd->pmid_lora->applied = true;
-                int64_t  t1 = ggml_time_ms();
-                LOG_INFO("pmid_lora apply completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-            }
-
-            auto cond_tup = sd_ctx->sd->get_learned_condition_with_trigger(
-                sd_ctx->engine_ctx, positive_prompt, clip_skip, width, height, ref_imgs_num
-            );
-            prompts_embeds_concat = std::get<0>(cond_tup);
-            prompts_embeds_vector = std::get<1>(cond_tup);  // [adm_in_channels, ]
-            class_tokens_mask     = std::get<2>(cond_tup);  //
-
-            sd_ctx->sd->pmid_model->style_strength    = pm_style_ratio;
-            sd_ctx->engine_keep.prompts_embeds_vector = prompts_embeds_vector;
-            sd_ctx->engine_keep.prompts_embeds_concat = sd_ctx->sd->id_encoder(
-                sd_ctx->engine_ctx, ref_input_imgs, prompts_embeds_concat, class_tokens_mask
-            );
-
-            // make sure encoding input prompt without the trigger word for delayed conditioning
-            positive_prompt = sd_ctx->sd->remove_trigger_from_prompt(sd_ctx->engine_ctx, positive_prompt);
-
-            int64_t t1 = ggml_time_ms();
-            LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
-        }
-
-        // check necessary for start_merge_step
-        if (sd_ctx->sd->stacked_id) {
-            int start_merge_step = -1;
-            start_merge_step = int(sd_ctx->sd->pmid_model->style_strength / 100.f * float(sample_steps));
-            if (start_merge_step > 30) {
-                start_merge_step = 30;
-            }
-            sd_ctx->engine_meta.engine_merge_start = start_merge_step;
-            LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);
-        }
-
-        // recycling reference input id-images
-        for (sd_image_t* img : input_id_images) {
-            free(img->data);
-        }
-        input_id_images.clear();
-        int64_t pm_e = ggml_time_ms();
-        LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", pm_e - pm_s);
-    }
-
-    if((initvid_image) && video_config.fps > 1){
-        int64_t t0 = ggml_time_ms();
-        std::tie(
-            sd_ctx->engine_keep.p_ca,
-            sd_ctx->engine_keep.p_c,
-            sd_ctx->engine_keep.p_cv
-        ) = sd_ctx->sd->get_learned_condition_svd(
-            sd_ctx->engine_ctx,
-            positive_prompt,
-            *initvid_image,
-            clip_skip,
-            sd_ctx->engine_meta.engine_env_w,
-            sd_ctx->engine_meta.engine_env_h,
-            video_config.fps,
-            video_config.total_frames,
-            video_config.motion_bucket_id,
-            video_config.augmentation_level
-        );
-
-        std::tie(
-            sd_ctx->engine_keep.n_ca,
-            sd_ctx->engine_keep.n_c,
-            sd_ctx->engine_keep.n_cv
-        ) = sd_ctx->sd->get_learned_condition_svd(
-            sd_ctx->engine_ctx,
-            negative_prompt,
-            *initvid_image,
-            clip_skip,
-            sd_ctx->engine_meta.engine_env_w,
-            sd_ctx->engine_meta.engine_env_h,
-            video_config.fps,
-            video_config.total_frames,
-            video_config.motion_bucket_id,
-            video_config.augmentation_level
-        );
-        sd_ctx->engine_keep.tag_video_config = video_config;
-        int64_t t1 = ggml_time_ms();
-        LOG_INFO("get_learned_condition VID completed, taking %" PRId64 " ms", t1 - t0);
-    } else {
-        // deal input_image
-        if (initvid_image){
-            ggml_tensor* init_moments = nullptr;
-            ggml_tensor* init_img     = nullptr;
-            ggml_tensor* init_latent  = nullptr;
-            init_img = ggml_new_tensor_4d(sd_ctx->engine_ctx, GGML_TYPE_F32,
-                                          sd_ctx->engine_meta.engine_env_w,
-                                          sd_ctx->engine_meta.engine_env_h,
-                                          3, 1);
-            sd_image_to_tensor(initvid_image->data, init_img);
-            if (!sd_ctx->sd->use_tiny_autoencoder) {
-                init_moments = sd_ctx->sd->encode_first_stage(sd_ctx->engine_ctx, init_img);
-                init_latent  = sd_ctx->sd->get_first_stage_encoding(sd_ctx->engine_ctx, init_moments);
-            } else {
-                init_latent = sd_ctx->sd->encode_first_stage(sd_ctx->engine_ctx, init_img);
-            }
-            sd_ctx->engine_keep.image_input = init_latent;
-        }
-
-
-        // deal positive-prompt
-        if (!positive_prompt.empty() &&
-            (positive_prompt != sd_ctx->engine_meta.env_positive_prompt || mark_force_update)) {
-            int64_t t4 = ggml_time_ms();
-            {
-                auto cond_pair           = sd_ctx->sd->get_learned_condition(sd_ctx->engine_ctx, positive_prompt, clip_skip, width, height);
-                sd_ctx->engine_keep.p_c  = cond_pair.first;
-                sd_ctx->engine_keep.p_cv = cond_pair.second;  // [adm_in_channels, ]
-            }
-            sd_ctx->engine_meta.env_positive_prompt = positive_prompt;
-            int64_t t5                              = ggml_time_ms();
-            LOG_INFO("get_learned_condition POSITIVE completed, taking %" PRId64 " ms", t5 - t4);
-        }
-
-        // deal negative-prompt
-        if (!negative_prompt.empty() &&
-            (negative_prompt != sd_ctx->engine_meta.env_negative_prompt || mark_force_update)) {
-            int64_t t0 = ggml_time_ms();
-            if (cfg_scale != 1.0) {
-                bool force_zero_embeddings = (sd_ctx->sd->version == VERSION_XL);
-                auto uncond_pair           = sd_ctx->sd->get_learned_condition(sd_ctx->engine_ctx, negative_prompt, clip_skip, width, height, force_zero_embeddings);
-                sd_ctx->engine_keep.n_c    = uncond_pair.first;
-                sd_ctx->engine_keep.n_cv   = uncond_pair.second;  // [adm_in_channels, ]
-            }
-            sd_ctx->engine_meta.env_negative_prompt = negative_prompt;
-            int64_t t1                              = ggml_time_ms();
-            LOG_INFO("get_learned_condition NEGATIVE completed, taking %" PRId64 " ms", t1 - t0);
-        }
-    }
-
-    input_id_images_path.clear();
-    negative_prompt.clear();
-    positive_prompt.clear();
-
-    // deal ControlNet image hint
-    if (control_image) {
-        int64_t t0 = ggml_time_ms();
-        sd_ctx->engine_keep.image_hint = ggml_new_tensor_4d(sd_ctx->engine_ctx, GGML_TYPE_F32, width, height, 3, 1);
-        sd_image_to_tensor(control_image->data, sd_ctx->engine_keep.image_hint);
-        int64_t t1 = ggml_time_ms();
-        LOG_INFO("generate Control Image completed, taking %" PRId64 " ms", t1 - t0);
-    }
-
-    // update batch count for output
-    if ((sd_ctx->engine_meta.env_batch_count!=batch_count)){
-        sd_ctx->engine_meta.env_batch_count = batch_count;
-        LOG_INFO("current batch count set to: %u", batch_count);
-    }
-
-    // unnecessary tempo-model resources recycle
-    if (sd_ctx->sd->free_params_immediately && sd_ctx->sd->pmid_lora) {
-        sd_ctx->sd->pmid_lora->free_params_buffer();
-    }
-    if (sd_ctx->sd->free_params_immediately && sd_ctx->sd->pmid_model) {
-        sd_ctx->sd->pmid_model->free_params_buffer();
-    }
-    if (sd_ctx->sd->free_params_immediately && sd_ctx->sd->cond_stage_model) {
-        sd_ctx->sd->cond_stage_model->free_params_buffer();
-    }
-}
-
 void free_sd_ctx(sd_ctx_t* sd_ctx) {
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->diffusion_model->free_params_buffer();
@@ -2035,112 +2192,80 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
         delete sd_ctx->sd;
         sd_ctx->sd = NULL;
     }
-    if (sd_ctx->engine_ctx != NULL) {
-        ggml_free(sd_ctx->engine_ctx);
-        sd_ctx->engine_ctx = NULL;
-    }
     free(sd_ctx);
 }
 
 /*============================================= SD API (Abilities) ==========================================*/
 
-void extract_output_images(sd_ctx_t* sd_ctx, sd_image_t** result_images, std::vector<struct ggml_tensor*> decoded_images) {
-    uint32_t result_w    = sd_ctx->engine_meta.engine_env_w;
-    uint32_t result_h    = sd_ctx->engine_meta.engine_env_h;
-    uint32_t result_c    = 3;
-    size_t result_groups = sd_ctx->engine_meta.env_batch_count;
-    size_t result_frames = sd_ctx->engine_keep.tag_video_config.total_frames;
-
-    *result_images = (sd_image_t*)calloc(result_groups * result_frames, sizeof(sd_image_t));
-    for (size_t g = 0; g < decoded_images.size(); g++) {
-        ggml_tensor* img = decoded_images[g];
-        for (size_t i = 0; i < result_frames; i++) {
-            int offset = g * result_frames;
-            auto img_i = ggml_view_3d(sd_ctx->engine_ctx, img, img->ne[0], img->ne[1], img->ne[2], img->nb[1], img->nb[2], img->nb[3] * i);
-            {
-                (*result_images[i + offset]).width   = result_w;
-                (*result_images[i + offset]).height  = result_h;
-                (*result_images[i + offset]).channel = result_c;
-                (*result_images[i + offset]).data    = sd_tensor_to_image(img_i);
-            }
-        }
-    }
-}
-
-void generate_stable_latents(sd_ctx_t* sd_ctx,
-                             ggml_tensor** init_latent,
-                             ggml_tensor** init_noised,
-                             sd_image_t *image_config,
-                             int64_t cur_seed){
-    int W = image_config->width;
-    int H = image_config->height;
-    int C = image_config->channel;
-    ggml_tensor* image_latent = sd_ctx->engine_keep.image_input;
-    int result_frames = sd_ctx->engine_keep.tag_video_config.total_frames;
-    sd_ctx->sd->rng->manual_seed(cur_seed);
-    if (image_latent) {
-        *init_latent = image_latent;
-        *init_noised = ggml_dup_tensor(sd_ctx->engine_ctx, image_latent);
-        ggml_tensor_set_f32_randn(*init_noised, sd_ctx->sd->rng);
-    } else {
-        *init_noised = nullptr;
-        *init_latent = ggml_new_tensor_4d(sd_ctx->engine_ctx, GGML_TYPE_F32, W, H, C, result_frames);
-        ggml_tensor_set_f32_randn(*init_latent, sd_ctx->sd->rng);
-    }
-    // print_ggml_tensor(init_latent);
-    // print_ggml_tensor(init_noised);
-}
-
-sd_image_t* txt2img(sd_ctx_t* sd_ctx) {
+sd_image_t* txt2img(sd_ctx_t* sd_ctx,
+                    const char* prompt,
+                    const char* negative_prompt,
+                    int clip_skip,
+                    float cfg_scale,
+                    int width,
+                    int height,
+                    enum sample_method_t sample_method,
+                    int sample_steps,
+                    float sample_strength,
+                    int64_t seed,
+                    int batch_count,
+                    const sd_image_t* control_cond,
+                    float control_strength,
+                    float style_strength,
+                    bool normalize_input,
+                    const char* input_id_images_path) {
     if (sd_ctx == NULL) {
         return NULL;
     }
     int64_t start_at = ggml_time_ms();
+    LOG_INFO("<txt2img> start");
+
+    {
+        LOG_INFO("<txt2img> encode_first_stage start");
+        int64_t t0       = ggml_time_ms();
+        sd_ctx->sd->encode_first_stage(
+            prompt,
+            negative_prompt,
+            input_id_images_path,
+            NULL /*initvid_image*/,
+            control_cond,
+            control_strength,
+            clip_skip,
+            cfg_scale,
+            cfg_scale,
+            width,
+            height,
+            sample_method,
+            sample_steps,
+            sample_strength,
+            seed,
+            style_strength,
+            normalize_input,
+            batch_count,
+            {}
+        );
+        int64_t t1 = ggml_time_ms();
+        LOG_INFO("<txt2img> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+    }
 
     std::vector<struct ggml_tensor*> decoded_images;
     {
-        sd_image_t init_config = {
-            uint32_t(sd_ctx->engine_meta.engine_env_w / 8),
-            uint32_t(sd_ctx->engine_meta.engine_env_h / 8),
-            3,
-            NULL
-        };
-        for (int b = 0; b < sd_ctx->engine_meta.env_batch_count; b++) {
+        for (int b = 0; b < batch_count; b++) {
             ggml_tensor* init_latent = NULL;
             ggml_tensor* init_noised = NULL;
             {
                 LOG_INFO("<txt2img> encode_first_stage start");
-                int64_t t0       = ggml_time_ms();
-                int64_t cur_seed = sd_ctx->engine_meta.engine_seed + b;
-                LOG_INFO("<txt2img> generating image: %i/%i - seed %i", b + 1, sd_ctx->engine_meta.env_batch_count, cur_seed);
-                generate_stable_latents(sd_ctx, &init_latent, &init_noised, &init_config, cur_seed);
+                int64_t t0 = ggml_time_ms();
+                sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 3, b);
                 int64_t t1 = ggml_time_ms();
-                LOG_INFO("<img2img> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+                LOG_INFO("<txt2img> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
             }
 
             ggml_tensor* temp_latent = nullptr;
             {
                 LOG_INFO("<txt2img> sampling start");
                 int64_t t2  = ggml_time_ms();
-                temp_latent = sd_ctx->sd->sample(
-                    sd_ctx->engine_ctx,
-                    init_latent,
-                    init_noised,
-                    sd_ctx->engine_keep.p_c,
-                    NULL,
-                    sd_ctx->engine_keep.p_cv,
-                    sd_ctx->engine_keep.n_c,
-                    NULL,
-                    sd_ctx->engine_keep.n_cv,
-                    sd_ctx->engine_keep.image_hint,
-                    sd_ctx->engine_meta.engine_control_strength,
-                    sd_ctx->engine_meta.engine_cfg_minor,
-                    sd_ctx->engine_meta.engine_cfg_scale,
-                    sd_ctx->engine_meta.engine_sample_method,
-                    sd_ctx->engine_meta.env_sigma_scheduler,
-                    sd_ctx->engine_meta.engine_merge_start,
-                    sd_ctx->engine_keep.prompts_embeds_concat,
-                    sd_ctx->engine_keep.prompts_embeds_vector);
+                temp_latent = sd_ctx->sd->generate_batch_result(init_latent, init_noised);
                 // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
                 // print_ggml_tensor(x_0);
                 int64_t t3 = ggml_time_ms();
@@ -2149,7 +2274,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx) {
 
             LOG_INFO("<txt2img> decode_first_stage start");
             int64_t t4 = ggml_time_ms();
-            decoded_images.push_back(sd_ctx->sd->decode_first_stage(sd_ctx->engine_ctx, temp_latent));
+            decoded_images.push_back(sd_ctx->sd->decode_first_stage(temp_latent));
             int64_t t5 = ggml_time_ms();
             LOG_INFO("<txt2img> decode_first_stage %" PRId64 " decoded, taking %.2fs", b + 1, (t5 - t4) * 1.0f / 1000);
         }
@@ -2159,7 +2284,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx) {
     {
         LOG_INFO("<img2img> packing start");
         int64_t t6 = ggml_time_ms();
-        extract_output_images(sd_ctx, &result_images, decoded_images);
+        sd_ctx->sd->extract_output_images(&result_images, decoded_images);
         int64_t t7 = ggml_time_ms();
         LOG_INFO("<img2img> packing completed in %.2fs", (t7 - t6) * 1.0f / 1000);
     }
@@ -2170,56 +2295,73 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx) {
     return result_images;
 }
 
-sd_image_t* img2img(sd_ctx_t* sd_ctx, sd_image_t* input_image) {
-    if (sd_ctx == NULL || input_image == NULL ) {
+sd_image_t* img2img(sd_ctx_t* sd_ctx,
+                    sd_image_t* init_image,
+                    const char* prompt,
+                    const char* negative_prompt,
+                    int clip_skip,
+                    float cfg_scale,
+                    int width,
+                    int height,
+                    enum sample_method_t sample_method,
+                    int sample_steps,
+                    float sample_strength,
+                    int64_t seed,
+                    int batch_count,
+                    const sd_image_t* control_cond,
+                    float control_strength) {
+    if (sd_ctx == NULL || init_image->data == NULL) {
         return NULL;
     }
     int64_t start_at = ggml_time_ms();
+    LOG_INFO("<img2img> start");
+
+    {
+        LOG_INFO("<img2img> encode_first_stage start");
+        int64_t t0       = ggml_time_ms();
+        sd_ctx->sd->encode_first_stage(
+            prompt,
+            negative_prompt,
+            NULL /*input_id_images_path*/,
+            init_image /*initvid_image*/,
+            control_cond,
+            control_strength,
+            clip_skip,
+            cfg_scale,
+            cfg_scale,
+            width,
+            height,
+            sample_method,
+            sample_steps,
+            sample_strength,
+            seed,
+            0 /*style_strength*/,
+            false /*normalize_input*/,
+            batch_count,
+            {}
+        );
+        int64_t t1 = ggml_time_ms();
+        LOG_INFO("<img2img> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+    }
 
     std::vector<struct ggml_tensor*> decoded_images;
     {
-        sd_image_t init_config = {
-            uint32_t(sd_ctx->engine_meta.engine_env_w),
-            uint32_t(sd_ctx->engine_meta.engine_env_h),
-            3,
-            NULL
-        };
-
         ggml_tensor* init_latent = NULL;
         ggml_tensor* init_noised = NULL;
         {
-            LOG_INFO("<img2img> encode_first_stage start");
+            LOG_INFO("<img2img> generating latents");
             int64_t t0       = ggml_time_ms();
-            int64_t cur_seed = sd_ctx->engine_meta.engine_seed;
-            LOG_INFO("<img2img> generating image: %i/%i - seed %i", 1, sd_ctx->engine_meta.env_batch_count, cur_seed);
-            generate_stable_latents(sd_ctx, &init_latent, &init_noised, &init_config, cur_seed);
+            LOG_INFO("<img2img> generating image: %i/%i", 1, batch_count);
+            sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width, height, 3);
             int64_t t1 = ggml_time_ms();
-            LOG_INFO("<img2img> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+            LOG_INFO("<img2img> generating latents completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         }
 
         ggml_tensor* temp_latent = nullptr;
         {
             LOG_INFO("<img2img> sampling start");
             int64_t t2  = ggml_time_ms();
-            temp_latent = sd_ctx->sd->sample(
-                sd_ctx->engine_ctx,
-                init_latent,
-                init_noised,
-                sd_ctx->engine_keep.p_c,
-                NULL,
-                sd_ctx->engine_keep.p_cv,
-                sd_ctx->engine_keep.n_c,
-                NULL,
-                sd_ctx->engine_keep.n_cv,
-                sd_ctx->engine_keep.image_hint,
-                sd_ctx->engine_meta.engine_control_strength,
-                sd_ctx->engine_meta.engine_cfg_minor,
-                sd_ctx->engine_meta.engine_cfg_scale,
-                sd_ctx->engine_meta.engine_sample_method,
-                sd_ctx->engine_meta.env_sigma_scheduler,
-                sd_ctx->engine_meta.engine_merge_start,
-                sd_ctx->engine_keep.prompts_embeds_concat,
-                sd_ctx->engine_keep.prompts_embeds_vector);
+            temp_latent = sd_ctx->sd->generate_batch_result(init_latent, init_noised);
             // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
             // print_ggml_tensor(x_0);
             int64_t t3 = ggml_time_ms();
@@ -2228,7 +2370,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx, sd_image_t* input_image) {
 
         LOG_INFO("<img2img> decode_first_stage start");
         int64_t t4 = ggml_time_ms();
-        decoded_images.push_back(sd_ctx->sd->decode_first_stage(sd_ctx->engine_ctx, temp_latent));
+        decoded_images.push_back(sd_ctx->sd->decode_first_stage(temp_latent));
         int64_t t5 = ggml_time_ms();
         LOG_INFO("<img2img> decode_first_stage completed, taking %.2fs", (t5 - t4) * 1.0f / 1000);
     }
@@ -2237,7 +2379,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx, sd_image_t* input_image) {
     {
         LOG_INFO("<img2img> packing start");
         int64_t t6 = ggml_time_ms();
-        extract_output_images(sd_ctx, &result_images, decoded_images);
+        sd_ctx->sd->extract_output_images(&result_images, decoded_images);
         int64_t t7 = ggml_time_ms();
         LOG_INFO("<img2img> packing completed in %.2fs", (t7 - t6) * 1.0f / 1000);
     }
@@ -2248,56 +2390,78 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx, sd_image_t* input_image) {
     return result_images;
 }
 
-SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx) {
-    if (sd_ctx == NULL) {
+SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
+                           sd_image_t* init_image,
+                           const char* prompt,
+                           const char* negative_prompt,
+                           int width,
+                           int height,
+                           float min_cfg,
+                           float cfg_scale,
+                           enum sample_method_t sample_method,
+                           int sample_steps,
+                           float sample_strength,
+                           int64_t seed,
+                           int video_frames,
+                           int motion_bucket_id,
+                           int fps,
+                           float augmentation_level) {
+    if (sd_ctx == NULL || init_image->data == NULL) {
         return NULL;
     }
     int64_t start_at = ggml_time_ms();
+    LOG_INFO("<img2vid> start");
+
+    {
+        LOG_INFO("<img2img> encode_first_stage start");
+        int64_t t0       = ggml_time_ms();
+        sd_ctx->sd->encode_first_stage(
+            prompt,
+            negative_prompt,
+            NULL /*input_id_images_path*/,
+            init_image /*initvid_image*/,
+            NULL /*control_cond*/,
+            0 /*control_strength*/,
+            -1 /*clip_skip*/,
+            cfg_scale,
+            cfg_scale,
+            width,
+            height,
+            sample_method,
+            sample_steps,
+            sample_strength,
+            seed,
+            0 /*style_strength*/,
+            false /*normalize_input*/,
+            1 /*batch_count*/,
+            {
+                fps,
+                video_frames,
+                motion_bucket_id,
+                augmentation_level
+            }
+        );
+        int64_t t1 = ggml_time_ms();
+        LOG_INFO("<img2img> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+    }
 
     std::vector<struct ggml_tensor*> decoded_images;
     {
-        sd_image_t init_config = {
-            uint32_t(sd_ctx->engine_meta.engine_env_w / 8),
-            uint32_t(sd_ctx->engine_meta.engine_env_h / 8),
-            4,
-            NULL
-        };
-
         ggml_tensor* init_latent = NULL;
         ggml_tensor* init_noised = NULL;
         {
             LOG_INFO("<img2vid> encode_first_stage start");
             int64_t t0       = ggml_time_ms();
-            int64_t cur_seed = sd_ctx->engine_meta.engine_seed;
-            LOG_INFO("<img2vid> generating video: %i/%i - seed %i", 1, sd_ctx->engine_meta.env_batch_count, cur_seed);
-            generate_stable_latents(sd_ctx, &init_latent, &init_noised, &init_config, cur_seed);
+            sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 4);
             int64_t t1 = ggml_time_ms();
             LOG_INFO("<img2vid> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         }
 
-        ggml_tensor* final_latent = nullptr;
+        ggml_tensor* temp_latent = nullptr;
         {
             LOG_INFO("<img2vid> sampling start");
             int64_t t2   = ggml_time_ms();
-            final_latent = sd_ctx->sd->sample(
-                sd_ctx->engine_ctx,
-                init_latent,
-                init_noised,
-                sd_ctx->engine_keep.p_c,
-                sd_ctx->engine_keep.p_ca,
-                sd_ctx->engine_keep.p_cv,
-                sd_ctx->engine_keep.n_c,
-                sd_ctx->engine_keep.n_ca,
-                sd_ctx->engine_keep.n_cv,
-                sd_ctx->engine_keep.image_hint,
-                sd_ctx->engine_meta.engine_control_strength,
-                sd_ctx->engine_meta.engine_cfg_minor,
-                sd_ctx->engine_meta.engine_cfg_scale,
-                sd_ctx->engine_meta.engine_sample_method,
-                sd_ctx->engine_meta.env_sigma_scheduler,
-                sd_ctx->engine_meta.engine_merge_start,
-                sd_ctx->engine_keep.prompts_embeds_concat,
-                sd_ctx->engine_keep.prompts_embeds_vector);
+            temp_latent = sd_ctx->sd->generate_batch_result(init_latent, init_noised);
             // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
             // print_ggml_tensor(x_0);
             int64_t t3 = ggml_time_ms();
@@ -2306,7 +2470,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx) {
 
         LOG_INFO("<img2vid> decode_first_stage start");
         int64_t t4 = ggml_time_ms();
-        decoded_images.push_back(sd_ctx->sd->decode_first_stage(sd_ctx->engine_ctx, final_latent));
+        decoded_images.push_back(sd_ctx->sd->decode_first_stage(temp_latent));
         int64_t t5 = ggml_time_ms();
         LOG_INFO("<img2vid> decode_first_stage completed, taking %.2fs", (t5 - t4) * 1.0f / 1000);
     }
@@ -2315,7 +2479,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx) {
     {
         LOG_INFO("<img2vid> packing start");
         int64_t t6 = ggml_time_ms();
-        extract_output_images(sd_ctx, &result_images, decoded_images);
+        sd_ctx->sd->extract_output_images(&result_images, decoded_images);
         int64_t t7 = ggml_time_ms();
         LOG_INFO("<img2vid> packing completed in %.2fs", (t7 - t6) * 1.0f / 1000);
     }
