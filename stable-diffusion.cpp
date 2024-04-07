@@ -103,6 +103,8 @@ public:
 
     std::string trigger_word = "img";  // should be user settable
 
+    bool model_loaded = false;
+
     StableDiffusionGGML() = default;
 
     StableDiffusionGGML(int n_threads,
@@ -1528,6 +1530,66 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
         return NULL;
     }
     return sd_ctx;
+}
+
+sd_ctx_t* new_sd_ctx_direct(
+                            const char* lora_model_dir,
+                            bool vae_decode_only,
+                            bool free_params_immediately,
+                            int n_threads,
+                            enum rng_type_t rng_type) {
+    sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
+    if (sd_ctx == NULL) {
+        return NULL;
+    }
+    sd_ctx->sd = new StableDiffusionGGML(n_threads,
+                vae_decode_only,
+                free_params_immediately,
+                lora_model_dir,
+                rng_type);
+    if (sd_ctx->sd == NULL) {
+        return NULL;
+    }
+    sd_ctx->sd->lora_model_dir = std::string(lora_model_dir);
+    return sd_ctx;
+}
+
+bool     sd_model_is_loaded(sd_ctx_t* sd_ctx) {
+    return sd_ctx->sd->model_loaded;
+}
+
+void load_model(sd_ctx_t* sd_ctx,
+                            const char* model_path_c_str,
+                            const char* vae_path_c_str,
+                            const char* taesd_path_c_str,
+                            const char* control_net_path_c_str,
+                            const char* embed_dir_c_str,
+                            enum sd_type_t wtype,
+                            bool vae_tiling,
+                            enum schedule_t s,
+                            bool keep_control_net_cpu) {
+    std::string model_path(model_path_c_str);
+    std::string vae_path(vae_path_c_str);
+    std::string taesd_path(taesd_path_c_str);
+    std::string control_net_path(control_net_path_c_str);
+    std::string embd_path(embed_dir_c_str);
+    std::string id_embd_path("");
+    if (!sd_ctx->sd->load_from_file(model_path,
+                                    vae_path,
+                                    control_net_path,
+                                    embd_path,
+                                    id_embd_path,
+                                    taesd_path,
+                                    vae_tiling,
+                                    (ggml_type)wtype,
+                                    s,
+                                    false,
+                                    keep_control_net_cpu,
+                                    false)) {
+        delete sd_ctx->sd;
+        sd_ctx->sd = NULL;
+        free(sd_ctx);
+    }
 }
 
 void free_sd_ctx(sd_ctx_t* sd_ctx) {
