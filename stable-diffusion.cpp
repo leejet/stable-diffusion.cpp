@@ -1856,9 +1856,10 @@ void config_sd_ctx(sd_ctx_t* sd_ctx,
             std::vector<bool> class_tokens_mask;      // ggml_tensor* class_tokens_mask = NULL;
 
             // deal lora stacked for PhotoMaker using
-            if (sd_ctx->sd->stacked_id) {
+            if (sd_ctx->sd->stacked_id && !sd_ctx->sd->pmid_lora->applied) {
                 int64_t t0 = ggml_time_ms();
                 sd_ctx->sd->pmid_lora->apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
+                sd_ctx->sd->pmid_lora->applied = true;
                 int64_t  t1 = ggml_time_ms();
                 LOG_INFO("pmid_lora apply completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
             }
