@@ -815,23 +815,6 @@ int main(int argc, const char* argv[]) {
                           params.style_ratio,
                           params.normalize_input,
                           params.input_id_images_path.c_str());
-    } else if (params.mode == IMG2VID) {
-        results = img2vid(sd_ctx,
-                          input_image,
-                          params.prompt.c_str(),
-                          params.negative_prompt.c_str(),
-                          params.width,
-                          params.height,
-                          params.min_cfg,
-                          params.cfg_scale,
-                          params.sample_method,
-                          params.sample_steps,
-                          params.strength,
-                          params.seed,
-                          params.video_frames,
-                          params.motion_bucket_id,
-                          params.fps,
-                          params.augmentation_level);
     } else if (params.mode == IMG2IMG) {
         results = img2img(sd_ctx,
                           input_image,
@@ -848,6 +831,23 @@ int main(int argc, const char* argv[]) {
                           params.batch_count,
                           control_image,
                           params.control_strength);
+    } else if (params.mode == IMG2VID) {
+        results = img2vid(sd_ctx,
+                          initvid_image,
+                          params.prompt.c_str(),
+                          params.negative_prompt.c_str(),
+                          params.width,
+                          params.height,
+                          params.min_cfg,
+                          params.cfg_scale,
+                          params.sample_method,
+                          params.sample_steps,
+                          params.strength,
+                          params.seed,
+                          params.video_frames,
+                          params.motion_bucket_id,
+                          params.fps,
+                          params.augmentation_level);
     }
 
     if (results == NULL) {
