@@ -15,6 +15,7 @@ models*
 
 cmake-build-*
 io-test
+sd-bash-examples
 sd-control-lora
 sd-control-net
 sd-embeddings
