@@ -2011,6 +2011,7 @@ public:
             }
             if (initvid_image && video_config.fps > 1) {
                 gglm_ctx_params.mem_size += width * height * 3 * sizeof(float) * (video_config.total_frames + 1);
+                gglm_ctx_params.mem_size *= video_config.total_frames * 20;
             }
             gglm_ctx_params.mem_size += width * height * 3 * sizeof(float) * (batch_count + 1);
             gglm_ctx_params.mem_buffer = NULL;
@@ -2292,15 +2293,15 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
     sd_image_t* result_images = nullptr;
     {
-        LOG_INFO("<img2img> packing start");
+        LOG_INFO("<txt2img> packing start");
         int64_t t6 = ggml_time_ms();
         sd_ctx->sd->extract_output_images(&result_images, decoded_images);
         int64_t t7 = ggml_time_ms();
-        LOG_INFO("<img2img> packing completed in %.2fs", (t7 - t6) * 1.0f / 1000);
+        LOG_INFO("<txt2img> packing completed in %.2fs", (t7 - t6) * 1.0f / 1000);
     }
 
     int64_t end_when = ggml_time_ms();
-    LOG_INFO("<img2img> completed in total %.2fs", (end_when - start_at) * 1.0f / 1000);
+    LOG_INFO("<txt2img> completed in total %.2fs", (end_when - start_at) * 1.0f / 1000);
     LOG_INFO("===========================<txt2img>===========================");
 
     return result_images;
@@ -2427,7 +2428,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
     LOG_INFO("<img2vid> start");
 
     {
-        LOG_INFO("<img2img> encode_first_stage start");
+        LOG_INFO("<img2vid> encode_first_stage start");
         int64_t t0       = ggml_time_ms();
         sd_ctx->sd->encode_first_stage(
             prompt,
@@ -2456,7 +2457,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
             }
         );
         int64_t t1 = ggml_time_ms();
-        LOG_INFO("<img2img> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+        LOG_INFO("<img2vid> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
     }
 
     std::vector<struct ggml_tensor*> decoded_images;
