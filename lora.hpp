@@ -55,7 +55,7 @@ struct LoraModel : public GGMLModule {
             if (dry_run) {
                 struct ggml_tensor* real = ggml_new_tensor(params_ctx,
                                                            tensor_storage.type,
-                                                           tensor_storage.n_dims,
+                                                           (1 < tensor_storage.n_dims) ? tensor_storage.n_dims : 1, // for params safe
                                                            tensor_storage.ne);
                 lora_tensors[name]       = real;
             } else {

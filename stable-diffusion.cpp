@@ -105,12 +105,12 @@ protected:
     };
 
     struct ggml_ctx_t {
-        ggml_context* engine_ctx = NULL;
+        ggml_context* engine_ctx;
         ggml_meta_t engine_meta;
         ggml_keep_t engine_keep;
     };
 
-    ggml_ctx_t* gglm_ctx_local;
+    ggml_ctx_t* gglm_ctx_local = NULL;
 
 public:
     ggml_backend_t backend             = NULL;  // general backend
@@ -166,6 +166,11 @@ public:
         } else if (rng_type == CUDA_RNG) {
             rng = std::make_shared<PhiloxRNG>();
         }
+        gglm_ctx_local = new (struct ggml_ctx_t){
+            /*.engine_ctx  =*/nullptr,
+            /*.engine_meta =*/{},
+            /*.engine_keep =*/{},
+        };
     }
 
     ~StableDiffusionGGML() {
@@ -181,6 +186,9 @@ public:
         if (gglm_ctx_local->engine_ctx != NULL) {
             ggml_free(gglm_ctx_local->engine_ctx);
             gglm_ctx_local->engine_ctx = NULL;
+        }
+        if (gglm_ctx_local){
+            delete gglm_ctx_local;
         }
         ggml_backend_free(backend);
     }
@@ -1988,9 +1996,9 @@ public:
             return;
         }
         bool mark_mid_update = false;
-        std::string positive_prompt(positive_prompt_c_str);
-        std::string negative_prompt(negative_prompt_c_str);
-        std::string input_id_images_path(input_id_images_path_c_str);
+        std::string positive_prompt(positive_prompt_c_str ? positive_prompt_c_str : "");
+        std::string negative_prompt(negative_prompt_c_str ? negative_prompt_c_str : "");
+        std::string input_id_images_path(input_id_images_path_c_str ? input_id_images_path_c_str : "");
 
         struct ggml_init_params gglm_ctx_params{};
         {
@@ -2002,7 +2010,7 @@ public:
                 gglm_ctx_params.mem_size += control_image->width * control_image->height * control_image->channel * sizeof(float);
             }
             if (initvid_image && video_config.fps > 1) {
-                gglm_ctx_params.mem_size += width * height * 3 * sizeof(float) * (video_config.total_frames);
+                gglm_ctx_params.mem_size += width * height * 3 * sizeof(float) * (video_config.total_frames + 1);
             }
             gglm_ctx_params.mem_size += width * height * 3 * sizeof(float) * (batch_count + 1);
             gglm_ctx_params.mem_buffer = NULL;
@@ -2097,8 +2105,9 @@ public:
         uint32_t result_w    = gglm_ctx_local->engine_meta.engine_env_w;
         uint32_t result_h    = gglm_ctx_local->engine_meta.engine_env_h;
         uint32_t result_c    = 3;
+        size_t vid_frames    = gglm_ctx_local->engine_keep.tag_video_config.total_frames;
         size_t result_groups = gglm_ctx_local->engine_meta.env_batch_count;
-        size_t result_frames = gglm_ctx_local->engine_keep.tag_video_config.total_frames;
+        size_t result_frames = vid_frames > 0 ? vid_frames : 1;
 
         *result_images = (sd_image_t*)calloc(result_groups * result_frames, sizeof(sd_image_t));
         for (size_t g = 0; g < decoded_images.size(); g++) {
@@ -2218,6 +2227,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         return NULL;
     }
     int64_t start_at = ggml_time_ms();
+    LOG_INFO("===========================<txt2img>===========================");
     LOG_INFO("<txt2img> start");
 
     {
@@ -2291,6 +2301,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
     int64_t end_when = ggml_time_ms();
     LOG_INFO("<img2img> completed in total %.2fs", (end_when - start_at) * 1.0f / 1000);
+    LOG_INFO("===========================<txt2img>===========================");
 
     return result_images;
 }
@@ -2314,6 +2325,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         return NULL;
     }
     int64_t start_at = ggml_time_ms();
+    LOG_INFO("===========================<img2img>===========================");
     LOG_INFO("<img2img> start");
 
     {
@@ -2386,6 +2398,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
 
     int64_t end_when = ggml_time_ms();
     LOG_INFO("<img2img> completed in total %.2fs", (end_when - start_at) * 1.0f / 1000);
+    LOG_INFO("===========================<img2img>===========================");
 
     return result_images;
 }
@@ -2410,6 +2423,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
         return NULL;
     }
     int64_t start_at = ggml_time_ms();
+    LOG_INFO("===========================<img2vid>===========================");
     LOG_INFO("<img2vid> start");
 
     {
@@ -2486,6 +2500,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
 
     int64_t end_when = ggml_time_ms();
     LOG_INFO("<img2vid> completed in total %.2fs", (end_when - start_at) * 1.0f / 1000);
+    LOG_INFO("===========================<img2vid>===========================");
 
     return result_images;
 }

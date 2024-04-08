@@ -765,10 +765,16 @@ public:
         }
         set_clip_skip(clip_skip_value);
 
-        blocks["embeddings"]       = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token));
-        blocks["projection"]       = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, projection_dim, true));
-        blocks["encoder"]          = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
-        blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
+        if (version == OPEN_CLIP_VIT_BIGG_14) {
+            blocks["embeddings"] = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token));
+            blocks["projection"] = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, projection_dim, true));
+            blocks["encoder"]    = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
+            blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
+        } else {
+            blocks["embeddings"] = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token));
+            blocks["encoder"]    = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
+            blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
+        }
     }
 
     void set_clip_skip(int skip) {
@@ -789,18 +795,18 @@ public:
                                 size_t max_token_idx = 0,
                                 bool return_pooled   = false) {
         // input_ids: [N, n_token]
-        auto embeddings       = std::dynamic_pointer_cast<CLIPEmbeddings>(blocks["embeddings"]);
-        auto text_projection  = std::dynamic_pointer_cast<CLIPProjection>(blocks["projection"]);
-        auto encoder          = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
-        auto final_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer_norm"]);
+        auto text_embeddings = std::dynamic_pointer_cast<CLIPEmbeddings>(blocks["embeddings"]);
+        auto text_projection = std::dynamic_pointer_cast<CLIPProjection>(blocks["projection"]);
+        auto text_encoder    = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
+        auto text_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer_norm"]);
 
-        auto x = embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
-        x      = encoder->forward(ctx, x, return_pooled ? -1 : clip_skip, true);
+        auto x = text_embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
+        x      = text_encoder->forward(ctx, x, return_pooled ? -1 : clip_skip, true);
         if (return_pooled || with_final_ln) {
-            x = final_layer_norm->forward(ctx, x);
+            x = text_layer_norm->forward(ctx, x);
         }
 
-        if (return_pooled) {
+        if (return_pooled && text_projection) {
             ggml_tensor* pooled = ggml_view_1d(ctx, x, hidden_size, x->nb[1] * max_token_idx);
             text_projection->forward(ctx, pooled);
             return pooled;
@@ -1040,7 +1046,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         } else if (version == VERSION_SVD) {
             vision_model->get_param_tensors(tensors, prefix + "transformer");
         } else {
-            text_model->get_param_tensors(tensors, prefix + "transformer");
+            text_model->get_param_tensors(tensors, prefix + "transformer.text_model");
         }
     }
 
@@ -1098,9 +1104,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         size_t n_token = input_ids->ne[0];
         struct ggml_tensor* hidden_states = NULL;
 
-        if (input_ids != NULL && input_ids->ne[0] > vision_model->n_token) {
-            GGML_ASSERT(input_ids->ne[0] % vision_model->n_token == 0);
-            input_ids = ggml_reshape_2d(ctx, input_ids, vision_model->n_token, input_ids->ne[0] / vision_model->n_token);
+        size_t model_n_token = ((version == VERSION_SVD) ? vision_model->n_token : text_model->n_token);
+        if (input_ids != NULL && input_ids->ne[0] > model_n_token) {
+            GGML_ASSERT(input_ids->ne[0] % model_n_token == 0);
+            input_ids = ggml_reshape_2d(ctx, input_ids, model_n_token, input_ids->ne[0] / model_n_token);
         }
 
         if (version == VERSION_XL) {
