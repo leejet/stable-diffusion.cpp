@@ -1868,8 +1868,8 @@ public:
         if(version == VERSION_SVD){
             int64_t t0 = ggml_time_ms();
             std::tie(
-                gglm_ctx_local->engine_keep.p_ca,
                 gglm_ctx_local->engine_keep.p_c,
+                gglm_ctx_local->engine_keep.p_ca,
                 gglm_ctx_local->engine_keep.p_cv
                 ) = get_learned_condition_svd(
                 gglm_ctx_local->engine_ctx,
@@ -1885,8 +1885,8 @@ public:
             );
 
             std::tie(
-                gglm_ctx_local->engine_keep.n_ca,
                 gglm_ctx_local->engine_keep.n_c,
+                gglm_ctx_local->engine_keep.n_ca,
                 gglm_ctx_local->engine_keep.n_cv
                 ) = get_learned_condition_svd(
                 gglm_ctx_local->engine_ctx,

@@ -423,7 +423,7 @@ public:
             auto label_embed_0 = std::dynamic_pointer_cast<Linear>(blocks["label_emb.0.0"]);
             auto label_embed_2 = std::dynamic_pointer_cast<Linear>(blocks["label_emb.0.2"]);
 
-            auto label_emb = label_embed_0->forward(ctx, y);
+            auto label_emb = label_embed_0->forward(ctx, y);          // [adm_in_channels, time_embed_dim]
             label_emb      = ggml_silu_inplace(ctx, label_emb);
             label_emb      = label_embed_2->forward(ctx, label_emb);  // [N, time_embed_dim]
 

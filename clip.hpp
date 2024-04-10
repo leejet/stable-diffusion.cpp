@@ -825,39 +825,39 @@ public:
     int32_t patch_size        = 14;
     int32_t image_size        = 224;
     int32_t num_positions     = 257;  // (image_size / patch_size)^2 + 1
-    int32_t hidden_size       = 1024;
+    int32_t hidden_size       = 768;  // (label_embed_dim)
     int32_t intermediate_size = 4096;
     int32_t n_head            = 16;
     int32_t n_layer           = 24;
-    int32_t projection_dim    = 768;
+    int32_t projection_dim    = 1280; // (time_embed_dim)
     int32_t clip_skip         = -1;
 
 public:
     CLIPVisionModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14) {
         if (version == OPEN_CLIP_VIT_H_14) {
-            hidden_size       = 1280;
+            hidden_size       = 1024;
             intermediate_size = 5120;
             n_head            = 16;
             n_layer           = 32;
-            projection_dim    = 1024;
+            projection_dim    = 1280;
         } else if (version == OPEN_CLIP_VIT_BIGG_14) {
-            hidden_size       = 1664;
+            hidden_size       = 1332;
             intermediate_size = 8192;
             n_head            = 16;
             n_layer           = 48;
-            projection_dim    = 1332;
+            projection_dim    = 1664;
         }
 
-        blocks["text_embeddings"] = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(projection_dim, token_size, n_token));
+        blocks["text_embeddings"] = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, token_size, n_token));
         //blocks["text_encoder"]    = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
-        blocks["text_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(projection_dim));
-        blocks["text_projection"] = std::shared_ptr<GGMLBlock>(new CLIPProjection(projection_dim, projection_dim, true));
+        blocks["text_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
+        blocks["text_projection"] = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, hidden_size, true));
 
-        blocks["visual_embeddings"]     = std::shared_ptr<GGMLBlock>(new CLIPVisionEmbeddings(hidden_size, num_channels, patch_size, image_size, num_positions));
-        blocks["visual_pre_layernorm"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
-        blocks["visual_encoder"]        = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
-        blocks["visual_post_layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
-        blocks["visual_projection"]     = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, projection_dim, true));
+        blocks["visual_embeddings"]     = std::shared_ptr<GGMLBlock>(new CLIPVisionEmbeddings(projection_dim, num_channels, patch_size, image_size, num_positions));
+        blocks["visual_pre_layernorm"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(projection_dim));
+        blocks["visual_encoder"]        = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, projection_dim, n_head, intermediate_size));
+        blocks["visual_post_layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(projection_dim));
+        blocks["visual_projection"]     = std::shared_ptr<GGMLBlock>(new CLIPProjection(projection_dim, hidden_size, true));
     }
 
     void set_clip_skip(int skip) {
@@ -896,24 +896,24 @@ public:
             //txt_x = text_encoder->forward(ctx, txt_x, return_pooled ? -1 : clip_skip, true);
             if (return_pooled) {
                 txt_x = text_layer_norm->forward(ctx, txt_x);
-                txt_x = ggml_view_1d(ctx, txt_x, projection_dim, txt_x->nb[1] * max_token_idx);
-                text_projection->forward(ctx, txt_x);
+                txt_x = ggml_view_1d(ctx, txt_x, hidden_size, txt_x->nb[1] * max_token_idx);
+                text_projection->forward(ctx, txt_x);                    // [N, hidden_size, hidden_size]
             }
         }
 
         ggml_tensor* vis_x= nullptr;
         {
-            vis_x = visual_embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
-            vis_x = pre_layernorm->forward(ctx, vis_x);
+            vis_x = visual_embeddings->forward(ctx, pixel_values);  // [N, num_positions, projection_dim]
+            vis_x = pre_layernorm->forward(ctx, vis_x);             // [N, projection_dim]
             vis_x = visual_encoder->forward(ctx, vis_x, return_pooled ? -1 : clip_skip, false);
-            vis_x = post_layernorm->forward(ctx, vis_x);  // [N, n_token, hidden_size]
+            vis_x = post_layernorm->forward(ctx, vis_x);            // [N, num_positions, projection_dim]
             if (return_pooled) {
                 vis_x = ggml_cont(ctx, ggml_view_2d(ctx, vis_x, vis_x->ne[0], vis_x->ne[2], vis_x->nb[2], 0));
-                visual_projection->forward(ctx, vis_x);
+                visual_projection->forward(ctx, vis_x);             // [hidden_size, projection_dim]
             }
         }
 
-        return ggml_out_prod(ctx, txt_x, vis_x);  // [N, n_token, hidden_size]
+        return ggml_out_prod(ctx, vis_x, txt_x);  // [N, label_embed_dim, time_embed_dim]
     }
 };
 
