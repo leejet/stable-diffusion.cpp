@@ -87,6 +87,7 @@ protected:
         std::string env_negative_prompt;
         std::string env_input_id_images_path;
         std::vector<float> env_sigma_scheduler;
+        sd_video_t tag_video_config = {};
         int env_batch_count = -1;
     };
 
@@ -101,7 +102,6 @@ protected:
         ggml_tensor* prompts_embeds_concat = nullptr;
         ggml_tensor* prompts_embeds_vector = nullptr;
         ggml_tensor* image_hint = nullptr;
-        sd_video_t tag_video_config = {};
     };
 
     struct ggml_ctx_t {
@@ -1681,7 +1681,7 @@ public:
                                    const std::string& input_id_images_path,
                                    float pm_style_ratio,
                                    bool normalize_input) {
-        if (positive_prompt.empty()) {
+        if (positive_prompt.empty() || input_id_images_path.empty()) {
             LOG_INFO("config_photo_maker() with NULL reference_images, PhotoMaker disabled");
             return positive_prompt;
         }
@@ -1865,7 +1865,7 @@ public:
             return;
         }
 
-        if( (version == VERSION_SVD || version == VERSION_SVD1_1 )){
+        if(version == VERSION_SVD){
             int64_t t0 = ggml_time_ms();
             std::tie(
                 gglm_ctx_local->engine_keep.p_ca,
@@ -1900,7 +1900,7 @@ public:
                 video_config.motion_bucket_id,
                 video_config.augmentation_level
             );
-            gglm_ctx_local->engine_keep.tag_video_config = video_config;
+            gglm_ctx_local->engine_meta.tag_video_config = video_config;
             int64_t t1 = ggml_time_ms();
             LOG_INFO("get_learned_condition VID completed, taking %" PRId64 " ms", t1 - t0);
         } else {
@@ -2054,7 +2054,8 @@ public:
                                  int output_c,
                                  int cur_seed_offset = 0){
         ggml_tensor* image_latent = gglm_ctx_local->engine_keep.image_latent;
-        int result_frames = gglm_ctx_local->engine_keep.tag_video_config.total_frames;
+        int vid_frames = gglm_ctx_local->engine_meta.tag_video_config.total_frames;
+        int output_frames = vid_frames > 0 ? vid_frames : 1;
         int64_t cur_seed = gglm_ctx_local->engine_meta.engine_seed + cur_seed_offset;
         rng->manual_seed(cur_seed);
         LOG_INFO("current seed %i", cur_seed);
@@ -2067,7 +2068,7 @@ public:
         } else {
             *init_noised = nullptr;
             *init_latent = ggml_new_tensor_4d(
-                gglm_ctx_local->engine_ctx, GGML_TYPE_F32, output_w, output_h, output_c, result_frames
+                gglm_ctx_local->engine_ctx, GGML_TYPE_F32, output_w, output_h, output_c, output_frames
             );
             ggml_tensor_set_f32_randn(*init_latent, rng);
         }
@@ -2106,7 +2107,7 @@ public:
         uint32_t result_w    = gglm_ctx_local->engine_meta.engine_env_w;
         uint32_t result_h    = gglm_ctx_local->engine_meta.engine_env_h;
         uint32_t result_c    = 3;
-        size_t vid_frames    = gglm_ctx_local->engine_keep.tag_video_config.total_frames;
+        size_t vid_frames    = gglm_ctx_local->engine_meta.tag_video_config.total_frames;
         size_t result_groups = gglm_ctx_local->engine_meta.env_batch_count;
         size_t result_frames = vid_frames > 0 ? vid_frames : 1;
 
@@ -2267,7 +2268,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
             {
                 LOG_INFO("<txt2img> encode_first_stage start");
                 int64_t t0 = ggml_time_ms();
-                sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 3, b);
+                sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 4, b);
                 int64_t t1 = ggml_time_ms();
                 LOG_INFO("<txt2img> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
             }
@@ -2467,7 +2468,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
         {
             LOG_INFO("<img2vid> encode_first_stage start");
             int64_t t0       = ggml_time_ms();
-            sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 4);
+            sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 8);
             int64_t t1 = ggml_time_ms();
             LOG_INFO("<img2vid> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         }

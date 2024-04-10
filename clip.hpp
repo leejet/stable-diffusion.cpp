@@ -845,7 +845,7 @@ public:
             intermediate_size = 8192;
             n_head            = 16;
             n_layer           = 48;
-            projection_dim    = 768;
+            projection_dim    = 1332;
         }
 
         blocks["text_embeddings"] = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(projection_dim, token_size, n_token));
@@ -913,9 +913,7 @@ public:
             }
         }
 
-        auto x = ggml_out_prod(ctx, txt_x, vis_x);
-
-        return x;  // [N, n_token, hidden_size]
+        return ggml_out_prod(ctx, txt_x, vis_x);  // [N, n_token, hidden_size]
     }
 };
 
@@ -1117,32 +1115,32 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             }
 
             if (return_pooled) {
-                return text_model2->forward(ctx, input_ids2, NULL, max_token_idx, return_pooled);
+                hidden_states = text_model2->forward(ctx, input_ids2, NULL, max_token_idx, return_pooled);
+            } else {
+                hidden_states = text_model->forward(ctx, input_ids, embeddings);  // [N, n_token, hidden_size]
+
+                hidden_states = ggml_reshape_4d(ctx,
+                                                hidden_states,
+                                                hidden_states->ne[0],
+                                                hidden_states->ne[1],
+                                                hidden_states->ne[2],
+                                                hidden_states->ne[3]);
+                hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 2, 0, 1, 3));
+
+                auto hidden_states2 = text_model2->forward(ctx, input_ids2, NULL);  // [N, n_token, hidden_size2]
+                // LOG_DEBUG("hidden_states: %d %d %d %d", hidden_states->ne[0], hidden_states->ne[1], hidden_states->ne[2], hidden_states->ne[3]);
+                hidden_states2 = ggml_reshape_4d(ctx,
+                                                 hidden_states2,
+                                                 hidden_states2->ne[0],
+                                                 hidden_states2->ne[1],
+                                                 hidden_states2->ne[2],
+                                                 hidden_states2->ne[3]);
+                hidden_states2 = ggml_cont(ctx, ggml_permute(ctx, hidden_states2, 2, 0, 1, 3));
+
+                hidden_states = ggml_concat(ctx, hidden_states, hidden_states2);  // [N, n_token, hidden_size + hidden_size2]
+
+                hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 1, 2, 0, 3));
             }
-
-            hidden_states = text_model->forward(ctx, input_ids, embeddings);  // [N, n_token, hidden_size]
-
-            hidden_states = ggml_reshape_4d(ctx,
-                                            hidden_states,
-                                            hidden_states->ne[0],
-                                            hidden_states->ne[1],
-                                            hidden_states->ne[2],
-                                            hidden_states->ne[3]);
-            hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 2, 0, 1, 3));
-
-            auto hidden_states2 = text_model2->forward(ctx, input_ids2, NULL);  // [N, n_token, hidden_size2]
-            // LOG_DEBUG("hidden_states: %d %d %d %d", hidden_states->ne[0], hidden_states->ne[1], hidden_states->ne[2], hidden_states->ne[3]);
-            hidden_states2 = ggml_reshape_4d(ctx,
-                                             hidden_states2,
-                                             hidden_states2->ne[0],
-                                             hidden_states2->ne[1],
-                                             hidden_states2->ne[2],
-                                             hidden_states2->ne[3]);
-            hidden_states2 = ggml_cont(ctx, ggml_permute(ctx, hidden_states2, 2, 0, 1, 3));
-
-            hidden_states = ggml_concat(ctx, hidden_states, hidden_states2);  // [N, n_token, hidden_size + hidden_size2]
-
-            hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 1, 2, 0, 3));
         } else if (version == VERSION_SVD) {
             hidden_states = vision_model->forward(ctx, input_ids, embeddings, pixel_values, return_pooled);  // [N, n_token, hidden_size]
         } else {

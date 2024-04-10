@@ -535,7 +535,7 @@ struct UNetModel : public GGMLModule {
     UNetModel(ggml_backend_t backend,
               ggml_type wtype,
               SDVersion version = VERSION_1_x)
-        : GGMLModule(backend, wtype), unet(version) {
+        : GGMLModule(backend, wtype), version(version), unet(version) {
         unet.init(params_ctx, wtype);
     }
 
