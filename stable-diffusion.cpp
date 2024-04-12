@@ -896,10 +896,10 @@ public:
         struct ggml_tensor* c_concat = NULL;
         {
             if (force_zero_embeddings) {
-                c_concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 4, total_frames);
+                c_concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 4, 1);
                 ggml_set_f32(c_concat, 0.f);
             } else if (init_image){
-                ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, total_frames);
+                ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
 
                 if (width != init_image->width || height != init_image->height) {
                     sd_image_f32_t image         = sd_image_t_to_sd_image_f32_t(*init_image);
@@ -2054,8 +2054,8 @@ public:
                                  int output_c,
                                  int cur_seed_offset = 0){
         ggml_tensor* image_latent = gglm_ctx_local->engine_keep.image_latent;
-        int vid_frames = gglm_ctx_local->engine_meta.tag_video_config.total_frames;
-        int output_frames = vid_frames > 0 ? vid_frames : 1;
+        //int vid_frames = gglm_ctx_local->engine_meta.tag_video_config.total_frames;
+        //int output_frames = vid_frames > 0 ? vid_frames : 1;
         int64_t cur_seed = gglm_ctx_local->engine_meta.engine_seed + cur_seed_offset;
         rng->manual_seed(cur_seed);
         LOG_INFO("current seed %i", cur_seed);
@@ -2068,7 +2068,7 @@ public:
         } else {
             *init_noised = nullptr;
             *init_latent = ggml_new_tensor_4d(
-                gglm_ctx_local->engine_ctx, GGML_TYPE_F32, output_w, output_h, output_c, output_frames
+                gglm_ctx_local->engine_ctx, GGML_TYPE_F32, output_w, output_h, output_c, 1
             );
             ggml_tensor_set_f32_randn(*init_latent, rng);
         }
@@ -2468,7 +2468,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
         {
             LOG_INFO("<img2vid> encode_first_stage start");
             int64_t t0       = ggml_time_ms();
-            sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 8);
+            sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 4);
             int64_t t1 = ggml_time_ms();
             LOG_INFO("<img2vid> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         }

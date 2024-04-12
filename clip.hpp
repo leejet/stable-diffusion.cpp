@@ -913,7 +913,7 @@ public:
             }
         }
 
-        return ggml_out_prod(ctx, vis_x, txt_x);  // [N, label_embed_dim, time_embed_dim]
+        return ggml_out_prod(ctx, txt_x, vis_x);  // [N, time_embed_dim, label_embed_dim]
     }
 };
 
