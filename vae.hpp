@@ -16,15 +16,18 @@ protected:
 public:
     ResnetBlock(int64_t in_channels,
                 int64_t out_channels,
-                std::pair<int, int> kernel_size)
+                std::pair<int, int> kernel_size,
+                std::pair<int, int> stride   = {1, 1},
+                std::pair<int, int> padding  = {1, 1},
+                std::pair<int, int> dilation = {1, 1})
         : in_channels(in_channels),
           out_channels(out_channels) {
         // temb_channels is always 0
         blocks["norm1"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, kernel_size, {1, 1}, {1, 1}));
+        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, kernel_size, stride, padding));
 
         blocks["norm2"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(out_channels));
-        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, kernel_size, {1, 1}, {1, 1}));
+        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, kernel_size, stride, padding));
 
         if (out_channels != in_channels) {
             blocks["nin_shortcut"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, {1, 1}));
@@ -180,7 +183,7 @@ public:
         : ResnetBlock(in_channels, out_channels, {3, 3}) {
         // merge_strategy is always learned
         blocks["spatial_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels, {3, 3}));
-        blocks["temporal_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(out_channels, out_channels, {3, 1}));
+        blocks["temporal_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(out_channels, out_channels, {3, 1}, {1, 1}, {1, 3}));
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));
         blocks["time_mixer"] = std::shared_ptr<GGMLBlock>(new AlphaBlender());
     }
