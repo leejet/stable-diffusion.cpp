@@ -752,10 +752,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_timestep_embedding(
     return ggml_timestep_embedding(ctx, timesteps, dim, max_period);
 }
 
-
-__STATIC_INLINE__ size_t ggml_tensor_num(ggml_context * ctx) {
+__STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
     size_t num = 0;
-    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+    for (ggml_tensor* t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
         num++;
     }
     return num;
@@ -851,7 +850,7 @@ protected:
     }
 
 public:
-    virtual std::string get_desc()       = 0;
+    virtual std::string get_desc() = 0;
 
     GGMLModule(ggml_backend_t backend, ggml_type wtype = GGML_TYPE_F32)
         : backend(backend), wtype(wtype) {

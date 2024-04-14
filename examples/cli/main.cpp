@@ -656,13 +656,16 @@ int main(int argc, const char* argv[]) {
         return 1;
     }
 
-    bool vae_decode_only        = true;
-    uint8_t* input_image_buffer = NULL;
+    bool vae_decode_only          = true;
+    uint8_t* input_image_buffer   = NULL;
+    uint8_t* control_image_buffer = NULL;
     if (params.mode == IMG2IMG || params.mode == IMG2VID) {
         vae_decode_only = false;
 
         int c              = 0;
-        input_image_buffer = stbi_load(params.input_path.c_str(), &params.width, &params.height, &c, 3);
+        int width          = 0;
+        int height         = 0;
+        input_image_buffer = stbi_load(params.input_path.c_str(), &width, &height, &c, 3);
         if (input_image_buffer == NULL) {
             fprintf(stderr, "load image from '%s' failed\n", params.input_path.c_str());
             return 1;
@@ -672,21 +675,22 @@ int main(int argc, const char* argv[]) {
             free(input_image_buffer);
             return 1;
         }
-        if (params.width <= 0) {
+        if (width <= 0) {
             fprintf(stderr, "error: the width of image must be greater than 0\n");
             free(input_image_buffer);
             return 1;
         }
-        if (params.height <= 0) {
+        if (height <= 0) {
             fprintf(stderr, "error: the height of image must be greater than 0\n");
             free(input_image_buffer);
             return 1;
         }
 
         // Resize input image ...
-        if (params.height % 64 != 0 || params.width % 64 != 0) {
-            int resized_height = params.height + (64 - params.height % 64);
-            int resized_width  = params.width + (64 - params.width % 64);
+        if (params.height != height || params.width != width) {
+            printf("resize input image from %dx%d to %dx%d\n", width, height, params.width, params.height);
+            int resized_height = params.height;
+            int resized_width  = params.width;
 
             uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * 3);
             if (resized_image_buffer == NULL) {
@@ -694,7 +698,7 @@ int main(int argc, const char* argv[]) {
                 free(input_image_buffer);
                 return 1;
             }
-            stbir_resize(input_image_buffer, params.width, params.height, 0,
+            stbir_resize(input_image_buffer, width, height, 0,
                          resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
                          3 /*RGB channel*/, STBIR_ALPHA_CHANNEL_NONE, 0,
                          STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
@@ -704,8 +708,6 @@ int main(int argc, const char* argv[]) {
             // Save resized result
             free(input_image_buffer);
             input_image_buffer = resized_image_buffer;
-            params.height      = resized_height;
-            params.width       = resized_width;
         }
     }
 
@@ -732,31 +734,32 @@ int main(int argc, const char* argv[]) {
         return 1;
     }
 
+    sd_image_t* control_image = NULL;
+    if (params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
+        int c                = 0;
+        control_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
+        if (control_image_buffer == NULL) {
+            fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
+            return 1;
+        }
+        control_image = new sd_image_t{(uint32_t)params.width,
+                                       (uint32_t)params.height,
+                                       3,
+                                       control_image_buffer};
+        if (params.canny_preprocess) {  // apply preprocessor
+            control_image->data = preprocess_canny(control_image->data,
+                                                   control_image->width,
+                                                   control_image->height,
+                                                   0.08f,
+                                                   0.08f,
+                                                   0.8f,
+                                                   1.0f,
+                                                   false);
+        }
+    }
+
     sd_image_t* results;
     if (params.mode == TXT2IMG) {
-        sd_image_t* control_image = NULL;
-        if (params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
-            int c              = 0;
-            input_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
-            if (input_image_buffer == NULL) {
-                fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
-                return 1;
-            }
-            control_image = new sd_image_t{(uint32_t)params.width,
-                                           (uint32_t)params.height,
-                                           3,
-                                           input_image_buffer};
-            if (params.canny_preprocess) {  // apply preprocessor
-                control_image->data = preprocess_canny(control_image->data,
-                                                       control_image->width,
-                                                       control_image->height,
-                                                       0.08f,
-                                                       0.08f,
-                                                       0.8f,
-                                                       1.0f,
-                                                       false);
-            }
-        }
         results = txt2img(sd_ctx,
                           params.prompt.c_str(),
                           params.negative_prompt.c_str(),
@@ -828,7 +831,12 @@ int main(int argc, const char* argv[]) {
                               params.sample_steps,
                               params.strength,
                               params.seed,
-                              params.batch_count);
+                              params.batch_count,
+                              control_image,
+                              params.control_strength,
+                              params.style_ratio,
+                              params.normalize_input,
+                              params.input_id_images_path.c_str());
         }
     }
 
@@ -881,6 +889,8 @@ int main(int argc, const char* argv[]) {
     }
     free(results);
     free_sd_ctx(sd_ctx);
+    free(control_image_buffer);
+    free(input_image_buffer);
 
     return 0;
 }
