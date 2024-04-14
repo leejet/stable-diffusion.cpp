@@ -200,14 +200,6 @@ struct TinyAutoEncoder : public GGMLModule {
         return "taesd";
     }
 
-    size_t get_params_mem_size() {
-        return taesd.get_params_mem_size();
-    }
-
-    size_t get_params_num() {
-        return taesd.get_params_num();
-    }
-
     bool load_from_file(const std::string& file_path) {
         LOG_INFO("loading taesd from '%s'", file_path.c_str());
         alloc_params_buffer();

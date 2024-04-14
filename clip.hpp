@@ -939,22 +939,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         return "clip";
     }
 
-    size_t get_params_mem_size() {
-        size_t params_mem_size = text_model.get_params_mem_size();
-        if (version == VERSION_XL) {
-            params_mem_size += text_model2.get_params_mem_size();
-        }
-        return params_mem_size;
-    }
-
-    size_t get_params_num() {
-        size_t params_num = text_model.get_params_num();
-        if (version == VERSION_XL) {
-            params_num += text_model2.get_params_num();
-        }
-        return params_num;
-    }
-
     void set_clip_skip(int clip_skip) {
         text_model.set_clip_skip(clip_skip);
         if (version == VERSION_XL) {
@@ -1383,14 +1367,6 @@ struct FrozenCLIPVisionEmbedder : public GGMLModule {
 
     std::string get_desc() {
         return "clip_vision";
-    }
-
-    size_t get_params_mem_size() {
-        return vision_model.get_params_mem_size();
-    }
-
-    size_t get_params_num() {
-        return vision_model.get_params_num();
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {

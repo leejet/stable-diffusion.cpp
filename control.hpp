@@ -369,14 +369,6 @@ struct ControlNet : public GGMLModule {
         return "control_net";
     }
 
-    size_t get_params_mem_size() {
-        return control_net.get_params_mem_size();
-    }
-
-    size_t get_params_num() {
-        return control_net.get_params_num();
-    }
-
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         control_net.get_param_tensors(tensors, prefix);
     }

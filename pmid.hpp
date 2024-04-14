@@ -186,16 +186,6 @@ public:
         return "pmid";
     }
 
-    size_t get_params_mem_size() {
-        size_t params_mem_size = id_encoder.get_params_mem_size();
-        return params_mem_size;
-    }
-
-    size_t get_params_num() {
-        size_t params_num = id_encoder.get_params_num();
-        return params_num;
-    }
-
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         id_encoder.get_param_tensors(tensors, prefix);
     }

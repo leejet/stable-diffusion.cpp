@@ -42,8 +42,6 @@ const char* sampling_methods_str[] = {
     "LCM",
 };
 
-char GGMLBlock::temp_buffer[1024 * 1024 * 10];
-
 /*================================================== Helper Functions ================================================*/
 
 void calculate_alphas_cumprod(float* alphas_cumprod,
@@ -353,27 +351,27 @@ public:
             // first_stage_model->test();
             // return false;
         } else {
-            size_t clip_params_mem_size = cond_stage_model->get_params_mem_size();
-            size_t unet_params_mem_size = diffusion_model->get_params_mem_size();
+            size_t clip_params_mem_size = cond_stage_model->get_params_buffer_size();
+            size_t unet_params_mem_size = diffusion_model->get_params_buffer_size();
             size_t vae_params_mem_size  = 0;
             if (!use_tiny_autoencoder) {
-                vae_params_mem_size = first_stage_model->get_params_mem_size();
+                vae_params_mem_size = first_stage_model->get_params_buffer_size();
             } else {
                 if (!tae_first_stage->load_from_file(taesd_path)) {
                     return false;
                 }
-                vae_params_mem_size = tae_first_stage->get_params_mem_size();
+                vae_params_mem_size = tae_first_stage->get_params_buffer_size();
             }
             size_t control_net_params_mem_size = 0;
             if (control_net) {
                 if (!control_net->load_from_file(control_net_path)) {
                     return false;
                 }
-                control_net_params_mem_size = control_net->get_params_mem_size();
+                control_net_params_mem_size = control_net->get_params_buffer_size();
             }
             size_t pmid_params_mem_size = 0;
             if (stacked_id) {
-                pmid_params_mem_size = pmid_model->get_params_mem_size();
+                pmid_params_mem_size = pmid_model->get_params_buffer_size();
             }
 
             size_t total_params_ram_size  = 0;
