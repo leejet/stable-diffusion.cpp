@@ -183,7 +183,7 @@ public:
         : ResnetBlock(in_channels, out_channels, {3, 3}) {
         // merge_strategy is always learned
         blocks["spatial_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels, {3, 3}));
-        blocks["temporal_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(out_channels, out_channels, {3, 1}, {1, 1}, {1, 3}));
+        blocks["temporal_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(out_channels, out_channels, {3, 1}, {1, 1}, {1, 0}));
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));
         blocks["time_mixer"] = std::shared_ptr<GGMLBlock>(new AlphaBlender());
     }
@@ -385,10 +385,6 @@ public:
         blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in));
         blocks["mid.block_2"] = get_resnet_block(block_in, block_in);
 
-        if (video_decoder) {
-            blocks["time_conv_out"] = std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(out_ch, out_ch, video_kernel_size, 1, video_kernel_size / 2));
-        }
-
         for (int i = int(num_resolutions - 1); i >= 0; i--) {
             int mult      = ch_mult[i];
             int block_out = ch * mult;
@@ -406,6 +402,10 @@ public:
 
         blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(block_in));
         blocks["conv_out"] = get_conv_out(block_in, out_ch, {3, 3}, {1, 1}, {1, 1});
+
+        if (video_decoder) {
+            blocks["time_conv_out"] = std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(out_ch, out_ch, video_kernel_size, 1, video_kernel_size / 2));
+        }
     }
 
     virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) {
@@ -432,10 +432,6 @@ public:
         h = mid_attn_1->forward(ctx, h);
         h = mid_block_2->forward(ctx, h);  // [N, block_in, h, w]
 
-        if (time_conv_out) {
-            h = time_conv_out->forward(ctx, h);
-        }
-
         // upsampling
         size_t num_resolutions = ch_mult.size();
         for (int i = int(num_resolutions - 1); i >= 0; i--) {
@@ -456,6 +452,11 @@ public:
         h = norm_out->forward(ctx, h);
         h = ggml_silu_inplace(ctx, h);  // nonlinearity/swish
         h = conv_out->forward(ctx, h);  // [N, out_ch, h*8, w*8]
+
+        if (time_conv_out) {
+            h = time_conv_out->forward(ctx, h);
+        }
+
         return h;
     }
 };

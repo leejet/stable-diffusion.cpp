@@ -827,6 +827,7 @@ public:
         cond_stage_model->set_clip_skip(clip_skip);
 
         struct ggml_tensor* hidden_states = NULL;  // [N, n_token, hidden_size]
+        struct ggml_tensor* pooled        = NULL;
         {
             struct ggml_tensor* chunk_hidden_states = NULL;  // [n_token, hidden_size]
             struct ggml_tensor* pixel_values        = NULL;
@@ -858,6 +859,9 @@ public:
                 size_t max_token_idx           = 0;
 
                 cond_stage_model->compute(n_threads, input_ids, input_ids2, pixel_values, max_token_idx, false, &chunk_hidden_states, work_ctx);
+                if (chunk_idx == 0) {
+                    cond_stage_model->compute(n_threads, input_ids, input_ids2, pixel_values,  max_token_idx, true, &pooled, work_ctx);
+                }
 
                 int64_t t1 = ggml_time_ms();
                 LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
@@ -927,19 +931,19 @@ public:
             //print_ggml_tensor(c_concat);
         }
 
-        // y
-        struct ggml_tensor* y = NULL;
+        // vec
+        struct ggml_tensor* vec = NULL;
         {
-            y                            = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model->unet.adm_in_channels);
-            int out_dim                  = 256;
-            int fps_id                   = fps - 1;
-            std::vector<float> timesteps = {(float)fps_id, (float)motion_bucket_id, augmentation_level};
-            set_timestep_embedding(timesteps, y, out_dim);
-            //print_ggml_tensor(y);
+            int out_dim = 256;
+            int fps_id  = fps - 1;
+            vec         = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, diffusion_model->unet.adm_in_channels);
+            memcpy(vec->data, pooled->data, ggml_nbytes(pooled));
+            std::vector<float>  timesteps = {(float)fps_id, (float)motion_bucket_id, augmentation_level};
+            set_timestep_embedding(timesteps, vec, out_dim);
         }
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing svd condition graph completed, taking %" PRId64 " ms", t1 - t0);
-        return {hidden_states, c_concat, y};
+        return {hidden_states, c_concat, vec};
     }
 
     ggml_tensor* sample(ggml_context* work_ctx,
