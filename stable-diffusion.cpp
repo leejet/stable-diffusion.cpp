@@ -42,8 +42,6 @@ const char* sampling_methods_str[] = {
     "LCM",
 };
 
-char GGMLBlock::temp_buffer[1024 * 1024 * 10];
-
 /*================================================== Helper Functions ================================================*/
 
 void calculate_alphas_cumprod(float* alphas_cumprod,
@@ -395,27 +393,27 @@ public:
         // LOG_DEBUG("model size = %.2fMB", total_size / 1024.0 / 1024.0);
 
         {
-            size_t clip_params_mem_size = cond_stage_model->get_params_mem_size();
-            size_t unet_params_mem_size = diffusion_model->get_params_mem_size();
+            size_t clip_params_mem_size = cond_stage_model->get_params_buffer_size();
+            size_t unet_params_mem_size = diffusion_model->get_params_buffer_size();
             size_t vae_params_mem_size  = 0;
             if (!use_tiny_autoencoder) {
-                vae_params_mem_size = first_stage_model->get_params_mem_size();
+                vae_params_mem_size = first_stage_model->get_params_buffer_size();
             } else {
                 if (!tae_first_stage->load_from_file(taesd_path)) {
                     return false;
                 }
-                vae_params_mem_size = tae_first_stage->get_params_mem_size();
+                vae_params_mem_size = tae_first_stage->get_params_buffer_size();
             }
             size_t control_net_params_mem_size = 0;
             if (control_net) {
                 if (!control_net->load_from_file(control_net_path)) {
                     return false;
                 }
-                control_net_params_mem_size = control_net->get_params_mem_size();
+                control_net_params_mem_size = control_net->get_params_buffer_size();
             }
             size_t pmid_params_mem_size = 0;
             if (stacked_id) {
-                pmid_params_mem_size = pmid_model->get_params_mem_size();
+                pmid_params_mem_size = pmid_model->get_params_buffer_size();
             }
 
             size_t total_params_ram_size  = 0;
@@ -971,7 +969,6 @@ public:
         copy_ggml_tensor(x, x_t);
 
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x_t);
-        struct ggml_tensor* guided_hint  = NULL;
 
         bool has_unconditioned = cfg_scale != 1.0 && uc != NULL;
 
@@ -2326,7 +2323,10 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     int64_t seed,
                     int batch_count,
                     const sd_image_t* control_cond,
-                    float control_strength) {
+                    float control_strength,
+                    float style_strength,
+                    bool normalize_input,
+                    const char* input_id_images_path) {
     if (sd_ctx == NULL || init_image->data == NULL) {
         return NULL;
     }
@@ -2340,7 +2340,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         sd_ctx->sd->encode_first_stage(
             prompt,
             negative_prompt,
-            NULL /*input_id_images_path*/,
+            input_id_images_path,
             init_image /*initvid_image*/,
             control_cond,
             control_strength,
@@ -2353,8 +2353,8 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
             sample_steps,
             sample_strength,
             seed,
-            0 /*style_strength*/,
-            false /*normalize_input*/,
+            style_strength,
+            normalize_input,
             batch_count,
             {}
         );

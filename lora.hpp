@@ -27,14 +27,6 @@ struct LoraModel : public GGMLModule {
         return "lora";
     }
 
-    size_t get_params_num() {
-        return LORA_GRAPH_SIZE;
-    }
-
-    size_t get_params_mem_size() {
-        return model_loader.get_params_mem_size(NULL);
-    }
-
     bool load_from_file(bool filter_tensor = false) {
         LOG_INFO("loading LoRA from '%s'", file_path.c_str());
 

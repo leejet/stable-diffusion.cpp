@@ -1000,32 +1000,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         return "clip";
     }
 
-    size_t get_params_mem_size() {
-        size_t params_mem_size = 0;
-        if (version == VERSION_XL) {
-            params_mem_size = text_model->get_params_mem_size();
-            params_mem_size += text_model2->get_params_mem_size();
-        } else if (version == VERSION_SVD) {
-            params_mem_size += vision_model->get_params_mem_size();
-        } else{
-            params_mem_size = text_model->get_params_mem_size();
-        }
-        return params_mem_size;
-    }
-
-    size_t get_params_num() {
-        size_t params_num = 0;
-        if (version == VERSION_XL) {
-            params_num = text_model->get_params_num();
-            params_num += text_model2->get_params_num();
-        } else if (version == VERSION_SVD) {
-            params_num += vision_model->get_params_num();
-        } else {
-            params_num = text_model->get_params_num();
-        }
-        return params_num;
-    }
-
     void set_clip_skip(int clip_skip) const {
         if (version == VERSION_XL) {
             text_model->set_clip_skip(clip_skip);
