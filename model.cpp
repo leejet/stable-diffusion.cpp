@@ -263,16 +263,17 @@ std::unordered_map<std::string, std::unordered_map<std::string, std::string>> su
     {
         "vae.resnets",
         {
-            {"temporal_res_block.conv1", "in_layers.2"},
-            {"temporal_res_block.conv2", "out_layers.3"},
-            {"temporal_res_block.norm1", "in_layers.0"},
-            {"temporal_res_block.norm2", "out_layers.0"},
+            {"temporal_res_block.conv1", "time_stack.in_layers.2"},
+            {"temporal_res_block.conv2", "time_stack.out_layers.3"},
+            {"temporal_res_block.norm1", "time_stack.in_layers.0"},
+            {"temporal_res_block.norm2", "time_stack.out_layers.0"},
             {"spatial_res_block.conv1", "conv1"},
             {"spatial_res_block.conv2", "conv2"},
             {"spatial_res_block.norm1", "norm1"},
             {"spatial_res_block.norm2", "norm2"},
-            {"time_emb_proj", "emb_layers.1"},
+            {"spatial_res_block.conv_shortcut", "nin_shortcut"},
             {"conv_shortcut", "skip_connection"},
+            {"time_emb_proj", "time_stack.emb_layers.1"},
         },
     },
 };
