@@ -260,6 +260,21 @@ std::unordered_map<std::string, std::unordered_map<std::string, std::string>> su
             {"conv_shortcut", "skip_connection"},
         },
     },
+    {
+        "vae.resnets",
+        {
+            {"temporal_res_block.conv1", "in_layers.2"},
+            {"temporal_res_block.conv2", "out_layers.3"},
+            {"temporal_res_block.norm1", "in_layers.0"},
+            {"temporal_res_block.norm2", "out_layers.0"},
+            {"spatial_res_block.conv1", "conv1"},
+            {"spatial_res_block.conv2", "conv2"},
+            {"spatial_res_block.norm1", "norm1"},
+            {"spatial_res_block.norm2", "norm2"},
+            {"time_emb_proj", "emb_layers.1"},
+            {"conv_shortcut", "skip_connection"},
+        },
+    },
 };
 
 std::string convert_diffusers_name_to_compvis(std::string key, char seq) {
@@ -360,21 +375,6 @@ std::string convert_diffusers_name_to_compvis(std::string key, char seq) {
         return format("first_stage_model%c%s%cnorm_out%s", seq, m[0].c_str(), seq, m[1].c_str());
     }
 
-    if (match(m, std::regex(format("vae%c(.*)%cmid_block%c(attentions|resnets)%c(\\d+)%c(.*)[%c](.\\w+)", seq, seq, seq, seq, seq, seq)), key)) {
-        std::string suffix;
-        std::string block_name;
-        int block_offset = 0;
-        if (m[1] == "attentions") {
-            block_name = "attn";
-            suffix     = get_converted_suffix(m[1], m[4]);
-        } else {
-            block_name = "block";
-            suffix     = m[4];
-        }
-        return format("first_stage_model%c%s%cmid%c%s_%d%c%s%c%s",
-                      seq, m[0].c_str(), seq, seq, block_name.c_str(), std::stoi(m[2]) + 1, seq, m[3].c_str(), seq, suffix.c_str());
-    }
-
     if (match(m, std::regex(format("vae%c(.*)%cmid_block%c(attentions|resnets)%c(\\d+)%c(.+)", seq, seq, seq, seq, seq)), key)) {
         std::string suffix;
         std::string block_name;
@@ -383,42 +383,37 @@ std::string convert_diffusers_name_to_compvis(std::string key, char seq) {
             suffix     = get_converted_suffix(m[1], m[3]);
         } else {
             block_name = "block";
-            suffix     = m[3];
+            suffix     = get_converted_suffix("vae."+ m[1], m[3]);
         }
         return format("first_stage_model%c%s%cmid%c%s_%d%c%s",
                       seq, m[0].c_str(), seq, seq, block_name.c_str(), std::stoi(m[2]) + 1, seq, suffix.c_str());
-    }
-
-    if (match(m, std::regex(format("vae%c(.*)%cup_blocks%c(\\d+)%cresnets%c(\\d+)%c(.*)[%c](.\\w+)", seq, seq, seq, seq, seq, seq, seq)), key)) {
-        std::string suffix = m[4];
-        if (suffix == "conv_shortcut") {
-            suffix = "nin_shortcut";
-        }
-        return format("first_stage_model%c%s%cup%c%d%cblock%c%s%c%s%c%s",
-                      seq, m[0].c_str(), seq, seq, 3 - std::stoi(m[1]), seq, seq, m[2].c_str(), seq, m[3].c_str(), seq, suffix.c_str());
     }
 
     if (match(m, std::regex(format("vae%c(.*)%cup_blocks%c(\\d+)%cresnets%c(\\d+)%c(.+)", seq, seq, seq, seq, seq, seq)), key)) {
         std::string suffix = m[3];
         if (suffix == "conv_shortcut") {
             suffix = "nin_shortcut";
+        } else {
+            suffix = get_converted_suffix("vae.resnets", m[3]);
         }
         return format("first_stage_model%c%s%cup%c%d%cblock%c%s%c%s",
                       seq, m[0].c_str(), seq, seq, 3 - std::stoi(m[1]), seq, seq, m[2].c_str(), seq, suffix.c_str());
-    }
-
-    if (match(m, std::regex(format("vae%c(.*)%cdown_blocks%c(\\d+)%cdownsamplers%c0%cconv", seq, seq, seq, seq, seq, seq)), key)) {
-        return format("first_stage_model%c%s%cdown%c%d%cdownsample%cconv",
-                      seq, m[0].c_str(), seq, seq, std::stoi(m[1]), seq, seq);
     }
 
     if (match(m, std::regex(format("vae%c(.*)%cdown_blocks%c(\\d+)%cresnets%c(\\d+)%c(.+)", seq, seq, seq, seq, seq, seq)), key)) {
         std::string suffix = m[3];
         if (suffix == "conv_shortcut") {
             suffix = "nin_shortcut";
+        } else {
+            suffix = get_converted_suffix("vae.resnets", m[3]);
         }
         return format("first_stage_model%c%s%cdown%c%d%cblock%c%s%c%s",
                       seq, m[0].c_str(), seq, seq, std::stoi(m[1]), seq, seq, m[2].c_str(), seq, suffix.c_str());
+    }
+
+    if (match(m, std::regex(format("vae%c(.*)%cdown_blocks%c(\\d+)%cdownsamplers%c0%cconv", seq, seq, seq, seq, seq, seq)), key)) {
+        return format("first_stage_model%c%s%cdown%c%d%cdownsample%cconv",
+                      seq, m[0].c_str(), seq, seq, std::stoi(m[1]), seq, seq);
     }
 
     if (match(m, std::regex(format("vae%c(.*)%cup_blocks%c(\\d+)%cupsamplers%c0%cconv", seq, seq, seq, seq, seq, seq)), key)) {

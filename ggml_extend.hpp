@@ -100,7 +100,7 @@ static struct ggml_tensor* get_tensor_from_graph(struct ggml_cgraph* gf, const c
 }
 
 __STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only = false, const char* mark = "") {
-    printf("%s (%s): shape(%4lld, %4lld, %4lld, %4lld) name: %s\n", mark, ggml_type_name(tensor->type), tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3], tensor->name);
+    printf("%s (%s): shape(%6lld, %4lld, %4lld, %4lld) type: %s\n", mark, ggml_type_name(tensor->type), tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3], tensor->name);
     fflush(stdout);
     if (shape_only) {
         return;

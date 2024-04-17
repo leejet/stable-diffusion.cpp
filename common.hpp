@@ -467,13 +467,13 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
-                                struct ggml_tensor* x_spatial,
-                                struct ggml_tensor* x_temporal) {
+                                struct ggml_tensor* x_1,
+                                struct ggml_tensor* x_2) {
         // image_only_indicator is always tensor([0.])
         float alpha = get_alpha();
         auto x      = ggml_add(ctx,
-                               ggml_scale(ctx, x_spatial, alpha),
-                               ggml_scale(ctx, x_temporal, 1.0f - alpha));
+                               ggml_scale(ctx, x_1, alpha),
+                               ggml_scale(ctx, x_2, 1.0f - alpha));
         return x;
     }
 };
@@ -503,21 +503,19 @@ public:
 
         x = ResBlock::forward(ctx, x, emb);
 
-        int64_t T = num_video_frames;
-        int64_t B = x->ne[3] / T;
+        int64_t T = 1;
+        int64_t B = x->ne[3] * num_video_frames;
         int64_t C = x->ne[2];
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];
 
-        x          = ggml_reshape_4d(ctx, x, W * H, C, T, B);           // (b t) c h w -> b t c (h w)
-        x          = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
+        x = ggml_reshape_4d(ctx, x, W * H, C, T, B);           // (b t) c h w -> b t c (h w)
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
+
         auto x_mix = x;
-
         emb = ggml_reshape_4d(ctx, emb, emb->ne[0], T, B, emb->ne[3]);  // (b t) ... -> b t ...
-
-        x = time_stack->forward(ctx, x, emb);  // b t c (h w)
-
-        x = time_mixer->forward(ctx, x_mix, x);  // b t c (h w)
+        x = time_stack->forward(ctx, x, emb);  // b c t (h w)
+        x = time_mixer->forward(ctx, x_mix, x);  // b c t (h w)
 
         x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
         x = ggml_reshape_4d(ctx, x, W, H, C, T * B);           // b t c (h w) -> (b t) c h w

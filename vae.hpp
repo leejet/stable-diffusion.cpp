@@ -169,23 +169,34 @@ class VideoResnetBlock : public ResnetBlock {
 protected:
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
         params["mix_factor"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+        params["time_mixer.mix_factor"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
     }
 
     float get_alpha() {
-        float alpha = ggml_backend_tensor_get_f32(params["mix_factor"]);
-        return sigmoid(alpha);
+        float alpha_1 = ggml_backend_tensor_get_f32(params["mix_factor"]);
+        float alpha_2 = ggml_backend_tensor_get_f32(params["time_mixer.mix_factor"]);
+        return sigmoid(alpha_1 * alpha_2);
+    }
+
+    struct ggml_tensor* apply_alpha(struct ggml_context* ctx,
+                                struct ggml_tensor* x_1,
+                                struct ggml_tensor* x_2) {
+        // image_only_indicator is always tensor([0.])
+        float alpha = get_alpha();
+        auto x      = ggml_add(ctx,
+                               ggml_scale(ctx, x_1, alpha),
+                               ggml_scale(ctx, x_2, 1.0f - alpha));
+        return x;
     }
 
 public:
     VideoResnetBlock(int64_t in_channels,
                      int64_t out_channels,
-                     int video_kernel_size = 3)
+                     int video_kernel_size = 3,
+                     bool extra_vae = false)
         : ResnetBlock(in_channels, out_channels, {3, 3}) {
         // merge_strategy is always learned
-        blocks["spatial_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels, {3, 3}));
-        blocks["temporal_res_block"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(out_channels, out_channels, {3, 1}, {1, 1}, {1, 0}));
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));
-        blocks["time_mixer"] = std::shared_ptr<GGMLBlock>(new AlphaBlender());
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -194,16 +205,9 @@ public:
         // t_emb is always None
         // skip_video is always False
         // timesteps is always None
-        auto spatial_res_block = std::dynamic_pointer_cast<ResnetBlock>(blocks["spatial_res_block"]);
-        auto temporal_res_block = std::dynamic_pointer_cast<ResnetBlock>(blocks["temporal_res_block"]);
         auto time_stack = std::dynamic_pointer_cast<ResBlock>(blocks["time_stack"]);
-        auto time_mixer = std::dynamic_pointer_cast<AlphaBlender>(blocks["time_mixer"]);
-
-        x = spatial_res_block->forward(ctx, x);
-        x = temporal_res_block->forward(ctx, x);
 
         x = ResnetBlock::forward(ctx, x);  // [N, out_channels, h, w]
-        // return x;
 
         int64_t T = x->ne[3];
         int64_t B = x->ne[3] / T;
@@ -211,20 +215,12 @@ public:
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];
 
-        x          = ggml_reshape_4d(ctx, x, W * H, C, T, B);           // (b t) c h w -> b t c (h w)
-        x          = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
+        x = ggml_reshape_4d(ctx, x, W * H, C, T, B);  // (b t) c h w -> b t c (h w)
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
+
         auto x_mix = x;
-
         x = time_stack->forward(ctx, x);  // b t c (h w)
-
-        x = time_mixer->forward(ctx, x_mix, x);  // b t c (h w)
-
-        float alpha = get_alpha();
-        if (alpha<1.0f) {
-            x = ggml_add(ctx,
-                         ggml_scale(ctx, x, alpha),
-                         ggml_scale(ctx, x_mix, 1.0f - alpha));
-        }
+        x = apply_alpha(ctx, x_mix, x);
 
         x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
         x = ggml_reshape_4d(ctx, x, W, H, C, T * B);           // b t c (h w) -> (b t) c h w
@@ -355,7 +351,7 @@ protected:
     std::shared_ptr<GGMLBlock> get_resnet_block(int64_t in_channels,
                                                 int64_t out_channels) const {
         if (video_decoder) {
-            return std::shared_ptr<GGMLBlock>(new VideoResnetBlock(in_channels, out_channels, video_kernel_size));
+            return std::shared_ptr<GGMLBlock>(new VideoResnetBlock(in_channels, out_channels, video_kernel_size, true));
         } else {
             return std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels, {3, 3}));
         }
@@ -427,8 +423,6 @@ public:
 
         // middle
         h = mid_block_1->forward(ctx, h);
-        // return h;
-
         h = mid_attn_1->forward(ctx, h);
         h = mid_block_2->forward(ctx, h);  // [N, block_in, h, w]
 
