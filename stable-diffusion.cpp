@@ -521,8 +521,10 @@ public:
         struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);
         ggml_set_f32(timesteps, 999);
         int64_t t0              = ggml_time_ms();
+        int vid_frames = gglm_ctx_local->engine_meta.tag_video_config.total_frames;
+        int output_frames = vid_frames > 0 ? vid_frames : 1;
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model->compute(n_threads, x_t, timesteps, c, NULL, NULL, -1, {}, 0.f, &out);
+        diffusion_model->compute(n_threads, x_t, timesteps, c, NULL, NULL, output_frames, {}, 0.f, &out);
         diffusion_model->free_compute_buffer();
 
         double result = 0.f;
@@ -1528,8 +1530,8 @@ public:
         ggml_tensor* result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
                                                  decode ? (W * 8) : (W / 8),  // width
                                                  decode ? (H * 8) : (H / 8),  // height
-                                                 decode ? 3 : (use_tiny_autoencoder ? 4 : 8),
-                                                 x->ne[3]);  // channels
+                                                 decode ? 3 : (use_tiny_autoencoder ? 4 : 8), // channels
+                                                 x->ne[3]);  // batch * frames
         int64_t t0          = ggml_time_ms();
         if (!use_tiny_autoencoder) {
             if (decode) {
@@ -2116,8 +2118,10 @@ public:
         for (size_t g = 0; g < decoded_images.size(); g++) {
             ggml_tensor* img = decoded_images[g];
             for (size_t i = 0; i < result_frames; i++) {
-                int offset = g * result_frames;
-                auto img_i = ggml_view_3d(gglm_ctx_local->engine_ctx, img, img->ne[0], img->ne[1], img->ne[2], img->nb[1], img->nb[2], img->nb[3] * i);
+                int offset = int(g) * decoded_images.size();
+                auto img_i = ggml_view_3d(gglm_ctx_local->engine_ctx, img,
+                                          img->ne[0], img->ne[1], img->ne[2],
+                                          img->nb[1], img->nb[2], img->nb[3] * i);
                 {
                     (*result_images[i + offset]).width   = result_w;
                     (*result_images[i + offset]).height  = result_h;

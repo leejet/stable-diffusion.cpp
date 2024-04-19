@@ -118,7 +118,37 @@ public:
     }
 };
 
-class AE3DConv : public Conv2d {
+class IVAEConv : public Conv2d {
+public:
+    IVAEConv(int64_t in_channels,
+             int64_t out_channels,
+             std::pair<int, int> kernel_size,
+             std::pair<int, int> stride   = {1, 1},
+             std::pair<int, int> padding  = {0, 0},
+             std::pair<int, int> dilation = {1, 1},
+             bool bias                    = true)
+        : Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias) {
+    }
+};
+
+class AE2DConv : public IVAEConv {
+public:
+    AE2DConv(int64_t in_channels,
+             int64_t out_channels,
+             std::pair<int, int> kernel_size,
+             std::pair<int, int> stride   = {1, 1},
+             std::pair<int, int> padding  = {0, 0},
+             std::pair<int, int> dilation = {1, 1},
+             bool bias                    = true)
+        : IVAEConv(in_channels, out_channels, kernel_size, stride, padding, dilation, bias) {
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+        return IVAEConv::forward(ctx, x);
+    }
+};
+
+class AE3DConv : public IVAEConv {
 public:
     AE3DConv(int64_t in_channels,
              int64_t out_channels,
@@ -128,30 +158,25 @@ public:
              std::pair<int, int> padding  = {0, 0},
              std::pair<int, int> dilation = {1, 1},
              bool bias                    = true)
-        : Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias) {
+        : IVAEConv(in_channels, out_channels, kernel_size, stride, padding, dilation, bias) {
         int64_t kernel_padding  = video_kernel_size / 2;
-        blocks["time_mix_conv"] = std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(out_channels,
-                                                                             out_channels,
-                                                                             video_kernel_size,
-                                                                             1,
-                                                                             kernel_padding));
+        blocks["time_mix_conv"] = std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(out_channels, out_channels, video_kernel_size, 1, kernel_padding));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
-                                struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
         // timesteps always None
         // skip_video always False
         // x: [N, IC, IH, IW]
         // result: [N, OC, OH, OW]
         auto time_mix_conv = std::dynamic_pointer_cast<Conv3dnx1x1>(blocks["time_mix_conv"]);
 
-        x = Conv2d::forward(ctx, x);
+        x = IVAEConv::forward(ctx, x);
         // timesteps = x.shape[0]
         // x = rearrange(x, "(b t) c h w -> b c t h w", t=timesteps)
         // x = conv3d(x)
         // return rearrange(x, "b c t h w -> (b t) c h w")
         int64_t T = x->ne[3];
-        int64_t B = x->ne[3] / T;
+        int64_t B = x->ne[3] / T;   // always 1
         int64_t C = x->ne[2];
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];
@@ -165,7 +190,29 @@ public:
     }
 };
 
-class VideoResnetBlock : public ResnetBlock {
+class IVAEResnetBlock : public ResnetBlock {
+public:
+    IVAEResnetBlock(int64_t in_channels,
+                    int64_t out_channels,
+                    std::pair<int, int> kernel_size)
+        : ResnetBlock(in_channels, out_channels, kernel_size) {
+    }
+};
+
+class TextsResnetBlock : public IVAEResnetBlock {
+public:
+    TextsResnetBlock(int64_t in_channels,
+                     int64_t out_channels,
+                     std::pair<int, int> kernel_size)
+        : IVAEResnetBlock(in_channels, out_channels, kernel_size) {
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+        return IVAEResnetBlock::forward(ctx, x);  // [N, out_channels, h, w]
+    }
+};
+
+class VideoResnetBlock : public IVAEResnetBlock {
 protected:
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
         params["mix_factor"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
@@ -194,12 +241,12 @@ public:
                      int64_t out_channels,
                      int video_kernel_size = 3,
                      bool extra_vae = false)
-        : ResnetBlock(in_channels, out_channels, {3, 3}) {
+        : IVAEResnetBlock(in_channels, out_channels, {3, 3}) {
         // merge_strategy is always learned
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
         // x: [N, in_channels, h, w] aka [b*t, in_channels, h, w]
         // return: [N, out_channels, h, w] aka [b*t, out_channels, h, w]
         // t_emb is always None
@@ -207,7 +254,7 @@ public:
         // timesteps is always None
         auto time_stack = std::dynamic_pointer_cast<ResBlock>(blocks["time_stack"]);
 
-        x = ResnetBlock::forward(ctx, x);  // [N, out_channels, h, w]
+        x = IVAEResnetBlock::forward(ctx, x);  // [N, out_channels, h, w]
 
         int64_t T = x->ne[3];
         int64_t B = x->ne[3] / T;
@@ -344,7 +391,7 @@ protected:
         if (video_decoder) {
             return std::shared_ptr<GGMLBlock>(new AE3DConv(in_channels, out_channels, video_kernel_size, kernel_size, stride, padding));
         } else {
-            return std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, kernel_size, stride, padding));
+            return std::shared_ptr<GGMLBlock>(new AE2DConv(in_channels, out_channels, kernel_size, stride, padding));
         }
     }
 
@@ -353,7 +400,7 @@ protected:
         if (video_decoder) {
             return std::shared_ptr<GGMLBlock>(new VideoResnetBlock(in_channels, out_channels, video_kernel_size, true));
         } else {
-            return std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels, {3, 3}));
+            return std::shared_ptr<GGMLBlock>(new TextsResnetBlock(in_channels, out_channels, {3, 3}));
         }
     }
 
@@ -398,10 +445,6 @@ public:
 
         blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(block_in));
         blocks["conv_out"] = get_conv_out(block_in, out_ch, {3, 3}, {1, 1}, {1, 1});
-
-        if (video_decoder) {
-            blocks["time_conv_out"] = std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(out_ch, out_ch, video_kernel_size, 1, video_kernel_size / 2));
-        }
     }
 
     virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) {
@@ -411,12 +454,11 @@ public:
         // time_mode is always conv-only, so we need to replace conv_out_op/resnet_op to AE3DConv/VideoResBlock
         // AttnVideoBlock will not be used
         auto conv_in     = std::dynamic_pointer_cast<Conv2d>(blocks["conv_in"]);
-        auto mid_block_1 = std::dynamic_pointer_cast<ResnetBlock>(blocks["mid.block_1"]);
+        auto mid_block_1 = std::dynamic_pointer_cast<IVAEResnetBlock>(blocks["mid.block_1"]);
         auto mid_attn_1  = std::dynamic_pointer_cast<AttnBlock>(blocks["mid.attn_1"]);
-        auto mid_block_2 = std::dynamic_pointer_cast<ResnetBlock>(blocks["mid.block_2"]);
+        auto mid_block_2 = std::dynamic_pointer_cast<IVAEResnetBlock>(blocks["mid.block_2"]);
         auto norm_out    = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm_out"]);
-        auto conv_out    = std::dynamic_pointer_cast<Conv2d>(blocks["conv_out"]);
-        auto time_conv_out= video_decoder? std::dynamic_pointer_cast<Conv3dnx1x1>(blocks["time_conv_out"]) : nullptr;
+        auto conv_out    = std::dynamic_pointer_cast<IVAEConv>(blocks["conv_out"]);
 
         // conv_in
         auto h = conv_in->forward(ctx, z);  // [N, block_in, h, w]
@@ -431,7 +473,7 @@ public:
         for (int i = int(num_resolutions - 1); i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
                 std::string name = "up." + std::to_string(i) + ".block." + std::to_string(j);
-                auto up_block    = std::dynamic_pointer_cast<ResnetBlock>(blocks[name]);
+                auto up_block    = std::dynamic_pointer_cast<IVAEResnetBlock>(blocks[name]);
 
                 h = up_block->forward(ctx, h);
             }
@@ -446,10 +488,6 @@ public:
         h = norm_out->forward(ctx, h);
         h = ggml_silu_inplace(ctx, h);  // nonlinearity/swish
         h = conv_out->forward(ctx, h);  // [N, out_ch, h*8, w*8]
-
-        if (time_conv_out) {
-            h = time_conv_out->forward(ctx, h);
-        }
 
         return h;
     }

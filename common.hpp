@@ -503,8 +503,8 @@ public:
 
         x = ResBlock::forward(ctx, x, emb);
 
-        int64_t T = 1;
-        int64_t B = x->ne[3] * num_video_frames;
+        int64_t T = num_video_frames;
+        int64_t B = x->ne[3];
         int64_t C = x->ne[2];
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];
