@@ -493,8 +493,7 @@ public:
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 struct ggml_tensor* x,
-                                struct ggml_tensor* emb,
-                                int num_video_frames) {
+                                struct ggml_tensor* emb) {
         // x: [N, channels, h, w] aka [b*t, channels, h, w]
         // emb: [N, emb_channels] aka [b*t, emb_channels]
         // image_only_indicator is always tensor([0.])
@@ -503,8 +502,8 @@ public:
 
         x = ResBlock::forward(ctx, x, emb);
 
-        int64_t T = num_video_frames;
-        int64_t B = x->ne[3];
+        int64_t T = x->ne[3];
+        int64_t B = x->ne[3] / T;  // for upper designed features, make this always 1
         int64_t C = x->ne[2];
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];

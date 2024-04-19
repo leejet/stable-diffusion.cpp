@@ -524,7 +524,7 @@ public:
         int vid_frames = gglm_ctx_local->engine_meta.tag_video_config.total_frames;
         int output_frames = vid_frames > 0 ? vid_frames : 1;
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model->compute(n_threads, x_t, timesteps, c, NULL, NULL, output_frames, {}, 0.f, &out);
+        diffusion_model->compute(n_threads, x_t, timesteps, c, NULL, NULL, {}, 0.f, &out);
         diffusion_model->free_compute_buffer();
 
         double result = 0.f;
@@ -1036,7 +1036,6 @@ public:
                                          c,
                                          c_concat,
                                          c_vector,
-                                         -1,
                                          controls,
                                          control_strength,
                                          &out_cond);
@@ -1047,7 +1046,6 @@ public:
                                          c_id,
                                          c_concat,
                                          c_vec_id,
-                                         -1,
                                          controls,
                                          control_strength,
                                          &out_cond);
@@ -1066,7 +1064,6 @@ public:
                                          uc,
                                          uc_concat,
                                          uc_vector,
-                                         -1,
                                          controls,
                                          control_strength,
                                          &out_uncond);
@@ -2115,20 +2112,11 @@ public:
         size_t result_frames = vid_frames > 0 ? vid_frames : 1;
 
         *result_images = (sd_image_t*)calloc(result_groups * result_frames, sizeof(sd_image_t));
-        for (size_t g = 0; g < decoded_images.size(); g++) {
-            ggml_tensor* img = decoded_images[g];
-            for (size_t i = 0; i < result_frames; i++) {
-                int offset = int(g) * decoded_images.size();
-                auto img_i = ggml_view_3d(gglm_ctx_local->engine_ctx, img,
-                                          img->ne[0], img->ne[1], img->ne[2],
-                                          img->nb[1], img->nb[2], img->nb[3] * i);
-                {
-                    (*result_images[i + offset]).width   = result_w;
-                    (*result_images[i + offset]).height  = result_h;
-                    (*result_images[i + offset]).channel = result_c;
-                    (*result_images[i + offset]).data    = sd_tensor_to_image(img_i);
-                }
-            }
+        for (size_t i = 0; i < decoded_images.size(); i++) {
+            (*result_images[i]).width   = result_w;
+            (*result_images[i]).height  = result_h;
+            (*result_images[i]).channel = result_c;
+            (*result_images[i]).data    = sd_tensor_to_image(decoded_images[i]);
         }
     }
 };
@@ -2475,28 +2463,31 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
         ggml_tensor* init_noised = NULL;
         {
             LOG_INFO("<img2vid> encode_first_stage start");
-            int64_t t0       = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 4);
             int64_t t1 = ggml_time_ms();
             LOG_INFO("<img2vid> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         }
 
-        ggml_tensor* temp_latent = nullptr;
-        {
-            LOG_INFO("<img2vid> sampling start");
-            int64_t t2   = ggml_time_ms();
-            temp_latent = sd_ctx->sd->generate_batch_result(init_latent, init_noised);
-            // struct ggml_tensor *x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
-            // print_ggml_tensor(x_0);
-            int64_t t3 = ggml_time_ms();
-            LOG_INFO("<img2vid> sampling completed, taking %.2fs", (t3 - t2) * 1.0f / 1000);
-        }
+        for (int b = 0; b < video_frames; b++) {
+            LOG_INFO("<img2vid> generating frames: %i/%i", b, video_frames);
+            ggml_tensor* temp_latent = nullptr;
+            {
+                LOG_INFO("<img2vid> sampling start");
+                int64_t t2  = ggml_time_ms();
+                temp_latent = sd_ctx->sd->generate_batch_result(init_latent, init_noised);
+                // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
+                // print_ggml_tensor(x_0);
+                int64_t t3 = ggml_time_ms();
+                LOG_INFO("<img2vid> sampling  %" PRId64 "  completed, taking %.2fs", b + 1, (t3 - t2) * 1.0f / 1000);
+            }
 
-        LOG_INFO("<img2vid> decode_first_stage start");
-        int64_t t4 = ggml_time_ms();
-        decoded_images.push_back(sd_ctx->sd->decode_first_stage(temp_latent));
-        int64_t t5 = ggml_time_ms();
-        LOG_INFO("<img2vid> decode_first_stage completed, taking %.2fs", (t5 - t4) * 1.0f / 1000);
+            LOG_INFO("<img2vid> decode_first_stage start");
+            int64_t t4 = ggml_time_ms();
+            decoded_images.push_back(sd_ctx->sd->decode_first_stage(temp_latent));
+            int64_t t5 = ggml_time_ms();
+            LOG_INFO("<img2vid> decode_first_stage %" PRId64 " decoded, taking %.2fs", b + 1, (t5 - t4) * 1.0f / 1000);
+        }
     }
 
     sd_image_t* result_images = nullptr;
