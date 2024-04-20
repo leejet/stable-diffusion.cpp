@@ -571,10 +571,7 @@ void convert_tensor(void* src,
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src, (ggml_fp16_t*)dst, n);
         } else {
-            int64_t hist[16];
-            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
-            const float* im = imatrix.data();
-            ggml_quantize_chunk(dst_type, (float*)src, dst, 0, nrows, n_per_row, hist, im);
+            ggml_quantize_chunk(dst_type, (float*)src, dst, 0, nrows, n_per_row, nullptr);
         }
     } else if (dst_type == GGML_TYPE_F32) {
         if (src_type == GGML_TYPE_F16) {
@@ -602,10 +599,7 @@ void convert_tensor(void* src,
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src_data_f32, (ggml_fp16_t*)dst, n);
         } else {
-            int64_t hist[16];
-            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
-            const float* im = imatrix.data();
-            ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, nrows, n_per_row, hist, im);
+            ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, nrows, n_per_row, nullptr);
         }
     }
 }
@@ -694,25 +688,21 @@ bool is_safetensors_file(const std::string& file_path) {
     file.seekg(0, file.beg);
 
     // read header size
-    if (file_size_ <= ST_HEADER_SIZE_LEN) {
-        return false;
-    }
-
-    uint8_t header_size_buf[ST_HEADER_SIZE_LEN];
-    file.read((char*)header_size_buf, ST_HEADER_SIZE_LEN);
+    uint8_t header_size_buf[ST_HEADER_SIZE_LEN + 1];
+    file.read((char*)header_size_buf, ST_HEADER_SIZE_LEN + 1);
     if (!file) {
         return false;
     }
 
     size_t header_size_ = read_u64(header_size_buf);
-    if (header_size_ >= file_size_ || header_size_ <= 2) {
+    if ((file_size_ > 0 && header_size_ >= file_size_) || header_size_ <= 2 || header_size_buf[ST_HEADER_SIZE_LEN] != '{') {
         return false;
     }
-
     // read header
     std::vector<char> header_buf;
-    header_buf.resize(header_size_ + 1);
+    header_buf.resize(header_size_);
     header_buf[header_size_] = '\0';
+    file.seekg(ST_HEADER_SIZE_LEN, file.beg);
     file.read(header_buf.data(), header_size_);
     if (!file) {
         return false;
@@ -770,6 +760,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
         // LOG_DEBUG("%s", name.c_str());
 
         TensorStorage tensor_storage(prefix + name, dummy->type, dummy->ne, ggml_n_dims(dummy), file_index, offset);
+        // printf("%110s | %.4f MB | [%d, %d, %d, %d] | %s\n", name.c_str(), ggml_nbytes(dummy) / 1024.f / 1024.f, dummy->ne[0], dummy->ne[1], dummy->ne[2], dummy->ne[3], ggml_type_name(dummy->type));
 
         GGML_ASSERT(ggml_nbytes(dummy) == tensor_storage.nbytes());
 
@@ -809,32 +800,28 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 
     // get file size
     file.seekg(0, file.end);
+
+    // file.tellg() sometimes for no reason gives -1
     size_t file_size_ = file.tellg();
     file.seekg(0, file.beg);
 
     // read header size
-    if (file_size_ <= ST_HEADER_SIZE_LEN) {
-        LOG_ERROR("invalid safetensor file '%s'", file_path.c_str());
-        return false;
-    }
-
-    uint8_t header_size_buf[ST_HEADER_SIZE_LEN];
-    file.read((char*)header_size_buf, ST_HEADER_SIZE_LEN);
+    uint8_t header_size_buf[ST_HEADER_SIZE_LEN + 1];
+    file.read((char*)header_size_buf, ST_HEADER_SIZE_LEN + 1);
     if (!file) {
-        LOG_ERROR("read safetensors header size failed: '%s'", file_path.c_str());
         return false;
     }
 
     size_t header_size_ = read_u64(header_size_buf);
-    if (header_size_ >= file_size_) {
-        LOG_ERROR("invalid safetensor file '%s'", file_path.c_str());
+    if ((file_size_ > 0 && header_size_ >= file_size_) || header_size_ <= 2 || header_size_buf[ST_HEADER_SIZE_LEN] != '{') {
         return false;
     }
 
     // read header
     std::vector<char> header_buf;
-    header_buf.resize(header_size_ + 1);
+    header_buf.resize(header_size_);
     header_buf[header_size_] = '\0';
+    file.seekg(ST_HEADER_SIZE_LEN, file.beg);
     file.read(header_buf.data(), header_size_);
     if (!file) {
         LOG_ERROR("read safetensors header failed: '%s'", file_path.c_str());
@@ -1502,6 +1489,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
                                ggml_backend_t backend,
                                std::set<std::string> ignore_tensors) {
     std::set<std::string> tensor_names_in_file;
+    std::map<const ggml_type, uint32_t> tensor_types;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
         const std::string& name = tensor_storage.name;
         // LOG_DEBUG("%s", tensor_storage.to_string().c_str());
@@ -1535,7 +1523,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
         }
 
         *dst_tensor = real;
-
+        tensor_types[real->type]++;
         return true;
     };
 
@@ -1543,6 +1531,10 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
     if (!success) {
         LOG_ERROR("load tensors from file failed");
         return false;
+    }
+
+    for(auto kv : tensor_types) {
+        LOG_DEBUG("type %4s - %d tensors", ggml_type_name(kv.first), kv.second);
     }
 
     bool some_tensor_not_init = false;

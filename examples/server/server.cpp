@@ -10,6 +10,10 @@
 #include "httplib.h"
 #include "json.hpp"
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 // internal website files
 #include "index.html.hpp"
 #include "main.js.hpp"
@@ -45,8 +49,8 @@ static std::string sd_basename(const std::string& path) {
 struct server_params
 {
     std::string hostname = "127.0.0.1";
-    std::string public_path = "examples/server/public";
-    int32_t port = 8080;
+    std::string public_path = "public";
+    int32_t port = 7860;
     int32_t read_timeout = 600;
     int32_t write_timeout = 600;
 };
@@ -97,8 +101,15 @@ std::string base64_encode(const uint8_t* buf, unsigned int bufLen) {
     while((i++ < 3))
       base64 += '=';
   }
-
   return base64;
+}
+
+void wait_(int ms) {
+#ifdef _WIN32
+Sleep(ms);
+#else
+sleep(ms);
+#endif
 }
 
 struct sd_params {
@@ -120,6 +131,7 @@ struct sd_params {
     int width       = 512;
     int height      = 512;
     int batch_count = 1;
+    bool stream     = false;
 
     sample_method_t sample_method = EULER_A;
     schedule_t schedule          = DEFAULT;
@@ -306,6 +318,10 @@ static void server_params_parse(int argc, char **argv, server_params &sparams,
         }
     }
 
+    if (params.n_threads <= 0) {
+        params.n_threads = get_num_physical_cores();
+    }
+
     if (invalid_param)
     {
         fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
@@ -326,6 +342,8 @@ static void parse_options_generation(const json &body, sd_params& params)
     params.width = json_value(body, "width", default_params.width);
     params.height = json_value(body, "height", default_params.height);
     params.cfg_scale = json_value(body, "cfg_scale", default_params.cfg_scale);
+    params.stream = json_value(body, "stream", default_params.stream);
+    params.vae_tiling = json_value(body, "vae_tiling", default_params.vae_tiling);
 }
 
 std::string get_image_params(sd_params params, int64_t seed) {
@@ -348,19 +366,111 @@ std::string get_image_params(sd_params params, int64_t seed) {
     return parameter_string;
 }
 
+struct shared_data {
+    httplib::DataSink* sink;
+    sd_ctx_t* sd;
+};
+
+void progressFunction(int step, int steps, float time, bool new_image, void* data) {
+    if(steps == 0) {
+        return;
+    }
+    shared_data* sh = static_cast<shared_data*>(data);
+    if(new_image) {
+        json pdata = {{"type", "new_image"}, { "index", step }, {"count", steps }};
+        std::string data_str = "data: " +
+            pdata.dump(-1, ' ', false, json::error_handler_t::replace) +
+            "\n\n";
+        if(!sh->sink->write(data_str.c_str(), data_str.size())) {
+            sd_request_cancel(sh->sd);
+        }
+    } else {
+        json pdata = {{"type", "status"}, { "progress_current", step }, {"progress_total", steps }};
+        std::string data_str = "data: " +
+            pdata.dump(-1, ' ', false, json::error_handler_t::replace) +
+            "\n\n";
+        if(!sh->sink->write(data_str.c_str(), data_str.size())) {
+            sd_request_cancel(sh->sd);
+        }
+    }
+}
+
+void vaeStage(void* data) {
+    json pdata = {{"type", "status"}, { "decoding", true }};
+    std::string data_str = "data: " +
+        pdata.dump(-1, ' ', false, json::error_handler_t::replace) +
+        "\n\n";
+    shared_data* sh = static_cast<shared_data*>(data);
+    if(!sh->sink->write(data_str.c_str(), data_str.size())) {
+        sd_request_cancel(sh->sd);
+    }
+}
+
+struct sd_request {
+    bool need_attend = false;
+    bool images_ready = false;
+    bool request_load_model = false;
+    bool cancel = false;
+    sd_image_t* images = NULL;
+};
+
+
+/* Enables Printing the log level tag in color using ANSI escape codes */
+void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
+    sd_params* params = (sd_params*)data;
+    int tag_color;
+    const char* level_str;
+    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
+
+    if (!log || (!params->verbose && level <= SD_LOG_DEBUG)) {
+        return;
+    }
+
+    switch (level) {
+        case SD_LOG_DEBUG:
+            tag_color = 37;
+            level_str = "DEBUG";
+            break;
+        case SD_LOG_INFO:
+            tag_color = 34;
+            level_str = "INFO";
+            break;
+        case SD_LOG_WARN:
+            tag_color = 35;
+            level_str = "WARNING";
+            break;
+        case SD_LOG_ERROR:
+            tag_color = 31;
+            level_str = "ERROR";
+            break;
+        default: /* Potential future-proofing */
+            tag_color = 33;
+            level_str = "?????";
+            break;
+    }
+
+    fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
+    fputs(log, out_stream);
+    fflush(out_stream);
+}
+
+
 int main(int argc, char **argv)
 {
     // own arguments required by this example
     sd_params params;
     server_params sparams;
+    sd_request sdreq;
 
     server_params_parse(argc, argv, sparams, params);
+
+    sd_set_log_callback(sd_log_cb, (void*)&params);
 
     struct sd_ctx_t* sd = new_sd_ctx_direct(params.lora_model_dir.c_str(), true, false, params.n_threads, params.rng_type);
 
     httplib::Server svr;
 
-    svr.set_default_headers({{"Server", "llama.cpp"},
+    svr.set_default_headers({{"Server", "stable-diffusion.cpp"},
                              {"Access-Control-Allow-Origin", "*"},
                              {"Access-Control-Allow-Headers", "content-type"}});
 
@@ -397,54 +507,73 @@ int main(int argc, char **argv)
                 res.set_content(data.dump(), "application/json");
             });
 
-    svr.Post("/txt2img", [&sd, &params](const httplib::Request &req, httplib::Response &res)
+    svr.Post("/txt2img", [&sd, &params, &sdreq](const httplib::Request &req, httplib::Response &res)
             {
                 parse_options_generation(json::parse(req.body), params);
-                const auto chunked_content_provider = [&sd, &params](size_t, httplib::DataSink & sink)
+                if(params.stream) {
+                    const auto chunked_content_provider = [&sd, &params, &sdreq](size_t, httplib::DataSink & sink)
                     {
+                        sdreq.images_ready = false;
                         if(!sd_model_is_loaded(sd)) {
-                            load_model(sd,
-                                params.model_path.c_str(),
-                                params.vae_path.c_str(),
-                                params.taesd_path.c_str(),
-                                "", "", (sd_type_t)params.wtype, true, params.schedule, false);
-                        }
-
-                        {
+                            sdreq.request_load_model = true;
+                        } else {
                             json data = {{"type", "status"}, { "loaded", true }};
-                            std::string data_str = "data: " +
-                                data.dump(-1, ' ', false, json::error_handler_t::replace) +
-                                "\n\n";
-                            sink.write(data_str.c_str(), data_str.size());
+                                std::string data_str = "data: " +
+                                    data.dump(-1, ' ', false, json::error_handler_t::replace) +
+                                    "\n\n";
+                                sink.write(data_str.c_str(), data_str.size());
                         }
-
-                        sd_image_t* images = txt2img(sd,
-                            params.prompt.c_str(),
-                            params.negative_prompt.c_str(), 0,
-                            params.cfg_scale, params.width, params.height,
-                            params.sample_method, params.sample_steps, params.seed,
-                            params.batch_count, NULL, 0.0f, 0.0f, 0.0f, "");
-                        for(int i = 0; i < params.batch_count; i ++) {
-                            int len;
-                            uint8_t* png = stbi_write_png_to_mem((const unsigned char *) images[i].data, 0, params.width, params.height, 3, &len, get_image_params(params, params.seed + i).c_str());
-                            json data = {{ "type", "image" }, {"data", base64_encode(png, len) }, {"stop", i == params.batch_count - 1}};
-                            std::string data_str = "data: " +
-                                data.dump(-1, ' ', false, json::error_handler_t::replace) +
-                                "\n\n";
-                            sink.write(data_str.c_str(), data_str.size());
+                        shared_data* sh = new shared_data{&sink, sd};
+                        // send progressions metrics
+                        sdreq.need_attend = true;
+                        bool need_model_notification = true;
+                        while(true) {
+                            if(need_model_notification && !sdreq.request_load_model) {
+                                json data = {{"type", "status"}, { "loaded", true }};
+                                std::string data_str = "data: " +
+                                    data.dump(-1, ' ', false, json::error_handler_t::replace) +
+                                    "\n\n";
+                                if(!sink.write(data_str.c_str(), data_str.size())){
+                                    return false;
+                                }
+                                sd_set_progress_callback(progressFunction, sh);
+                                sd_set_vae_callback(vaeStage, sh);
+                                need_model_notification = false;
+                            }
+                            if(sdreq.images_ready) {
+                                if(!sdreq.images) {
+                                    return false;
+                                }
+                                for(int i = 0; i < params.batch_count; i ++) {
+                                    int len;
+                                    uint8_t* png = stbi_write_png_to_mem((const unsigned char *) sdreq.images[i].data, 0, params.width, params.height, 3, &len, get_image_params(params, params.seed + i).c_str());
+                                    json data = {{ "type", "image" }, {"data", base64_encode(png, len) }, { "seed", sdreq.images[i].seed }, {"stop", i == params.batch_count - 1}};
+                                    std::string data_str = "data: " +
+                                        data.dump(-1, ' ', false, json::error_handler_t::replace) +
+                                        "\n\n";
+                                    if(!sink.write(data_str.c_str(), data_str.size())){
+                                        return false;
+                                    }
+                                }
+                                break;
+                            }
+                            wait_(2);
                         }
-
                         sink.done();
                         return true;
                     };
-
-                    auto on_complete = [&sd] (bool)
-                    {
+                    auto on_complete = [&sd, &sdreq] (bool) {
                         // cancel
-                        //sd.request_cancel();
+                        sd_request_cancel(sd);
                     };
-
                     res.set_chunked_content_provider("text/event-stream", chunked_content_provider, on_complete);
+                } else {
+                    // while(true) {
+
+                    // }
+                    // json data = {{"images", base64_encode(png, len) }, { "seed", sdreq.images[i].seed }, {"stop", i == params.batch_count - 1}};
+                    // res.set_content(data.dump(-1, ' ', false, json::error_handler_t::replace), "application/json; charset=utf-8");
+                }
             });
 
     svr.Options(R"(/.*)", [](const httplib::Request &, httplib::Response &res)
@@ -499,29 +628,33 @@ int main(int argc, char **argv)
     // to make it ctrl+clickable:
     printf("\nstable-diffusion server listening at http://%s:%d\n", sparams.hostname.c_str(), sparams.port);
 
-    // run the HTTP server in a thread - see comment below
     std::thread t([&]()
-            {
-                if (!svr.listen_after_bind())
-                {
-                    return 1;
-                }
-
-                return 0;
-            });
-
-    // GG: if I put the main loop inside a thread, it crashes on the first request when build in Debug!?
-    //     "Bus error: 10" - this is on macOS, it does not crash on Linux
-    //std::thread t2([&]()
-    // {
-    //     bool running = true;
-    //     while (running)
-    //     {
-    //         running = llama.update_slots();
-    //     }
-    // }
-    //);
-
-    t.join();
+    {
+        if (!svr.listen_after_bind()) {
+            return 1;
+        }
+        return 0;
+    });
+    while(true) {
+        if(sdreq.request_load_model) {
+            load_model(sd,
+                        params.model_path.c_str(),
+                        params.vae_path.c_str(),
+                        params.taesd_path.c_str(),
+                        "", "", (sd_type_t)params.wtype, params.schedule, false);
+            sdreq.request_load_model = false;
+        }
+        if(sdreq.need_attend) {
+            sdreq.images = txt2img(sd,
+                            params.prompt.c_str(),
+                            params.negative_prompt.c_str(), 0,
+                            params.cfg_scale, params.width, params.height,
+                            params.sample_method, params.sample_steps, params.seed,
+                            params.batch_count, NULL, 0.0f, 0.0f, 0.0f, "", params.vae_tiling);
+            sdreq.images_ready = true;
+            sdreq.need_attend = false;
+        }
+        wait_(2);
+    }
     return 0;
 }

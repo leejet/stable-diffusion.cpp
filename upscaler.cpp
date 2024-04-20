@@ -15,7 +15,7 @@ struct UpscalerGGML {
     }
 
     bool load_from_file(const std::string& esrgan_path) {
-#ifdef SD_USE_CUBLAS
+#ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
 #endif
@@ -77,6 +77,7 @@ struct UpscalerGGML {
             (uint32_t)output_width,
             (uint32_t)output_height,
             3,
+            input_image.seed,
             upscaled_data,
         };
         return upscaled_image;

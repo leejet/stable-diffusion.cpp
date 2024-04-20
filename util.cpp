@@ -233,6 +233,9 @@ int32_t get_num_physical_cores() {
 static sd_progress_cb_t sd_progress_cb = NULL;
 void* sd_progress_cb_data              = NULL;
 
+static sd_vae_stage_cb_t sd_vae_cb = NULL;
+void* sd_vae_cb_data          = NULL;
+
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
     return converter.from_bytes(utf8_str);
@@ -305,13 +308,20 @@ sd_image_t* preprocess_id_image(sd_image_t* img) {
     resized = new sd_image_t{(uint32_t)shortest_edge,
                              (uint32_t)shortest_edge,
                              3,
+                             img->seed,
                              buf};
     return resized;
 }
 
+void notify_new_image(int index, int count) {
+    if (sd_progress_cb) {
+        sd_progress_cb(index, count, 0, true, sd_progress_cb_data);
+    }
+}
+
 void pretty_progress(int step, int steps, float time) {
     if (sd_progress_cb) {
-        sd_progress_cb(step, steps, time, sd_progress_cb_data);
+        sd_progress_cb(step, steps, time, false, sd_progress_cb_data);
         return;
     }
     if (step == 0) {
@@ -336,6 +346,12 @@ void pretty_progress(int step, int steps, float time) {
     fflush(stdout);  // for linux
     if (step == steps) {
         printf("\n");
+    }
+}
+
+void notify_vae_stage() {
+    if (sd_vae_cb) {
+        sd_vae_cb(sd_vae_cb_data);
     }
 }
 
@@ -367,7 +383,7 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     va_start(args, format);
 
     static char log_buffer[LOG_BUFFER_SIZE + 1];
-    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "%s:%-4d - ", sd_basename(file).c_str(), line);
+    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "%15s:%-4d - ", sd_basename(file).c_str(), line);
 
     if (written >= 0 && written < LOG_BUFFER_SIZE) {
         vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
@@ -385,10 +401,17 @@ void sd_set_log_callback(sd_log_cb_t cb, void* data) {
     sd_log_cb      = cb;
     sd_log_cb_data = data;
 }
+
 void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
 }
+
+void sd_set_vae_callback(sd_vae_stage_cb_t cb, void* data) {
+    sd_vae_cb = cb;
+    sd_vae_cb_data = data;
+}
+
 const char* sd_get_system_info() {
     static char buffer[1024];
     std::stringstream ss;
