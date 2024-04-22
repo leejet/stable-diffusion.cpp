@@ -2103,7 +2103,7 @@ public:
         return compute_first_stage(gglm_ctx_local->engine_ctx, x, true);
     }
 
-    void extract_output_images(sd_image_t** result_images, std::vector<struct ggml_tensor*> decoded_images) {
+    void extract_output_images(sd_image_t* result_images, std::vector<struct ggml_tensor*> decoded_images) {
         uint32_t result_w    = gglm_ctx_local->engine_meta.engine_env_w;
         uint32_t result_h    = gglm_ctx_local->engine_meta.engine_env_h;
         uint32_t result_c    = 3;
@@ -2111,12 +2111,12 @@ public:
         size_t result_groups = gglm_ctx_local->engine_meta.env_batch_count;
         size_t result_frames = vid_frames > 0 ? vid_frames : 1;
 
-        *result_images = (sd_image_t*)calloc(result_groups * result_frames, sizeof(sd_image_t));
+        result_images = (sd_image_t*)calloc(result_groups * result_frames, sizeof(sd_image_t));
         for (size_t i = 0; i < decoded_images.size(); i++) {
-            (*result_images[i]).width   = result_w;
-            (*result_images[i]).height  = result_h;
-            (*result_images[i]).channel = result_c;
-            (*result_images[i]).data    = sd_tensor_to_image(decoded_images[i]);
+            result_images[i].width   = result_w;
+            result_images[i].height  = result_h;
+            result_images[i].channel = result_c;
+            result_images[i].data    = sd_tensor_to_image(decoded_images[i]);
         }
     }
 };
@@ -2289,7 +2289,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     {
         LOG_INFO("<txt2img> packing start");
         int64_t t6 = ggml_time_ms();
-        sd_ctx->sd->extract_output_images(&result_images, decoded_images);
+        sd_ctx->sd->extract_output_images(result_images, decoded_images);
         int64_t t7 = ggml_time_ms();
         LOG_INFO("<txt2img> packing completed in %.2fs", (t7 - t6) * 1.0f / 1000);
     }
@@ -2389,7 +2389,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     {
         LOG_INFO("<img2img> packing start");
         int64_t t6 = ggml_time_ms();
-        sd_ctx->sd->extract_output_images(&result_images, decoded_images);
+        sd_ctx->sd->extract_output_images(result_images, decoded_images);
         int64_t t7 = ggml_time_ms();
         LOG_INFO("<img2img> packing completed in %.2fs", (t7 - t6) * 1.0f / 1000);
     }
@@ -2470,7 +2470,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
         }
 
         for (int b = 0; b < video_frames; b++) {
-            LOG_INFO("<img2vid> generating frames: %i/%i", b, video_frames);
+            LOG_INFO("<img2vid> generating frames: %i/%i", (b + 1), video_frames);
             ggml_tensor* temp_latent = nullptr;
             {
                 LOG_INFO("<img2vid> sampling start");
@@ -2494,7 +2494,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
     {
         LOG_INFO("<img2vid> packing start");
         int64_t t6 = ggml_time_ms();
-        sd_ctx->sd->extract_output_images(&result_images, decoded_images);
+        sd_ctx->sd->extract_output_images(result_images, decoded_images);
         int64_t t7 = ggml_time_ms();
         LOG_INFO("<img2vid> packing completed in %.2fs", (t7 - t6) * 1.0f / 1000);
     }
