@@ -766,10 +766,10 @@ public:
         set_clip_skip(clip_skip_value);
 
         if (version == OPEN_CLIP_VIT_BIGG_14) {
-            blocks["embeddings"] = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token));
-            blocks["projection"] = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, projection_dim, true));
-            blocks["encoder"]    = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
-            blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
+            blocks["text_embeddings"]  = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token));
+            blocks["text_projection"]  = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, projection_dim, true));
+            blocks["text_encoder"]     = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
+            blocks["text_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
         } else {
             blocks["embeddings"] = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token));
             blocks["encoder"]    = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
@@ -795,10 +795,11 @@ public:
                                 size_t max_token_idx = 0,
                                 bool return_pooled   = false) {
         // input_ids: [N, n_token]
-        auto text_embeddings = std::dynamic_pointer_cast<CLIPEmbeddings>(blocks["embeddings"]);
-        auto text_projection = std::dynamic_pointer_cast<CLIPProjection>(blocks["projection"]);
-        auto text_encoder    = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
-        auto text_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer_norm"]);
+        bool enable_sub_mark = (version == OPEN_CLIP_VIT_BIGG_14);
+        auto text_embeddings = std::dynamic_pointer_cast<CLIPEmbeddings>(enable_sub_mark ? blocks["text_embeddings"] : blocks["embeddings"]);
+        auto text_projection = std::dynamic_pointer_cast<CLIPProjection>(enable_sub_mark ? blocks["text_projection"] : blocks["projection"]);
+        auto text_encoder    = std::dynamic_pointer_cast<CLIPEncoder>(enable_sub_mark ? blocks["text_encoder"] : blocks["encoder"]);
+        auto text_layer_norm = std::dynamic_pointer_cast<LayerNorm>(enable_sub_mark ? blocks["text_layer_norm"] : blocks["final_layer_norm"]);
 
         auto x = text_embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
         x      = text_encoder->forward(ctx, x, return_pooled ? -1 : clip_skip, true);
@@ -1014,7 +1015,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         if (version == VERSION_XL) {
             text_model->get_param_tensors(tensors, prefix + "transformer.text_model");
-            text_model2->get_param_tensors(tensors, prefix + "1.transformer.text_model");
+            text_model2->get_param_tensors(tensors, prefix + "1.transformer");
         } else if (version == VERSION_SVD) {
             vision_model->get_param_tensors(tensors, prefix + "transformer");
         } else {
