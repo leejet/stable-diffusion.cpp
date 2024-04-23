@@ -1013,7 +1013,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         if (version == VERSION_XL) {
-            text_model->get_param_tensors(tensors, prefix + "transformer");
+            text_model->get_param_tensors(tensors, prefix + "transformer.text_model");
             text_model2->get_param_tensors(tensors, prefix + "1.transformer.text_model");
         } else if (version == VERSION_SVD) {
             vision_model->get_param_tensors(tensors, prefix + "transformer");
