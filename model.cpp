@@ -377,7 +377,7 @@ std::string convert_diffusers_name_to_compvis(std::string key, char seq) {
     }
 
     if (match(m, std::regex(format("vae%c(.*)%ctime_conv_out(.*)", seq, seq)), key)) {
-        return format("first_stage_model%c%s%cconv_out%ctime_conv_out%s", seq, m[0].c_str(), seq, seq, m[1].c_str());
+        return format("first_stage_model%c%s%cconv_out%ctime_mix_conv%s", seq, m[0].c_str(), seq, seq, m[1].c_str());
     }
 
     if (match(m, std::regex(format("vae%c(.*)%cmid_block%c(attentions|resnets)%c(\\d+)%c(.+)", seq, seq, seq, seq, seq)), key)) {
