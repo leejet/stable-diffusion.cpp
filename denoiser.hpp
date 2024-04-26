@@ -180,7 +180,6 @@ struct AYSSchedule : SigmaSchedule {
             0.173, 0.034, 0.002},
         };
     
-        /* Hard coded to SDXL while testing */
         std::vector<float> inputs;
         std::vector<float> results(len + 1);
     
