@@ -2187,11 +2187,26 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
 }
 
 void free_sd_ctx(sd_ctx_t* sd_ctx) {
-    if (sd_ctx->sd->free_params_immediately) {
+    if (sd_ctx->sd->diffusion_model) {
         sd_ctx->sd->diffusion_model->free_params_buffer();
     }
-    if (sd_ctx->sd->free_params_immediately && !sd_ctx->sd->use_tiny_autoencoder) {
+    if (sd_ctx->sd->tae_first_stage) {
+        sd_ctx->sd->tae_first_stage->free_params_buffer();
+    }
+    if (sd_ctx->sd->first_stage_model) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
+    }
+    if (sd_ctx->sd->pmid_lora) {
+        sd_ctx->sd->pmid_lora->free_params_buffer();
+    }
+    if (sd_ctx->sd->pmid_model) {
+        sd_ctx->sd->pmid_model->free_params_buffer();
+    }
+    if (sd_ctx->sd->control_net) {
+        sd_ctx->sd->control_net->free_params_buffer();
+    }
+    if (sd_ctx->sd->cond_stage_model) {
+        sd_ctx->sd->cond_stage_model->free_params_buffer();
     }
     if (sd_ctx->sd != NULL) {
         delete sd_ctx->sd;
