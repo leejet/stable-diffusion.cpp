@@ -544,9 +544,10 @@ public:
 
     struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
+        auto h = z;
         if (!use_video_decoder) {
             auto post_quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["post_quant_conv"]);
-            z                    = post_quant_conv->forward(ctx, z);  // [N, z_channels, h, w]
+            h                    = post_quant_conv->forward(ctx, z);  // [N, z_channels, h, w]
         }
         auto decoder = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
 
