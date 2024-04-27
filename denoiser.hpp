@@ -207,7 +207,9 @@ struct AYSSchedule : SigmaSchedule {
          * size using log-linear interpolation */
         if ((len + 1) != inputs.size()) {
             results = logLinearInterpolation(inputs, len + 1);
-        }
+        } else {
+	    results = inputs; 
+	}
     
         /* Not sure if this is strictly neccessary */
         results[len] = 0.0f;
