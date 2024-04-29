@@ -450,6 +450,11 @@ public:
                     LOG_INFO("running with Karras schedule");
                     denoiser->schedule = std::make_shared<KarrasSchedule>();
                     break;
+                case AYS:
+                    LOG_INFO("Running with Align-Your-Steps schedule");
+                    denoiser->schedule          = std::make_shared<AYSSchedule>();
+                    denoiser->schedule->version = version;
+                    break;
                 case DEFAULT:
                     // Don't touch anything.
                     break;
