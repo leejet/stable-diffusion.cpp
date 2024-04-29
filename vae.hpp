@@ -552,7 +552,7 @@ public:
         auto decoder = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
 
         ggml_set_name(z, "bench-start");
-        auto h = decoder->forward(ctx, z);
+        h = decoder->forward(ctx, z);
         ggml_set_name(h, "bench-end");
         return h;
     }
