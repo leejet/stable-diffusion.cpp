@@ -888,6 +888,11 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             }
         }
 
+        // ggml/src/ggml.c:2745
+        if (n_dims < 1 || n_dims > GGML_MAX_DIMS) {
+            continue;
+        }
+
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
         tensor_storage.reverse_ne();
 
