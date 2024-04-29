@@ -890,6 +890,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 
         // ggml/src/ggml.c:2745
         if (n_dims < 1 || n_dims > GGML_MAX_DIMS) {
+            LOG_ERROR("skip tensor '%s' with n_dims %d", name.c_str(), n_dims);
             continue;
         }
 
