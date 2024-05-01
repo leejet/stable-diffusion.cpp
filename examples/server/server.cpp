@@ -533,7 +533,7 @@ int main(int argc, char **argv)
                                 std::string data_str = "data: " +
                                     data.dump(-1, ' ', false, json::error_handler_t::replace) +
                                     "\n\n";
-                                if(!sink.write(data_str.c_str(), data_str.size())){
+                                if(!sink.write(data_str.c_str(), data_str.size())) {
                                     return false;
                                 }
                                 sd_set_progress_callback(progressFunction, sh);
@@ -628,8 +628,7 @@ int main(int argc, char **argv)
     // to make it ctrl+clickable:
     printf("\nstable-diffusion server listening at http://%s:%d\n", sparams.hostname.c_str(), sparams.port);
 
-    std::thread t([&]()
-    {
+    std::thread t([&]() {
         if (!svr.listen_after_bind()) {
             return 1;
         }

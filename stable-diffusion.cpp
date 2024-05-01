@@ -2050,6 +2050,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     for (size_t i = 0; i < 1; i++) {
         result_images[i].width   = width;
         result_images[i].height  = height;
+        result_images[i].seed  = seed;
         result_images[i].channel = 3;
         result_images[i].data    = sd_tensor_to_image(img);
     }
