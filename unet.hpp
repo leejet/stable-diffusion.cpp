@@ -543,14 +543,6 @@ struct UNetModel : public GGMLModule {
         return "unet";
     }
 
-    size_t get_params_mem_size() {
-        return unet.get_params_mem_size();
-    }
-
-    size_t get_params_num() {
-        return unet.get_params_num();
-    }
-
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         unet.get_param_tensors(tensors, prefix);
     }

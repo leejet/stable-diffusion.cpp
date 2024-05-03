@@ -152,14 +152,6 @@ struct ESRGAN : public GGMLModule {
         return "esrgan";
     }
 
-    size_t get_params_mem_size() {
-        return rrdb_net.get_params_mem_size();
-    }
-
-    size_t get_params_num() {
-        return rrdb_net.get_params_num();
-    }
-
     bool load_from_file(const std::string& file_path) {
         LOG_INFO("loading esrgan from '%s'", file_path.c_str());
 

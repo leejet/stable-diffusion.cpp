@@ -454,7 +454,7 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
     ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_size, tile_size, input->ne[2], 1);
     ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_size * scale, tile_size * scale, output->ne[2], 1);
     on_processing(input_tile, NULL, true);
-    int num_tiles = (input_width * input_height) / (non_tile_overlap * non_tile_overlap);
+    int num_tiles = ceil((float)input_width / non_tile_overlap) * ceil((float)input_height / non_tile_overlap);
     LOG_INFO("processing %i tiles", num_tiles);
     pretty_progress(1, num_tiles, 0.0f);
     int tile_count = 1;
@@ -752,18 +752,14 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_timestep_embedding(
     return ggml_timestep_embedding(ctx, timesteps, dim, max_period);
 }
 
-// struct GGMLComputeGraph {
-//     virtual void init(struct ggml_context* ctx, ggml_type wtype) = 0;
-//     virtual std::string get_desc() = 0;
-//     virtual size_t get_params_mem_size()   = 0;
-//     virtual size_t get_params_num() = 0;
-//     virtual struct ggml_cgraph* get_ggml_cgraph() = 0;
-// };
+__STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
+    size_t num = 0;
+    for (ggml_tensor* t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+        num++;
+    }
+    return num;
+}
 
-/*
-#define MAX_PARAMS_TENSOR_NUM 10240
-#define MAX_GRAPH_SIZE 10240
-*/
 /* SDXL with LoRA requires more space */
 #define MAX_PARAMS_TENSOR_NUM 15360
 #define MAX_GRAPH_SIZE 15360
@@ -854,9 +850,7 @@ protected:
     }
 
 public:
-    virtual size_t get_params_mem_size() = 0;
-    virtual size_t get_params_num()      = 0;
-    virtual std::string get_desc()       = 0;
+    virtual std::string get_desc() = 0;
 
     GGMLModule(ggml_backend_t backend, ggml_type wtype = GGML_TYPE_F32)
         : backend(backend), wtype(wtype) {
@@ -876,7 +870,7 @@ public:
     }
 
     bool alloc_params_buffer() {
-        size_t num_tensors = get_params_num();
+        size_t num_tensors = ggml_tensor_num(params_ctx);
         params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, backend);
         if (params_buffer == NULL) {
             LOG_ERROR("%s alloc params backend buffer failed", get_desc().c_str());
@@ -896,6 +890,13 @@ public:
             ggml_backend_buffer_free(params_buffer);
             params_buffer = NULL;
         }
+    }
+
+    size_t get_params_buffer_size() {
+        if (params_buffer != NULL) {
+            return ggml_backend_buffer_get_size(params_buffer);
+        }
+        return 0;
     }
 
     void free_compute_buffer() {
@@ -968,19 +969,6 @@ public:
 };
 
 class GGMLBlock {
-private:
-    static char temp_buffer[1024 * 1024 * 10];
-    ggml_context* get_temp_ctx() {
-        struct ggml_init_params params;
-        params.mem_size   = sizeof(temp_buffer);
-        params.mem_buffer = temp_buffer;
-        params.no_alloc   = true;
-
-        ggml_context* temp_ctx = ggml_init(params);
-        GGML_ASSERT(temp_ctx != NULL);
-        return temp_ctx;
-    }
-
 protected:
     typedef std::unordered_map<std::string, struct ggml_tensor*> ParameterMap;
     typedef std::unordered_map<std::string, std::shared_ptr<GGMLBlock>> GGMLBlockMap;
@@ -1001,14 +989,6 @@ public:
     void init(struct ggml_context* ctx, ggml_type wtype) {
         init_blocks(ctx, wtype);
         init_params(ctx, wtype);
-    }
-
-    std::tuple<size_t, size_t> get_params_info(ggml_type wtype) {
-        ggml_context* temp_ctx = get_temp_ctx();
-        init(temp_ctx, wtype);
-        size_t num_tensors = get_params_num();
-        size_t mem_size    = get_params_mem_size();
-        return {num_tensors, mem_size};
     }
 
     size_t get_params_num() {

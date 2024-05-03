@@ -526,14 +526,6 @@ struct AutoEncoderKL : public GGMLModule {
         return "vae";
     }
 
-    size_t get_params_mem_size() {
-        return ae.get_params_mem_size();
-    }
-
-    size_t get_params_num() {
-        return ae.get_params_num();
-    }
-
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         ae.get_param_tensors(tensors, prefix);
     }
