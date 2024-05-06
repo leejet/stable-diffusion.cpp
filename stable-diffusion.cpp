@@ -1865,6 +1865,25 @@ public:
             return;
         }
 
+        // deal input_image
+        if (initvid_image){
+            ggml_tensor* init_moments = nullptr;
+            ggml_tensor* init_img     = nullptr;
+            ggml_tensor* init_latent  = nullptr;
+            init_img = ggml_new_tensor_4d(gglm_ctx_local->engine_ctx, GGML_TYPE_F32,
+                                                           gglm_ctx_local->engine_meta.engine_env_w,
+                                                           gglm_ctx_local->engine_meta.engine_env_h,
+                                                           3, 1);
+            sd_image_to_tensor(initvid_image->data, init_img);
+            if (!use_tiny_autoencoder) {
+                init_moments = compute_first_stage(gglm_ctx_local->engine_ctx, init_img, false);
+                init_latent  = get_first_stage_encoding(gglm_ctx_local->engine_ctx, init_moments);
+            } else {
+                init_latent = compute_first_stage(gglm_ctx_local->engine_ctx, init_img, false);
+            }
+            gglm_ctx_local->engine_keep.image_latent = init_latent;
+        }
+
         if(version == VERSION_SVD){
             int64_t t0 = ggml_time_ms();
             std::tie(
@@ -1904,25 +1923,6 @@ public:
             int64_t t1 = ggml_time_ms();
             LOG_INFO("get_learned_condition VID completed, taking %" PRId64 " ms", t1 - t0);
         } else {
-            // deal input_image
-            if (initvid_image){
-                ggml_tensor* init_moments = nullptr;
-                ggml_tensor* init_img     = nullptr;
-                ggml_tensor* init_latent  = nullptr;
-                init_img = ggml_new_tensor_4d(gglm_ctx_local->engine_ctx, GGML_TYPE_F32,
-                                                               gglm_ctx_local->engine_meta.engine_env_w,
-                                                               gglm_ctx_local->engine_meta.engine_env_h,
-                                                               3, 1);
-                sd_image_to_tensor(initvid_image->data, init_img);
-                if (!use_tiny_autoencoder) {
-                    init_moments = compute_first_stage(gglm_ctx_local->engine_ctx, init_img, false);
-                    init_latent  = get_first_stage_encoding(gglm_ctx_local->engine_ctx, init_moments);
-                } else {
-                    init_latent = compute_first_stage(gglm_ctx_local->engine_ctx, init_img, false);
-                }
-                gglm_ctx_local->engine_keep.image_latent = init_latent;
-            }
-
             // deal positive-prompt
             if (!positive_prompt.empty() &&
                 (positive_prompt != gglm_ctx_local->engine_meta.env_positive_prompt || mark_force_update)) {

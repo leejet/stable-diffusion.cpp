@@ -1309,6 +1309,9 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") != std::string::npos) {
             return VERSION_SVD;
         }
+        if (tensor_storage.name.find("down_blocks.0.attentions.1.temporal_transformer_blocks.0.norm_in.weight") != std::string::npos) {
+            return VERSION_SVD;
+        }
 
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||
