@@ -1824,9 +1824,9 @@ public:
         return modified_prompt;
     }
 
-    std::string config_by_lora(const std::string &positive_prompt) {
+    std::string config_apply_loras(const std::string &positive_prompt) {
         if (positive_prompt.empty()) {
-            LOG_ERROR("config_by_lora() with empty positive_prompt");
+            LOG_ERROR("config_apply_loras() with empty positive_prompt");
             return positive_prompt;
         }
         std::string modified_prompt = positive_prompt;
@@ -2037,7 +2037,7 @@ public:
 
             positive_prompt = config_photo_maker(positive_prompt, input_id_images_path, pm_style_ratio, normalize_input);
 
-            positive_prompt = config_by_lora(positive_prompt);
+            positive_prompt = config_apply_loras(positive_prompt);
 
             generate_input_latent(positive_prompt, negative_prompt, initvid_image, video_config, mark_mid_update);
         }
@@ -2053,7 +2053,7 @@ public:
                                  int output_h,
                                  int output_c,
                                  int cur_seed_offset = 0){
-        ggml_tensor* image_latent = gglm_ctx_local->engine_keep.image_latent;
+        ggml_tensor* image_latent = (*init_latent)? (*init_latent): gglm_ctx_local->engine_keep.image_latent;
         //int vid_frames = gglm_ctx_local->engine_meta.tag_video_config.total_frames;
         //int output_frames = vid_frames > 0 ? vid_frames : 1;
         int64_t cur_seed = gglm_ctx_local->engine_meta.engine_seed + cur_seed_offset;
@@ -2475,17 +2475,17 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
 
     std::vector<struct ggml_tensor*> decoded_images;
     {
-        ggml_tensor* init_latent = NULL;
-        ggml_tensor* init_noised = NULL;
-        {
-            LOG_INFO("<img2vid> encode_first_stage start");
-            int64_t t0 = ggml_time_ms();
-            sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 4);
-            int64_t t1 = ggml_time_ms();
-            LOG_INFO("<img2vid> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-        }
-
         for (int b = 0; b < video_frames; b++) {
+            ggml_tensor* init_latent = NULL;
+            ggml_tensor* init_noised = NULL;
+            {
+                LOG_INFO("<img2vid> encode_first_stage start");
+                int64_t t0 = ggml_time_ms();
+                sd_ctx->sd->generate_stable_latents(&init_latent, &init_noised, width / 8, height / 8, 4);
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("<img2vid> encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+            }
+
             LOG_INFO("<img2vid> generating frames: %i/%i", (b + 1), video_frames);
             ggml_tensor* temp_latent = nullptr;
             {
@@ -2498,11 +2498,16 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                 LOG_INFO("<img2vid> sampling  %" PRId64 "  completed, taking %.2fs", b + 1, (t3 - t2) * 1.0f / 1000);
             }
 
-            LOG_INFO("<img2vid> decode_first_stage start");
-            int64_t t4 = ggml_time_ms();
-            decoded_images.push_back(sd_ctx->sd->decode_first_stage(temp_latent));
-            int64_t t5 = ggml_time_ms();
-            LOG_INFO("<img2vid> decode_first_stage %" PRId64 " decoded, taking %.2fs", b + 1, (t5 - t4) * 1.0f / 1000);
+            ggml_tensor* cur_output = NULL;
+            {
+                LOG_INFO("<img2vid> decode_first_stage start");
+                int64_t t4 = ggml_time_ms();
+                cur_output = sd_ctx->sd->decode_first_stage(temp_latent);
+                decoded_images.push_back(cur_output);
+                int64_t t5 = ggml_time_ms();
+                LOG_INFO("<img2vid> decode_first_stage %" PRId64 " decoded, taking %.2fs", b + 1, (t5 - t4) * 1.0f / 1000);
+            }
+            init_latent = cur_output;
         }
     }
 
