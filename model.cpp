@@ -796,6 +796,10 @@ ggml_type str_to_ggml_type(const std::string& dtype) {
     return ttype;
 }
 
+static bool name_ends_with(const std::string name, const std::string suffix) {
+    return ((name.size() >= suffix.size()) && (name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0));
+}
+
 // https://huggingface.co/docs/safetensors/index
 bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const std::string& prefix) {
     LOG_DEBUG("init from '%s'", file_path.c_str());
@@ -889,7 +893,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         // ggml/src/ggml.c:2745
-        if (n_dims < 1 || n_dims > GGML_MAX_DIMS) {
+        if ((n_dims < 1 || n_dims > GGML_MAX_DIMS) && (name_ends_with(name, ".alpha") == false)) {
             LOG_ERROR("skip tensor '%s' with n_dims %d", name.c_str(), n_dims);
             continue;
         }
