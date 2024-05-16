@@ -4,17 +4,36 @@ on:
   workflow_dispatch: # allows manual triggering
     inputs:
       create_release:
-        description: 'Create new release'
+        description: "Create new release"
         required: true
         type: boolean
   push:
     branches:
       - master
       - ci
-    paths: ['.github/workflows/**', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu']
+    paths:
+      [
+        ".github/workflows/**",
+        "**/CMakeLists.txt",
+        "**/Makefile",
+        "**/*.h",
+        "**/*.hpp",
+        "**/*.c",
+        "**/*.cpp",
+        "**/*.cu",
+      ]
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu']
+    paths:
+      [
+        "**/CMakeLists.txt",
+        "**/Makefile",
+        "**/*.h",
+        "**/*.hpp",
+        "**/*.c",
+        "**/*.cpp",
+        "**/*.cu",
+      ]
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
@@ -67,11 +86,11 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
+          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
           path: |
             sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
-
 
   macOS-latest-cmake:
     runs-on: macos-latest
@@ -120,11 +139,11 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
+          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
           path: |
             sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
-
 
   windows-latest-cmake:
     runs-on: windows-latest
@@ -132,17 +151,17 @@ jobs:
     strategy:
       matrix:
         include:
-          - build: 'noavx'
-            defines: '-DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DSD_BUILD_SHARED_LIBS=ON'
-          - build: 'avx2'
-            defines: '-DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON'
-          - build: 'avx'
-            defines: '-DGGML_AVX2=OFF -DSD_BUILD_SHARED_LIBS=ON'
-          - build: 'avx512'
-            defines: '-DGGML_AVX512=ON -DSD_BUILD_SHARED_LIBS=ON'
-          - build: 'cuda12'
-            defines: '-DSD_CUBLAS=ON -DSD_BUILD_SHARED_LIBS=ON'
-          - build: 'rocm5.5'
+          - build: "noavx"
+            defines: "-DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DSD_BUILD_SHARED_LIBS=ON"
+          - build: "avx2"
+            defines: "-DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON"
+          - build: "avx"
+            defines: "-DGGML_AVX2=OFF -DSD_BUILD_SHARED_LIBS=ON"
+          - build: "avx512"
+            defines: "-DGGML_AVX512=ON -DSD_BUILD_SHARED_LIBS=ON"
+          - build: "cuda12"
+            defines: "-DSD_CUBLAS=ON -DSD_BUILD_SHARED_LIBS=ON"
+          - build: "rocm5.5"
             defines: '-G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS="gfx1100;gfx1102;gfx1030" -DSD_BUILD_SHARED_LIBS=ON'
     steps:
       - name: Clone
@@ -156,8 +175,8 @@ jobs:
         if: ${{ matrix.build == 'cuda12' }}
         uses: Jimver/cuda-toolkit@v0.2.11
         with:
-          cuda: '12.2.0'
-          method: 'network'
+          cuda: "12.2.0"
+          method: "network"
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
 
       - name: Install rocm-toolkit
@@ -165,7 +184,7 @@ jobs:
         if: ${{ matrix.build == 'rocm5.5' }}
         uses: Cyberhan123/rocm-toolkit@v0.1.0
         with:
-          rocm: '5.5.0'
+          rocm: "5.5.0"
 
       - name: Install Ninja
         id: install-ninja
@@ -231,15 +250,17 @@ jobs:
 
       - name: Upload Cuda runtime
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.build == 'cuda12' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
+          name: sd-cudart-sd-bin-win-cu12-x64.zip
           path: |
             cudart-sd-bin-win-cu12-x64.zip
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
+          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip
           path: |
             sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip
 
@@ -256,7 +277,11 @@ jobs:
     steps:
       - name: Download artifacts
         id: download-artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifact
+          pattern: sd-*
+          merge-multiple: true
 
       - name: Get commit hash
         id: commit
