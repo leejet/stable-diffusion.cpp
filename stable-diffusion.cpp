@@ -1717,7 +1717,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
         int64_t cur_seed       = seed + b;
-        LOG_INFO("generating image: %i/%i - seed %i", b + 1, batch_count, cur_seed);
+        LOG_INFO("generating image: %i/%i - seed %" PRId64, b + 1, batch_count, cur_seed);
 
         sd_ctx->sd->rng->manual_seed(cur_seed);
         struct ggml_tensor* x_t   = NULL;
