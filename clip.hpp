@@ -330,7 +330,6 @@ public:
 
         std::smatch matches;
         std::string str = text;
-        std::vector<std::string> token_strs;
         while (std::regex_search(str, matches, pat)) {
             bool skip = on_new_token_cb(str, bpe_tokens);
             if (skip) {
@@ -349,24 +348,14 @@ public:
                 while ((pos = bpe_strs.find(' ', start)) != std::u32string::npos) {
                     auto bpe_str = bpe_strs.substr(start, pos - start);
                     bpe_tokens.push_back(encoder[bpe_str]);
-                    token_strs.push_back(utf32_to_utf8(bpe_str));
-
                     start = pos + 1;
                 }
                 auto bpe_str = bpe_strs.substr(start, bpe_strs.size() - start);
                 bpe_tokens.push_back(encoder[bpe_str]);
-                token_strs.push_back(utf32_to_utf8(bpe_str));
             }
             str = matches.suffix();
         }
-        std::stringstream ss;
-        ss << "[";
-        for (auto token : token_strs) {
-            ss << "\"" << token << "\", ";
-        }
-        ss << "]";
-        // LOG_DEBUG("split prompt \"%s\" to tokens %s", original_text.c_str(), ss.str().c_str());
-        // printf("split prompt \"%s\" to tokens %s \n", original_text.c_str(), ss.str().c_str());
+
         return bpe_tokens;
     }
 };
@@ -1093,8 +1082,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         GGMLModule::compute(get_graph, n_threads, true, output, output_ctx);
     }
 
-    std::pair<std::vector<int>, std::vector<float>> tokenize(std::string text,
-                                                             bool padding = false) {
+    std::pair<std::vector<int>, std::vector<float>> tokenize(std::string text, bool padding = false) {
         return tokenize(text, text_model.n_token, padding);
     }
 
@@ -1347,11 +1335,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         }
 
         pad_tokens(tokens, weights, max_length, padding);
-
-        // for (int i = 0; i < tokens.size(); i++) {
-        //     std::cout << tokens[i] << ":" << weights[i] << ", ";
-        // }
-        // std::cout << std::endl;
 
         return {tokens, weights};
     }
