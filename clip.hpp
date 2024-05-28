@@ -4,6 +4,8 @@
 #include "ggml_extend.hpp"
 #include "model.h"
 
+#include <charconv>
+
 /*================================================== CLIPTokenizer ===================================================*/
 
 std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remove_lora(std::string text) {
@@ -13,7 +15,9 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
 
     while (std::regex_search(text, matches, re)) {
         std::string filename = matches[1].str();
-        float multiplier     = std::stof(matches[2].str());
+        std::string m        = matches[2].str();
+        float multiplier     = 0;
+        std::from_chars(m.data(), m.data() + m.size(), multiplier);
 
         text = std::regex_replace(text, re, "", std::regex_constants::format_first_only);
 
