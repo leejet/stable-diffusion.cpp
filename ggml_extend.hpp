@@ -917,7 +917,7 @@ public:
             return NULL;
         }
         // it's performing a compute, check if backend isn't cpu
-        if (!ggml_backend_is_cpu(backend) && tensor->backend == GGML_BACKEND_TYPE_CPU) {
+        if (!ggml_backend_is_cpu(backend) && (tensor->buffer == NULL || ggml_backend_buffer_is_host(tensor->buffer))) {
             // pass input tensors to gpu memory
             auto backend_tensor = ggml_dup_tensor(compute_ctx, tensor);
 

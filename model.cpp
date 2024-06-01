@@ -571,10 +571,9 @@ void convert_tensor(void* src,
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src, (ggml_fp16_t*)dst, n);
         } else {
-            int64_t hist[16];
             std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
             const float* im = imatrix.data();
-            ggml_quantize_chunk(dst_type, (float*)src, dst, 0, nrows, n_per_row, hist, im);
+            ggml_quantize_chunk(dst_type, (float*)src, dst, 0, nrows, n_per_row, im);
         }
     } else if (dst_type == GGML_TYPE_F32) {
         if (src_type == GGML_TYPE_F16) {
@@ -602,10 +601,9 @@ void convert_tensor(void* src,
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src_data_f32, (ggml_fp16_t*)dst, n);
         } else {
-            int64_t hist[16];
             std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
             const float* im = imatrix.data();
-            ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, nrows, n_per_row, hist, im);
+            ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, nrows, n_per_row, im);
         }
     }
 }

@@ -679,8 +679,8 @@ public:
         class_embedding                     = ggml_repeat(ctx, class_embed_weight, class_embedding);      // [N, embed_dim]
         class_embedding                     = ggml_reshape_4d(ctx, class_embedding, 1, embed_dim, 1, N);  // [N, 1, embed_dim, 1]
 
-        struct ggml_tensor* x = ggml_concat(ctx, class_embedding, patch_embedding);    // [N, num_positions, embed_dim, 1]
-        x                     = ggml_reshape_3d(ctx, x, embed_dim, num_positions, N);  // [N, num_positions, embed_dim]
+        struct ggml_tensor* x = ggml_concat(ctx, class_embedding, patch_embedding, 2);  // [N, num_positions, embed_dim, 1]
+        x                     = ggml_reshape_3d(ctx, x, embed_dim, num_positions, N);   // [N, num_positions, embed_dim]
         x                     = ggml_add(ctx, x, position_embed_weight);
         return x;  // [N, num_positions, embed_dim]
     }
@@ -1036,7 +1036,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
                                              hidden_states2->ne[3]);
             hidden_states2 = ggml_cont(ctx, ggml_permute(ctx, hidden_states2, 2, 0, 1, 3));
 
-            hidden_states = ggml_concat(ctx, hidden_states, hidden_states2);  // [N, n_token, hidden_size + hidden_size2]
+            hidden_states = ggml_concat(ctx, hidden_states, hidden_states2, 2);  // [N, n_token, hidden_size + hidden_size2]
 
             hidden_states = ggml_cont(ctx, ggml_permute(ctx, hidden_states, 1, 2, 0, 3));
         }
@@ -1069,7 +1069,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             auto token_embed_weight = text_model.get_token_embed_weight();
             token_embed_weight      = ggml_reshape_3d(compute_ctx, token_embed_weight, token_embed_weight->ne[0], 1, token_embed_weight->ne[1]);
             // concatenate custom embeddings
-            embeddings = ggml_concat(compute_ctx, token_embed_weight, custom_embeddings);
+            embeddings = ggml_concat(compute_ctx, token_embed_weight, custom_embeddings, 2);
             embeddings = ggml_reshape_2d(compute_ctx, embeddings, embeddings->ne[0], embeddings->ne[2]);
         }
 
