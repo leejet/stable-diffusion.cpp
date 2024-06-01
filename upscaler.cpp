@@ -15,7 +15,7 @@ struct UpscalerGGML {
     }
 
     bool load_from_file(const std::string& esrgan_path) {
-#ifdef SD_USE_CUBLAS
+#ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
 #endif
@@ -39,7 +39,7 @@ struct UpscalerGGML {
 
     sd_image_t upscale(sd_image_t input_image, uint32_t upscale_factor) {
         // upscale_factor, unused for RealESRGAN_x4plus_anime_6B.pth
-        sd_image_t upscaled_image = {0, 0, 0, NULL};
+        sd_image_t upscaled_image = {0, 0, 0, -1, NULL};
         int output_width          = (int)input_image.width * esrgan_upscaler->scale;
         int output_height         = (int)input_image.height * esrgan_upscaler->scale;
         LOG_INFO("upscaling from (%i x %i) to (%i x %i)",
@@ -77,6 +77,7 @@ struct UpscalerGGML {
             (uint32_t)output_width,
             (uint32_t)output_height,
             3,
+            input_image.seed,
             upscaled_data,
         };
         return upscaled_image;

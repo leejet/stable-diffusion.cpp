@@ -80,9 +80,12 @@ enum sd_type_t {
     SD_TYPE_IQ3_S   = 21,
     SD_TYPE_IQ2_S   = 22,
     SD_TYPE_IQ4_XS  = 23,
-    SD_TYPE_I8,
-    SD_TYPE_I16,
-    SD_TYPE_I32,
+    SD_TYPE_I8      = 24,
+    SD_TYPE_I16     = 25,
+    SD_TYPE_I32     = 26,
+    SD_TYPE_I64     = 27,
+    SD_TYPE_F64     = 28,
+    SD_TYPE_IQ1_M   = 29,
     SD_TYPE_COUNT,
 };
 
@@ -96,10 +99,12 @@ enum sd_log_level_t {
 };
 
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
-typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
+typedef void (*sd_progress_cb_t)(int step, int steps, float time, bool start, void* data);
+typedef void (*sd_vae_stage_cb_t)(void* data); // notify is vae phase
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
+SD_API void sd_set_vae_callback(sd_vae_stage_cb_t cb, void* data);
 SD_API int32_t get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 
@@ -107,6 +112,7 @@ typedef struct {
     uint32_t width;
     uint32_t height;
     uint32_t channel;
+    int64_t seed;
     uint8_t* data;
 } sd_image_t;
 
@@ -120,7 +126,6 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             const char* embed_dir_c_str,
                             const char* stacked_id_embed_dir_c_str,
                             bool vae_decode_only,
-                            bool vae_tiling,
                             bool free_params_immediately,
                             int n_threads,
                             enum sd_type_t wtype,
@@ -129,6 +134,27 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             bool keep_clip_on_cpu,
                             bool keep_control_net_cpu,
                             bool keep_vae_on_cpu);
+
+SD_API sd_ctx_t* new_sd_ctx_direct(
+                            const char* lora_model_dir,
+                            bool vae_decode_only,
+                            bool free_params_immediately,
+                            int n_threads,
+                            enum rng_type_t rng_type);
+
+SD_API bool     sd_model_is_loaded(sd_ctx_t* sd_ctx);
+
+SD_API void sd_request_cancel(sd_ctx_t* sd_ctx);
+
+SD_API void     load_model(sd_ctx_t* sd_ctx,
+                            const char* model_path,
+                            const char* vae_path,
+                            const char* taesd_path,
+                            const char* control_net_path_c_str,
+                            const char* embed_dir_c_str,
+                            enum sd_type_t wtype,
+                            enum schedule_t s,
+                            bool keep_control_net_cpu);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
@@ -147,7 +173,8 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            float control_strength,
                            float style_strength,
                            bool normalize_input,
-                           const char* input_id_images_path);
+                           const char* input_id_images_path,
+                           bool vae_tiling);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,

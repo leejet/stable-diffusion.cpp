@@ -721,7 +721,6 @@ int main(int argc, const char* argv[]) {
                                   params.embeddings_path.c_str(),
                                   params.stacked_id_embeddings_path.c_str(),
                                   vae_decode_only,
-                                  params.vae_tiling,
                                   true,
                                   params.n_threads,
                                   params.wtype,
@@ -747,6 +746,7 @@ int main(int argc, const char* argv[]) {
         control_image = new sd_image_t{(uint32_t)params.width,
                                        (uint32_t)params.height,
                                        3,
+                                           -1,
                                        control_image_buffer};
         if (params.canny_preprocess) {  // apply preprocessor
             control_image->data = preprocess_canny(control_image->data,
@@ -777,11 +777,13 @@ int main(int argc, const char* argv[]) {
                           params.control_strength,
                           params.style_ratio,
                           params.normalize_input,
-                          params.input_id_images_path.c_str());
+                          params.input_id_images_path.c_str(),
+                          params.vae_tiling);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
                                   3,
+                                  -1,
                                   input_image_buffer};
 
         if (params.mode == IMG2VID) {

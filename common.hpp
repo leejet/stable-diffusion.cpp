@@ -279,24 +279,63 @@ public:
         int64_t n_context = context->ne[1];
         int64_t inner_dim = d_head * n_head;
 
+#if defined(SD_USE_FLASH_ATTENTION) && defined(SD_USE_CUDA)
+        bool apply_flash = n_context % 256 == 0 && d_head == 40;
+#endif
+
         auto q = to_q->forward(ctx, x);                                 // [N, n_token, inner_dim]
         q      = ggml_reshape_4d(ctx, q, d_head, n_head, n_token, n);   // [N, n_token, n_head, d_head]
         q      = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));      // [N, n_head, n_token, d_head]
         q      = ggml_reshape_3d(ctx, q, d_head, n_token, n_head * n);  // [N * n_head, n_token, d_head]
+
+#if defined(SD_USE_FLASH_ATTENTION) && defined(SD_USE_CUDA)
+        if(apply_flash) {
+            q = ggml_pad(ctx, q, d_head == 40 ? 8 : 0, 0, 0, 0);
+        }
+#endif
 
         auto k = to_k->forward(ctx, context);                             // [N, n_context, inner_dim]
         k      = ggml_reshape_4d(ctx, k, d_head, n_head, n_context, n);   // [N, n_context, n_head, d_head]
         k      = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));        // [N, n_head, n_context, d_head]
         k      = ggml_reshape_3d(ctx, k, d_head, n_context, n_head * n);  // [N * n_head, n_context, d_head]
 
+#if defined(SD_USE_FLASH_ATTENTION) && defined(SD_USE_CUDA)
+        if(apply_flash) {
+            k = ggml_cast(ctx, ggml_pad(ctx, k, d_head == 40 ? 8 : 0, 0, 0, 0), GGML_TYPE_F16);
+        }
+#endif
+
         auto v = to_v->forward(ctx, context);                             // [N, n_context, inner_dim]
         v      = ggml_reshape_4d(ctx, v, d_head, n_head, n_context, n);   // [N, n_context, n_head, d_head]
-        v      = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));        // [N, n_head, d_head, n_context]
-        v      = ggml_reshape_3d(ctx, v, n_context, d_head, n_head * n);  // [N * n_head, d_head, n_context]
 
-        auto kqv = ggml_nn_attention(ctx, q, k, v, false);  // [N * n_head, n_token, d_head]
-        kqv      = ggml_reshape_4d(ctx, kqv, d_head, n_token, n_head, n);
-        kqv      = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, n_token, n_head, d_head]
+#if defined(SD_USE_FLASH_ATTENTION) && defined(SD_USE_CUDA)
+        if(apply_flash) {
+            v   = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));      // [N, n_head, n_token, d_head]
+            v   = ggml_reshape_3d(ctx, v, d_head, n_token, n_head * n);  // [N * n_head, n_token, d_head]
+            v   = ggml_cast(ctx, ggml_pad(ctx, v, d_head == 40 ? 8 : 0, 0, 0, 0), GGML_TYPE_F16);
+        } else {
+#endif
+            v      = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));        // [N, n_head, d_head, n_context]
+            v      = ggml_reshape_3d(ctx, v, n_context, d_head, n_head * n);  // [N * n_head, d_head, n_context]
+#if defined(SD_USE_FLASH_ATTENTION) && defined(SD_USE_CUDA)
+        }
+#endif
+
+        struct ggml_tensor* kqv = nullptr;
+#if defined(SD_USE_FLASH_ATTENTION) && defined(SD_USE_CUDA)
+        if(!apply_flash) {
+#endif
+            kqv      = ggml_nn_attention(ctx, q, k, v, false);  // [N * n_head, n_token, d_head]
+            kqv      = ggml_reshape_4d(ctx, kqv, d_head, n_token, n_head, n);
+            kqv      = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));  // [N, n_token, n_head, d_head]
+#if defined(SD_USE_FLASH_ATTENTION) && defined(SD_USE_CUDA)
+        } else {
+            kqv      = ggml_flash_attn_ext(ctx, q, k, v, nullptr, 1.f / sqrtf(d_head));
+            ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
+            kqv      = ggml_view_3d(ctx, kqv, d_head, n_head, n_token, kqv->nb[1], kqv->nb[2], 0);
+            kqv      = ggml_cont(ctx, kqv);
+        }
+#endif
 
         x = ggml_reshape_3d(ctx, kqv, d_head * n_head, n_token, n);  // [N, n_token, inner_dim]
 
