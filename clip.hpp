@@ -1247,7 +1247,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             if(curr_text == "BREAK" && curr_weight == -1.0f) {
                // Pad token array up to chunk size at this point.
                // TODO: This is a hardcoded chunk_len, like in stable-diffusion.cpp, make it a parameter for the future?
-               // Also, this is 75 instead of 75 to leave room for BOS and EOS tokens.
+               // Also, this is 75 instead of 77 to leave room for BOS and EOS tokens.
                for(int j=0; j< 75 - (tokens_acc%75); j++) {
                   clean_input_ids.push_back(EOS_TOKEN_ID);
                   clean_index++;
@@ -1360,7 +1360,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             if(curr_text == "BREAK" && curr_weight == -1.0f) {
                // Pad token array up to chunk size at this point.
                // TODO: This is a hardcoded chunk_len, like in stable-diffusion.cpp, make it a parameter for the future?
-               // Also, this is 75 instead of 75 to leave room for BOS and EOS tokens.
+               // Also, this is 75 instead of 77 to leave room for BOS and EOS tokens.
                LOG_DEBUG("BREAK token encountered, padding current chunk by %i tokens.", 75 - (tokens.size()%75));
                while(tokens.size() % 75) {
                   tokens.push_back(EOS_TOKEN_ID);
