@@ -413,7 +413,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     float round_bracket_multiplier  = 1.1f;
     float square_bracket_multiplier = 1 / 1.1f;
 
-    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|[^\\()\[\]:]+|:)");
+    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|\s*\bBREAK\b\s*|[^\\()\[\]: B]+|:|\s*\bB)");
     std::regex re_break(R"(\s*\bBREAK\b\s*)");
 
     auto multiply_range = [&](int start_position, float multiplier) {
@@ -422,7 +422,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
         }
     };
 
-    std::smatch m;
+    std::smatch m,m2;
     std::string remaining_text = text;
 
     while (std::regex_search(remaining_text, m, re_attention)) {
@@ -446,6 +446,8 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
             square_brackets.pop_back();
         } else if (text == "\\(") {
             res.push_back({text.substr(1), 1.0f});
+        } else if (std::regex_match(text, m2, re_break)) {
+            res.push_back({"BREAK", -1.0f});
         } else {
             res.push_back({text, 1.0f});
         }
@@ -1240,32 +1242,45 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
             // printf(" %s: %f \n", curr_text.c_str(), curr_weight);
-            std::vector<int> curr_tokens = tokenizer.encode(curr_text, on_new_token_cb);
+
             int32_t clean_index          = 0;
-            for (uint32_t i = 0; i < curr_tokens.size(); i++) {
-                int token_id = curr_tokens[i];
-                if (token_id == image_token)
-                    class_token_index.push_back(clean_index - 1);
-                else {
-                    clean_input_ids.push_back(token_id);
-                    clean_index++;
-                }
-            }
-            // GGML_ASSERT(class_token_index.size() == 1); // PhotoMaker currently does not support multiple
-            //     trigger words in a single prompt.
-            if (class_token_index.size() == 1) {
-                // Expand the class word token and corresponding mask
-                int class_token = clean_input_ids[class_token_index[0]];
-                class_idx       = tokens_acc + class_token_index[0];
-                std::vector<int> clean_input_ids_tmp;
-                for (uint32_t i = 0; i < class_token_index[0]; i++)
-                    clean_input_ids_tmp.push_back(clean_input_ids[i]);
-                for (uint32_t i = 0; i < num_input_imgs; i++)
-                    clean_input_ids_tmp.push_back(class_token);
-                for (uint32_t i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
-                    clean_input_ids_tmp.push_back(clean_input_ids[i]);
-                clean_input_ids.clear();
-                clean_input_ids = clean_input_ids_tmp;
+            if(curr_text == "BREAK" && curr_weight == -1.0f) {
+               // Pad token array up to chunk size at this point.
+               // TODO: This is a hardcoded chunk_len, like in stable-diffusion.cpp, make it a parameter for the future?
+               // Also, this is 75 instead of 75 to leave room for BOS and EOS tokens.
+               for(int j=0; j< 75 - (tokens_acc%75); j++) {
+                  clean_input_ids.push_back(EOS_TOKEN_ID);
+                  clean_index++;
+               }
+            } else {
+
+               // Regular token, process normally.
+               std::vector<int> curr_tokens = tokenizer.encode(curr_text, on_new_token_cb);
+               for (uint32_t i = 0; i < curr_tokens.size(); i++) {
+                   int token_id = curr_tokens[i];
+                   if (token_id == image_token)
+                       class_token_index.push_back(clean_index - 1);
+                   else {
+                       clean_input_ids.push_back(token_id);
+                       clean_index++;
+                   }
+               }
+               // GGML_ASSERT(class_token_index.size() == 1); // PhotoMaker currently does not support multiple
+               //     trigger words in a single prompt.
+               if (class_token_index.size() == 1) {
+                   // Expand the class word token and corresponding mask
+                   int class_token = clean_input_ids[class_token_index[0]];
+                   class_idx       = tokens_acc + class_token_index[0];
+                   std::vector<int> clean_input_ids_tmp;
+                   for (uint32_t i = 0; i < class_token_index[0]; i++)
+                       clean_input_ids_tmp.push_back(clean_input_ids[i]);
+                   for (uint32_t i = 0; i < num_input_imgs; i++)
+                       clean_input_ids_tmp.push_back(class_token);
+                   for (uint32_t i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
+                       clean_input_ids_tmp.push_back(clean_input_ids[i]);
+                   clean_input_ids.clear();
+                   clean_input_ids = clean_input_ids_tmp;
+               }
             }
             tokens_acc += clean_index;
             tokens.insert(tokens.end(), clean_input_ids.begin(), clean_input_ids.end());
@@ -1341,6 +1356,18 @@ struct FrozenCLIPEmbedderWithCustomWords : public GGMLModule {
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
+
+            if(curr_text == "BREAK" && curr_weight == -1.0f) {
+               // Pad token array up to chunk size at this point.
+               // TODO: This is a hardcoded chunk_len, like in stable-diffusion.cpp, make it a parameter for the future?
+               // Also, this is 75 instead of 75 to leave room for BOS and EOS tokens.
+               LOG_DEBUG("BREAK token encountered, padding current chunk by %i tokens.", 75 - (tokens.size()%75));
+               while(tokens.size() % 75) {
+                  tokens.push_back(EOS_TOKEN_ID);
+                  weights.push_back(1);
+               }
+               continue;
+            }
             std::vector<int> curr_tokens = tokenizer.encode(curr_text, on_new_token_cb);
             tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);
