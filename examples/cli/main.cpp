@@ -7,7 +7,9 @@
 #include <vector>
 
 // #include "preprocessing.hpp"
+#include "mmdit.hpp"
 #include "stable-diffusion.h"
+#include "t5.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
@@ -168,7 +170,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings.\n");
     printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir.\n");
     printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
-    printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
+    printf("  --upscale-model [ESRGAN_PATH]      path to t5 model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
@@ -626,6 +628,15 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 
 int main(int argc, const char* argv[]) {
     SDParams params;
+    // params.verbose = true;
+    // sd_set_log_callback(sd_log_cb, (void*)&params);
+    // T5Embedder::load_from_file_and_test(argv[1]);
+    // return 1;
+    // params.verbose = true;
+    // sd_set_log_callback(sd_log_cb, (void*)&params);
+    // MMDiTRunner::load_from_file_and_test(argv[1]);
+    // return 1;
+
     parse_args(argc, argv, params);
 
     sd_set_log_callback(sd_log_cb, (void*)&params);

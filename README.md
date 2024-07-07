@@ -86,11 +86,13 @@ git submodule update
     - Stable Diffusion v1.4 from https://huggingface.co/CompVis/stable-diffusion-v-1-4-original
     - Stable Diffusion v1.5 from https://huggingface.co/runwayml/stable-diffusion-v1-5
     - Stable Diffuison v2.1 from https://huggingface.co/stabilityai/stable-diffusion-2-1
+    - Stable Diffusion 3 2B from https://huggingface.co/stabilityai/stable-diffusion-3-medium
 
     ```shell
     curl -L -O https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4.ckpt
     # curl -L -O https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
     # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-2-1/resolve/main/v2-1_768-nonema-pruned.safetensors
+    # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-3-medium/resolve/main/sd3_medium_incl_clips_t5xxlfp16.safetensors
     ```
 
 ### Build
@@ -226,6 +228,7 @@ For example:
 ./bin/sd -m ../models/sd-v1-4.ckpt -p "a lovely cat"
 # ./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 # ./bin/sd -m ../models/sd_xl_base_1.0.safetensors --vae ../models/sdxl_vae-fp16-fix.safetensors -H 1024 -W 1024 -p "a lovely cat" -v
+# ./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable Diffusion CPP\"' --cfg-scale 4.5 --sampling-method euler -v
 ```
 
 Using formats of different precisions will yield results of varying quality.
@@ -384,6 +387,7 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 
 - [ggml](https://github.com/ggerganov/ggml)
 - [stable-diffusion](https://github.com/CompVis/stable-diffusion)
+- [sd3-ref](https://github.com/Stability-AI/sd3-ref)
 - [stable-diffusion-stability-ai](https://github.com/Stability-AI/stablediffusion)
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
