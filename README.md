@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/a%20lovely%20cat.png" width="256x">
+  <img src="./assets/a%20love%20cat%20with%20stable%20diffusion%20cpp.png" width="256x">
 </p>
 
 # stable-diffusion.cpp
@@ -10,7 +10,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
 - Super lightweight and without external dependencies
-- SD1.x, SD2.x and SDXL support
+- SD1.x, SD2.x, SDXL and SD3 support
     - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
 
 - [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) and [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo) support
