@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/a%20love%20cat%20with%20stable%20diffusion%20cpp.png" width="256x">
+  <img src="./assets/cat_with_sd_cpp_42.png" width="360x">
 </p>
 
 # stable-diffusion.cpp
