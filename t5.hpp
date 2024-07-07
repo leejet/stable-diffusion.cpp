@@ -151,7 +151,7 @@ protected:
             value[i] = (*pieces)[i].second;        // vocab_id
         }
 
-        trie_ = std::make_unique<Darts::DoubleArray>();
+        trie_ = std::unique_ptr<Darts::DoubleArray>(new Darts::DoubleArray());
         if (trie_->build(key.size(), const_cast<char**>(&key[0]), nullptr,
                          &value[0]) != 0) {
             status_ = BUILD_DOUBLE_ARRAY_FAILED;

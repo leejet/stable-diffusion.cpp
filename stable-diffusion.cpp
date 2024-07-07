@@ -1482,7 +1482,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
 
     auto uc_vector = ggml_dup_tensor(work_ctx, cond.c_vector);
 
-    SDCondition uncond = {uc_crossattn, uc_vector, uc_concat};
+    SDCondition uncond = SDCondition(uc_crossattn, uc_vector, uc_concat);
 
     int64_t t1 = ggml_time_ms();
     LOG_INFO("get_learned_condition completed, taking %" PRId64 " ms", t1 - t0);
@@ -1513,7 +1513,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                                                  sample_method,
                                                  sigmas,
                                                  -1,
-                                                 {NULL, NULL});
+                                                 SDCondition(NULL, NULL, NULL));
 
     int64_t t2 = ggml_time_ms();
     LOG_INFO("sampling completed, taking %.2fs", (t2 - t1) * 1.0f / 1000);

@@ -8,6 +8,10 @@ struct SDCondition {
     struct ggml_tensor* c_crossattn = NULL;  // aka context
     struct ggml_tensor* c_vector    = NULL;  // aka y
     struct ggml_tensor* c_concat    = NULL;
+
+    SDCondition() = default;
+    SDCondition(struct ggml_tensor* c_crossattn, struct ggml_tensor* c_vector, struct ggml_tensor* c_concat) :
+    c_crossattn(c_crossattn), c_vector(c_vector), c_concat(c_concat) {}
 };
 
 struct Conditioner {
@@ -514,7 +518,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             GGML_ASSERT(offset == ggml_nbytes(vec));
         }
         // print_ggml_tensor(result);
-        return {hidden_states, vec, NULL};
+        return SDCondition(hidden_states, vec, NULL);
     }
 
     std::tuple<SDCondition, std::vector<bool>>
@@ -941,7 +945,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                                         hidden_states,
                                         chunk_hidden_states->ne[0],
                                         ggml_nelements(hidden_states) / chunk_hidden_states->ne[0]);
-        return {hidden_states, pooled, NULL};
+        return SDCondition(hidden_states, pooled, NULL);
     }
 
     SDCondition get_learned_condition(ggml_context* work_ctx,
