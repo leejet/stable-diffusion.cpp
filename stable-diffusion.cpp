@@ -154,7 +154,12 @@ public:
 #endif
 #ifdef SD_USE_VULKAN
         LOG_DEBUG("Using Vulkan backend");
-        backend = ggml_backend_vk_init();
+        for (int device = 0; device < ggml_backend_vk_get_device_count(); ++device) {
+            backend = ggml_backend_vk_init(device);
+        }
+        if(!backend) {
+            LOG_WARN("Failed to initialize Vulkan backend");
+        }
 #endif
 
         if (!backend) {
