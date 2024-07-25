@@ -24,6 +24,10 @@ struct UpscalerGGML {
         ggml_backend_metal_log_set_callback(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
+#ifdef SD_USE_SYCL
+        LOG_DEBUG("Using SYCL backend");
+        backend = ggml_backend_sycl_init(0);
+#endif
 
         if (!backend) {
             LOG_DEBUG("Using CPU backend");

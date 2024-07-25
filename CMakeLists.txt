@@ -27,6 +27,7 @@ option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_CUBLAS                     "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
+option(SD_SYCL                       "sd: sycl backend" OFF)
 option(SD_FLASH_ATTN                 "sd: use flash attention for x4 less memory usage" OFF)
 option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
 option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
@@ -53,12 +54,20 @@ if (SD_HIPBLAS)
     endif()
 endif ()
 
+if(SD_SYCL)
+	message("Use SYCL as backend stable-diffusion")
+    set(GGML_SYCL ON)
+    add_definitions(-DSD_USE_SYCL)
+endif()
+
 if(SD_FLASH_ATTN)
     message("Use Flash Attention for memory optimization")
     add_definitions(-DSD_USE_FLASH_ATTENTION)
 endif()
 
 set(SD_LIB stable-diffusion)
+
+set (GGML_F16C OFF)
 
 file(GLOB SD_LIB_SOURCES 
     "*.h"
