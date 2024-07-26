@@ -34,13 +34,13 @@ option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
 if(SD_CUBLAS)
-	message("Use CUBLAS as backend stable-diffusion")
+    message("Use CUBLAS as backend stable-diffusion")
     set(GGML_CUDA ON)
     add_definitions(-DSD_USE_CUBLAS)
 endif()
 
 if(SD_METAL)
-	message("Use Metal as backend stable-diffusion")
+    message("Use Metal as backend stable-diffusion")
     set(GGML_METAL ON)
     add_definitions(-DSD_USE_METAL)
 endif()
@@ -55,7 +55,7 @@ if (SD_HIPBLAS)
 endif ()
 
 if(SD_SYCL)
-	message("Use SYCL as backend stable-diffusion")
+    message("Use SYCL as backend stable-diffusion")
     set(GGML_SYCL ON)
     add_definitions(-DSD_USE_SYCL)
 endif()
@@ -67,7 +67,10 @@ endif()
 
 set(SD_LIB stable-diffusion)
 
-set (GGML_F16C OFF)
+if (NOT SD_CUBLAS AND NOT SD_METAL AND NOT SD_SYCL AND NOT SD_HIPBLAS)
+    message(WARNING "Set GGML_F16C OFF due to latest ggml library updating bug in CPU backend (TODO)")
+    set (GGML_F16C OFF)
+endif()
 
 file(GLOB SD_LIB_SOURCES 
     "*.h"
