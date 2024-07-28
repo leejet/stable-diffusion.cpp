@@ -10,8 +10,8 @@
 #include <tuple>
 #include <vector>
 
-#include "ggml/ggml-backend.h"
-#include "ggml/ggml.h"
+#include "ggml-backend.h"
+#include "ggml.h"
 #include "json.hpp"
 #include "zip.h"
 
