@@ -10,50 +10,14 @@
 #define TIMESTEPS 1000
 
 struct SigmaSchedule {
-    float alphas_cumprod[TIMESTEPS];
-    float sigmas[TIMESTEPS];
-    float log_sigmas[TIMESTEPS];
     int version = 0;
+    typedef std::function<float(float)> t_to_sigma_t;
 
-    virtual std::vector<float> get_sigmas(uint32_t n) = 0;
-
-    float sigma_to_t(float sigma) {
-        float log_sigma = std::log(sigma);
-        std::vector<float> dists;
-        dists.reserve(TIMESTEPS);
-        for (float log_sigma_val : log_sigmas) {
-            dists.push_back(log_sigma - log_sigma_val);
-        }
-
-        int low_idx = 0;
-        for (size_t i = 0; i < TIMESTEPS; i++) {
-            if (dists[i] >= 0) {
-                low_idx++;
-            }
-        }
-        low_idx      = std::min(std::max(low_idx - 1, 0), TIMESTEPS - 2);
-        int high_idx = low_idx + 1;
-
-        float low  = log_sigmas[low_idx];
-        float high = log_sigmas[high_idx];
-        float w    = (low - log_sigma) / (low - high);
-        w          = std::max(0.f, std::min(1.f, w));
-        float t    = (1.0f - w) * low_idx + w * high_idx;
-
-        return t;
-    }
-
-    float t_to_sigma(float t) {
-        int low_idx     = static_cast<int>(std::floor(t));
-        int high_idx    = static_cast<int>(std::ceil(t));
-        float w         = t - static_cast<float>(low_idx);
-        float log_sigma = (1.0f - w) * log_sigmas[low_idx] + w * log_sigmas[high_idx];
-        return std::exp(log_sigma);
-    }
+    virtual std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) = 0;
 };
 
 struct DiscreteSchedule : SigmaSchedule {
-    std::vector<float> get_sigmas(uint32_t n) {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
         std::vector<float> result;
 
         int t_max = TIMESTEPS - 1;
@@ -161,7 +125,7 @@ struct AYSSchedule : SigmaSchedule {
         return results;
     }
 
-    std::vector<float> get_sigmas(uint32_t len) {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
         const std::vector<float> noise_levels[] = {
             /* SD1.5 */
             {14.6146412293f, 6.4745760956f, 3.8636745985f, 2.6946151520f,
@@ -177,7 +141,7 @@ struct AYSSchedule : SigmaSchedule {
         };
 
         std::vector<float> inputs;
-        std::vector<float> results(len + 1);
+        std::vector<float> results(n + 1);
 
         switch (version) {
             case VERSION_2_x: /* fallthrough */
@@ -201,26 +165,24 @@ struct AYSSchedule : SigmaSchedule {
 
         /* Stretches those pre-calculated reference levels out to the desired
          * size using log-linear interpolation */
-        if ((len + 1) != inputs.size()) {
-            results = log_linear_interpolation(inputs, len + 1);
+        if ((n + 1) != inputs.size()) {
+            results = log_linear_interpolation(inputs, n + 1);
         } else {
             results = inputs;
         }
 
         /* Not sure if this is strictly neccessary */
-        results[len] = 0.0f;
+        results[n] = 0.0f;
 
         return results;
     }
 };
 
 struct KarrasSchedule : SigmaSchedule {
-    std::vector<float> get_sigmas(uint32_t n) {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
         // These *COULD* be function arguments here,
         // but does anybody ever bother to touch them?
-        float sigma_min = 0.1f;
-        float sigma_max = 10.f;
-        float rho       = 7.f;
+        float rho = 7.f;
 
         std::vector<float> result(n + 1);
 
@@ -236,28 +198,155 @@ struct KarrasSchedule : SigmaSchedule {
 };
 
 struct Denoiser {
-    std::shared_ptr<SigmaSchedule> schedule              = std::make_shared<DiscreteSchedule>();
-    virtual std::vector<float> get_scalings(float sigma) = 0;
-};
+    std::shared_ptr<SigmaSchedule> schedule                                                  = std::make_shared<DiscreteSchedule>();
+    virtual float sigma_min()                                                                = 0;
+    virtual float sigma_max()                                                                = 0;
+    virtual float sigma_to_t(float sigma)                                                    = 0;
+    virtual float t_to_sigma(float t)                                                        = 0;
+    virtual std::vector<float> get_scalings(float sigma)                                     = 0;
+    virtual ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) = 0;
+    virtual ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent)             = 0;
 
-struct CompVisDenoiser : public Denoiser {
-    float sigma_data = 1.0f;
-
-    std::vector<float> get_scalings(float sigma) {
-        float c_out = -sigma;
-        float c_in  = 1.0f / std::sqrt(sigma * sigma + sigma_data * sigma_data);
-        return {c_out, c_in};
+    virtual std::vector<float> get_sigmas(uint32_t n) {
+        auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
+        return schedule->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
     }
 };
 
-struct CompVisVDenoiser : public Denoiser {
+struct CompVisDenoiser : public Denoiser {
+    float sigmas[TIMESTEPS];
+    float log_sigmas[TIMESTEPS];
+
     float sigma_data = 1.0f;
 
+    float sigma_min() {
+        return sigmas[0];
+    }
+
+    float sigma_max() {
+        return sigmas[TIMESTEPS - 1];
+    }
+
+    float sigma_to_t(float sigma) {
+        float log_sigma = std::log(sigma);
+        std::vector<float> dists;
+        dists.reserve(TIMESTEPS);
+        for (float log_sigma_val : log_sigmas) {
+            dists.push_back(log_sigma - log_sigma_val);
+        }
+
+        int low_idx = 0;
+        for (size_t i = 0; i < TIMESTEPS; i++) {
+            if (dists[i] >= 0) {
+                low_idx++;
+            }
+        }
+        low_idx      = std::min(std::max(low_idx - 1, 0), TIMESTEPS - 2);
+        int high_idx = low_idx + 1;
+
+        float low  = log_sigmas[low_idx];
+        float high = log_sigmas[high_idx];
+        float w    = (low - log_sigma) / (low - high);
+        w          = std::max(0.f, std::min(1.f, w));
+        float t    = (1.0f - w) * low_idx + w * high_idx;
+
+        return t;
+    }
+
+    float t_to_sigma(float t) {
+        int low_idx     = static_cast<int>(std::floor(t));
+        int high_idx    = static_cast<int>(std::ceil(t));
+        float w         = t - static_cast<float>(low_idx);
+        float log_sigma = (1.0f - w) * log_sigmas[low_idx] + w * log_sigmas[high_idx];
+        return std::exp(log_sigma);
+    }
+
+    std::vector<float> get_scalings(float sigma) {
+        float c_skip = 1.0f;
+        float c_out  = -sigma;
+        float c_in   = 1.0f / std::sqrt(sigma * sigma + sigma_data * sigma_data);
+        return {c_skip, c_out, c_in};
+    }
+
+    // this function will modify noise/latent
+    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) {
+        ggml_tensor_scale(noise, sigma);
+        ggml_tensor_add(latent, noise);
+        return latent;
+    }
+
+    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) {
+        return latent;
+    }
+};
+
+struct CompVisVDenoiser : public CompVisDenoiser {
     std::vector<float> get_scalings(float sigma) {
         float c_skip = sigma_data * sigma_data / (sigma * sigma + sigma_data * sigma_data);
         float c_out  = -sigma * sigma_data / std::sqrt(sigma * sigma + sigma_data * sigma_data);
         float c_in   = 1.0f / std::sqrt(sigma * sigma + sigma_data * sigma_data);
         return {c_skip, c_out, c_in};
+    }
+};
+
+float time_snr_shift(float alpha, float t) {
+    if (alpha == 1.0f) {
+        return t;
+    }
+    return alpha * t / (1 + (alpha - 1) * t);
+}
+
+struct DiscreteFlowDenoiser : public Denoiser {
+    float sigmas[TIMESTEPS];
+    float shift = 3.0f;
+
+    float sigma_data = 1.0f;
+
+    DiscreteFlowDenoiser() {
+        set_parameters();
+    }
+
+    void set_parameters() {
+        for (int i = 1; i < TIMESTEPS + 1; i++) {
+            sigmas[i - 1] = t_to_sigma(i);
+        }
+    }
+
+    float sigma_min() {
+        return sigmas[0];
+    }
+
+    float sigma_max() {
+        return sigmas[TIMESTEPS - 1];
+    }
+
+    float sigma_to_t(float sigma) {
+        return sigma * 1000.f;
+    }
+
+    float t_to_sigma(float t) {
+        t = t + 1;
+        return time_snr_shift(shift, t / 1000.f);
+    }
+
+    std::vector<float> get_scalings(float sigma) {
+        float c_skip = 1.0f;
+        float c_out  = -sigma;
+        float c_in   = 1.0f;
+        return {c_skip, c_out, c_in};
+    }
+
+    // this function will modify noise/latent
+    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) {
+        ggml_tensor_scale(noise, sigma);
+        ggml_tensor_scale(latent, 1.0f - sigma);
+        ggml_tensor_add(latent, noise);
+        return latent;
+    }
+
+    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) {
+        ggml_tensor_scale(latent, 1.0f / (1.0f - sigma));
+        return latent;
     }
 };
 
