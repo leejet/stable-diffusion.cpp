@@ -79,7 +79,7 @@ public:
 
     std::shared_ptr<Conditioner> cond_stage_model;
     std::shared_ptr<FrozenCLIPVisionEmbedder> clip_vision;  // for svd
-    std::shared_ptr<DiffuisionModel> diffusion_model;
+    std::shared_ptr<DiffusionModel> diffusion_model;
     std::shared_ptr<AutoEncoderKL> first_stage_model;
     std::shared_ptr<TinyAutoEncoder> tae_first_stage;
     std::shared_ptr<ControlNet> control_net;

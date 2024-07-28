@@ -4,7 +4,7 @@
 #include "mmdit.hpp"
 #include "unet.hpp"
 
-struct DiffuisionModel {
+struct DiffusionModel {
     virtual void compute(int n_threads,
                          struct ggml_tensor* x,
                          struct ggml_tensor* timesteps,
@@ -24,7 +24,7 @@ struct DiffuisionModel {
     virtual int64_t get_adm_in_channels()                                               = 0;
 };
 
-struct UNetModel : public DiffuisionModel {
+struct UNetModel : public DiffusionModel {
     UNetModelRunner unet;
 
     UNetModel(ggml_backend_t backend,
@@ -72,7 +72,7 @@ struct UNetModel : public DiffuisionModel {
     }
 };
 
-struct MMDiTModel : public DiffuisionModel {
+struct MMDiTModel : public DiffusionModel {
     MMDiTRunner mmdit;
 
     MMDiTModel(ggml_backend_t backend,
