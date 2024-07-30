@@ -575,10 +575,16 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(rng_type_to_str[params.rng_type]) + ", ";
     parameter_string += "Sampler: " + std::string(sample_method_str[params.sample_method]);
-    if (params.schedule == KARRAS) {
-        parameter_string += " karras";
+    if (params.schedule == KARRAS || params.schedule == AYS) {
+        parameter_string += " " + std::string(schedule_str[params.schedule]);
     }
     parameter_string += ", ";
+    if (!params.vae_path.empty()) {
+        parameter_string += "VAE: " + sd_basename(params.vae_path) + ", ";
+    }
+    if (params.clip_skip != -1) {
+        parameter_string += "Clip skip: " + std::to_string(params.clip_skip) + ", ";
+    }
     parameter_string += "Version: stable-diffusion.cpp";
     return parameter_string;
 }
