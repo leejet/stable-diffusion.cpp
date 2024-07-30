@@ -11,9 +11,9 @@
 #include "util.h"
 #include "vocab.hpp"
 
-#include "ggml/ggml-alloc.h"
-#include "ggml/ggml-backend.h"
-#include "ggml/ggml.h"
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
+#include "ggml.h"
 
 #include "stable-diffusion.h"
 
@@ -160,6 +160,10 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
     } else if (ends_with(new_name, "vision_model.visual_projection.weight")) {
         prefix   = new_name.substr(0, new_name.size() - strlen("vision_model.visual_projection.weight"));
         new_name = prefix + "visual_projection.weight";
+        return new_name;
+    } else if (ends_with(new_name, "transformer.text_projection.weight")) {
+        prefix   = new_name.substr(0, new_name.size() - strlen("transformer.text_projection.weight"));
+        new_name = prefix + "transformer.text_model.text_projection";
         return new_name;
     } else {
         return new_name;
@@ -420,7 +424,7 @@ std::string convert_diffusers_name_to_compvis(std::string key, char seq) {
 
 std::string convert_tensor_name(const std::string& name) {
     std::string new_name = name;
-    if (starts_with(name, "cond_stage_model.") || starts_with(name, "conditioner.embedders.") || ends_with(name, ".vision_model.visual_projection.weight")) {
+    if (starts_with(name, "cond_stage_model.") || starts_with(name, "conditioner.embedders.") || starts_with(name, "text_encoders.") || ends_with(name, ".vision_model.visual_projection.weight")) {
         new_name = convert_open_clip_to_hf_clip(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
         new_name = convert_vae_decoder_name(name);
@@ -1288,6 +1292,9 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
 SDVersion ModelLoader::get_sd_version() {
     TensorStorage token_embedding_weight;
     for (auto& tensor_storage : tensor_storages) {
+        if (tensor_storage.name.find("model.diffusion_model.joint_blocks.23.") != std::string::npos) {
+            return VERSION_3_2B;
+        }
         if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos) {
             return VERSION_XL;
         }
@@ -1323,7 +1330,8 @@ ggml_type ModelLoader::get_sd_wtype() {
         }
 
         if (tensor_storage.name.find(".weight") != std::string::npos &&
-            tensor_storage.name.find("time_embed") != std::string::npos) {
+                (tensor_storage.name.find("time_embed") != std::string::npos) ||
+            tensor_storage.name.find("context_embedder") != std::string::npos) {
             return tensor_storage.type;
         }
     }
@@ -1333,6 +1341,11 @@ ggml_type ModelLoader::get_sd_wtype() {
 std::string ModelLoader::load_merges() {
     std::string merges_utf8_str(reinterpret_cast<const char*>(merges_utf8_c_str), sizeof(merges_utf8_c_str));
     return merges_utf8_str;
+}
+
+std::string ModelLoader::load_t5_tokenizer_json() {
+    std::string json_str(reinterpret_cast<const char*>(t5_tokenizer_json_str), sizeof(t5_tokenizer_json_str));
+    return json_str;
 }
 
 std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& vec) {

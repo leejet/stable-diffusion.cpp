@@ -137,14 +137,14 @@ public:
     }
 };
 
-struct ESRGAN : public GGMLModule {
+struct ESRGAN : public GGMLRunner {
     RRDBNet rrdb_net;
     int scale     = 4;
     int tile_size = 128;  // avoid cuda OOM for 4gb VRAM
 
     ESRGAN(ggml_backend_t backend,
            ggml_type wtype)
-        : GGMLModule(backend, wtype) {
+        : GGMLRunner(backend, wtype) {
         rrdb_net.init(params_ctx, wtype);
     }
 
@@ -191,7 +191,7 @@ struct ESRGAN : public GGMLModule {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(x);
         };
-        GGMLModule::compute(get_graph, n_threads, false, output, output_ctx);
+        GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
     }
 };
 
