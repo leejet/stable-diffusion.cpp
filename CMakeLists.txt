@@ -67,11 +67,6 @@ endif()
 
 set(SD_LIB stable-diffusion)
 
-if (NOT SD_CUBLAS AND NOT SD_METAL AND NOT SD_SYCL AND NOT SD_HIPBLAS)
-    message(WARNING "Set GGML_F16C OFF due to latest ggml library updating bug in CPU backend (TODO)")
-    set (GGML_F16C OFF)
-endif()
-
 file(GLOB SD_LIB_SOURCES 
     "*.h"
     "*.cpp"
