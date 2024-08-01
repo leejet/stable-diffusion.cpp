@@ -20,7 +20,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA and Metal backend for GPU acceleration.
+- Full CUDA, Metal and SYCL backend for GPU acceleration.
 - Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
 - Flash Attention for memory usage optimization (only cpu for now)
@@ -139,6 +139,23 @@ Using Metal makes the computation run on the GPU. Currently, there are some issu
 
 ```
 cmake .. -DSD_METAL=ON
+cmake --build . --config Release
+```
+
+##### Using SYCL
+
+Using SYCL makes the computation run on the Intel GPU. Please make sure you have installed the related driver and [Intel® oneAPI Base toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) before start. More details and steps can refer to [llama.cpp SYCL backend](https://github.com/ggerganov/llama.cpp/blob/master/docs/backend/SYCL.md#linux).
+
+```
+# Export relevant ENV variables
+source /opt/intel/oneapi/setvars.sh
+
+# Option 1: Use FP32 (recommended for better performance in most cases)
+cmake .. -DSD_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
+
+# Option 2: Use FP16
+cmake .. -DSD_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON
+
 cmake --build . --config Release
 ```
 
