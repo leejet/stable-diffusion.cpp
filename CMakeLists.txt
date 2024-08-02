@@ -79,6 +79,7 @@ else()
     message("Build static library")
     set(BUILD_SHARED_LIBS OFF)
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
+    target_compile_definitions(${SD_LIB} PUBLIC)
 endif()
 
 
@@ -96,8 +97,15 @@ target_link_libraries(${SD_LIB} PUBLIC ggml zip)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
 target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
 
+set_target_properties(${SD_LIB} PROPERTIES
+                      PUBLIC_HEADER "stable-diffusion.h")
+
 
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
+
+install(TARGETS ${SD_LIB}
+        LIBRARY DESTINATION lib
+        PUBLIC_HEADER DESTINATION include)
