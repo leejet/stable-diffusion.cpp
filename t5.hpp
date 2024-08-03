@@ -453,7 +453,7 @@ public:
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
-        x                     = ggml_norm_ext(ctx, x, eps, false);
+        x                     = ggml_rms_norm(ctx, x, eps);
         x                     = ggml_mul(ctx, x, w);
         return x;
     }
