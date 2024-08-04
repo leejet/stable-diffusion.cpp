@@ -202,7 +202,19 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --color                            Colors the logging tags according to level\n");
     printf("  -v, --verbose                      print extra info\n");
 }
-
+/**
+ * VAE-Tiling 技术
+ * 问题背景
+ * 当使用 VAE 生成大型图像时，由于解码器需要一次性处理整个图像的潜在表示，这可能导致内存占用过大，尤其是在高分辨率下。
+ * 对于非常大的图像，单个潜在表示可能过于庞大而无法处理。
+ * 解决方案
+ * 分块: VAE-Tiling 的核心思想是将大图像分解成较小的块或瓷砖 (tiles)，并对每个瓷砖单独进行处理。
+ * 逐块生成: 每个瓷砖分别通过 VAE 解码器生成。
+ * 拼接: 最后将所有生成的瓷砖重新组合成完整的图像。
+ * @param argc
+ * @param argv
+ * @param params
+ */
 void parse_args(int argc, const char** argv, SDParams& params) {
     bool invalid_arg = false;
     std::string arg;
@@ -670,6 +682,22 @@ int main(int argc, const char* argv[]) {
         int c              = 0;
         int width          = 0;
         int height         = 0;
+        // stbi_load 是一个用于加载图像文件的函数，它来自 Simple True-Basic Image (STB) 图像库。
+        /**
+         * 参数说明
+            filename: 指向图像文件名的指针。
+            x: 输出参数，用于返回图像的宽度。
+            y: 输出参数，用于返回图像的高度。
+            channels: 输出参数，用于返回图像的颜色通道数。
+            desired_channels: 用户指定希望的通道数。如果设置为 0，则返回图像的实际通道数；如果设置为非零值，则图像会被转换为具有指定通道数的格式。
+         * 返回值
+            如果成功加载图像，stbi_load 函数会返回一个指向图像数据的指针。图像数据是以行主序存储的 RGB 或 RGBA 像素值。
+            如果加载失败，函数会返回 NULL 并且可能会打印错误信息。
+         * 注意事项
+            内存管理: stbi_load 分配的内存需要使用 stbi_image_free 来释放。
+            错误处理: 应该检查 stbi_load 的返回值是否为 NULL，以判断加载是否成功。
+            性能: stbi_load 是一个非常高效的库，在大多数现代处理器上表现良好。
+         */
         input_image_buffer = stbi_load(params.input_path.c_str(), &width, &height, &c, 3);
         if (input_image_buffer == NULL) {
             fprintf(stderr, "load image from '%s' failed\n", params.input_path.c_str());
@@ -691,6 +719,7 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
 
+        // 右边来自加载的图像
         // Resize input image ...
         if (params.height != height || params.width != width) {
             printf("resize input image from %dx%d to %dx%d\n", width, height, params.width, params.height);
@@ -703,6 +732,29 @@ int main(int argc, const char* argv[]) {
                 free(input_image_buffer);
                 return 1;
             }
+            /**
+             * stbir_resize 函数，它是 STB Image Resize (STBIR) 库的一部分，用于图像的缩放操作。
+             * STBIR 库提供了简单的接口来调整图像的大小，同时提供了多种滤波器和边缘处理选项。
+                参数说明
+                src: 输入图像数据的指针。
+                src_x: 输入图像的宽度。
+                src_y: 输入图像的高度。
+                src_z: 输入图像的起始偏移量，通常为0。
+                dst: 输出图像数据的指针。
+                dst_x: 输出图像的宽度。
+                dst_y: 输出图像的高度。
+                dst_z: 输出图像的起始偏移量，通常为0。
+                type: 数据类型，例如 STBIR_TYPE_UINT8 表示无符号8位整数。
+                num_channels: 图像的通道数，例如 3 表示 RGB。
+                alpha_channel: 透明通道索引，如果图像没有透明通道，则通常为 STBIR_ALPHA_CHANNEL_NONE。
+                flags: 保留标志，通常为0。
+                edge_clamp_s: 水平方向的边缘处理方法。
+                edge_clamp_t: 垂直方向的边缘处理方法。
+                filter_s: 水平方向的滤波器。
+                filter_t: 垂直方向的滤波器。
+                colorspace: 颜色空间，例如 STBIR_COLORSPACE_SRGB 表示 sRGB 颜色空间。
+                params: 可选参数，例如用于颜色空间转换。
+            */
             stbir_resize(input_image_buffer, width, height, 0,
                          resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
                          3 /*RGB channel*/, STBIR_ALPHA_CHANNEL_NONE, 0,
@@ -712,6 +764,7 @@ int main(int argc, const char* argv[]) {
 
             // Save resized result
             free(input_image_buffer);
+            // 最终得到resize后的图片(内存buffer中)
             input_image_buffer = resized_image_buffer;
         }
     }
@@ -851,6 +904,14 @@ int main(int argc, const char* argv[]) {
         return 1;
     }
 
+    /**
+     * esrgan 可能是指增强超分辨率生成对抗网络（Enhanced Super-Resolution Generative Adversarial Network, ESRGAN）的一种实现或应用。
+     * ESRGAN 是一种用于图像超分辨率的技术，它能够将低分辨率图像放大到高分辨率图像，同时保持图像的质量和细节。
+        ESRGAN 技术概述:
+        在 stable-diffusion.cpp 项目中，esrgan 可能用于以下目的之一：
+        图像放大: 在生成图像之前或之后，使用 ESRGAN 技术放大图像，以提高生成图像的分辨率。
+        图像修复: 作为一种图像后处理步骤，用于改善生成图像的质量，尤其是细节方面。
+     */
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (params.esrgan_path.size() > 0 && params.upscale_repeats > 0) {
         upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
@@ -886,6 +947,19 @@ int main(int argc, const char* argv[]) {
             continue;
         }
         std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
+        /**
+         * 0: 这个值是可选的，用于指定每一行的字节数。如果为 0，则 stbi_write_png 将会自动计算每一行的字节数。
+         * 在本例中，函数会使用 results[i].width 和 results[i].channel 计算出每一行的字节数。
+         *
+         * 最后一个参数字符串不会直接写入到输出的PNG文件的内容中，而是作为PNG图像的元数据或者说是PNG的文本块（text chunk）。
+         * 这些文本块可以用来存储关于图像的额外信息，比如作者名、版权信息、软件版本等。
+         *
+         * stbi_write_png函数允许通过最后一个参数传递这些自定义的文本chunks。
+         * 这些chunks会被添加到PNG文件的末尾，它们不干扰图像的实际显示，但可以通过图像查看器或专门的工具读取。
+         *
+         * 如何检查这些文本chunks
+         * 你可以使用像pngcheck或pnginfo这样的工具来检查PNG文件中的所有chunks，包括自定义的文本chunks。例如，在命令行中使用pngcheck -v命令可以列出PNG文件的所有chunks。
+        */
         stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                        results[i].data, 0, get_image_params(params, params.seed + i).c_str());
         printf("save result image to '%s'\n", final_image_path.c_str());

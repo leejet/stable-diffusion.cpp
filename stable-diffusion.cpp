@@ -1003,6 +1003,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     int sample_steps = sigmas.size() - 1;
 
     // Apply lora
+    // 从正向提示词中抽取lora的限定词和权重, 保存为map对象, 放在pair.first中
+    // pair.second存放排除掉lora相关项的提示词.
     auto result_pair                                = extract_and_remove_lora(prompt);
     std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
 
@@ -1014,6 +1016,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     LOG_DEBUG("prompt after extract and remove lora: \"%s\"", prompt.c_str());
 
     int64_t t0 = ggml_time_ms();
+    // 应用lora, 传入的map中有lora的模型名字, 权重.
     sd_ctx->sd->apply_loras(lora_f2m);
     int64_t t1 = ggml_time_ms();
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
@@ -1245,38 +1248,48 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
 sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     const char* prompt_c_str,
                     const char* negative_prompt_c_str,
-                    int clip_skip,
-                    float cfg_scale,
+                    int clip_skip,  // CLIP 编码器的层数，用于控制文本嵌入的深度
+                    float cfg_scale, // 条件缩放因子，用于调整提示的影响程度。
                     int width,
                     int height,
                     enum sample_method_t sample_method,
-                    int sample_steps,
+                    int sample_steps, // 采样步数，即迭代次数
                     int64_t seed,
-                    int batch_count,
-                    const sd_image_t* control_cond,
-                    float control_strength,
-                    float style_ratio,
-                    bool normalize_input,
+                    int batch_count, // 批次数量，即一次生成多少张图像
+                    const sd_image_t* control_cond, // 控制条件图像，可以为空，用于指导生成过程。
+                    float control_strength,  // 控制条件图像的强度
+                    float style_ratio,  // 风格混合比率
+                    bool normalize_input, // 是否对输入进行归一化
                     const char* input_id_images_path_c_str) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
     }
 
+    // 初始化内存上下文:
+    // 计算所需的内存大小，这取决于图像的大小、批次数量以及模型版本等因素。
+
     struct ggml_init_params params;
+    // 这里首先分配了 10MB 的内存作为基础大小。这是为了保证有足够的内存来存储一些基础的数据结构和临时变量。
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
+    // 如果模型版本是 VERSION_3_2B，则将基础内存大小乘以 3。这是因为不同版本的模型可能需要更多的内存来处理额外的数据结构或更大的中间张量。
     if (sd_ctx->sd->version == VERSION_3_2B) {
         params.mem_size *= 3;
     }
+    // 为了处理与堆叠 ID 相关的额外数据。
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
+    // 这一行代码是基于图像尺寸来计算潜空间张量的大小。通常情况下，稳定扩散模型会在每个像素位置上使用多个通道来表示潜在变量。
+    // 这里使用 width * height * 3 是假设每个像素有 3 个通道（例如 RGB 图像），而每个通道使用单精度浮点数表示，因此需要乘以 sizeof(float)。
     params.mem_size += width * height * 3 * sizeof(float);
+    // 如果生成多个图像（即 batch_count > 1），那么需要为每个批次分配相应的内存。这意味着如果需要同时生成多张图像，内存需求会相应地增加。
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);
 
+    // 使用 ggml_init 初始化一个新的 ggml_context，用于存储中间计算结果。
     struct ggml_context* work_ctx = ggml_init(params);
     if (!work_ctx) {
         LOG_ERROR("ggml_init() failed");
@@ -1285,14 +1298,34 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
     size_t t0 = ggml_time_ms();
 
+    // 生成初始潜空间向量:
+    // 根据模型版本设置初始潜空间向量的值。
+
+    // sigmas 是一个浮点数向量，包含了采样步骤中每一阶段的噪声水平。
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
 
+    // C 表示通道数，对于不同的模型版本有不同的默认值（4 或 16）。
     int C = 4;
     if (sd_ctx->sd->version == VERSION_3_2B) {
         C = 16;
     }
+    // W: 图像宽度除以 8。这是因为稳定扩散模型通常会对图像进行下采样，即将图像尺寸缩小为原来的 1/8。这样做的目的是减少计算量，并且在潜在空间中处理较小的张量。
+    // H: 图像高度除以 8，同样是为了适应模型的下采样要求。
     int W                    = width / 8;
     int H                    = height / 8;
+    // work_ctx: 是一个指向 ggml_context 的指针，用于管理内存和计算图。在这个上下文中创建的张量将使用分配给 work_ctx 的内存。
+    // GGML_TYPE_F32: 指定张量的数据类型为 32 位浮点数。
+    // W 和 H: 分别是前面计算出的图像宽度和高度除以 8 的结果。
+    // C: 通道数。根据模型版本的不同，C 的值可能为 4 或 16。在稳定扩散模型中，这个值表示每个位置上的通道数，通常对应于潜在空间中的特征图。
+    // 1: 第四个维度。在这个上下文中，它通常是 1，表示这是一个二维的特征图（即使在四维张量中表示）。
+    // 这段代码创建了一个四维张量 init_latent，它将用于表示图像的初始潜空间向量。
+    // 这个张量的形状为 (W, H, C, 1)，其中 W 和 H 分别是原始图像宽度和高度除以 8，而 C 是通道数。这个张量将在后续的生成过程中用于表示潜在空间中的初始状态。
+    //
+    // 执行 sd 命令（假设是指稳定扩散模型的命令）时传入的量化类型，通常与创建张量时使用的数据类型是不同的概念。
+    // 量化类型指的是模型权重如何被存储和计算，而张量的数据类型是指在运行时模型内部的计算所采用的数据精度。
+    // 在创建张量时使用 GGML_TYPE_F32，意味着这些张量在内存中将以32位浮点数的形式存储。这通常用于确保计算精度，尤其是在神经网络的前向传播和反向传播过程中。
+    //
+    // 当你执行 sd 命令时，量化类型通常是在加载模型时指定的。量化类型会影响模型加载的方式以及模型在内存中的表示形式。
     ggml_tensor* init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
     if (sd_ctx->sd->version == VERSION_3_2B) {
         ggml_set_f32(init_latent, 0.0609f);
@@ -1300,6 +1333,8 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         ggml_set_f32(init_latent, 0.f);
     }
 
+    // 生成图像:
+    // 调用 generate_image 函数来生成图像。这个函数负责核心的生成逻辑，包括条件编码、潜空间向量的采样、去噪等步骤。
     sd_image_t* result_images = generate_image(sd_ctx,
                                                work_ctx,
                                                init_latent,
