@@ -11,3 +11,4 @@ test/
 output*.png
 models*
 *.log
+/models/majicmixRealistic_v7.safetensors

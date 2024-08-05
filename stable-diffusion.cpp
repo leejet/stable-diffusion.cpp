@@ -509,6 +509,11 @@ public:
         return result < -1;
     }
 
+    /**
+     * 具体应用lora模型
+     * @param lora_name lora模型名字,无后缀
+     * @param multiplier 权重
+     */
     void apply_lora(const std::string& lora_name, float multiplier) {
         int64_t t0                 = ggml_time_ms();
         std::string st_file_path   = path_join(lora_model_dir, lora_name + ".safetensors");
@@ -522,6 +527,10 @@ public:
             LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
             return;
         }
+        // 加载lora模型
+        // backend是类的成员变量, 用来选择采用哪种方式(cpu, gpu, ...)
+        // model_data_type 定义了模型量化方式 fp16, int4这些
+        // 注意这里lora对象是局部变量, 也就是会析构, 可能最终会把加载的内存数据统一交给backend管理.
         LoraModel lora(backend, model_data_type, file_path);
         if (!lora.load_from_file()) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
@@ -529,6 +538,7 @@ public:
         }
 
         lora.multiplier = multiplier;
+        // tensors是一个Map<String, Tensor *> 对象, 用来管理张量的.
         lora.apply(tensors, n_threads);
         lora.free_params_buffer();
 
@@ -537,6 +547,11 @@ public:
         LOG_INFO("lora '%s' applied, taking %.2fs", lora_name.c_str(), (t1 - t0) * 1.0f / 1000);
     }
 
+    /**
+     * 应用所有prompt里面找到的lora
+     * @param lora_state 每一个key,value对都是 (lora名字, 权重) 对
+     * 内部逻辑会从用户设定的lora权重中减掉已经应用的权重.
+     */
     void apply_loras(const std::unordered_map<std::string, float>& lora_state) {
         if (lora_state.size() > 0 && model_data_type != GGML_TYPE_F16 && model_data_type != GGML_TYPE_F32) {
             LOG_WARN("In quantized models when applying LoRA, the images have poor quality.");
@@ -1003,6 +1018,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     int sample_steps = sigmas.size() - 1;
 
     // Apply lora
+    // 从正向提示词中抽取lora的限定词和权重, 保存为map对象, 放在pair.first中
+    // pair.second存放排除掉lora相关项的提示词.
     auto result_pair                                = extract_and_remove_lora(prompt);
     std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
 
@@ -1014,17 +1031,52 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     LOG_DEBUG("prompt after extract and remove lora: \"%s\"", prompt.c_str());
 
     int64_t t0 = ggml_time_ms();
+    // 应用lora, 传入的map中有lora的模型名字, 权重.
     sd_ctx->sd->apply_loras(lora_f2m);
     int64_t t1 = ggml_time_ms();
     LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     // Photo Maker
+    // PhotoMaker功能允许用户通过提供参考图像来指导生成过程，从而创建出更加符合预期的图像。
+    /*
+     * 代码的主要流程和解释：
+
+     * Lora应用:
+        如果pmid_lora（假定是一个LoRA模型）还没有被应用过，则先应用它。
+        LoRA（Low-Rank Adaptation）是一种轻量级的微调方法，用于对预训练模型进行适应性调整。
+        应用LoRA之后，如果设置了free_params_immediately，则释放LoRA模型的参数缓冲区。
+     * 读取并预处理ID图像:
+        如果提供了PhotoMaker模型文件和输入ID图像路径，程序会遍历该路径下的所有图像文件。
+        使用stbi_load函数加载图像数据。
+        调用preprocess_id_image函数对图像进行预处理。
+        预处理后的图像存储在input_id_images向量中。
+     * 构建条件向量:
+        如果存在预处理后的ID图像，则构建条件向量。
+        设置style_strength（风格强度），这会影响生成图像与输入图像相似的程度。
+        创建一个四维张量init_img，用于存储预处理后的图像数据。
+        使用mean和std对图像数据进行归一化（如果normalize_input为真）。
+        调用get_learned_condition_with_trigger函数生成条件向量id_cond以及class_tokens_mask。
+     * ID编码:
+        使用id_encoder函数对条件向量进行进一步处理。
+        这一步可能会涉及注意力机制，以确保模型关注到输入图像的关键特征。
+     * 处理文本提示:
+        从原始文本提示中移除触发词（trigger word），得到prompt_text_only。
+        这是为了避免在延迟条件生成阶段重复使用触发词。
+        更新prompt变量为prompt_text_only。
+
+     * 清理和后续处理:
+        清理已加载的图像数据。
+        如果没有提供输入ID图像，关闭PhotoMaker功能。
+     */
     std::string prompt_text_only;
     ggml_tensor* init_img = NULL;
     SDCondition id_cond;
     std::vector<bool> class_tokens_mask;
+    // stacked_id用来标记是否启用了 PhotoMaker 功能。
+    // PhotoMaker 特性允许模型在生成图像时考虑额外的输入图像作为参考，以便生成的图像能够更好地匹配这些参考图像的风格或内容。
     if (sd_ctx->sd->stacked_id) {
         if (!sd_ctx->sd->pmid_lora->applied) {
+            // 加载 LoRA 模型（如果尚未加载）并应用它。
             t0 = ggml_time_ms();
             sd_ctx->sd->pmid_lora->apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
             t1                             = ggml_time_ms();
@@ -1034,7 +1086,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                 sd_ctx->sd->pmid_lora->free_params_buffer();
             }
         }
+        // 加载和预处理输入的 ID 图像
         // preprocess input id images
+        // id_image 通常指的是一个特定类型的输入图像，这种图像被用作生成新图像时的一种参考或者身份标识。
+        // 在这个场景中，id_image 可能是指一种用于指导生成过程的图像，使得生成的图像能够具有与 id_image 类似的特征或风格。
         std::vector<sd_image_t*> input_id_images;
         if (sd_ctx->sd->pmid_model && input_id_images_path.size() > 0) {
             std::vector<std::string> img_files = get_files_from_dir(input_id_images_path);
@@ -1053,6 +1108,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                              (uint32_t)height,
                                              3,
                                              input_image_buffer};
+                // 进行预处理
                 input_image             = preprocess_id_image(input_image);
                 if (input_image == NULL) {
                     LOG_ERROR("preprocess input id image from '%s' failed", img_file.c_str());
@@ -1062,12 +1118,18 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
             }
         }
         if (input_id_images.size() > 0) {
+            // 为预处理后的ID图像, 构建条件变量
+            // 设置模型的风格强度, 这影响输入与生成图像的相似度
             sd_ctx->sd->pmid_model->style_strength = style_ratio;
             int32_t w                              = input_id_images[0]->width;
             int32_t h                              = input_id_images[0]->height;
             int32_t channels                       = input_id_images[0]->channel;
+            // 这是上一步中得到的id图像的个数
             int32_t num_input_images               = (int32_t)input_id_images.size();
+            // init_img是一个四维张量, 用来存储处理后的图像数据
+            // 第4维是图像数量
             init_img                               = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, w, h, channels, num_input_images);
+            // 使用mean和std对图像数据进行归一化（如果normalize_input为真）
             // TODO: move these to somewhere else and be user settable
             float mean[] = {0.48145466f, 0.4578275f, 0.40821073f};
             float std[]  = {0.26862954f, 0.26130258f, 0.27577711f};
@@ -1078,6 +1140,13 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                 else
                     sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
             }
+            // 调用get_learned_condition_with_trigger函数生成条件向量id_cond以及class_tokens_mask。
+            // sd_ctx->sd->cond_stage_model 指向模型中负责处理条件阶段（conditional stage）的子模型
+            // prompt: 文本提示，用于描述要生成的图像的内容
+            // clip_skip: CLIP模型中可以跳过的层的数量。CLIP模型通常用于将文本提示转化为嵌入向量。
+            // sd_ctx->sd->diffusion_model->get_adm_in_channels(): 获取扩散模型（diffusion model）的输入通道数。这通常是与模型架构相关的内部参数。
+            // 整个函数调用的目的是为了获取一个条件元组（cond_tup），它将用于后续的图像生成过程。
+            // 条件元组可能包含了文本嵌入、图像尺寸信息以及其他用于引导生成过程的信息。
             t0                = ggml_time_ms();
             auto cond_tup     = sd_ctx->sd->cond_stage_model->get_learned_condition_with_trigger(work_ctx,
                                                                                                  sd_ctx->sd->n_threads, prompt,
@@ -1086,15 +1155,30 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                                                                  height,
                                                                                                  num_input_images,
                                                                                                  sd_ctx->sd->diffusion_model->get_adm_in_channels());
+            // cond_tup其结构为 std::tuple<SDCondition, std::vector<bool>>。
+            //
+            // SDCondition:
+            // 这个类型应该是代表了条件信息的一个结构体或类。它包含了用于指导图像生成的重要数据，比如文本嵌入、图像尺寸等。
+            // std::vector<bool>:
+            // 这是一个布尔值的向量，通常用来表示某个条件是否适用，或者是一些标记信息，例如哪些类别的 token 应该被处理。
             id_cond           = std::get<0>(cond_tup);
             class_tokens_mask = std::get<1>(cond_tup);  //
-
+            /*
+             * id_encoder 函数被调用，它接收如下参数：
+                work_ctx: 工作上下文，可能是一个计算上下文或资源管理器。
+                init_img: 初始图像，可能是用于图像到图像任务的输入图像。
+                id_cond.c_crossattn: 与交叉注意力相关的数据。
+                class_tokens_mask: 之前从 cond_tup 中提取的布尔向量。
+             * id_encoder 函数的作用可能是对 c_crossattn 进行编码，可能涉及更新交叉注意力的权重，
+             * 以反映 class_tokens_mask 所指示的信息。
+             */
             id_cond.c_crossattn = sd_ctx->sd->id_encoder(work_ctx, init_img, id_cond.c_crossattn, class_tokens_mask);
             t1                  = ggml_time_ms();
             LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
             if (sd_ctx->sd->free_params_immediately) {
                 sd_ctx->sd->pmid_model->free_params_buffer();
             }
+            // 将触发词干掉.
             // Encode input prompt without the trigger word for delayed conditioning
             prompt_text_only = sd_ctx->sd->cond_stage_model->remove_trigger_from_prompt(work_ctx, prompt);
             // printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
@@ -1114,6 +1198,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         input_id_images.clear();
     }
 
+    // 正向和负向的提示词转成向量, 注意这里get_learned_condition没有trigger
     // Get learned condition
     t0               = ggml_time_ms();
     SDCondition cond = sd_ctx->sd->cond_stage_model->get_learned_condition(work_ctx,
@@ -1147,14 +1232,21 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     }
 
     // Control net hint
-    struct ggml_tensor* image_hint = NULL;
+    struct ggml_tensor* image_hint = NULL; // 存储图像提示信息
     if (control_cond != NULL) {
-        image_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-        sd_image_to_tensor(control_cond->data, image_hint);
+        // ggml_new_tensor_4d 创建了一个新的四维张量，其尺寸为 width x height x 3 x 1。这里的 3 表示图像的通道数（假设是 RGB 图像），1 表示批量大小，这里只处理一张图像。
+        image_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1); // 初始化hint
+        // sd_image_to_tensor 函数将图像数据转换为张量形式
+        // sd_image_to_tensor 函数负责将 control_cond->data 中的图像数据填充到新创建的张量 image_hint 中。
+        sd_image_to_tensor(control_cond->data, image_hint); //
     }
 
     // Sample
+    // Sample包括加噪音和去噪音两个过程. 算法例如DDIM (Denoising Diffusion Implicit Models)
+    // Sample决定如何生成一系列潜在空间(latent space)的张量，这些张量随后可以被解码成图像
+    // final_latents 是一个用于收集生成的潜在张量的向量，这些张量之后会被用来解码成图像。
     std::vector<struct ggml_tensor*> final_latents;  // collect latents to decode
+    // C 表示通道数，对于版本 3.2B 的 Stable Diffusion 模型，通道数为 16；否则默认为 4。
     int C = 4;
     if (sd_ctx->sd->version == VERSION_3_2B) {
         C = 16;
@@ -1162,16 +1254,23 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     int W = width / 8;
     int H = height / 8;
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
+    // batch_count是指生成图像的批量数量
+    // 在一个训练或者生成过程中，不是一次只生成一张图像，而是同时生成多张图像，每张图像使用不同的随机种子。
+    // batch_count 控制着循环的迭代次数，每次迭代都会生成一个新的图像。每个图像的生成过程都是独立的，并且使用不同的随机种子来初始化噪声张量，这有助于确保生成的图像具有多样性。
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
         int64_t cur_seed       = seed + b;
         LOG_INFO("generating image: %i/%i - seed %" PRId64, b + 1, batch_count, cur_seed);
 
         sd_ctx->sd->rng->manual_seed(cur_seed);
+        // noise 张量是根据潜在空间的尺寸 (W, H, C) 创建的一个 4D 张量，类型为 GGML_TYPE_F32（32位浮点数），用于初始化每个潜在张量的噪声。
+        // ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng)：用正态分布随机值填充噪声张量。
         struct ggml_tensor* x_t   = init_latent;
         struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
         ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
 
+        // 如果使用了 stacked_id，则会计算 start_merge_step，这可能是为了混合不同的风格
+        // stacked_id 表示 是否使用了id图像, 即参考图
         int start_merge_step = -1;
         if (sd_ctx->sd->stacked_id) {
             start_merge_step = int(sd_ctx->sd->pmid_model->style_strength / 100.f * sample_steps);
@@ -1180,6 +1279,17 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
             LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);
         }
 
+        /**
+         * sd_ctx->sd->sample 调用了采样函数，该函数负责执行从噪声到潜在张量的转换。
+            x_t 是初始的潜在张量。
+            noise 是前面创建的噪声张量。
+            cond 和 uncond 可能分别代表条件和无条件的输入。
+            image_hint 和 control_strength 用于控制生成过程。
+            cfg_scale 用于控制条件自由引导的程度。
+            sample_method 指定采样方法。
+            sigmas 用于指定噪声水平。
+            start_merge_step 和 id_cond 用于控制混合过程。
+         */
         struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx,
                                                      x_t,
                                                      noise,
@@ -1211,6 +1321,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     std::vector<struct ggml_tensor*> decoded_images;  // collect decoded images
     for (size_t i = 0; i < final_latents.size(); i++) {
         t1                      = ggml_time_ms();
+        // 从latent空间的张量 解码到 像素空间的张量
         struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, final_latents[i] /* x_0 */);
         // print_ggml_tensor(img);
         if (img != NULL) {
@@ -1245,38 +1356,48 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
 sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     const char* prompt_c_str,
                     const char* negative_prompt_c_str,
-                    int clip_skip,
-                    float cfg_scale,
+                    int clip_skip,  // CLIP 编码器的层数，用于控制文本嵌入的深度
+                    float cfg_scale, // 条件缩放因子，用于调整提示的影响程度。
                     int width,
                     int height,
                     enum sample_method_t sample_method,
-                    int sample_steps,
+                    int sample_steps, // 采样步数，即迭代次数
                     int64_t seed,
-                    int batch_count,
-                    const sd_image_t* control_cond,
-                    float control_strength,
-                    float style_ratio,
-                    bool normalize_input,
+                    int batch_count, // 批次数量，即一次生成多少张图像
+                    const sd_image_t* control_cond, // 控制条件图像，可以为空，用于指导生成过程。
+                    float control_strength,  // 控制条件图像的强度
+                    float style_ratio,  // 风格混合比率
+                    bool normalize_input, // 是否对输入进行归一化
                     const char* input_id_images_path_c_str) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
     }
 
+    // 初始化内存上下文:
+    // 计算所需的内存大小，这取决于图像的大小、批次数量以及模型版本等因素。
+
     struct ggml_init_params params;
+    // 这里首先分配了 10MB 的内存作为基础大小。这是为了保证有足够的内存来存储一些基础的数据结构和临时变量。
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
+    // 如果模型版本是 VERSION_3_2B，则将基础内存大小乘以 3。这是因为不同版本的模型可能需要更多的内存来处理额外的数据结构或更大的中间张量。
     if (sd_ctx->sd->version == VERSION_3_2B) {
         params.mem_size *= 3;
     }
+    // 为了处理与堆叠 ID 相关的额外数据。
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
+    // 这一行代码是基于图像尺寸来计算潜空间张量的大小。通常情况下，稳定扩散模型会在每个像素位置上使用多个通道来表示潜在变量。
+    // 这里使用 width * height * 3 是假设每个像素有 3 个通道（例如 RGB 图像），而每个通道使用单精度浮点数表示，因此需要乘以 sizeof(float)。
     params.mem_size += width * height * 3 * sizeof(float);
+    // 如果生成多个图像（即 batch_count > 1），那么需要为每个批次分配相应的内存。这意味着如果需要同时生成多张图像，内存需求会相应地增加。
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);
 
+    // 使用 ggml_init 初始化一个新的 ggml_context，用于存储中间计算结果。
     struct ggml_context* work_ctx = ggml_init(params);
     if (!work_ctx) {
         LOG_ERROR("ggml_init() failed");
@@ -1285,14 +1406,34 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
     size_t t0 = ggml_time_ms();
 
+    // 生成初始潜空间向量:
+    // 根据模型版本设置初始潜空间向量的值。
+
+    // sigmas 是一个浮点数向量，包含了采样步骤中每一阶段的噪声水平。
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
 
+    // C 表示通道数，对于不同的模型版本有不同的默认值（4 或 16）。
     int C = 4;
     if (sd_ctx->sd->version == VERSION_3_2B) {
         C = 16;
     }
+    // W: 图像宽度除以 8。这是因为稳定扩散模型通常会对图像进行下采样，即将图像尺寸缩小为原来的 1/8。这样做的目的是减少计算量，并且在潜在空间中处理较小的张量。
+    // H: 图像高度除以 8，同样是为了适应模型的下采样要求。
     int W                    = width / 8;
     int H                    = height / 8;
+    // work_ctx: 是一个指向 ggml_context 的指针，用于管理内存和计算图。在这个上下文中创建的张量将使用分配给 work_ctx 的内存。
+    // GGML_TYPE_F32: 指定张量的数据类型为 32 位浮点数。
+    // W 和 H: 分别是前面计算出的图像宽度和高度除以 8 的结果。
+    // C: 通道数。根据模型版本的不同，C 的值可能为 4 或 16。在稳定扩散模型中，这个值表示每个位置上的通道数，通常对应于潜在空间中的特征图。
+    // 1: 第四个维度。在这个上下文中，它通常是 1，表示这是一个二维的特征图（即使在四维张量中表示）。
+    // 这段代码创建了一个四维张量 init_latent，它将用于表示图像的初始潜空间向量。
+    // 这个张量的形状为 (W, H, C, 1)，其中 W 和 H 分别是原始图像宽度和高度除以 8，而 C 是通道数。这个张量将在后续的生成过程中用于表示潜在空间中的初始状态。
+    //
+    // 执行 sd 命令（假设是指稳定扩散模型的命令）时传入的量化类型，通常与创建张量时使用的数据类型是不同的概念。
+    // 量化类型指的是模型权重如何被存储和计算，而张量的数据类型是指在运行时模型内部的计算所采用的数据精度。
+    // 在创建张量时使用 GGML_TYPE_F32，意味着这些张量在内存中将以32位浮点数的形式存储。这通常用于确保计算精度，尤其是在神经网络的前向传播和反向传播过程中。
+    //
+    // 当你执行 sd 命令时，量化类型通常是在加载模型时指定的。量化类型会影响模型加载的方式以及模型在内存中的表示形式。
     ggml_tensor* init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
     if (sd_ctx->sd->version == VERSION_3_2B) {
         ggml_set_f32(init_latent, 0.0609f);
@@ -1300,6 +1441,8 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         ggml_set_f32(init_latent, 0.f);
     }
 
+    // 生成图像:
+    // 调用 generate_image 函数来生成图像。这个函数负责核心的生成逻辑，包括条件编码、潜空间向量的采样、去噪等步骤。
     sd_image_t* result_images = generate_image(sd_ctx,
                                                work_ctx,
                                                init_latent,
