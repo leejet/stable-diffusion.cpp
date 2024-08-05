@@ -208,6 +208,7 @@ arguments:
 ./bin/sd -m ../models/sd-v1-4.ckpt -p "a lovely cat"
 # ./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 # ./bin/sd -m ../models/sd_xl_base_1.0.safetensors --vae ../models/sdxl_vae-fp16-fix.safetensors -H 1024 -W 1024 -p "a lovely cat" -v
+# ./bin/sh -m ../models/sd_xl_turbo_1.0.safetensors --vae ../models/sdxl.vae.safetensors -H 512 -W 512 --steps 4 --cfg-scale 1 -p "a lovely cat"
 # ./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable Diffusion CPP\"' --cfg-scale 4.5 --sampling-method euler -v
 ```
 
