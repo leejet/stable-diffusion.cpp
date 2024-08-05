@@ -87,6 +87,7 @@ git submodule update
     - Stable Diffusion v1.5 from https://huggingface.co/runwayml/stable-diffusion-v1-5
     - Stable Diffuison v2.1 from https://huggingface.co/stabilityai/stable-diffusion-2-1
     - Stable Diffusion 3 2B from https://huggingface.co/stabilityai/stable-diffusion-3-medium
+    - Stable Diffusion XL Turbo from https://huggingface.co/stabilityai/sdxl-turbo
 
     ```shell
     curl -L -O https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4.ckpt
