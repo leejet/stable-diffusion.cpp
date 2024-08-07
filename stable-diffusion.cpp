@@ -139,6 +139,7 @@ public:
                         bool vae_tiling_,
                         ggml_type wtype,
                         schedule_t schedule,
+                        prediction_t prediction,
                         bool clip_on_cpu,
                         bool control_net_cpu,
                         bool vae_on_cpu) {
@@ -421,25 +422,45 @@ public:
         int64_t t1 = ggml_time_ms();
         LOG_INFO("loading model from '%s' completed, taking %.2fs", model_path.c_str(), (t1 - t0) * 1.0f / 1000);
 
-        // check is_using_v_parameterization_for_sd2
-        bool is_using_v_parameterization = false;
-        if (version == VERSION_2_x) {
-            if (is_using_v_parameterization_for_sd2(ctx)) {
+
+        if (prediction != EPS_PRED) {
+            switch (prediction) {
+                case EPS_PRED:
+                    LOG_INFO("running in eps-prediction mode");
+                    break;
+                case V_PRED:
+                    LOG_INFO("running in v-prediction mode");
+                    denoiser = std::make_shared<CompVisVDenoiser>();
+                    break;
+                case FLOW_PRED:
+                    LOG_INFO("running in FLOW mode");
+                    denoiser = std::make_shared<DiscreteFlowDenoiser>();
+                    break;
+                default:
+                    LOG_ERROR("Unknown parametrization %i", prediction);
+                    abort();
+            }
+        } else {
+            // check is_using_v_parameterization_for_sd2
+            bool is_using_v_parameterization = false;
+            if (version == VERSION_2_x) {
+                if (is_using_v_parameterization_for_sd2(ctx)) {
+                    is_using_v_parameterization = true;
+                }
+            } else if (version == VERSION_SVD) {
+                // TODO: V_PREDICTION_EDM
                 is_using_v_parameterization = true;
             }
-        } else if (version == VERSION_SVD) {
-            // TODO: V_PREDICTION_EDM
-            is_using_v_parameterization = true;
-        }
 
-        if (version == VERSION_3_2B) {
-            LOG_INFO("running in FLOW mode");
-            denoiser = std::make_shared<DiscreteFlowDenoiser>();
-        } else if (is_using_v_parameterization) {
-            LOG_INFO("running in v-prediction mode");
-            denoiser = std::make_shared<CompVisVDenoiser>();
-        } else {
-            LOG_INFO("running in eps-prediction mode");
+            if (version == VERSION_3_2B) {
+                LOG_INFO("running in FLOW mode");
+                denoiser = std::make_shared<DiscreteFlowDenoiser>();
+            } else if (is_using_v_parameterization) {
+                LOG_INFO("running in v-prediction mode");
+                denoiser = std::make_shared<CompVisVDenoiser>();
+            } else {
+                LOG_INFO("running in eps-prediction mode");
+            }
         }
 
         if (schedule != DEFAULT) {
@@ -917,6 +938,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      enum sd_type_t wtype,
                      enum rng_type_t rng_type,
                      enum schedule_t s,
+                     enum prediction_t p,
                      bool keep_clip_on_cpu,
                      bool keep_control_net_cpu,
                      bool keep_vae_on_cpu) {
@@ -950,6 +972,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     vae_tiling,
                                     (ggml_type)wtype,
                                     s,
+                                    p,
                                     keep_clip_on_cpu,
                                     keep_control_net_cpu,
                                     keep_vae_on_cpu)) {

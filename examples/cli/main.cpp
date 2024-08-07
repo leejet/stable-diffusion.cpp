@@ -48,6 +48,12 @@ const char* schedule_str[] = {
     "ays",
 };
 
+const char* prediction_str[] = {
+    "eps",
+    "v",
+    "flow",
+};
+
 const char* modes_str[] = {
     "txt2img",
     "img2img",
@@ -98,6 +104,7 @@ struct SDParams {
 
     sample_method_t sample_method = EULER_A;
     schedule_t schedule           = DEFAULT;
+    prediction_t prediction       = EPS_PRED;
     int sample_steps              = 20;
     float strength                = 0.75f;
     float control_strength        = 0.9f;
@@ -145,6 +152,7 @@ void print_params(SDParams params) {
     printf("    height:            %d\n", params.height);
     printf("    sample_method:     %s\n", sample_method_str[params.sample_method]);
     printf("    schedule:          %s\n", schedule_str[params.schedule]);
+    printf("    prediction:        %s\n", prediction_str[params.prediction]);
     printf("    sample_steps:      %d\n", params.sample_steps);
     printf("    strength(img2img): %.2f\n", params.strength);
     printf("    rng:               %s\n", rng_type_to_str[params.rng_type]);
@@ -194,6 +202,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate.\n");
     printf("  --schedule {discrete, karras, ays} Denoiser sigma schedule (default: discrete)\n");
+    printf("  --prediction {eps, v, flow}\n");
+    printf("                                     prediction type (default: \"eps\")\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
@@ -450,6 +460,23 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.schedule = (schedule_t)schedule_found;
+        } else if (arg == "--prediction") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            const char* prediction_selected = argv[i];
+            int prediction_found            = -1;
+            for (int n = 0; n < N_PREDICTION; n++) {
+                if (!strcmp(prediction_selected, prediction_str[n])) {
+                    prediction_found = n;
+                }
+            }
+            if (prediction_found == -1) {
+                invalid_arg = true;
+                break;
+            }
+            params.prediction = (prediction_t)prediction_found;
         } else if (arg == "-s" || arg == "--seed") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -730,6 +757,7 @@ int main(int argc, const char* argv[]) {
                                   params.wtype,
                                   params.rng_type,
                                   params.schedule,
+                                  params.prediction,
                                   params.clip_on_cpu,
                                   params.control_net_cpu,
                                   params.vae_on_cpu);
