@@ -54,6 +54,7 @@ enum schedule_t {
 };
 
 enum prediction_t {
+    DEFAULT_PRED,
     EPS_PRED,
     V_PRED,
     FLOW_PRED,

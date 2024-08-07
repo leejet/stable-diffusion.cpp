@@ -49,6 +49,7 @@ const char* schedule_str[] = {
 };
 
 const char* prediction_str[] = {
+    "default",
     "eps",
     "v",
     "flow",
@@ -104,7 +105,7 @@ struct SDParams {
 
     sample_method_t sample_method = EULER_A;
     schedule_t schedule           = DEFAULT;
-    prediction_t prediction       = EPS_PRED;
+    prediction_t prediction       = DEFAULT_PRED;
     int sample_steps              = 20;
     float strength                = 0.75f;
     float control_strength        = 0.9f;
