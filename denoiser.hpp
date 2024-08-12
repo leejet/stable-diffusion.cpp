@@ -765,6 +765,156 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
+        case IPNDM: {
+            int max_order = 4;
+            ggml_tensor* x_next = x;
+            std::vector<ggml_tensor*> buffer_model;
+
+            for (int i = 0; i < steps; i++) {
+                float sigma = sigmas[i];
+                float sigma_next = sigmas[i + 1];
+
+                ggml_tensor* x_cur = x_next;
+                float* vec_x_cur = (float*)x_cur->data;
+                float* vec_x_next = (float*)x_next->data;
+
+                // Denoising step
+                ggml_tensor* denoised = model(x_cur, sigma, i + 1);
+                float* vec_denoised = (float*)denoised->data;
+                // d_cur = (x_cur - denoised) / sigma
+                struct ggml_tensor* d_cur = ggml_dup_tensor(work_ctx, x_cur);
+                float* vec_d_cur = (float*)d_cur->data;
+
+                for (int j = 0; j < ggml_nelements(d_cur); j++) {
+                    vec_d_cur[j] = (vec_x_cur[j] - vec_denoised[j]) / sigma;
+                }
+
+                int order = std::min(max_order, i + 1);
+
+                // Calculate vec_x_next based on the order
+                switch (order) {
+                    case 1:  // First Euler step
+                        for (int j = 0; j < ggml_nelements(x_next); j++) {
+                            vec_x_next[j] = vec_x_cur[j] + (sigma_next - sigma) * vec_d_cur[j];
+                        }
+                        break;
+
+                    case 2:  // Use one history point
+                        {
+                            float* vec_d_prev1 = (float*)buffer_model.back()->data;
+                            for (int j = 0; j < ggml_nelements(x_next); j++) {
+                                vec_x_next[j] = vec_x_cur[j] + (sigma_next - sigma) * (3 * vec_d_cur[j] - vec_d_prev1[j]) / 2;
+                            }
+                        }
+                        break;
+
+                    case 3:  // Use two history points
+                        {
+                            float* vec_d_prev1 = (float*)buffer_model.back()->data;
+                            float* vec_d_prev2 = (float*)buffer_model[buffer_model.size() - 2]->data;
+                            for (int j = 0; j < ggml_nelements(x_next); j++) {
+                                vec_x_next[j] = vec_x_cur[j] + (sigma_next - sigma) * (23 * vec_d_cur[j] - 16 * vec_d_prev1[j] + 5 * vec_d_prev2[j]) / 12;
+                            }
+                        }
+                        break;
+
+                    case 4:  // Use three history points
+                        {
+                            float* vec_d_prev1 = (float*)buffer_model.back()->data;
+                            float* vec_d_prev2 = (float*)buffer_model[buffer_model.size() - 2]->data;
+                            float* vec_d_prev3 = (float*)buffer_model[buffer_model.size() - 3]->data;
+                            for (int j = 0; j < ggml_nelements(x_next); j++) {
+                                vec_x_next[j] = vec_x_cur[j] + (sigma_next - sigma) * (55 * vec_d_cur[j] - 59 * vec_d_prev1[j] + 37 * vec_d_prev2[j] - 9 * vec_d_prev3[j]) / 24;
+                            }
+                        }
+                        break;
+                }
+
+                // Manage buffer_model
+                if (buffer_model.size() == max_order - 1) {
+                    // Shift elements to the left
+                    for (int k = 0; k < max_order - 2; k++) {
+                        buffer_model[k] = buffer_model[k + 1];
+                    }
+                    buffer_model.back() = d_cur;  // Replace the last element with d_cur
+                } else {
+                    buffer_model.push_back(d_cur);
+                }
+            }
+        } break;
+        case IPNDM_V: {
+            int max_order = 4;
+            std::vector<ggml_tensor*> buffer_model;
+            ggml_tensor* x_next = x;
+
+            for (int i = 0; i < steps; i++) {
+                float sigma = sigmas[i];
+                float t_next = sigmas[i + 1];
+
+                // Denoising step
+                ggml_tensor* denoised = model(x, sigma, i + 1);
+                float* vec_denoised = (float*)denoised->data;
+                struct ggml_tensor* d_cur = ggml_dup_tensor(work_ctx, x);
+                float* vec_d_cur = (float*)d_cur->data;
+                float* vec_x = (float*)x->data;
+
+                // d_cur = (x - denoised) / sigma
+                for (int j = 0; j < ggml_nelements(d_cur); j++) {
+                    vec_d_cur[j] = (vec_x[j] - vec_denoised[j]) / sigma;
+                }
+
+                int order = std::min(max_order, i + 1);
+                float h_n = t_next - sigma;
+                float h_n_1 = (i > 0) ? (sigma - sigmas[i - 1]) : h_n;
+
+                switch (order) {
+                    case 1: 
+                        for (int j = 0; j < ggml_nelements(x_next); j++) {
+                            vec_x[j] += vec_d_cur[j] * h_n;
+                        }
+                        break;
+
+                    case 2: {
+                        float* vec_d_prev1 = (float*)buffer_model.back()->data;
+                        for (int j = 0; j < ggml_nelements(x_next); j++) {
+                            vec_x[j] += h_n * ((2 + (h_n / h_n_1)) * vec_d_cur[j] - (h_n / h_n_1) * vec_d_prev1[j]) / 2;
+                        }
+                        break;
+                    }
+
+                    case 3: {
+                        float h_n_2 = (i > 1) ? (sigmas[i - 1] - sigmas[i - 2]) : h_n_1;
+                        float* vec_d_prev1 = (float*)buffer_model.back()->data;
+                        float* vec_d_prev2 = (buffer_model.size() > 1) ? (float*)buffer_model[buffer_model.size() - 2]->data : vec_d_prev1;
+                        for (int j = 0; j < ggml_nelements(x_next); j++) {
+                            vec_x[j] += h_n * ((23 * vec_d_cur[j] - 16 * vec_d_prev1[j] + 5 * vec_d_prev2[j]) / 12);
+                        }
+                        break;
+                    }
+
+                    case 4: {
+                        float h_n_2 = (i > 1) ? (sigmas[i - 1] - sigmas[i - 2]) : h_n_1;
+                        float h_n_3 = (i > 2) ? (sigmas[i - 2] - sigmas[i - 3]) : h_n_2;
+                        float* vec_d_prev1 = (float*)buffer_model.back()->data;
+                        float* vec_d_prev2 = (buffer_model.size() > 1) ? (float*)buffer_model[buffer_model.size() - 2]->data : vec_d_prev1;
+                        float* vec_d_prev3 = (buffer_model.size() > 2) ? (float*)buffer_model[buffer_model.size() - 3]->data : vec_d_prev2;
+                        for (int j = 0; j < ggml_nelements(x_next); j++) {
+                            vec_x[j] += h_n * ((55 * vec_d_cur[j] - 59 * vec_d_prev1[j] + 37 * vec_d_prev2[j] - 9 * vec_d_prev3[j]) / 24);
+                        }
+                        break;
+                    }
+                }
+
+                // Manage buffer_model
+                if (buffer_model.size() == max_order - 1) {
+                    buffer_model.erase(buffer_model.begin());
+                }
+                buffer_model.push_back(d_cur);
+
+                // Prepare the next d tensor
+                d_cur = ggml_dup_tensor(work_ctx, x_next);
+            }
+        } break;
         case LCM:  // Latent Consistency Models
         {
             struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
