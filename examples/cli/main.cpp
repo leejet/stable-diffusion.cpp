@@ -45,6 +45,7 @@ const char* schedule_str[] = {
     "discrete",
     "karras",
     "ays",
+    "gits",
 };
 
 const char* modes_str[] = {
