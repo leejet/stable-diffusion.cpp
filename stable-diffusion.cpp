@@ -156,6 +156,15 @@ public:
         LOG_DEBUG("Using SYCL backend");
         backend = ggml_backend_sycl_init(0);
 #endif
+#ifdef SD_USE_VULKAN
+        LOG_DEBUG("Using Vulkan backend");
+		for (int device=0;device<ggml_backend_vk_get_device_count(); ++device){
+			backend = ggml_backend_vk_init(device);
+		}
+		if(!backend) {
+			LOG_WARN("Failed to initialise Vulkan backend");
+		}
+#endif
 
         if (!backend) {
             LOG_DEBUG("Using CPU backend");

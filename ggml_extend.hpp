@@ -36,6 +36,10 @@
 #include "ggml-sycl.h"
 #endif
 
+#ifdef SD_USE_VULKAN
+#include "ggml-vulkan.h"
+#endif
+
 #include "rng.hpp"
 #include "util.h"
 

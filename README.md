@@ -142,6 +142,15 @@ cmake .. -DSD_METAL=ON
 cmake --build . --config Release
 ```
 
+##### Using Vulkan
+
+Using Vulkan makes the computation run on any vulkan physical devices, DGPU and iGPU.
+glslc from the shaderc library handles shader generation within ggml backend.
+```
+cmake .. -DSD_VULKAN=ON -DVulkan_GLSLC_EXECUTABLE=/path/to/glslc
+cmake --build . --config Release
+```
+
 ##### Using SYCL
 
 Using SYCL makes the computation run on the Intel GPU. Please make sure you have installed the related driver and [Intel® oneAPI Base toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) before start. More details and steps can refer to [llama.cpp SYCL backend](https://github.com/ggerganov/llama.cpp/blob/master/docs/backend/SYCL.md#linux).
@@ -171,7 +180,6 @@ Example of text2img by using SYCL backend:
 
 > [!NOTE]
 > Try to set smaller image height and width (for example, `-H 512 -W 512`) if you meet `Provided range is out of integer limits. Pass '-fno-sycl-id-queries-fit-in-int' to disable range check.`
-
 
 ##### Using Flash Attention
 
