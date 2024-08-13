@@ -41,6 +41,27 @@ struct DiscreteSchedule : SigmaSchedule {
     }
 };
 
+struct ExponentialSchedule : SigmaSchedule {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> sigmas;
+
+        // Calculate step size
+        float log_sigma_min = std::log(sigma_min);
+        float log_sigma_max = std::log(sigma_max);
+        float step = (log_sigma_max - log_sigma_min) / (n - 1);
+
+        // Fill sigmas with exponential values
+        for (uint32_t i = 0; i < n; ++i) {
+            float sigma = std::exp(log_sigma_max - step * i);
+            sigmas.push_back(sigma);
+        }
+
+        sigmas.push_back(0);
+
+        return sigmas;
+    }
+};
+
 /*
 https://research.nvidia.com/labs/toronto-ai/AlignYourSteps/howto.html
 */

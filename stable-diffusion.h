@@ -49,6 +49,7 @@ enum schedule_t {
     DEFAULT,
     DISCRETE,
     KARRAS,
+    EXPONENTIAL,
     AYS,
     N_SCHEDULES
 };
