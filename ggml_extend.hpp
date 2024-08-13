@@ -541,7 +541,7 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
 
 __STATIC_INLINE__ struct ggml_tensor* ggml_group_norm_32(struct ggml_context* ctx,
                                                          struct ggml_tensor* a) {
-    return ggml_group_norm(ctx, a, 32);
+    return ggml_group_norm(ctx, a, 32, EPS);
 }
 
 __STATIC_INLINE__ struct ggml_tensor* ggml_nn_linear(struct ggml_context* ctx,
@@ -726,13 +726,14 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_group_norm(struct ggml_context* ct
                                                          struct ggml_tensor* x,
                                                          struct ggml_tensor* w,
                                                          struct ggml_tensor* b,
-                                                         int num_groups = 32) {
+                                                         int num_groups = 32,
+                                                         float eps = EPS) {
     if (ggml_n_dims(x) >= 3 && w != NULL && b != NULL) {
         w = ggml_reshape_4d(ctx, w, 1, 1, w->ne[0], 1);
         b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
     }
 
-    x = ggml_group_norm(ctx, x, num_groups);
+    x = ggml_group_norm(ctx, x, num_groups, eps);
     if (w != NULL && b != NULL) {
         x = ggml_mul(ctx, x, w);
         // b = ggml_repeat(ctx, b, x);
@@ -1365,7 +1366,7 @@ public:
             w = params["weight"];
             b = params["bias"];
         }
-        return ggml_nn_group_norm(ctx, x, w, b, num_groups);
+        return ggml_nn_group_norm(ctx, x, w, b, num_groups, eps);
     }
 };
 
