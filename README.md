@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/a%20lovely%20cat.png" width="256x">
+  <img src="./assets/cat_with_sd_cpp_42.png" width="360x">
 </p>
 
 # stable-diffusion.cpp
@@ -10,7 +10,7 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
 - Super lightweight and without external dependencies
-- SD1.x, SD2.x and SDXL support
+- SD1.x, SD2.x, SDXL and SD3 support
     - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
 
 - [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) and [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo) support
@@ -86,11 +86,13 @@ git submodule update
     - Stable Diffusion v1.4 from https://huggingface.co/CompVis/stable-diffusion-v-1-4-original
     - Stable Diffusion v1.5 from https://huggingface.co/runwayml/stable-diffusion-v1-5
     - Stable Diffuison v2.1 from https://huggingface.co/stabilityai/stable-diffusion-2-1
+    - Stable Diffusion 3 2B from https://huggingface.co/stabilityai/stable-diffusion-3-medium
 
     ```shell
     curl -L -O https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4.ckpt
     # curl -L -O https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
     # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-2-1/resolve/main/v2-1_768-nonema-pruned.safetensors
+    # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-3-medium/resolve/main/sd3_medium_incl_clips_t5xxlfp16.safetensors
     ```
 
 ### Build
@@ -200,32 +202,13 @@ arguments:
   -v, --verbose                      print extra info
 ```
 
-#### Quantization
-
-You can specify the model weight type using the `--type` parameter. The weights are automatically converted when loading the model.
-
-- `f16` for 16-bit floating-point
-- `f32` for 32-bit floating-point
-- `q8_0` for 8-bit integer quantization
-- `q5_0` or `q5_1` for 5-bit integer quantization
-- `q4_0` or `q4_1` for 4-bit integer quantization
-
-#### Convert to GGUF
-
-You can also convert weights in the formats `ckpt/safetensors/diffusers` to gguf and perform quantization in advance, avoiding the need for quantization every time you load them.
-
-For example:
-
-```sh
-./bin/sd -M convert -m ../models/v1-5-pruned-emaonly.safetensors -o  ../models/v1-5-pruned-emaonly.q8_0.gguf -v --type q8_0
-```
-
 #### txt2img example
 
 ```sh
 ./bin/sd -m ../models/sd-v1-4.ckpt -p "a lovely cat"
 # ./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 # ./bin/sd -m ../models/sd_xl_base_1.0.safetensors --vae ../models/sdxl_vae-fp16-fix.safetensors -H 1024 -W 1024 -p "a lovely cat" -v
+# ./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable Diffusion CPP\"' --cfg-scale 4.5 --sampling-method euler -v
 ```
 
 Using formats of different precisions will yield results of varying quality.
@@ -247,119 +230,15 @@ Using formats of different precisions will yield results of varying quality.
   <img src="./assets/img2img_output.png" width="256x">
 </p>
 
-#### with LoRA
+## More Guides
 
-- You can specify the directory where the lora weights are stored via `--lora-model-dir`. If not specified, the default is the current working directory.
-
-- LoRA is specified via prompt, just like [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora).
-
-Here's a simple example:
-
-```
-./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat<lora:marblesh:1>" --lora-model-dir ../models
-```
-
-`../models/marblesh.safetensors` or `../models/marblesh.ckpt` will be applied to the model
-
-#### LCM/LCM-LoRA
-
-- Download LCM-LoRA form https://huggingface.co/latent-consistency/lcm-lora-sdv1-5
-- Specify LCM-LoRA by adding `<lora:lcm-lora-sdv1-5:1>` to prompt
-- It's advisable to set `--cfg-scale` to `1.0` instead of the default `7.0`. For `--steps`, a range of `2-8` steps is recommended. For `--sampling-method`, `lcm`/`euler_a` is recommended.
-
-Here's a simple example:
-
-```
-./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat<lora:lcm-lora-sdv1-5:1>" --steps 4 --lora-model-dir ../models -v --cfg-scale 1
-```
-
-| without LCM-LoRA (--cfg-scale 7)  | with LCM-LoRA (--cfg-scale 1)  |
-| ----  |----    |
-| ![](./assets/without_lcm.png) |![](./assets/with_lcm.png)  |
-
-#### Using TAESD to faster decoding
-
-You can use TAESD to accelerate the decoding of latent images by following these steps:
-
-- Download the model [weights](https://huggingface.co/madebyollin/taesd/blob/main/diffusion_pytorch_model.safetensors).
-
-Or curl
-
-```bash
-curl -L -O https://huggingface.co/madebyollin/taesd/blob/main/diffusion_pytorch_model.safetensors
-```
-
-- Specify the model path using the `--taesd PATH` parameter. example:
-
-```bash
-sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --taesd ../models/diffusion_pytorch_model.safetensors
-```
-
-#### Using ESRGAN to upscale results
-
-You can use ESRGAN to upscale the generated images. At the moment, only the [RealESRGAN_x4plus_anime_6B.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth) model is supported. Support for more models of this architecture will be added soon.
-
-- Specify the model path using the `--upscale-model PATH` parameter. example:
-
-```bash
-sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --upscale-model ../models/RealESRGAN_x4plus_anime_6B.pth
-```
-
-#### Using PhotoMaker to personalize image generation
-
-You can use [PhotoMaker](https://github.com/TencentARC/PhotoMaker) to personalize generated images with your own ID.
-
-**NOTE**, currently PhotoMaker **ONLY** works with **SDXL** (any SDXL model files will work).
-
-Download PhotoMaker model file (in safetensor format) [here](https://huggingface.co/bssrdf/PhotoMaker). The official release of the model file (in .bin format) does not work with ```stablediffusion.cpp```.
-
-- Specify the PhotoMaker model path using the `--stacked-id-embd-dir PATH` parameter.
-- Specify the input images path using the `--input-id-images-dir PATH` parameter.
-  - input images **must** have the same width and height for preprocessing (to be improved)
-
-In prompt, make sure you have a class word followed by the trigger word ```"img"``` (hard-coded for now). The class word could be one of ```"man, woman, girl, boy"```. If input ID images contain asian faces, add ```Asian``` before the class
-word.
-
-Another PhotoMaker specific parameter:
-
-- ```--style-ratio  (0-100)%```: default is 20 and 10-20 typically gets good results. Lower ratio means more faithfully following input ID (not necessarily better quality).
-
-Other parameters recommended for running Photomaker:
-
-- ```--cfg-scale 5.0```
-- ```-H 1024```
-- ```-W 1024```
-
-If on low memory GPUs (<= 8GB), recommend running with ```--vae-on-cpu``` option to get artifact free images.
-
-Example:
-
-```bash
-bin/sd -m ../models/sdxlUnstableDiffusers_v11.safetensors  --vae ../models/sdxl_vae.safetensors --stacked-id-embd-dir ../models/photomaker-v1.safetensors --input-id-images-dir ../assets/examples/scarletthead_woman -p "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed" -n "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text" --cfg-scale 5.0  --sampling-method euler -H 1024 -W 1024 --style-ratio 10 --vae-on-cpu -o output.png
-```
-
-### Docker
-
-#### Building using Docker
-
-```shell
-docker build -t sd .
-```
-
-#### Run
-
-```shell
-docker run -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
-# For example
-# docker run -v ./models:/models -v ./build:/output sd -m /models/sd-v1-4.ckpt -p "a lovely cat" -v -o /output/output.png
-```
-
-## Memory Requirements
-
-| precision | f32  | f16  |q8_0  |q5_0  |q5_1  |q4_0  |q4_1  |
-| ----         | ----  |----  |----  |----  |----  |----  |----  |
-|  **Memory** (txt2img - 512 x 512) | ~2.8G | ~2.3G | ~2.1G | ~2.0G | ~2.0G | ~2.0G | ~2.0G |
-|  **Memory** (txt2img - 512 x 512) *with Flash Attention* | ~2.4G | ~1.9G | ~1.6G | ~1.5G | ~1.5G | ~1.5G | ~1.5G |
+- [LoRA](./docs/lora.md)
+- [LCM/LCM-LoRA](./docs/lcm.md)
+- [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)
+- [Using ESRGAN to upscale results](./docs/esrgan.md)
+- [Using TAESD to faster decoding](./docs/taesd.md)
+- [Docker](./docs/docker.md)
+- [Quantization and GGUF](./docs/quantization_and_gguf.md)
 
 ## Bindings
 
@@ -384,6 +263,7 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 
 - [ggml](https://github.com/ggerganov/ggml)
 - [stable-diffusion](https://github.com/CompVis/stable-diffusion)
+- [sd3-ref](https://github.com/Stability-AI/sd3-ref)
 - [stable-diffusion-stability-ai](https://github.com/Stability-AI/stablediffusion)
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI)

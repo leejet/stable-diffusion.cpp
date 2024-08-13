@@ -528,14 +528,13 @@ public:
     }
 };
 
-struct UNetModel : public GGMLModule {
-    SDVersion version = VERSION_1_x;
+struct UNetModelRunner : public GGMLRunner {
     UnetModelBlock unet;
 
-    UNetModel(ggml_backend_t backend,
-              ggml_type wtype,
-              SDVersion version = VERSION_1_x)
-        : GGMLModule(backend, wtype), unet(version) {
+    UNetModelRunner(ggml_backend_t backend,
+                    ggml_type wtype,
+                    SDVersion version = VERSION_1_x)
+        : GGMLRunner(backend, wtype), unet(version) {
         unet.init(params_ctx, wtype);
     }
 
@@ -605,7 +604,7 @@ struct UNetModel : public GGMLModule {
             return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength);
         };
 
-        GGMLModule::compute(get_graph, n_threads, false, output, output_ctx);
+        GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
     }
 
     void test() {
@@ -647,7 +646,7 @@ struct UNetModel : public GGMLModule {
             print_ggml_tensor(out);
             LOG_DEBUG("unet test done in %dms", t1 - t0);
         }
-    };
+    }
 };
 
 #endif  // __UNET_HPP__

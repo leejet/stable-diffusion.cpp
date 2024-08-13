@@ -7,7 +7,9 @@
 #include <vector>
 
 // #include "preprocessing.hpp"
+#include "mmdit.hpp"
 #include "stable-diffusion.h"
+#include "t5.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
@@ -626,6 +628,7 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 
 int main(int argc, const char* argv[]) {
     SDParams params;
+
     parse_args(argc, argv, params);
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
