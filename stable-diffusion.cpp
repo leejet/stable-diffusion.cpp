@@ -534,7 +534,7 @@ public:
                     break;
                 case GITS:
                     LOG_INFO("Running with GITS schedule");
-                    denoiser->schedule          = std::make_shared<GITSScheduler>();
+                    denoiser->schedule          = std::make_shared<GITSSchedule>();
                     denoiser->schedule->version = version;
                     break;
                 case DEFAULT:

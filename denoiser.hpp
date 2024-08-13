@@ -526,7 +526,7 @@ const std::vector<std::vector<std::vector<float>>> NOISE_LEVELS = {
 };
 
 
-struct GITSScheduler : SigmaSchedule {
+struct GITSSchedule : SigmaSchedule {
     std::vector<float> log_linear_interp(const std::vector<float>& t_steps, size_t num_steps) {
         size_t len = t_steps.size();
         std::vector<float> xs(len);
