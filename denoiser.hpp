@@ -231,17 +231,10 @@ struct GITSSchedule : SigmaSchedule {
         }
 
         std::vector<float> sigmas;
+        int idx = static_cast<int>(std::round(1.20f * 10)) - 8; // Example adjustment for coefficient 1.20
         if (n <= 20) {
-            int idx = static_cast<int>(std::round(1.20f * 10)) - 8; // Example adjustment for coefficient 1.20
-            if (idx < 0 || idx >= GITS_NOISE.size()) {
-                throw std::out_of_range("Coefficient index out of range.");
-            }
             sigmas = GITS_NOISE[idx][n - 2];
         } else {
-            int idx = static_cast<int>(std::round(1.20f * 10)) - 8; // Example adjustment for coefficient 1.20
-            if (idx < 0 || idx >= GITS_NOISE.size()) {
-                throw std::out_of_range("Coefficient index out of range.");
-            }
             sigmas = GITS_NOISE[idx].back();
             sigmas = log_linear_interp(sigmas, n + 1);
         }
