@@ -55,10 +55,10 @@ enum schedule_t {
 
 // same as enum ggml_type
 enum sd_type_t {
-    SD_TYPE_F32  = 0,
-    SD_TYPE_F16  = 1,
-    SD_TYPE_Q4_0 = 2,
-    SD_TYPE_Q4_1 = 3,
+    SD_TYPE_F32     = 0,
+    SD_TYPE_F16     = 1,
+    SD_TYPE_Q4_0    = 2,
+    SD_TYPE_Q4_1    = 3,
     // SD_TYPE_Q4_2 = 4, support has been removed
     // SD_TYPE_Q4_3 = 5, support has been removed
     SD_TYPE_Q5_0    = 6,
@@ -86,6 +86,9 @@ enum sd_type_t {
     SD_TYPE_F64     = 28,
     SD_TYPE_IQ1_M   = 29,
     SD_TYPE_BF16    = 30,
+    SD_TYPE_Q4_0_4_4 = 31,
+    SD_TYPE_Q4_0_4_8 = 32,
+    SD_TYPE_Q4_0_8_8 = 33,
     SD_TYPE_COUNT,
 };
 
