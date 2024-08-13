@@ -181,6 +181,9 @@ struct AYSSchedule : SigmaSchedule {
 };
 
 struct GITSSchedule : SigmaSchedule {
+    /* GITS Scheduler: https://github.com/zju-pi/diff-sampler/tree/main/gits-main
+     * Based on ComfyUI's GITS implementation.
+     * https://github.com/comfyanonymous/ComfyUI/blob/master/comfy_extras/nodes_gits.py */
     std::vector<float> log_linear_interp(const std::vector<float>& t_steps, size_t num_steps) {
         size_t len = t_steps.size();
         std::vector<float> xs(len);
