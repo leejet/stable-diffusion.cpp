@@ -223,7 +223,7 @@ arguments:
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate.
-  --schedule {discrete, karras, ays} Denoiser sigma schedule (default: discrete)
+  --schedule {discrete, karras, exponential, ays} Denoiser sigma schedule (default: discrete)
   --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
