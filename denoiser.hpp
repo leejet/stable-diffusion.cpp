@@ -233,10 +233,9 @@ struct GITSSchedule : SigmaSchedule {
         std::vector<float> sigmas;
         int idx = static_cast<int>(std::round(1.20f * 10)) - 8; // Example adjustment for coefficient 1.20
         if (n <= 20) {
-            sigmas = GITS_NOISE[idx][n - 2];
+            sigmas = (*GITS_NOISE[idx])[n - 2];
         } else {
-            sigmas = GITS_NOISE[idx].back();
-            sigmas = log_linear_interp(sigmas, n + 1);
+            sigmas = log_linear_interp((*GITS_NOISE[idx]).back(), n + 1);
         }
 
         sigmas.resize(total_steps + 1);
@@ -244,7 +243,6 @@ struct GITSSchedule : SigmaSchedule {
         return sigmas;
     }
 };
-
 
 struct KarrasSchedule : SigmaSchedule {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {

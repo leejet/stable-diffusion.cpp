@@ -328,22 +328,22 @@ const std::vector<std::vector<float>> GITS_NOISE_1_50 = {
     { 14.61464119f, 2.45070267f, 1.41535246f, 0.95350921f, 0.72133851f, 0.57119018f, 0.4783645f, 0.43325692f, 0.38853383f, 0.36617002f, 0.34370604f, 0.32104823f, 0.29807833f, 0.27464288f, 0.25053367f, 0.22545385f, 0.19894916f, 0.17026083f, 0.13792117f, 0.09824532f, 0.02916753f }
 };
 
-const std::vector<std::vector<std::vector<float>>> GITS_NOISE = {
-    GITS_NOISE_0_80,
-    GITS_NOISE_0_85,
-    GITS_NOISE_0_90,
-    GITS_NOISE_0_95,
-    GITS_NOISE_1_00,
-    GITS_NOISE_1_05,
-    GITS_NOISE_1_10,
-    GITS_NOISE_1_15,
-    GITS_NOISE_1_20,
-    GITS_NOISE_1_25,
-    GITS_NOISE_1_30,
-    GITS_NOISE_1_35,
-    GITS_NOISE_1_40,
-    GITS_NOISE_1_45,
-    GITS_NOISE_1_50
+const std::vector<const std::vector<std::vector<float>>*> GITS_NOISE = {
+    &GITS_NOISE_0_80,
+    &GITS_NOISE_0_85,
+    &GITS_NOISE_0_90,
+    &GITS_NOISE_0_95,
+    &GITS_NOISE_1_00,
+    &GITS_NOISE_1_05,
+    &GITS_NOISE_1_10,
+    &GITS_NOISE_1_15,
+    &GITS_NOISE_1_20,
+    &GITS_NOISE_1_25,
+    &GITS_NOISE_1_30,
+    &GITS_NOISE_1_35,
+    &GITS_NOISE_1_40,
+    &GITS_NOISE_1_45,
+    &GITS_NOISE_1_50
 };
 
 #endif // GITS_NOISE_INL
