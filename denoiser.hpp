@@ -765,7 +765,8 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case IPNDM: {
+        case IPNDM:  // iPNDM sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
+        {
             int max_order = 4;
             ggml_tensor* x_next = x;
             std::vector<ggml_tensor*> buffer_model;
@@ -842,7 +843,8 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case IPNDM_V: {
+        case IPNDM_V:  // iPNDM_v sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
+        {
             int max_order = 4;
             std::vector<ggml_tensor*> buffer_model;
             ggml_tensor* x_next = x;
@@ -868,7 +870,7 @@ static void sample_k_diffusion(sample_method_t method,
                 float h_n_1 = (i > 0) ? (sigma - sigmas[i - 1]) : h_n;
 
                 switch (order) {
-                    case 1: 
+                    case 1:  // First Euler step 
                         for (int j = 0; j < ggml_nelements(x_next); j++) {
                             vec_x[j] += vec_d_cur[j] * h_n;
                         }
