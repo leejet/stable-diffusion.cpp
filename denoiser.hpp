@@ -42,91 +42,91 @@ struct DiscreteSchedule : SigmaSchedule {
     }
 };
 
+/* interp and linear_interp adapted from dpilger26's NumCpp library:
+ * https://github.com/dpilger26/NumCpp/tree/5e40aab74d14e257d65d3dc385c9ff9e2120c60e */
+constexpr double interp(double left, double right, double perc) noexcept {
+    return (left * (1. - perc)) + (right * perc);
+}
+
+/* This will make the assumption that the reference x and y values are
+ * already sorted in ascending order because they are being generated as
+ * such in the calling function */
+std::vector<double> linear_interp(std::vector<float> new_x,
+                                  const std::vector<float> ref_x,
+                                  const std::vector<float> ref_y) {
+    const size_t len_x = new_x.size();
+    size_t i           = 0;
+    size_t j           = 0;
+    std::vector<double> new_y(len_x);
+
+    if (ref_x.size() != ref_y.size()) {
+        LOG_ERROR("Linear Interoplation Failed: length mismatch");
+        return new_y;
+    }
+
+    /* serves as the bounds checking for the below while loop */
+    if ((new_x[0] < ref_x[0]) || (new_x[new_x.size() - 1] > ref_x[ref_x.size() - 1])) {
+        LOG_ERROR("Linear Interpolation Failed: bad bounds");
+        return new_y;
+    }
+
+    while (i < len_x) {
+        if ((ref_x[j] > new_x[i]) || (new_x[i] > ref_x[j + 1])) {
+            j++;
+            continue;
+        }
+
+        const double perc = static_cast<double>(new_x[i] - ref_x[j]) / static_cast<double>(ref_x[j + 1] - ref_x[j]);
+
+        new_y[i] = interp(ref_y[j], ref_y[j + 1], perc);
+        i++;
+    }
+
+    return new_y;
+}
+
+std::vector<float> linear_space(const float start, const float end, const size_t num_points) {
+    std::vector<float> result(num_points);
+    const float inc = (end - start) / (static_cast<float>(num_points - 1));
+
+    if (num_points > 0) {
+        result[0] = start;
+
+        for (size_t i = 1; i < num_points; i++) {
+            result[i] = result[i - 1] + inc;
+        }
+    }
+
+    return result;
+}
+
+std::vector<float> log_linear_interpolation(std::vector<float> sigma_in,
+                                            const size_t new_len) {
+    const size_t s_len        = sigma_in.size();
+    std::vector<float> x_vals = linear_space(0.f, 1.f, s_len);
+    std::vector<float> y_vals(s_len);
+
+    /* Reverses the input array to be ascending instead of descending,
+     * also hits it with a log, it is log-linear interpolation after all */
+    for (size_t i = 0; i < s_len; i++) {
+        y_vals[i] = std::log(sigma_in[s_len - i - 1]);
+    }
+
+    std::vector<float> new_x_vals  = linear_space(0.f, 1.f, new_len);
+    std::vector<double> new_y_vals = linear_interp(new_x_vals, x_vals, y_vals);
+    std::vector<float> results(new_len);
+
+    for (size_t i = 0; i < new_len; i++) {
+        results[i] = static_cast<float>(std::exp(new_y_vals[new_len - i - 1]));
+    }
+
+    return results;
+}
+
 /*
 https://research.nvidia.com/labs/toronto-ai/AlignYourSteps/howto.html
 */
 struct AYSSchedule : SigmaSchedule {
-    /* interp and linear_interp adapted from dpilger26's NumCpp library:
-     * https://github.com/dpilger26/NumCpp/tree/5e40aab74d14e257d65d3dc385c9ff9e2120c60e */
-    constexpr double interp(double left, double right, double perc) noexcept {
-        return (left * (1. - perc)) + (right * perc);
-    }
-
-    /* This will make the assumption that the reference x and y values are
-     * already sorted in ascending order because they are being generated as
-     * such in the calling function */
-    std::vector<double> linear_interp(std::vector<float> new_x,
-                                      const std::vector<float> ref_x,
-                                      const std::vector<float> ref_y) {
-        const size_t len_x = new_x.size();
-        size_t i           = 0;
-        size_t j           = 0;
-        std::vector<double> new_y(len_x);
-
-        if (ref_x.size() != ref_y.size()) {
-            LOG_ERROR("Linear Interoplation Failed: length mismatch");
-            return new_y;
-        }
-
-        /* serves as the bounds checking for the below while loop */
-        if ((new_x[0] < ref_x[0]) || (new_x[new_x.size() - 1] > ref_x[ref_x.size() - 1])) {
-            LOG_ERROR("Linear Interpolation Failed: bad bounds");
-            return new_y;
-        }
-
-        while (i < len_x) {
-            if ((ref_x[j] > new_x[i]) || (new_x[i] > ref_x[j + 1])) {
-                j++;
-                continue;
-            }
-
-            const double perc = static_cast<double>(new_x[i] - ref_x[j]) / static_cast<double>(ref_x[j + 1] - ref_x[j]);
-
-            new_y[i] = interp(ref_y[j], ref_y[j + 1], perc);
-            i++;
-        }
-
-        return new_y;
-    }
-
-    std::vector<float> linear_space(const float start, const float end, const size_t num_points) {
-        std::vector<float> result(num_points);
-        const float inc = (end - start) / (static_cast<float>(num_points - 1));
-
-        if (num_points > 0) {
-            result[0] = start;
-
-            for (size_t i = 1; i < num_points; i++) {
-                result[i] = result[i - 1] + inc;
-            }
-        }
-
-        return result;
-    }
-
-    std::vector<float> log_linear_interpolation(std::vector<float> sigma_in,
-                                                const size_t new_len) {
-        const size_t s_len        = sigma_in.size();
-        std::vector<float> x_vals = linear_space(0.f, 1.f, s_len);
-        std::vector<float> y_vals(s_len);
-
-        /* Reverses the input array to be ascending instead of descending,
-         * also hits it with a log, it is log-linear interpolation after all */
-        for (size_t i = 0; i < s_len; i++) {
-            y_vals[i] = std::log(sigma_in[s_len - i - 1]);
-        }
-
-        std::vector<float> new_x_vals  = linear_space(0.f, 1.f, new_len);
-        std::vector<double> new_y_vals = linear_interp(new_x_vals, x_vals, y_vals);
-        std::vector<float> results(new_len);
-
-        for (size_t i = 0; i < new_len; i++) {
-            results[i] = static_cast<float>(std::exp(new_y_vals[new_len - i - 1]));
-        }
-
-        return results;
-    }
-
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
         const std::vector<float> noise_levels[] = {
             /* SD1.5 */
@@ -180,47 +180,12 @@ struct AYSSchedule : SigmaSchedule {
     }
 };
 
+/* 
+ * GITS Scheduler: https://github.com/zju-pi/diff-sampler/tree/main/gits-main
+ * Based on ComfyUI's GITS implementation.
+ * https://github.com/comfyanonymous/ComfyUI/blob/master/comfy_extras/nodes_gits.py
+*/
 struct GITSSchedule : SigmaSchedule {
-    /* GITS Scheduler: https://github.com/zju-pi/diff-sampler/tree/main/gits-main
-     * Based on ComfyUI's GITS implementation.
-     * https://github.com/comfyanonymous/ComfyUI/blob/master/comfy_extras/nodes_gits.py */
-    std::vector<float> log_linear_interp(const std::vector<float>& t_steps, size_t num_steps) {
-        size_t len = t_steps.size();
-        std::vector<float> xs(len);
-        std::vector<float> ys(len);
-
-        for (size_t i = 0; i < len; ++i) {
-            xs[i] = static_cast<float>(i) / static_cast<float>(len - 1);
-            ys[i] = std::log(t_steps[len - i - 1]);
-        }
-
-        std::vector<float> new_xs(num_steps);
-        std::vector<float> new_ys(num_steps);
-        float step = 1.0f / (num_steps - 1);
-
-        for (size_t i = 0; i < num_steps; ++i) {
-            new_xs[i] = i * step;
-        }
-
-        for (size_t i = 0; i < num_steps; ++i) {
-            float x = new_xs[i];
-            size_t j = 0;
-            while (j < len - 1 && xs[j + 1] < x) {
-                ++j;
-            }
-
-            float t = (x - xs[j]) / (xs[j + 1] - xs[j]);
-            new_ys[i] = ys[j] * (1.0f - t) + ys[j + 1] * t;
-        }
-
-        std::vector<float> interped_ys(num_steps);
-        for (size_t i = 0; i < num_steps; ++i) {
-            interped_ys[i] = std::exp(new_ys[num_steps - i - 1]);
-        }
-
-        return interped_ys;
-    }
-
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         int total_steps = static_cast<int>(n);
         if (sigma_max < 1.0f) {
@@ -235,7 +200,7 @@ struct GITSSchedule : SigmaSchedule {
         if (n <= 20) {
             sigmas = (*GITS_NOISE[idx])[n - 2];
         } else {
-            sigmas = log_linear_interp((*GITS_NOISE[idx]).back(), n + 1);
+            sigmas = log_linear_interpolation((*GITS_NOISE[idx]).back(), n + 1);
         }
 
         sigmas.resize(total_steps + 1);
