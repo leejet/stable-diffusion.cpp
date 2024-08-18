@@ -95,7 +95,10 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 add_definitions(-DGGML_MAX_NAME=128)
 
 # deps
-add_subdirectory(ggml)
+# Only add ggml if it hasn't been added yet
+if (NOT TARGET ggml)
+    add_subdirectory(ggml)
+endif()
 
 add_subdirectory(thirdparty)
 
