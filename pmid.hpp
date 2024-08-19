@@ -82,6 +82,163 @@ class QFormerPerceiver(nn.Module):
         return out
 */
 
+
+struct PMFeedForward : public GGMLBlock {
+    // network hparams
+    int dim;
+
+public:
+    PMFeedForward(int d, int multi=4)
+    : dim(d) {
+        int inner_dim = dim * multi;
+        blocks["0"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
+        blocks["1"]   = std::shared_ptr<GGMLBlock>(new Mlp(dim, inner_dim, dim, false));
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                struct ggml_tensor* x){
+
+        auto norm = std::dynamic_pointer_cast<LayerNorm>(blocks["0"]);
+        auto ff   = std::dynamic_pointer_cast<Mlp>(blocks["1"]);
+
+        x = norm->forward(ctx, x);
+        x = ff->forward(ctx, x);
+        return x;
+    }
+
+};
+
+struct PerceiverAttention : public GGMLBlock {
+    // network hparams
+    float scale; // = dim_head**-0.5
+    int dim_head; // = dim_head
+    int heads; // = heads
+public:
+    PerceiverAttention(int dim, int dim_h=64, int h=8)
+    : scale(powf(dim_h, -0.5)), dim_head(dim_h), heads(h) {
+
+        int inner_dim = dim_head * heads;
+        blocks["norm1"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
+        blocks["norm2"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
+        blocks["to_q"]   = std::shared_ptr<GGMLBlock>(new Linear(dim, inner_dim, false));
+        blocks["to_kv"]  = std::shared_ptr<GGMLBlock>(new Linear(dim, inner_dim*2, false));
+        blocks["to_out"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim, false));
+    }
+
+    struct ggml_tensor* reshape_tensor(struct ggml_context* ctx,
+                                struct ggml_tensor* x,
+                                int heads) {
+        int64_t ne[4];
+        for(int i = 0; i < 4; ++i)
+           ne[i] = x->ne[i];
+        x = ggml_view_4d(ctx, x, x->ne[0], x->ne[1], heads, x->ne[2]/heads,
+                                 x->nb[1], x->nb[2], x->nb[3], 0);
+        // x = ggml_transpose(ctx, x);
+        x  = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
+        x  = ggml_reshape_4d(ctx, x, ne[0], heads, ne[1], ne[2]/heads);
+        return x;
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                struct ggml_tensor* x,
+                                struct ggml_tensor* latents){
+
+        // x (torch.Tensor): image features
+        //     shape (b, n1, D)
+        // latent (torch.Tensor): latent features
+        //     shape (b, n2, D)
+        int64_t ne[4];
+        for(int i = 0; i < 4; ++i)
+           ne[i] = latents->ne[i];
+
+        auto norm1      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm1"]);
+        auto norm2      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm2"]);
+        x = norm1->forward(ctx, x);
+        latents = norm2->forward(ctx, latents);
+        auto to_q = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
+        auto q = to_q->forward(ctx, latents);
+
+        auto kv_input = ggml_concat(ctx, x, latents, 1);
+        auto to_kv    = std::dynamic_pointer_cast<Linear>(blocks["to_kv"]);
+        auto kv = to_kv->forward(ctx, kv_input);
+        int64_t n = kv->ne[2] / 2;
+        int64_t offset = kv->nb[2] * n;
+        auto k = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*0);
+        auto v = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*1);
+        q = reshape_tensor(ctx, q, heads);
+        k = reshape_tensor(ctx, k, heads);
+        v = reshape_tensor(ctx, v, heads);
+
+        scale = 1.f / sqrt(sqrt((float)dim_head));
+        k = ggml_scale_inplace(ctx, k, scale);
+        k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 1, 3, 2));
+        q = ggml_scale_inplace(ctx, q, scale);
+        auto weight = ggml_mul_mat(ctx, q, k);
+
+        // GGML's softmax() is equivalent to pytorch's softmax(x, dim=-1)
+        // in this case, dimension along which Softmax will be computed is the last dim
+        // in torch and the first dim in GGML, consistent with the convention that pytorch's
+        // last dimension (varying most rapidly) corresponds to GGML's first (varying most rapidly).
+        weight = ggml_soft_max(ctx, weight);
+        auto out = ggml_mul_mat(ctx, weight, v);
+
+        out  = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));
+        out  = ggml_reshape_3d(ctx, out, ne[0], ne[1], ggml_nelements(out)/(ne[0]*ne[1]));
+        auto to_out    = std::dynamic_pointer_cast<Linear>(blocks["to_out"]);
+        out  = to_out->forward(ctx, out);
+        return out;
+    }
+};
+
+struct FacePerceiverResampler : public GGMLBlock {
+    // network hparams
+    int depth;
+public:
+    FacePerceiverResampler( int dim=768,
+                            int d=4,
+                            int dim_head=64,
+                            int heads=16,
+                            int embedding_dim=1280,
+                            int output_dim=768,
+                            int ff_mult=4)
+                            : depth(d) {
+        blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Linear(embedding_dim, dim, true));
+        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(dim, output_dim, true));
+        blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new LayerNorm(output_dim));
+
+        for (int i = 0; i < depth; i++) {
+            std::string name = "layers." + std::to_string(i) + ".0";
+            blocks[name]     = std::shared_ptr<GGMLBlock>(new PerceiverAttention(dim, dim_head, heads));
+            name = "layers." + std::to_string(i) + ".1";
+            blocks[name]     = std::shared_ptr<GGMLBlock>(new PMFeedForward(dim, ff_mult));
+        }
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                struct ggml_tensor* latents,
+                                struct ggml_tensor* x){
+        // x: [N, channels, h, w]
+        auto proj_in       = std::dynamic_pointer_cast<Linear>(blocks["proj_in"]);
+        auto proj_out      = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
+        auto norm_out      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
+
+        x = proj_in->forward(ctx, x);
+        for (int i = 0; i < depth; i++) {
+            std::string name = "layers." + std::to_string(i) + ".0";
+            auto attn     = std::dynamic_pointer_cast<PerceiverAttention>(blocks[name]);
+            name = "layers." + std::to_string(i) + ".1";
+            auto ff     = std::dynamic_pointer_cast<PMFeedForward>(blocks[name]);
+            auto t = attn->forward(ctx, x, latents);
+            latents = ggml_add(ctx, t, latents);
+            t = ff->forward(ctx, latents);
+            latents = ggml_add(ctx, t, latents);
+        }
+        latents = proj_out->forward(ctx, latents);
+        latents = norm_out->forward(ctx, latents);
+        return latents;
+    }
+};
+
 struct QFormerPerceiver : public GGMLBlock {
     // network hparams
     int num_tokens;
@@ -101,19 +258,43 @@ public:
                                                                   cross_attention_dim*num_tokens, 
                                                                   true));
         blocks["token_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(cross_attention_d));
+        blocks["perceiver_resampler"] = std::shared_ptr<GGMLBlock>(new FacePerceiverResampler(
+                                            cross_attention_dim,
+                                            4,
+                                            128,
+                                            cross_attention_dim / 128,
+                                            embedding_dim,
+                                            cross_attention_dim,
+                                            4));
     }
 
-    
+    /* 
+    def forward(self, x, last_hidden_state):
+        x = self.token_proj(x)
+        x = x.reshape(-1, self.num_tokens, self.cross_attention_dim)
+        x = self.token_norm(x) # cls token
+        out = self.perceiver_resampler(x, last_hidden_state) # retrieve from patch tokens
+        if self.use_residual: # TODO: if use_residual is not true
+            out = x + 1.0 * out 
+        return out
+    */
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* last_hidden_state){
         // x: [N, channels, h, w]
-        auto mlp1       = std::dynamic_pointer_cast<FuseBlock>(blocks["mlp1"]);
-        auto mlp2       = std::dynamic_pointer_cast<FuseBlock>(blocks["mlp2"]);
+        auto token_proj  = std::dynamic_pointer_cast<Mlp>(blocks["token_proj"]);
         auto token_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["token_norm"]);
+        auto perceiver_resampler = std::dynamic_pointer_cast<FacePerceiverResampler>(blocks["perceiver_resampler"]);
 
-       
+        x = token_proj->forward(ctx, x);
+        int64_t nel = ggml_nelements(x);
+        x = ggml_reshape_3d(ctx, x, cross_attention_dim, num_tokens, nel/(cross_attention_dim*num_tokens));
+        x = token_norm->forward(ctx, x);
+        struct ggml_tensor* out = perceiver_resampler->forward(ctx, x, last_hidden_state);
+        if(use_residul)
+            out = ggml_add(ctx, x, out);
+        return out;
     }
 };
 
@@ -155,56 +336,7 @@ class FacePerceiverResampler(torch.nn.Module):
         return self.norm_out(latents)
 */
 
-struct FacePerceiverResampler : public GGMLBlock {    
-    // network hparams  
-    int depth;
-public:
-    FacePerceiverResampler( int dim=768,
-                            int d=4,
-                            int dim_head=64,
-                            int heads=16,
-                            int embedding_dim=1280,
-                            int output_dim=768,
-                            int ff_mult=4) 
-                            : depth(d) {
-        blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Linear(embedding_dim, dim, true));
-        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(dim, output_dim, true));
-        blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new LayerNorm(output_dim));
 
-        for (int i = 0; i < depth; i++) {
-            std::string name = "layers." + std::to_string(i) + ".0";            
-            blocks[name]     = std::shared_ptr<GGMLBlock>(new PerceiverAttention(dim, dim_head, heads));
-            name = "layers." + std::to_string(i) + ".1";            
-            blocks[name]     = std::shared_ptr<GGMLBlock>(new FeedForward(dim, ff_mult));
-        }
-    }
-
-    
-
-    struct ggml_tensor* forward(struct ggml_context* ctx,
-                                struct ggml_tensor* latents,
-                                struct ggml_tensor* x){
-        // x: [N, channels, h, w]
-        auto proj_in       = std::dynamic_pointer_cast<Linear>(blocks["proj_in"]);
-        auto proj_out      = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
-        auto norm_out      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out"]);
-
-        x = proj_in->forward(ctx, x);
-        for (int i = 0; i < depth; i++) {
-            std::string name = "layers." + std::to_string(i) + ".0";  
-            auto attn     = std::dynamic_pointer_cast<PerceiverAttention>(blocks[name]);
-            name = "layers." + std::to_string(i) + ".1";            
-            auto ff     = std::dynamic_pointer_cast<FeedForward>(blocks[name]);
-            auto t = attn->forward(ctx, x, latents);
-            latents = ggml_add(ctx, t, latents);
-            t = ff->forward(ctx, latents);
-            latents = ggml_add(ctx, t, latents);
-        }
-        latents = proj_out->forward(ctx, latents);
-        latents = norm_out->forward(ctx, latents);
-        return latents;  
-    }
-};
 
 /*
 
@@ -275,115 +407,7 @@ class PerceiverAttention(nn.Module):
 
 */
 
-struct FeedForward : public GGMLBlock {
-    // network hparams
-    int dim;
-    
-public:
-    FeedForward(int d, int multi=4)
-    : dim(d) {
-        int inner_dim = dim * multi;
-        blocks["0"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));        
-        blocks["1"]   = std::shared_ptr<GGMLBlock>(new Mlp(dim, inner_dim, dim, false));
-    }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
-                                struct ggml_tensor* x){
-
-        auto norm = std::dynamic_pointer_cast<LayerNorm>(blocks["0"]);
-        auto ff   = std::dynamic_pointer_cast<Mlp>(blocks["1"]);
-
-        x = norm->forward(ctx, x);
-        x = ff->forward(ctx, x);                            
-        return x;
-    }
-
-};
-                                
-
-
-
-struct PerceiverAttention : public GGMLBlock {
-    // network hparams
-    float scale; // = dim_head**-0.5
-    int dim_head; // = dim_head
-    int heads; // = heads
-public:
-    PerceiverAttention(int dim, int dim_h=64, int h=8)
-    : scale(powf(dim_h, -0.5)), dim_head(dim_h), heads(h) {
-
-        int inner_dim = dim_head * heads;
-        blocks["norm1"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
-        blocks["norm2"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
-        blocks["to_q"]   = std::shared_ptr<GGMLBlock>(new Linear(dim, inner_dim, false));
-        blocks["to_kv"]  = std::shared_ptr<GGMLBlock>(new Linear(dim, inner_dim*2, false));
-        blocks["to_out"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim, false));
-    }
-
-    struct ggml_tensor* reshape_tensor(struct ggml_context* ctx,
-                                struct ggml_tensor* x,
-                                int heads) {
-        int64_t ne[4];
-        for(int i = 0; i < 4; ++i)
-           ne[i] = x->ne[i];
-        x = ggml_view_4d(ctx, x, x->ne[0], x->ne[1], heads, x->ne[2]/heads, 
-                                 x->nb[1], x->nb[2], x->nb[3], 0);
-        // x = ggml_transpose(ctx, x); 
-        x  = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
-        x  = ggml_reshape_4d(ctx, x, ne[0], heads, ne[1], ne[2]/heads);
-        return x;
-    }
-
-    struct ggml_tensor* forward(struct ggml_context* ctx,
-                                struct ggml_tensor* x,
-                                struct ggml_tensor* latents){
-
-        // x (torch.Tensor): image features
-        //     shape (b, n1, D)
-        // latent (torch.Tensor): latent features
-        //     shape (b, n2, D)
-        int64_t ne[4];
-        for(int i = 0; i < 4; ++i)
-           ne[i] = latents->ne[i];
-
-        auto norm1      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm1"]);
-        auto norm2      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm2"]);
-        x = norm1->forward(ctx, x);
-        latents = norm2->forward(ctx, latents);
-        auto to_q = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
-        auto q = to_q->forward(ctx, latents);
-
-        auto kv_input = ggml_concat(ctx, x, latents, 1);
-        auto to_kv    = std::dynamic_pointer_cast<Linear>(blocks["to_kv"]);
-        auto kv = to_kv->forward(ctx, kv_input);
-        int64_t n = kv->ne[2] / 2;
-        int64_t offset = kv->nb[2] * n;
-        auto k = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*0);
-        auto v = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*1);
-        q = reshape_tensor(ctx, q, heads);
-        k = reshape_tensor(ctx, k, heads);
-        v = reshape_tensor(ctx, v, heads);
-
-        scale = 1.f / sqrt(sqrt((float)dim_head));
-        k = ggml_scale_inplace(ctx, k, scale);
-        k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 1, 3, 2)); 
-        q = ggml_scale_inplace(ctx, q, scale);
-        auto weight = ggml_mul_mat(ctx, q, k);
-
-        // GGML's softmax() is equivalent to pytorch's softmax(x, dim=-1)
-        // in this case, dimension along which Softmax will be computed is the last dim 
-        // in torch and the first dim in GGML, consistent with the convention that pytorch's 
-        // last dimension (varying most rapidly) corresponds to GGML's first (varying most rapidly). 
-        weight = ggml_soft_max(ctx, weight);
-        auto out = ggml_mul_mat(ctx, weight, v);
-
-        out  = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));
-        out  = ggml_reshape_3d(ctx, out, ne[0], ne[1], ggml_nelements(out)/(ne[0]*ne[1]));
-        auto to_out    = std::dynamic_pointer_cast<Linear>(blocks["to_out"]);
-        out  = to_out->forward(ctx, out);
-        return out;
-    }
-};
 
 
 struct FuseModule : public GGMLBlock {

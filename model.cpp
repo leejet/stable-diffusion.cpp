@@ -142,6 +142,33 @@ std::unordered_map<std::string, std::string> vae_decoder_name_map = {
     {"first_stage_model.decoder.mid.attn_1.to_v.weight", "first_stage_model.decoder.mid.attn_1.v.weight"},
 };
 
+std::unordered_map<std::string, std::string> pmid_v2_name_map = {
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.fc1.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.0.1.3.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.fc2.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.fc1.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.1.1.3.weight",
+     "pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.fc2.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.fc1.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.2.1.3.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.fc2.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.fc1.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.3.1.3.weight",
+     "pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.fc2.weight"},
+    {"pmid.qformer_perceiver.token_proj.0.bias",
+     "pmid.qformer_perceiver.token_proj.fc1.bias"},
+    {"pmid.qformer_perceiver.token_proj.2.bias",
+     "pmid.qformer_perceiver.token_proj.fc2.bias"},
+    {"pmid.qformer_perceiver.token_proj.0.weight",
+     "pmid.qformer_perceiver.token_proj.fc1.weight"},
+    {"pmid.qformer_perceiver.token_proj.2.weight",
+     "pmid.qformer_perceiver.token_proj.fc2.weight"},
+};
+
 std::string convert_open_clip_to_hf_clip(const std::string& name) {
     std::string new_name = name;
     std::string prefix;
@@ -204,6 +231,13 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
 std::string convert_vae_decoder_name(const std::string& name) {
     if (vae_decoder_name_map.find(name) != vae_decoder_name_map.end()) {
         return vae_decoder_name_map[name];
+    }
+    return name;
+}
+
+std::string convert_pmid_v2_name(const std::string& name) {
+    if (pmid_v2_name_map.find(name) != pmid_v2_name_map.end()) {
+        return pmid_v2_name_map[name];
     }
     return name;
 }
@@ -428,6 +462,8 @@ std::string convert_tensor_name(const std::string& name) {
         new_name = convert_open_clip_to_hf_clip(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
         new_name = convert_vae_decoder_name(name);
+    } else if (starts_with(name, "pmid.qformer_perceiver")) {
+        new_name = convert_pmid_v2_name(name);
     } else if (starts_with(name, "control_model.")) {  // for controlnet pth models
         size_t pos = name.find('.');
         if (pos != std::string::npos) {

@@ -280,7 +280,12 @@ public:
                 control_net = std::make_shared<ControlNet>(controlnet_backend, model_data_type, version);
             }
 
-            pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_data_type, version);
+            //printf("Photomaker model file is %s \n", id_embeddings_path.c_str());
+            if(id_embeddings_path.find("v2") != std::string::npos) {
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_data_type, version, VERSION_2);
+            } else {
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_data_type, version);
+            }
             if (id_embeddings_path.size() > 0) {
                 pmid_lora = std::make_shared<LoraModel>(backend, model_data_type, id_embeddings_path, "");
                 if (!pmid_lora->load_from_file(true)) {
@@ -575,7 +580,7 @@ public:
                             ggml_tensor* prompts_embeds,
                             std::vector<bool>& class_tokens_mask) {
         ggml_tensor* res = NULL;
-        pmid_model->compute(n_threads, init_img, prompts_embeds, class_tokens_mask, &res, work_ctx);
+        pmid_model->compute(n_threads, init_img, prompts_embeds, NULL, class_tokens_mask, &res, work_ctx);
 
         return res;
     }
