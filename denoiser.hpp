@@ -182,8 +182,6 @@ struct AYSSchedule : SigmaSchedule {
 
 /* 
  * GITS Scheduler: https://github.com/zju-pi/diff-sampler/tree/main/gits-main
- * Based on ComfyUI's GITS implementation.
- * https://github.com/comfyanonymous/ComfyUI/blob/master/comfy_extras/nodes_gits.py
 */
 struct GITSSchedule : SigmaSchedule {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
