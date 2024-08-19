@@ -186,25 +186,30 @@ struct AYSSchedule : SigmaSchedule {
  * https://github.com/comfyanonymous/ComfyUI/blob/master/comfy_extras/nodes_gits.py
 */
 struct GITSSchedule : SigmaSchedule {
-    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
-        int total_steps = static_cast<int>(n);
-        if (sigma_max < 1.0f) {
-            if (sigma_max <= 0.0f) {
-                return std::vector<float>{};
-            }
-            total_steps = static_cast<int>(std::round(n * sigma_max));
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
+        if (sigma_max <= 0.0f) {
+            return std::vector<float>{};
         }
 
         std::vector<float> sigmas;
-        int idx = static_cast<int>(std::round(1.20f * 10)) - 8; // Example adjustment for coefficient 1.20
+
+        // Assume coeff is provided (replace 1.20 with your dynamic coeff)
+        float coeff = 1.20f;  // Default coefficient
+        // Normalize coeff to the closest value in the array (0.80 to 1.50)
+        coeff = std::round(coeff * 20.0f) / 20.0f;  // Round to the nearest 0.05
+        // Calculate the index based on the coefficient
+        int index = static_cast<int>((coeff - 0.80f) / 0.05f);
+        // Ensure the index is within bounds
+        index = std::max(0, std::min(index, static_cast<int>(GITS_NOISE.size() - 1)));
+        const std::vector<std::vector<float>>& selected_noise = *GITS_NOISE[index];
+
         if (n <= 20) {
-            sigmas = (*GITS_NOISE[idx])[n - 2];
+            sigmas = (selected_noise)[n - 2];
         } else {
-            sigmas = log_linear_interpolation((*GITS_NOISE[idx]).back(), n + 1);
+            sigmas = log_linear_interpolation(selected_noise.back(), n + 1);
         }
 
-        sigmas.resize(total_steps + 1);
-        sigmas[total_steps] = 0.0f;
+        sigmas[n] = 0.0f;
         return sigmas;
     }
 };
