@@ -42,7 +42,7 @@ struct DiscreteSchedule : SigmaSchedule {
 };
 
 struct ExponentialSchedule : SigmaSchedule {
-    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) {
         std::vector<float> sigmas;
 
         // Calculate step size
@@ -56,7 +56,7 @@ struct ExponentialSchedule : SigmaSchedule {
             sigmas.push_back(sigma);
         }
 
-        sigmas.push_back(0);
+        sigmas.push_back(0.0f);
 
         return sigmas;
     }
