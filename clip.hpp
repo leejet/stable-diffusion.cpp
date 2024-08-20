@@ -751,7 +751,8 @@ public:
         blocks["post_layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values, bool return_pooled = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values, 
+                                bool return_pooled = true) {
         // pixel_values: [N, num_channels, image_size, image_size]
         auto embeddings     = std::dynamic_pointer_cast<CLIPVisionEmbeddings>(blocks["embeddings"]);
         auto pre_layernorm  = std::dynamic_pointer_cast<LayerNorm>(blocks["pre_layernorm"]);
@@ -761,14 +762,17 @@ public:
         auto x = embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
         x      = pre_layernorm->forward(ctx, x);
         x      = encoder->forward(ctx, x, -1, false);
+        // print_ggml_tensor(x, true, "ClipVisionModel x: ");  
+        auto last_hidden_state = x;
         x      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
 
-        GGML_ASSERT(x->ne[3] == 1);
+        GGML_ASSERT(x->ne[3] == 1);        
         if (return_pooled) {
             ggml_tensor* pooled = ggml_cont(ctx, ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], 0));
             return pooled;  // [N, hidden_size]
         } else {
-            return x;  // [N, n_token, hidden_size]
+            // return x;  // [N, n_token, hidden_size]
+            return last_hidden_state;  // [N, n_token, hidden_size]
         }
     }
 };

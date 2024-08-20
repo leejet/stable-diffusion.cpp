@@ -131,12 +131,28 @@ public:
         int64_t ne[4];
         for(int i = 0; i < 4; ++i)
            ne[i] = x->ne[i];
-        x = ggml_view_4d(ctx, x, x->ne[0], x->ne[1], heads, x->ne[2]/heads,
+        // print_ggml_tensor(x, true, "PerceiverAttention reshape x 0: ");
+        // printf("heads = %d \n", heads);
+        // x = ggml_view_4d(ctx, x, x->ne[0], x->ne[1], heads, x->ne[2]/heads,
+        //                          x->nb[1], x->nb[2], x->nb[3], 0);
+        x = ggml_view_4d(ctx, x, x->ne[0]/heads, heads, x->ne[1], x->ne[2],
                                  x->nb[1], x->nb[2], x->nb[3], 0);
         // x = ggml_transpose(ctx, x);
         x  = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
-        x  = ggml_reshape_4d(ctx, x, ne[0], heads, ne[1], ne[2]/heads);
+        // print_ggml_tensor(x, true, "PerceiverAttention reshape x 1: ");
+        // x  = ggml_reshape_4d(ctx, x, ne[0], heads, ne[1], ne[2]/heads);
         return x;
+    }
+
+    std::vector<struct ggml_tensor*> chunk_half(struct ggml_context* ctx,
+                                struct ggml_tensor* x){
+        auto t = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));   
+        int64_t n = t->ne[2] / 2;
+        int64_t offset = t->nb[2] * n; 
+        auto k = ggml_view_3d(ctx, t, t->ne[0], t->ne[1], n, t->nb[1], t->nb[2], offset*0);
+        auto v = ggml_view_3d(ctx, t, t->ne[0], t->ne[1], n, t->nb[1], t->nb[2], offset*1);
+        return {ggml_cont(ctx, ggml_permute(ctx, k, 1, 2, 0, 3)),
+                ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3))};  
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
@@ -150,6 +166,8 @@ public:
         int64_t ne[4];
         for(int i = 0; i < 4; ++i)
            ne[i] = latents->ne[i];
+        print_ggml_tensor(x, true, "PerceiverAttention x 0: ");
+        print_ggml_tensor(latents, true, "PerceiverAttention latents 0: ");   
 
         auto norm1      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm1"]);
         auto norm2      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm2"]);
@@ -158,28 +176,46 @@ public:
         auto to_q = std::dynamic_pointer_cast<Linear>(blocks["to_q"]);
         auto q = to_q->forward(ctx, latents);
 
+        print_ggml_tensor(x, true, "PerceiverAttention x: ");
+        print_ggml_tensor(latents, true, "PerceiverAttention latents: ");
+        print_ggml_tensor(q, true, "PerceiverAttention q: ");
         auto kv_input = ggml_concat(ctx, x, latents, 1);
         auto to_kv    = std::dynamic_pointer_cast<Linear>(blocks["to_kv"]);
         auto kv = to_kv->forward(ctx, kv_input);
-        int64_t n = kv->ne[2] / 2;
-        int64_t offset = kv->nb[2] * n;
-        auto k = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*0);
-        auto v = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*1);
+        // int64_t n = kv->ne[0] / 2;
+        // int64_t offset = kv->nb[2] * n;
+        print_ggml_tensor(kv, true, "PerceiverAttention kv: ");
+        // auto k = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*0);
+        // auto v = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*1);
+        std::vector<struct ggml_tensor*> chunks = chunk_half(ctx, kv);
+        auto k = chunks[0]; 
+        auto v = chunks[1]; 
+        print_ggml_tensor(q, true, "PerceiverAttention bef reshape q: ");
+        print_ggml_tensor(k, true, "PerceiverAttention bef reshape k: ");
+        print_ggml_tensor(v, true, "PerceiverAttention bef reshape v: ");
         q = reshape_tensor(ctx, q, heads);
         k = reshape_tensor(ctx, k, heads);
         v = reshape_tensor(ctx, v, heads);
-
+        print_ggml_tensor(q, true, "PerceiverAttention aft reshape q: ");
+        print_ggml_tensor(k, true, "PerceiverAttention aft reshape k: ");
+        print_ggml_tensor(v, true, "PerceiverAttention aft reshape v: ");
         scale = 1.f / sqrt(sqrt((float)dim_head));
         k = ggml_scale_inplace(ctx, k, scale);
-        k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 1, 3, 2));
+        // k = ggml_cont(ctx, ggml_permute(ctx, k, 1, 0, 2, 3));
         q = ggml_scale_inplace(ctx, q, scale);
+        print_ggml_tensor(q, true, "PerceiverAttention mul q: ");
+        print_ggml_tensor(k, true, "PerceiverAttention mul k: ");        
         auto weight = ggml_mul_mat(ctx, q, k);
 
         // GGML's softmax() is equivalent to pytorch's softmax(x, dim=-1)
         // in this case, dimension along which Softmax will be computed is the last dim
         // in torch and the first dim in GGML, consistent with the convention that pytorch's
         // last dimension (varying most rapidly) corresponds to GGML's first (varying most rapidly).
-        weight = ggml_soft_max(ctx, weight);
+        weight = ggml_soft_max(ctx, weight);        
+        weight = ggml_cont(ctx, ggml_transpose(ctx, weight));
+        v = ggml_cont(ctx, ggml_transpose(ctx, v));
+        print_ggml_tensor(weight, true, "PerceiverAttention mul weight: ");
+        print_ggml_tensor(v, true, "PerceiverAttention mul v: ");
         auto out = ggml_mul_mat(ctx, weight, v);
 
         out  = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));
@@ -429,8 +465,13 @@ public:
         auto mlp2       = std::dynamic_pointer_cast<FuseBlock>(blocks["mlp2"]);
         auto layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm"]);
 
+        print_ggml_tensor(id_embeds, true, "Fuseblock id_embeds: ");
+        print_ggml_tensor(prompt_embeds, true, "Fuseblock prompt_embeds: ");
+
         auto prompt_embeds0 = ggml_cont(ctx, ggml_permute(ctx, prompt_embeds, 2, 0, 1, 3));
         auto id_embeds0     = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 2, 0, 1, 3));
+        print_ggml_tensor(id_embeds0, true, "Fuseblock id_embeds0: ");
+        print_ggml_tensor(prompt_embeds0, true, "Fuseblock prompt_embeds0: ");
         // concat is along dim 2
         auto stacked_id_embeds = ggml_concat(ctx, prompt_embeds0, id_embeds0, 2);
         stacked_id_embeds      = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 1, 2, 0, 3));
@@ -580,10 +621,13 @@ struct PhotoMakerIDEncoder_CLIPInsightfaceExtendtokenBlock : public CLIPVisionMo
         auto fuse_module         = std::dynamic_pointer_cast<FuseModule>(blocks["fuse_module"]);
         auto qformer_perceiver   = std::dynamic_pointer_cast<QFormerPerceiver>(blocks["qformer_perceiver"]);
 
-        struct ggml_tensor* last_hidden_state = vision_model->forward(ctx, id_pixel_values);          // [N, hidden_size]
-
+        // struct ggml_tensor* last_hidden_state = vision_model->forward(ctx, id_pixel_values);          // [N, hidden_size]
+        struct ggml_tensor* last_hidden_state = vision_model->forward(ctx, id_pixel_values, false);          // [N, hidden_size]
+        print_ggml_tensor(id_pixel_values, true, "PhotoMakerIDEncoder2 id_pixel_values: ");  
+        print_ggml_tensor(last_hidden_state, true, "PhotoMakerIDEncoder2 last_hidden_state: ");  
         id_embeds   = qformer_perceiver->forward(ctx, id_embeds, last_hidden_state);
         // id_embeds_2 = ggml_cont(ctx, ggml_permute(ctx, id_embeds_2, 2, 0, 1, 3));
+        print_ggml_tensor(id_embeds, true, "PhotoMakerIDEncoder2 id_embeds: ");  
 
         // id_embeds = ggml_concat(ctx, id_embeds, id_embeds_2, 2);  // [batch_size, seq_length, 1, 2048] check whether concat at dim 2 is right
         // id_embeds = ggml_cont(ctx, ggml_permute(ctx, id_embeds, 1, 2, 0, 3));
@@ -753,6 +797,82 @@ public:
 
         // GGMLRunner::compute(get_graph, n_threads, updated_prompt_embeds);
         GGMLRunner::compute(get_graph, n_threads, true, updated_prompt_embeds, output_ctx);
+    }
+};
+
+
+struct PhotoMakerIDEmbed : public GGMLRunner {
+    
+    std::map<std::string, struct ggml_tensor*> tensors;
+    std::string file_path;
+    ModelLoader *model_loader;
+    bool load_failed = false;
+    bool applied     = false;
+
+    PhotoMakerIDEmbed(ggml_backend_t backend,
+              ggml_type wtype,
+              ModelLoader *ml,
+              const std::string& file_path = "",
+              const std::string& prefix    = "")
+        : file_path(file_path), GGMLRunner(backend, wtype),
+        model_loader(ml) {
+        if (!model_loader->init_from_file(file_path, prefix)) {
+            load_failed = true;
+        }
+    }
+
+    std::string get_desc() {
+        return "id_embeds";
+    }
+
+    bool load_from_file(bool filter_tensor = false) {
+        LOG_INFO("loading PhotoMaker ID Embeds from '%s'", file_path.c_str());
+
+        if (load_failed) {
+            LOG_ERROR("init photomaker id embed from file failed: '%s'", file_path.c_str());
+            return false;
+        }
+
+        bool dry_run          = true;
+        auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+            const std::string& name = tensor_storage.name;
+
+            if (filter_tensor && !contains(name, "pmid.id_embeds")) {
+                // LOG_INFO("skipping LoRA tesnor '%s'", name.c_str());
+                return true;
+            }
+
+            if (dry_run) {
+                struct ggml_tensor* real = ggml_new_tensor(params_ctx,
+                                                           tensor_storage.type,
+                                                           tensor_storage.n_dims,
+                                                           tensor_storage.ne);
+                tensors[name]       = real;
+            } else {
+                auto real   = tensors[name];
+                *dst_tensor = real;
+            }
+
+            return true;
+        };
+
+        model_loader->load_tensors(on_new_tensor_cb, backend);
+        alloc_params_buffer();
+
+        dry_run = false;
+        model_loader->load_tensors(on_new_tensor_cb, backend);
+
+        LOG_DEBUG("finished loading PhotoMaker ID Embeds ");
+        return true;
+    }
+
+
+    struct ggml_tensor* get(){
+        std::map<std::string, struct ggml_tensor*>::iterator pos;
+        pos = tensors.find("pmid.id_embeds");
+        if(pos != tensors.end())
+            return pos->second;
+        return NULL;    
     }
 };
 

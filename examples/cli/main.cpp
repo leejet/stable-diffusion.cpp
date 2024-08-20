@@ -723,6 +723,7 @@ int main(int argc, const char* argv[]) {
                                   params.lora_model_dir.c_str(),
                                   params.embeddings_path.c_str(),
                                   params.stacked_id_embeddings_path.c_str(),
+                                  params.input_id_images_path.c_str(),
                                   vae_decode_only,
                                   params.vae_tiling,
                                   true,

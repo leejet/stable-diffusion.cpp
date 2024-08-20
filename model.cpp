@@ -1271,7 +1271,7 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                         reader.tensor_storage.reverse_ne();
                         reader.tensor_storage.file_index = file_index;
                         // if(strcmp(prefix.c_str(), "scarlett") == 0)
-                        // printf(" got tensor %s \n ", reader.tensor_storage.name.c_str());
+                        // printf(" ZIP got tensor %s \n ", reader.tensor_storage.name.c_str());
                         reader.tensor_storage.name = prefix + reader.tensor_storage.name;
                         tensor_storages.push_back(reader.tensor_storage);
                         // LOG_DEBUG("%s", reader.tensor_storage.name.c_str());
@@ -1307,7 +1307,9 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
             std::string name = zip_entry_name(zip);
             size_t pos       = name.find("data.pkl");
             if (pos != std::string::npos) {
+
                 std::string dir = name.substr(0, pos);
+                printf("ZIP %d, name = %s, dir = %s \n", i, name.c_str(), dir.c_str());
                 void* pkl_data  = NULL;
                 size_t pkl_size;
                 zip_entry_read(zip, &pkl_data, &pkl_size);
@@ -1403,6 +1405,10 @@ std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& v
     // vec.resize(name_to_index_map.size());
 
     return res;
+}
+
+bool ModelLoader::load_tensor(std::string tensor_name, ggml_backend_t backend){
+
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend) {
