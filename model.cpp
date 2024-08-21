@@ -932,7 +932,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
-        tensor_storage.reverse_ne();
+        tensor_storage.reverse_ne();        
 
         size_t tensor_data_size = end - begin;
 
@@ -1405,10 +1405,6 @@ std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& v
     // vec.resize(name_to_index_map.size());
 
     return res;
-}
-
-bool ModelLoader::load_tensor(std::string tensor_name, ggml_backend_t backend){
-
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend) {

@@ -285,7 +285,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         tokenizer.pad_tokens(tokens, weights, max_length, padding);
 
         for (uint32_t i = 0; i < tokens.size(); i++) {
-            if (class_idx + 1 <= i && i < class_idx + 1 + num_input_imgs)
+            if (class_idx + 1 <= i && i < class_idx + 1 + 2*num_input_imgs) // photomaker V2 has num_tokens(=2)*num_input_imgs
+                                                                            // hardcode for now   
                 class_token_mask.push_back(true);
             else
                 class_token_mask.push_back(false);

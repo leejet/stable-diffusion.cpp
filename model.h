@@ -148,7 +148,6 @@ public:
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       ggml_backend_t backend,
                       std::set<std::string> ignore_tensors = {});
-    bool load_tensor(std::string tensor_name, ggml_backend_t backend);
                       
     bool save_to_gguf_file(const std::string& file_path, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);

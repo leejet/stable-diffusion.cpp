@@ -202,6 +202,11 @@ public:
         LOG_INFO("Stable Diffusion weight type: %s", ggml_type_name(model_data_type));
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
+        if(ggml_backend_is_cpu(backend))
+            LOG_INFO("Stable Diffusion backend is CPU");
+        else
+            LOG_INFO("Stable Diffusion backend is GPU");
+
         if (version == VERSION_XL) {
             scale_factor = 0.13025f;
             if (vae_path.size() == 0 && taesd_path.size() == 0) {
@@ -284,7 +289,8 @@ public:
 
             //printf("Photomaker model file is %s \n", id_embeddings_path.c_str());
             if(id_embeddings_path.find("v2") != std::string::npos) {
-                pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_data_type, version, VERSION_2);
+                // pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_data_type, version, VERSION_2);
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_data_type, version, VERSION_2);
             } else {
                 pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_data_type, version);
             }
@@ -1118,9 +1124,9 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                                                                  sd_ctx->sd->diffusion_model->get_adm_in_channels());
             id_cond           = std::get<0>(cond_tup);
             class_tokens_mask = std::get<1>(cond_tup);  //
-            struct ggml_tensor * id_embeds = NULL;
+            struct ggml_tensor* id_embeds = NULL;
             if(pmv2){
-                id_embeds = sd_ctx->sd->pmid_id_embeds->get();
+                id_embeds = sd_ctx->sd->pmid_id_embeds->get();                
                 // print_ggml_tensor(id_embeds, true, "id_embeds:");
             }
             id_cond.c_crossattn = sd_ctx->sd->id_encoder(work_ctx, init_img, id_cond.c_crossattn, id_embeds, class_tokens_mask);
