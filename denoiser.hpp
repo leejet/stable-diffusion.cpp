@@ -65,11 +65,11 @@ std::vector<double> linear_interp(std::vector<float> new_x,
     }
 
     /* Adjusted bounds checking to ensure new_x is within ref_x range */
-    if ((new_x[0] < ref_x[0])) {
+    if (new_x[0] < ref_x[0]) {
         new_x[0] = ref_x[0];
     }
-    if ((new_x[new_x.size() - 1] > ref_x[ref_x.size() - 1])) {
-        new_x[new_x.size() - 1] = ref_x[ref_x.size() - 1];
+    if (new_x.back() > ref_x.back()) {
+        new_x.back() = ref_x.back();
     }
 
     while (i < len_x) {
@@ -182,7 +182,7 @@ struct AYSSchedule : SigmaSchedule {
     }
 };
 
-/* 
+/*
  * GITS Scheduler: https://github.com/zju-pi/diff-sampler/tree/main/gits-main
 */
 struct GITSSchedule : SigmaSchedule {
