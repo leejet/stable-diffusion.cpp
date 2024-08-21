@@ -60,14 +60,16 @@ std::vector<double> linear_interp(std::vector<float> new_x,
     std::vector<double> new_y(len_x);
 
     if (ref_x.size() != ref_y.size()) {
-        LOG_ERROR("Linear Interoplation Failed: length mismatch");
+        LOG_ERROR("Linear Interpolation Failed: length mismatch");
         return new_y;
     }
 
-    /* serves as the bounds checking for the below while loop */
-    if ((new_x[0] < ref_x[0]) || (new_x[new_x.size() - 1] > ref_x[ref_x.size() - 1])) {
-        LOG_ERROR("Linear Interpolation Failed: bad bounds");
-        return new_y;
+    /* Adjusted bounds checking to ensure new_x is within ref_x range */
+    if ((new_x[0] < ref_x[0])) {
+        new_x[0] = ref_x[0];
+    }
+    if ((new_x[new_x.size() - 1] > ref_x[ref_x.size() - 1])) {
+        new_x[new_x.size() - 1] = ref_x[ref_x.size() - 1];
     }
 
     while (i < len_x) {
