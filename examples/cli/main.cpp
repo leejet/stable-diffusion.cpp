@@ -327,8 +327,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 params.wtype = SD_TYPE_Q5_1;
             } else if (type == "q8_0") {
                 params.wtype = SD_TYPE_Q8_0;
+            } else if (type == "q2_k") {
+                params.wtype = SD_TYPE_Q2_K;
+            } else if (type == "q3_k") {
+                params.wtype = SD_TYPE_Q3_K;
+            } else if (type == "q4_k") {
+                params.wtype = SD_TYPE_Q4_K;
             } else {
-                fprintf(stderr, "error: invalid weight format %s, must be one of [f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0]\n",
+                fprintf(stderr, "error: invalid weight format %s, must be one of [f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k]\n",
                         type.c_str());
                 exit(1);
             }

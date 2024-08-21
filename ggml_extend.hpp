@@ -1183,6 +1183,9 @@ protected:
     bool bias;
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
+        if (in_features % ggml_blck_size(wtype) != 0) {
+            wtype = GGML_TYPE_F32;
+        }
         params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
         if (bias) {
             params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_features);

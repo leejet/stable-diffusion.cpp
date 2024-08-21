@@ -1672,7 +1672,7 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
 
         ggml_type tensor_type = tensor_storage.type;
         if (type != GGML_TYPE_COUNT) {
-            if (ggml_is_quantized(type) && tensor_storage.ne[0] % 32 != 0) {
+            if (ggml_is_quantized(type) && tensor_storage.ne[0] % ggml_blck_size(type) != 0) {
                 tensor_type = GGML_TYPE_F16;
             } else {
                 tensor_type = type;
