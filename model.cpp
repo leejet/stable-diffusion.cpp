@@ -1291,15 +1291,22 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
 
 SDVersion ModelLoader::get_sd_version() {
     TensorStorage token_embedding_weight;
+    bool is_flux = false;
     for (auto& tensor_storage : tensor_storages) {
+        if (tensor_storage.name.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
+            return VERSION_FLUX_DEV;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
+            is_flux = true;
+        }
         if (tensor_storage.name.find("model.diffusion_model.joint_blocks.23.") != std::string::npos) {
-            return VERSION_3_2B;
+            return VERSION_SD3_2B;
         }
         if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos) {
-            return VERSION_XL;
+            return VERSION_SDXL;
         }
         if (tensor_storage.name.find("cond_stage_model.1") != std::string::npos) {
-            return VERSION_XL;
+            return VERSION_SDXL;
         }
         if (tensor_storage.name.find("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") != std::string::npos) {
             return VERSION_SVD;
@@ -1315,10 +1322,13 @@ SDVersion ModelLoader::get_sd_version() {
             // break;
         }
     }
+    if (is_flux) {
+        return VERSION_FLUX_SCHNELL;
+    }
     if (token_embedding_weight.ne[0] == 768) {
-        return VERSION_1_x;
+        return VERSION_SD1;
     } else if (token_embedding_weight.ne[0] == 1024) {
-        return VERSION_2_x;
+        return VERSION_SD2;
     }
     return VERSION_COUNT;
 }
@@ -1330,8 +1340,68 @@ ggml_type ModelLoader::get_sd_wtype() {
         }
 
         if (tensor_storage.name.find(".weight") != std::string::npos &&
-                (tensor_storage.name.find("time_embed") != std::string::npos) ||
-            tensor_storage.name.find("context_embedder") != std::string::npos) {
+            (tensor_storage.name.find("time_embed") != std::string::npos ||
+            tensor_storage.name.find("context_embedder") != std::string::npos ||
+            tensor_storage.name.find("time_in") != std::string::npos)) {
+            return tensor_storage.type;
+        }
+    }
+    return GGML_TYPE_COUNT;
+}
+
+ggml_type ModelLoader::get_conditioner_wtype() {
+    for (auto& tensor_storage : tensor_storages) {
+        if (is_unused_tensor(tensor_storage.name)) {
+            continue;
+        }
+
+        if ((tensor_storage.name.find("text_encoders") == std::string::npos &&
+            tensor_storage.name.find("cond_stage_model") == std::string::npos &&
+            tensor_storage.name.find("te.text_model.") == std::string::npos &&
+            tensor_storage.name.find("conditioner") == std::string::npos)) {
+            continue;
+        }
+
+        if (tensor_storage.name.find(".weight") != std::string::npos) {
+            return tensor_storage.type;
+        }
+    }
+    return GGML_TYPE_COUNT;
+}
+
+
+ggml_type ModelLoader::get_diffusion_model_wtype() {
+    for (auto& tensor_storage : tensor_storages) {
+        if (is_unused_tensor(tensor_storage.name)) {
+            continue;
+        }
+
+        if (tensor_storage.name.find("model.diffusion_model.") == std::string::npos) {
+            continue;
+        }
+
+        if (tensor_storage.name.find(".weight") != std::string::npos &&
+            (tensor_storage.name.find("time_embed") != std::string::npos ||
+            tensor_storage.name.find("context_embedder") != std::string::npos ||
+            tensor_storage.name.find("time_in") != std::string::npos)) {
+            return tensor_storage.type;
+        }
+    }
+    return GGML_TYPE_COUNT;
+}
+
+ggml_type ModelLoader::get_vae_wtype() {
+    for (auto& tensor_storage : tensor_storages) {
+        if (is_unused_tensor(tensor_storage.name)) {
+            continue;
+        }
+
+        if (tensor_storage.name.find("vae.") == std::string::npos &&
+            tensor_storage.name.find("first_stage_model") == std::string::npos) {
+            continue;
+        }
+
+        if (tensor_storage.name.find(".weight")) {
             return tensor_storage.type;
         }
     }

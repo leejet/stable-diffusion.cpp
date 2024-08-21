@@ -142,20 +142,6 @@ public:
     }
 };
 
-__STATIC_INLINE__ std::vector<struct ggml_tensor*> split_qkv(struct ggml_context* ctx,
-                                                             struct ggml_tensor* qkv) {
-    // qkv: [N, L, 3*C]
-    // return: ([N, L, C], [N, L, C], [N, L, C])
-    qkv = ggml_reshape_4d(ctx, qkv, qkv->ne[0] / 3, 3, qkv->ne[1], qkv->ne[2]);  // [N, L, 3, C]
-    qkv = ggml_cont(ctx, ggml_permute(ctx, qkv, 0, 3, 1, 2));                    // [3, N, L, C]
-
-    int64_t offset = qkv->nb[2] * qkv->ne[2];
-    auto q         = ggml_view_3d(ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->nb[1], qkv->nb[2], offset * 0);  // [N, L, C]
-    auto k         = ggml_view_3d(ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->nb[1], qkv->nb[2], offset * 1);  // [N, L, C]
-    auto v         = ggml_view_3d(ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->nb[1], qkv->nb[2], offset * 2);  // [N, L, C]
-    return {q, k, v};
-}
-
 class SelfAttention : public GGMLBlock {
 public:
     int64_t num_heads;
@@ -469,7 +455,7 @@ public:
 struct MMDiT : public GGMLBlock {
     // Diffusion model with a Transformer backbone.
 protected:
-    SDVersion version          = VERSION_3_2B;
+    SDVersion version          = VERSION_SD3_2B;
     int64_t input_size         = -1;
     int64_t patch_size         = 2;
     int64_t in_channels        = 16;
@@ -487,7 +473,7 @@ protected:
     }
 
 public:
-    MMDiT(SDVersion version = VERSION_3_2B)
+    MMDiT(SDVersion version = VERSION_SD3_2B)
         : version(version) {
         // input_size is always None
         // learn_sigma is always False
@@ -501,7 +487,7 @@ public:
         // pos_embed_scaling_factor is not used
         // pos_embed_offset is not used
         // context_embedder_config is always {'target': 'torch.nn.Linear', 'params': {'in_features': 4096, 'out_features': 1536}}
-        if (version == VERSION_3_2B) {
+        if (version == VERSION_SD3_2B) {
             input_size         = -1;
             patch_size         = 2;
             in_channels        = 16;
@@ -669,7 +655,7 @@ struct MMDiTRunner : public GGMLRunner {
 
     MMDiTRunner(ggml_backend_t backend,
                 ggml_type wtype,
-                SDVersion version = VERSION_3_2B)
+                SDVersion version = VERSION_SD3_2B)
         : GGMLRunner(backend, wtype), mmdit(version) {
         mmdit.init(params_ctx, wtype);
     }

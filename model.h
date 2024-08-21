@@ -18,11 +18,13 @@
 #define SD_MAX_DIMS 5
 
 enum SDVersion {
-    VERSION_1_x,
-    VERSION_2_x,
-    VERSION_XL,
+    VERSION_SD1,
+    VERSION_SD2,
+    VERSION_SDXL,
     VERSION_SVD,
-    VERSION_3_2B,
+    VERSION_SD3_2B,
+    VERSION_FLUX_DEV,
+    VERSION_FLUX_SCHNELL,
     VERSION_COUNT,
 };
 
@@ -144,6 +146,9 @@ public:
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     SDVersion get_sd_version();
     ggml_type get_sd_wtype();
+    ggml_type get_conditioner_wtype();
+    ggml_type get_diffusion_model_wtype();
+    ggml_type get_vae_wtype();
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       ggml_backend_t backend,
