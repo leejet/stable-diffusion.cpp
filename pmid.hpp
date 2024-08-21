@@ -146,13 +146,12 @@ public:
 
     std::vector<struct ggml_tensor*> chunk_half(struct ggml_context* ctx,
                                 struct ggml_tensor* x){
-        auto t = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));   
-        int64_t n = t->ne[2] / 2;
-        int64_t offset = t->nb[2] * n; 
-        auto k = ggml_view_3d(ctx, t, t->ne[0], t->ne[1], n, t->nb[1], t->nb[2], offset*0);
-        auto v = ggml_view_3d(ctx, t, t->ne[0], t->ne[1], n, t->nb[1], t->nb[2], offset*1);
-        return {ggml_cont(ctx, ggml_permute(ctx, k, 1, 2, 0, 3)),
-                ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3))};  
+
+        auto tlo = ggml_view_4d(ctx, x, x->ne[0]/2, x->ne[1], x->ne[2], x->ne[3], x->nb[1], x->nb[2], x->nb[3], 0);
+        auto tli = ggml_view_4d(ctx, x, x->ne[0]/2, x->ne[1], x->ne[2], x->ne[3], x->nb[1], x->nb[2], x->nb[3], x->nb[0]*x->ne[0]/2);
+        return {ggml_cont(ctx, tlo),
+                ggml_cont(ctx, tli)};
+    
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
@@ -278,7 +277,10 @@ public:
             auto ff     = std::dynamic_pointer_cast<PMFeedForward>(blocks[name]);
             auto t = attn->forward(ctx, x, latents);
             latents = ggml_add(ctx, t, latents);
-            t = ff->forward(ctx, latents);
+            auto latents2 = ggml_reshape_2d(ctx, latents, latents->ne[0], latents->ne[1]*latents->ne[2]);
+            // t = ff->forward(ctx, latents);
+            t = ff->forward(ctx, latents2);
+            t = ggml_reshape_3d(ctx, t, latents->ne[0], latents->ne[1], latents->ne[2]);
             latents = ggml_add(ctx, t, latents);
         }
         latents = proj_out->forward(ctx, latents);
