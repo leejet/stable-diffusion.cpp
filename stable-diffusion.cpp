@@ -291,6 +291,7 @@ public:
             if(id_embeddings_path.find("v2") != std::string::npos) {
                 // pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_data_type, version, VERSION_2);
                 pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_data_type, version, VERSION_2);
+                LOG_INFO("using PhotoMaker Version 2");
             } else {
                 pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_data_type, version);
             }

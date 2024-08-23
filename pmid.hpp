@@ -135,10 +135,11 @@ public:
         // printf("heads = %d \n", heads);
         // x = ggml_view_4d(ctx, x, x->ne[0], x->ne[1], heads, x->ne[2]/heads,
         //                          x->nb[1], x->nb[2], x->nb[3], 0);
-        x = ggml_view_4d(ctx, x, x->ne[0]/heads, heads, x->ne[1], x->ne[2],
-                                 x->nb[1], x->nb[2], x->nb[3], 0);
-        // x = ggml_transpose(ctx, x);
-        x  = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
+        x  = ggml_reshape_4d(ctx, x, x->ne[0]/heads, heads, x->ne[1], x->ne[2]);
+        // x = ggml_view_4d(ctx, x, x->ne[0]/heads, heads, x->ne[1], x->ne[2],
+        //                          x->nb[1], x->nb[2], x->nb[3], 0);
+        // x = ggml_cont(ctx, x);
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));
         // print_ggml_tensor(x, true, "PerceiverAttention reshape x 1: ");
         // x  = ggml_reshape_4d(ctx, x, ne[0], heads, ne[1], ne[2]/heads);
         return x;
@@ -181,14 +182,25 @@ public:
         auto kv_input = ggml_concat(ctx, x, latents, 1);
         auto to_kv    = std::dynamic_pointer_cast<Linear>(blocks["to_kv"]);
         auto kv = to_kv->forward(ctx, kv_input);
-        // int64_t n = kv->ne[0] / 2;
-        // int64_t offset = kv->nb[2] * n;
         print_ggml_tensor(kv, true, "PerceiverAttention kv: ");
         // auto k = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*0);
         // auto v = ggml_view_3d(ctx, kv, kv->ne[0], kv->ne[1], n, kv->nb[1], kv->nb[2], offset*1);
-        std::vector<struct ggml_tensor*> chunks = chunk_half(ctx, kv);
-        auto k = chunks[0]; 
-        auto v = chunks[1]; 
+        // std::vector<struct ggml_tensor*> chunks = chunk_half(ctx, kv);
+        // auto k = chunks[0];
+        // auto v = chunks[1];
+        // printf("KV1: %ld, %ld, %ld, %ld \n", kv->ne[0], kv->ne[1], kv->ne[2], kv->ne[3]);
+        // printf("KV2: %ld, %ld, %ld, %ld \n", kv->nb[0], kv->nb[1], kv->nb[2], kv->nb[3]);
+        // printf("KV3: %ld, %ld, %ld, %ld \n", kv->nb[0]*kv->ne[0], kv->nb[1]*kv->ne[1], kv->nb[2]*kv->ne[2], kv->nb[3]*kv->ne[3]);
+        auto k = ggml_view_4d(ctx, kv, kv->ne[0]/2, kv->ne[1], kv->ne[2], kv->ne[3], kv->nb[1]/2, kv->nb[2]/2, kv->nb[3]/2, 0);
+        auto v = ggml_view_4d(ctx, kv, kv->ne[0]/2, kv->ne[1], kv->ne[2], kv->ne[3], kv->nb[1]/2, kv->nb[2]/2, kv->nb[3]/2, kv->nb[0]*(kv->ne[0]/2));
+        // printf("K1: %ld, %ld, %ld, %ld \n", k->ne[0], k->ne[1], k->ne[2], k->ne[3]);
+        // printf("K2: %ld, %ld, %ld, %ld \n", k->nb[0], k->nb[1], k->nb[2], k->nb[3]);
+        // printf("K3: %ld, %ld, %ld, %ld \n", k->nb[0]*k->ne[0], k->nb[1]*k->ne[1], k->nb[2]*k->ne[2], k->nb[3]*k->ne[3]);
+        // printf("V1: %ld, %ld, %ld, %ld \n", v->ne[0], v->ne[1], v->ne[2], v->ne[3]);
+        // printf("V2: %ld, %ld, %ld, %ld \n", v->nb[0], v->nb[1], v->nb[2], v->nb[3]);
+        // printf("V3: %ld, %ld, %ld, %ld \n", v->nb[0]*v->ne[0], v->nb[1]*v->ne[1], v->nb[2]*v->ne[2], v->nb[3]*v->ne[3]);
+        k = ggml_cont(ctx, k);
+        v = ggml_cont(ctx, v);
         print_ggml_tensor(q, true, "PerceiverAttention bef reshape q: ");
         print_ggml_tensor(k, true, "PerceiverAttention bef reshape k: ");
         print_ggml_tensor(v, true, "PerceiverAttention bef reshape v: ");
@@ -207,12 +219,14 @@ public:
         ggml_set_name(q, "PerceiverAttention q");     
         ggml_set_name(k, "PerceiverAttention k");     
         auto weight = ggml_mul_mat(ctx, q, k);
+        print_ggml_tensor(weight, true, "PerceiverAttention softmax weight: ");
 
         // GGML's softmax() is equivalent to pytorch's softmax(x, dim=-1)
         // in this case, dimension along which Softmax will be computed is the last dim
         // in torch and the first dim in GGML, consistent with the convention that pytorch's
         // last dimension (varying most rapidly) corresponds to GGML's first (varying most rapidly).
-        weight = ggml_soft_max(ctx, weight);        
+        // weight = ggml_soft_max(ctx, weight);
+        weight = ggml_soft_max_inplace(ctx, weight);
         weight = ggml_cont(ctx, ggml_transpose(ctx, weight));
         v = ggml_cont(ctx, ggml_transpose(ctx, v));
         print_ggml_tensor(weight, true, "PerceiverAttention mul weight: ");
@@ -277,10 +291,10 @@ public:
             auto ff     = std::dynamic_pointer_cast<PMFeedForward>(blocks[name]);
             auto t = attn->forward(ctx, x, latents);
             latents = ggml_add(ctx, t, latents);
-            auto latents2 = ggml_reshape_2d(ctx, latents, latents->ne[0], latents->ne[1]*latents->ne[2]);
-            // t = ff->forward(ctx, latents);
-            t = ff->forward(ctx, latents2);
-            t = ggml_reshape_3d(ctx, t, latents->ne[0], latents->ne[1], latents->ne[2]);
+            // auto latents2 = ggml_reshape_2d(ctx, latents, latents->ne[0], latents->ne[1]*latents->ne[2]);
+            t = ff->forward(ctx, latents);
+            // t = ff->forward(ctx, latents2);
+            // t = ggml_reshape_3d(ctx, t, latents->ne[0], latents->ne[1], latents->ne[2]);
             latents = ggml_add(ctx, t, latents);
         }
         latents = proj_out->forward(ctx, latents);
@@ -502,6 +516,8 @@ public:
         stacked_id_embeds = mlp2->forward(ctx, stacked_id_embeds);
         stacked_id_embeds = layer_norm->forward(ctx, stacked_id_embeds);
 
+        print_ggml_tensor(stacked_id_embeds, true, "Fuseblock stacked_id_embeds 1: ");
+
         return stacked_id_embeds;
     }
 
@@ -525,23 +541,29 @@ public:
         ggml_set_name(image_token_embeds, "image_token_embeds");
         valid_id_embeds = ggml_reshape_2d(ctx, valid_id_embeds, valid_id_embeds->ne[0],
                       ggml_nelements(valid_id_embeds)/valid_id_embeds->ne[0]);
-        struct ggml_tensor* stacked_id_embeds = fuse_fn(ctx, image_token_embeds, valid_id_embeds);
+        struct ggml_tensor* stacked_id_embeds = fuse_fn(ctx, image_token_embeds, valid_id_embeds);        
 
-        stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
+        // stacked_id_embeds = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
+        print_ggml_tensor(stacked_id_embeds, true, "AA stacked_id_embeds");
+        print_ggml_tensor(left, true, "AA left");
+        print_ggml_tensor(right, true, "AA right");
         if (left && right) {
-            stacked_id_embeds = ggml_concat(ctx, left, stacked_id_embeds, 2);
-            stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right, 2);
+            stacked_id_embeds = ggml_concat(ctx, left, stacked_id_embeds, 1);
+            stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right, 1);
         } else if (left) {
-            stacked_id_embeds = ggml_concat(ctx, left, stacked_id_embeds, 2);
+            stacked_id_embeds = ggml_concat(ctx, left, stacked_id_embeds, 1);
         } else if (right) {
-            stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right, 2);
+            stacked_id_embeds = ggml_concat(ctx, stacked_id_embeds, right, 1);
         }
-        stacked_id_embeds                         = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
+        print_ggml_tensor(stacked_id_embeds, true, "BB stacked_id_embeds");
+        // stacked_id_embeds                         = ggml_cont(ctx, ggml_permute(ctx, stacked_id_embeds, 0, 2, 1, 3));
+        // print_ggml_tensor(stacked_id_embeds, true, "CC stacked_id_embeds");
         class_tokens_mask                         = ggml_cont(ctx, ggml_transpose(ctx, class_tokens_mask));
         class_tokens_mask                         = ggml_repeat(ctx, class_tokens_mask, prompt_embeds);
         prompt_embeds                             = ggml_mul(ctx, prompt_embeds, class_tokens_mask);
         struct ggml_tensor* updated_prompt_embeds = ggml_add(ctx, prompt_embeds, stacked_id_embeds);
         ggml_set_name(updated_prompt_embeds, "updated_prompt_embeds");
+        print_ggml_tensor(updated_prompt_embeds, true, "updated_prompt_embeds: ");
         return updated_prompt_embeds;
     }
 };
@@ -765,11 +787,14 @@ public:
         }
         // printf("\n");
         if (ctmpos[0] > 0) {
-            left = ggml_new_tensor_3d(ctx0, type, hidden_size, 1, ctmpos[0]);
+            // left = ggml_new_tensor_3d(ctx0, type, hidden_size, 1, ctmpos[0]);
+            left = ggml_new_tensor_3d(ctx0, type, hidden_size, ctmpos[0], 1);
         }
         if (ctmpos[ctmpos.size() - 1] < seq_length - 1) {
+            // right = ggml_new_tensor_3d(ctx0, type,
+            //                            hidden_size, 1, seq_length - ctmpos[ctmpos.size() - 1] - 1);
             right = ggml_new_tensor_3d(ctx0, type,
-                                       hidden_size, 1, seq_length - ctmpos[ctmpos.size() - 1] - 1);
+                                       hidden_size, seq_length - ctmpos[ctmpos.size() - 1] - 1, 1);
         }
         struct ggml_tensor* class_tokens_mask_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ctmpos.size());
 
