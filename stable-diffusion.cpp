@@ -247,7 +247,11 @@ public:
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, model_data_type);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend, model_data_type, version);
             } else {
-                cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_data_type, embeddings_path, version);
+                 if(id_embeddings_path.find("v2") != std::string::npos) {
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_data_type, embeddings_path, version, VERSION_2);
+                 }else{
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_data_type, embeddings_path, version);
+                 }
                 diffusion_model  = std::make_shared<UNetModel>(backend, model_data_type, version);
             }
             cond_stage_model->alloc_params_buffer();
@@ -316,6 +320,7 @@ public:
                             LOG_ERROR("load photomaker id embed tensors from %s failed", id_embed_path.c_str());
                             return false;
                         }
+
                     }
                 }
             }
@@ -1068,14 +1073,13 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         }
         // preprocess input id images
         std::vector<sd_image_t*> input_id_images;
-        bool pmv2 = false;
+        bool pmv2 = sd_ctx->sd->pmid_model->get_version() == VERSION_2;
         if (sd_ctx->sd->pmid_model && input_id_images_path.size() > 0) {
             std::vector<std::string> img_files = get_files_from_dir(input_id_images_path);
             for (std::string img_file : img_files) {
                 int c = 0;
                 int width, height;
-                if(ends_with(img_file, "id_embeds.safetensors")){
-                    pmv2 = true;
+                if(ends_with(img_file, "safetensors")){
                     continue;
                 }                    
                 uint8_t* input_image_buffer = stbi_load(img_file.c_str(), &width, &height, &c, 3);

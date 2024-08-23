@@ -26,6 +26,11 @@ enum SDVersion {
     VERSION_COUNT,
 };
 
+enum PMVersion {
+    VERSION_1,
+    VERSION_2,
+};
+
 struct TensorStorage {
     std::string name;
     ggml_type type          = GGML_TYPE_F32;

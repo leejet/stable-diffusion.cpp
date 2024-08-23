@@ -7,10 +7,6 @@
 #include "lora.hpp"
 
 
-enum PMVersion {
-    VERSION_1,
-    VERSION_2,
-};
 struct FuseBlock : public GGMLBlock {
     // network hparams
     int in_dim;
@@ -659,6 +655,11 @@ public:
     std::string get_desc() {
         return "pmid";
     }
+
+    PMVersion get_version() const{
+        return pm_version;
+    }
+
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         if(pm_version == VERSION_1)
