@@ -218,7 +218,8 @@ public:
         print_ggml_tensor(k, true, "PerceiverAttention mul k: ");   
         ggml_set_name(q, "PerceiverAttention q");     
         ggml_set_name(k, "PerceiverAttention k");     
-        auto weight = ggml_mul_mat(ctx, q, k);
+        // auto weight = ggml_mul_mat(ctx, q, k);
+        auto weight = ggml_mul_mat(ctx, k, q);
         print_ggml_tensor(weight, true, "PerceiverAttention softmax weight: ");
 
         // GGML's softmax() is equivalent to pytorch's softmax(x, dim=-1)
@@ -227,7 +228,7 @@ public:
         // last dimension (varying most rapidly) corresponds to GGML's first (varying most rapidly).
         // weight = ggml_soft_max(ctx, weight);
         weight = ggml_soft_max_inplace(ctx, weight);
-        weight = ggml_cont(ctx, ggml_transpose(ctx, weight));
+        // weight = ggml_cont(ctx, ggml_transpose(ctx, weight));
         v = ggml_cont(ctx, ggml_transpose(ctx, v));
         print_ggml_tensor(weight, true, "PerceiverAttention mul weight: ");
         print_ggml_tensor(v, true, "PerceiverAttention mul v: ");
