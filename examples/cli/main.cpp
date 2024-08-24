@@ -169,7 +169,11 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)\n");
     printf("  -t, --threads N                    number of threads to use during computation (default: -1).\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
-    printf("  -m, --model [MODEL]                path to model\n");
+    printf("  -m, --model [MODEL]                path to full model\n");
+    printf("  --diffusion-model                  path to the standalone diffusion model\n");
+    printf("  --clip_l                           path to the clip-l text encoder\n");
+    printf("  --t5xxl                            path to the the t5xxl text encoder.\n");
+
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
@@ -204,6 +208,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
+    printf("  --vae-on-cpu                       keep vae in cpu (for low vram)\n");
+    printf("  --clip-on-cpu                      keep clip in cpu (for low vram).\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            Colors the logging tags according to level\n");
