@@ -179,7 +179,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
-    printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
+    printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)\n");
     printf("                                     If not specified, the default is the type of the weight file.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
