@@ -76,7 +76,7 @@ public:
     const std::string UNK_TOKEN = "<|endoftext|>";
     const std::string BOS_TOKEN = "<|startoftext|>";
     const std::string EOS_TOKEN = "<|endoftext|>";
-    const std::string PAD_TOEKN = "<|endoftext|>";
+    const std::string PAD_TOKEN = "<|endoftext|>";
 
     const int UNK_TOKEN_ID = 49407;
     const int BOS_TOKEN_ID = 49406;
