@@ -422,7 +422,10 @@ std::string convert_diffusers_name_to_compvis(std::string key, char seq) {
     return key;
 }
 
-std::string convert_tensor_name(const std::string& name) {
+std::string convert_tensor_name(std::string name) {
+    if (starts_with(name, "diffusion_model")) {
+        name = "model." + name;
+    }
     std::string new_name = name;
     if (starts_with(name, "cond_stage_model.") || starts_with(name, "conditioner.embedders.") || starts_with(name, "text_encoders.") || ends_with(name, ".vision_model.visual_projection.weight")) {
         new_name = convert_open_clip_to_hf_clip(name);
