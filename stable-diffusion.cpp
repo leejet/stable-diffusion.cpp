@@ -254,7 +254,7 @@ public:
 
         LOG_INFO("Weight type:                 %s", ggml_type_name(model_wtype));
         LOG_INFO("Conditioner weight type:     %s", ggml_type_name(conditioner_wtype));
-        LOG_INFO("Diffsuion model weight type: %s", ggml_type_name(diffusion_model_wtype));
+        LOG_INFO("Diffusion model weight type: %s", ggml_type_name(diffusion_model_wtype));
         LOG_INFO("VAE weight type:             %s", ggml_type_name(vae_wtype));
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
