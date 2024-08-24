@@ -8,6 +8,7 @@
 // Ref: https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/external.py
 
 #define TIMESTEPS 1000
+#define FLUX_TIMESTEPS 1000
 
 struct SigmaSchedule {
     int version = 0;
@@ -144,13 +145,13 @@ struct AYSSchedule : SigmaSchedule {
         std::vector<float> results(n + 1);
 
         switch (version) {
-            case VERSION_2_x: /* fallthrough */
+            case VERSION_SD2: /* fallthrough */
                 LOG_WARN("AYS not designed for SD2.X models");
-            case VERSION_1_x:
+            case VERSION_SD1:
                 LOG_INFO("AYS using SD1.5 noise levels");
                 inputs = noise_levels[0];
                 break;
-            case VERSION_XL:
+            case VERSION_SDXL:
                 LOG_INFO("AYS using SDXL noise levels");
                 inputs = noise_levels[1];
                 break;
@@ -327,6 +328,66 @@ struct DiscreteFlowDenoiser : public Denoiser {
     float t_to_sigma(float t) {
         t = t + 1;
         return time_snr_shift(shift, t / 1000.f);
+    }
+
+    std::vector<float> get_scalings(float sigma) {
+        float c_skip = 1.0f;
+        float c_out  = -sigma;
+        float c_in   = 1.0f;
+        return {c_skip, c_out, c_in};
+    }
+
+    // this function will modify noise/latent
+    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) {
+        ggml_tensor_scale(noise, sigma);
+        ggml_tensor_scale(latent, 1.0f - sigma);
+        ggml_tensor_add(latent, noise);
+        return latent;
+    }
+
+    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) {
+        ggml_tensor_scale(latent, 1.0f / (1.0f - sigma));
+        return latent;
+    }
+};
+
+
+float flux_time_shift(float mu, float sigma, float t) {
+    return std::exp(mu) / (std::exp(mu) + std::pow((1.0 / t - 1.0), sigma));
+}
+
+struct FluxFlowDenoiser : public Denoiser {
+    float sigmas[TIMESTEPS];
+    float shift = 1.15f;
+
+    float sigma_data = 1.0f;
+
+    FluxFlowDenoiser(float shift = 1.15f) {
+        set_parameters(shift);
+    }
+
+    void set_parameters(float shift = 1.15f) {
+        this->shift = shift;
+        for (int i = 1; i < TIMESTEPS + 1; i++) {
+            sigmas[i - 1] = t_to_sigma(i/TIMESTEPS * TIMESTEPS);
+        }
+    }
+
+    float sigma_min() {
+        return sigmas[0];
+    }
+
+    float sigma_max() {
+        return sigmas[TIMESTEPS - 1];
+    }
+
+    float sigma_to_t(float sigma) {
+        return sigma;
+    }
+
+    float t_to_sigma(float t) {
+        t = t + 1;
+        return flux_time_shift(shift, 1.0f, t / TIMESTEPS);
     }
 
     std::vector<float> get_scalings(float sigma) {
