@@ -367,7 +367,7 @@ protected:
     int64_t n_head;
     int64_t d_head;
     int64_t depth       = 1;    // 1
-    int64_t context_dim = 768;  // hidden_size, 1024 for VERSION_2_x
+    int64_t context_dim = 768;  // hidden_size, 1024 for VERSION_SD2
 
 public:
     SpatialTransformer(int64_t in_channels,
