@@ -351,7 +351,6 @@ struct DiscreteFlowDenoiser : public Denoiser {
     }
 };
 
-
 float flux_time_shift(float mu, float sigma, float t) {
     return std::exp(mu) / (std::exp(mu) + std::pow((1.0 / t - 1.0), sigma));
 }
@@ -369,7 +368,7 @@ struct FluxFlowDenoiser : public Denoiser {
     void set_parameters(float shift = 1.15f) {
         this->shift = shift;
         for (int i = 1; i < TIMESTEPS + 1; i++) {
-            sigmas[i - 1] = t_to_sigma(i/TIMESTEPS * TIMESTEPS);
+            sigmas[i - 1] = t_to_sigma(i / TIMESTEPS * TIMESTEPS);
         }
     }
 

@@ -1,9 +1,9 @@
 #ifndef __DIFFUSION_MODEL_H__
 #define __DIFFUSION_MODEL_H__
 
+#include "flux.hpp"
 #include "mmdit.hpp"
 #include "unet.hpp"
-#include "flux.hpp"
 
 struct DiffusionModel {
     virtual void compute(int n_threads,
@@ -124,13 +124,12 @@ struct MMDiTModel : public DiffusionModel {
     }
 };
 
-
 struct FluxModel : public DiffusionModel {
     Flux::FluxRunner flux;
 
     FluxModel(ggml_backend_t backend,
-               ggml_type wtype,
-               SDVersion version = VERSION_FLUX_DEV)
+              ggml_type wtype,
+              SDVersion version = VERSION_FLUX_DEV)
         : flux(backend, wtype, version) {
     }
 

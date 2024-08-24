@@ -541,7 +541,7 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
 
 __STATIC_INLINE__ struct ggml_tensor* ggml_group_norm_32(struct ggml_context* ctx,
                                                          struct ggml_tensor* a) {
-    const float eps = 1e-6f; // default eps parameter
+    const float eps = 1e-6f;  // default eps parameter
     return ggml_group_norm(ctx, a, 32, eps);
 }
 
@@ -683,27 +683,27 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
                                                             int64_t n_head,
                                                             struct ggml_tensor* mask = NULL,
                                                             bool diag_mask_inf       = false,
-                                                            bool skip_reshape = false) {
+                                                            bool skip_reshape        = false) {
     int64_t L_q;
     int64_t L_k;
-    int64_t C  ;
-    int64_t N  ;
+    int64_t C;
+    int64_t N;
     int64_t d_head;
     if (!skip_reshape) {
-        L_q = q->ne[1];
-        L_k = k->ne[1];
-        C   = q->ne[0];
-        N   = q->ne[2];
+        L_q    = q->ne[1];
+        L_k    = k->ne[1];
+        C      = q->ne[0];
+        N      = q->ne[2];
         d_head = C / n_head;
-        q = ggml_reshape_4d(ctx, q, d_head, n_head, L_q, N);   // [N, L_q, n_head, d_head]
-        q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));  // [N, n_head, L_q, d_head]
-        q = ggml_reshape_3d(ctx, q, d_head, L_q, n_head * N);  // [N * n_head, L_q, d_head]
+        q      = ggml_reshape_4d(ctx, q, d_head, n_head, L_q, N);   // [N, L_q, n_head, d_head]
+        q      = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));  // [N, n_head, L_q, d_head]
+        q      = ggml_reshape_3d(ctx, q, d_head, L_q, n_head * N);  // [N * n_head, L_q, d_head]
 
         k = ggml_reshape_4d(ctx, k, d_head, n_head, L_k, N);   // [N, L_k, n_head, d_head]
         k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
         k = ggml_reshape_3d(ctx, k, d_head, L_k, n_head * N);  // [N * n_head, L_k, d_head]
 
-        v = ggml_reshape_4d(ctx, v, d_head, n_head, L_k, N);   // [N, L_k, n_head, d_head]
+        v = ggml_reshape_4d(ctx, v, d_head, n_head, L_k, N);  // [N, L_k, n_head, d_head]
     } else {
         L_q    = q->ne[1];
         L_k    = k->ne[1];
@@ -712,10 +712,10 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         C      = d_head * n_head;
     }
 
-    float scale    = (1.0f / sqrt((float)d_head));
+    float scale = (1.0f / sqrt((float)d_head));
 
     bool use_flash_attn = false;
-    ggml_tensor* kqv = NULL;
+    ggml_tensor* kqv    = NULL;
     if (use_flash_attn) {
         v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
         v = ggml_reshape_3d(ctx, v, d_head, L_k, n_head * N);  // [N * n_head, L_k, d_head]
@@ -770,8 +770,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_group_norm(struct ggml_context* ct
         b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
     }
 
-    const float eps = 1e-6f; // default eps parameter
-    x = ggml_group_norm(ctx, x, num_groups, eps);
+    const float eps = 1e-6f;  // default eps parameter
+    x               = ggml_group_norm(ctx, x, num_groups, eps);
     if (w != NULL && b != NULL) {
         x = ggml_mul(ctx, x, w);
         // b = ggml_repeat(ctx, b, x);
@@ -781,7 +781,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_group_norm(struct ggml_context* ct
 }
 
 __STATIC_INLINE__ void ggml_backend_tensor_get_and_sync(ggml_backend_t backend, const struct ggml_tensor* tensor, void* data, size_t offset, size_t size) {
-#if defined (SD_USE_CUBLAS) || defined (SD_USE_SYCL)
+#if defined(SD_USE_CUBLAS) || defined(SD_USE_SYCL)
     if (!ggml_backend_is_cpu(backend)) {
         ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
         ggml_backend_synchronize(backend);
@@ -889,7 +889,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_timestep_embedding(
     struct ggml_context* ctx,
     struct ggml_tensor* timesteps,
     int dim,
-    int max_period = 10000,
+    int max_period    = 10000,
     float time_factor = 1.0f) {
     timesteps = ggml_scale(ctx, timesteps, time_factor);
     return ggml_timestep_embedding(ctx, timesteps, dim, max_period);

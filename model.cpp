@@ -567,10 +567,10 @@ uint16_t f8_e4m3_to_f16(uint8_t f8) {
         return ggml_fp32_to_fp16(NAN);
     }
 
-    uint32_t sign = f8 & 0x80;
+    uint32_t sign     = f8 & 0x80;
     uint32_t exponent = (f8 & 0x78) >> 3;
     uint32_t mantissa = f8 & 0x07;
-    uint32_t result = sign << 24;
+    uint32_t result   = sign << 24;
     if (exponent == 0) {
         if (mantissa > 0) {
             exponent = 0x7f - exponent_bias;
@@ -1399,8 +1399,8 @@ ggml_type ModelLoader::get_sd_wtype() {
 
         if (tensor_storage.name.find(".weight") != std::string::npos &&
             (tensor_storage.name.find("time_embed") != std::string::npos ||
-            tensor_storage.name.find("context_embedder") != std::string::npos ||
-            tensor_storage.name.find("time_in") != std::string::npos)) {
+             tensor_storage.name.find("context_embedder") != std::string::npos ||
+             tensor_storage.name.find("time_in") != std::string::npos)) {
             return tensor_storage.type;
         }
     }
@@ -1414,9 +1414,9 @@ ggml_type ModelLoader::get_conditioner_wtype() {
         }
 
         if ((tensor_storage.name.find("text_encoders") == std::string::npos &&
-            tensor_storage.name.find("cond_stage_model") == std::string::npos &&
-            tensor_storage.name.find("te.text_model.") == std::string::npos &&
-            tensor_storage.name.find("conditioner") == std::string::npos)) {
+             tensor_storage.name.find("cond_stage_model") == std::string::npos &&
+             tensor_storage.name.find("te.text_model.") == std::string::npos &&
+             tensor_storage.name.find("conditioner") == std::string::npos)) {
             continue;
         }
 
@@ -1426,7 +1426,6 @@ ggml_type ModelLoader::get_conditioner_wtype() {
     }
     return GGML_TYPE_COUNT;
 }
-
 
 ggml_type ModelLoader::get_diffusion_model_wtype() {
     for (auto& tensor_storage : tensor_storages) {
@@ -1440,8 +1439,8 @@ ggml_type ModelLoader::get_diffusion_model_wtype() {
 
         if (tensor_storage.name.find(".weight") != std::string::npos &&
             (tensor_storage.name.find("time_embed") != std::string::npos ||
-            tensor_storage.name.find("context_embedder") != std::string::npos ||
-            tensor_storage.name.find("time_in") != std::string::npos)) {
+             tensor_storage.name.find("context_embedder") != std::string::npos ||
+             tensor_storage.name.find("time_in") != std::string::npos)) {
             return tensor_storage.type;
         }
     }

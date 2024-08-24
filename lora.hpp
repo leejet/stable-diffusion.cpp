@@ -10,10 +10,10 @@ struct LoraModel : public GGMLRunner {
     std::map<std::string, struct ggml_tensor*> lora_tensors;
     std::string file_path;
     ModelLoader model_loader;
-    bool load_failed = false;
-    bool applied     = false;
+    bool load_failed                = false;
+    bool applied                    = false;
     std::vector<int> zero_index_vec = {0};
-    ggml_tensor* zero_index = NULL;
+    ggml_tensor* zero_index         = NULL;
 
     LoraModel(ggml_backend_t backend,
               ggml_type wtype,
@@ -72,8 +72,8 @@ struct LoraModel : public GGMLRunner {
 
     ggml_tensor* to_f32(ggml_context* ctx, ggml_tensor* a) {
         auto out = ggml_reshape_1d(ctx, a, ggml_nelements(a));
-        out = ggml_get_rows(ctx, out, zero_index);
-        out = ggml_reshape(ctx, out, a);
+        out      = ggml_get_rows(ctx, out, zero_index);
+        out      = ggml_reshape(ctx, out, a);
         return out;
     }
 

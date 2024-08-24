@@ -69,11 +69,10 @@ public:
     ggml_backend_t clip_backend        = NULL;
     ggml_backend_t control_net_backend = NULL;
     ggml_backend_t vae_backend         = NULL;
-    ggml_type model_wtype          = GGML_TYPE_COUNT;
-    ggml_type conditioner_wtype          = GGML_TYPE_COUNT;
-    ggml_type diffusion_model_wtype          = GGML_TYPE_COUNT;
-    ggml_type vae_wtype          = GGML_TYPE_COUNT;
-
+    ggml_type model_wtype              = GGML_TYPE_COUNT;
+    ggml_type conditioner_wtype        = GGML_TYPE_COUNT;
+    ggml_type diffusion_model_wtype    = GGML_TYPE_COUNT;
+    ggml_type vae_wtype                = GGML_TYPE_COUNT;
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -171,7 +170,7 @@ public:
             backend = ggml_backend_cpu_init();
         }
 #ifdef SD_USE_FLASH_ATTENTION
-#if defined(SD_USE_CUBLAS) || defined(SD_USE_METAL) || defined (SD_USE_SYCL)
+#if defined(SD_USE_CUBLAS) || defined(SD_USE_METAL) || defined(SD_USE_SYCL)
         LOG_WARN("Flash Attention not supported with GPU Backend");
 #else
         LOG_INFO("Flash Attention enabled");
@@ -243,10 +242,10 @@ public:
                 vae_wtype = wtype;
             }
         } else {
-            model_wtype = wtype;
-            conditioner_wtype = wtype;
+            model_wtype           = wtype;
+            conditioner_wtype     = wtype;
             diffusion_model_wtype = wtype;
-            vae_wtype = wtype;
+            vae_wtype             = wtype;
         }
 
         if (version == VERSION_SDXL) {
@@ -290,7 +289,7 @@ public:
             first_stage_model->alloc_params_buffer();
             first_stage_model->get_param_tensors(tensors, "first_stage_model");
         } else {
-            clip_backend = backend;
+            clip_backend   = backend;
             bool use_t5xxl = false;
             if (version == VERSION_SD3_2B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
                 use_t5xxl = true;
@@ -508,7 +507,7 @@ public:
             LOG_INFO("running in Flux FLOW mode");
             float shift = 1.15f;
             if (version == VERSION_FLUX_SCHNELL) {
-                shift = 1.0f; // TODO: validate
+                shift = 1.0f;  // TODO: validate
             }
             denoiser = std::make_shared<FluxFlowDenoiser>(shift);
         } else if (is_using_v_parameterization) {

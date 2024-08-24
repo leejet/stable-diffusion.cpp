@@ -10,8 +10,8 @@ struct SDCondition {
     struct ggml_tensor* c_concat    = NULL;
 
     SDCondition() = default;
-    SDCondition(struct ggml_tensor* c_crossattn, struct ggml_tensor* c_vector, struct ggml_tensor* c_concat) :
-    c_crossattn(c_crossattn), c_vector(c_vector), c_concat(c_concat) {}
+    SDCondition(struct ggml_tensor* c_crossattn, struct ggml_tensor* c_vector, struct ggml_tensor* c_concat)
+        : c_crossattn(c_crossattn), c_vector(c_vector), c_concat(c_concat) {}
 };
 
 struct Conditioner {
@@ -978,7 +978,6 @@ struct SD3CLIPEmbedder : public Conditioner {
     }
 };
 
-
 struct FluxCLIPEmbedder : public Conditioner {
     ggml_type wtype;
     CLIPTokenizer clip_l_tokenizer;
@@ -987,8 +986,8 @@ struct FluxCLIPEmbedder : public Conditioner {
     std::shared_ptr<T5Runner> t5;
 
     FluxCLIPEmbedder(ggml_backend_t backend,
-                    ggml_type wtype,
-                    int clip_skip = -1)
+                     ggml_type wtype,
+                     int clip_skip = -1)
         : wtype(wtype) {
         if (clip_skip <= 0) {
             clip_skip = 2;
@@ -1085,10 +1084,10 @@ struct FluxCLIPEmbedder : public Conditioner {
         auto& t5_tokens      = token_and_weights[1].first;
         auto& t5_weights     = token_and_weights[1].second;
 
-        int64_t t0                                 = ggml_time_ms();
-        struct ggml_tensor* hidden_states          = NULL;  // [N, n_token, 4096]
-        struct ggml_tensor* chunk_hidden_states    = NULL;  // [n_token, 4096]
-        struct ggml_tensor* pooled                 = NULL;  // [768,]
+        int64_t t0                              = ggml_time_ms();
+        struct ggml_tensor* hidden_states       = NULL;  // [N, n_token, 4096]
+        struct ggml_tensor* chunk_hidden_states = NULL;  // [n_token, 4096]
+        struct ggml_tensor* pooled              = NULL;  // [768,]
         std::vector<float> hidden_states_vec;
 
         size_t chunk_len   = 256;
