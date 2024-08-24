@@ -4,7 +4,7 @@
 
 # stable-diffusion.cpp
 
-Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in pure C/C++
+Inference of Stable Diffusion and Flux in pure C/C++
 
 ## Features
 
