@@ -134,7 +134,7 @@ void print_params(SDParams params) {
     printf("    stacked_id_embeddings_path:   %s\n", params.stacked_id_embeddings_path.c_str());
     printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
     printf("    style ratio:       %.2f\n", params.style_ratio);
-    printf("    normzalize input image :  %s\n", params.normalize_input ? "true" : "false");
+    printf("    normalize input image :  %s\n", params.normalize_input ? "true" : "false");
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
