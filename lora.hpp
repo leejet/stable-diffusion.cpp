@@ -82,6 +82,7 @@ struct LoraModel : public GGMLRunner {
 
         zero_index = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, 1);
         set_backend_tensor_data(zero_index, zero_index_vec.data());
+        ggml_build_forward_expand(gf, zero_index);
 
         std::set<std::string> applied_lora_tensors;
         for (auto it : model_tensors) {
