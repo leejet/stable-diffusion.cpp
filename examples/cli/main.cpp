@@ -173,7 +173,6 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
     printf("  --clip_l                           path to the clip-l text encoder\n");
     printf("  --t5xxl                            path to the the t5xxl text encoder.\n");
-
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
