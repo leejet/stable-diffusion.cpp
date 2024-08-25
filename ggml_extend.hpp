@@ -1187,9 +1187,10 @@ protected:
     int64_t in_features;
     int64_t out_features;
     bool bias;
+    bool force_f32;
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        if (in_features % ggml_blck_size(wtype) != 0) {
+        if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
             wtype = GGML_TYPE_F32;
         }
         params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
@@ -1201,10 +1202,12 @@ protected:
 public:
     Linear(int64_t in_features,
            int64_t out_features,
-           bool bias = true)
+           bool bias      = true,
+           bool force_f32 = false)
         : in_features(in_features),
           out_features(out_features),
-          bias(bias) {}
+          bias(bias),
+          force_f32(force_f32) {}
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
