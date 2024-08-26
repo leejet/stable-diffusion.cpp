@@ -271,7 +271,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 std::vector<int> clean_input_ids_tmp;
                 for (uint32_t i = 0; i < class_token_index[0]; i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
-                for (uint32_t i = 0; i < num_input_imgs; i++)
+                for (uint32_t i = 0; i < (pm_version == VERSION_2 ? 2*num_input_imgs: num_input_imgs); i++)
                     clean_input_ids_tmp.push_back(class_token);
                 for (uint32_t i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
