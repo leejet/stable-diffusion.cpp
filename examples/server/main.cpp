@@ -569,10 +569,6 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
     printf("request: %s %s (%s)\n", req.method.c_str(), req.path.c_str(), req.body.c_str());
 }
 
-const auto pingpong = [&](const httplib::Request &, httplib::Response & res) {
-        std::string resp = "{\"ping\": \"pong\"}";
-        res.set_content(resp, "application/json");
-    };
 
 int main(int argc, const char* argv[]) {
     SDParams params;
@@ -685,7 +681,6 @@ int main(int argc, const char* argv[]) {
     });
     svr->set_logger(log_server_request);
 
-    svr->Get("/Ping", pingpong);
     svr->Post("/txt2img", txt2imgRequest);
 
 
