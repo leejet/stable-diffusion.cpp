@@ -634,13 +634,13 @@ namespace Flux {
             int64_t out_channels = params.in_channels;
             int64_t pe_dim       = params.hidden_size / params.num_heads;
 
-            blocks["img_in"]    = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, params.hidden_size));
+            blocks["img_in"]    = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, params.hidden_size, true));
             blocks["time_in"]   = std::shared_ptr<GGMLBlock>(new MLPEmbedder(256, params.hidden_size));
             blocks["vector_in"] = std::shared_ptr<GGMLBlock>(new MLPEmbedder(params.vec_in_dim, params.hidden_size));
             if (params.guidance_embed) {
                 blocks["guidance_in"] = std::shared_ptr<GGMLBlock>(new MLPEmbedder(256, params.hidden_size));
             }
-            blocks["txt_in"] = std::shared_ptr<GGMLBlock>(new Linear(params.context_in_dim, params.hidden_size));
+            blocks["txt_in"] = std::shared_ptr<GGMLBlock>(new Linear(params.context_in_dim, params.hidden_size, true));
 
             for (int i = 0; i < params.depth; i++) {
                 blocks["double_blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new DoubleStreamBlock(params.hidden_size,

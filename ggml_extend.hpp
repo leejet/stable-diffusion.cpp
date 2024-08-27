@@ -32,6 +32,10 @@
 #include "ggml-metal.h"
 #endif
 
+#ifdef SD_USE_VULKAN
+#include "ggml-vulkan.h"
+#endif
+
 #ifdef SD_USE_SYCL
 #include "ggml-sycl.h"
 #endif
@@ -655,7 +659,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx
                                                         struct ggml_tensor* k,
                                                         struct ggml_tensor* v,
                                                         bool mask = false) {
-#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL) && !defined(SD_USE_SYCL)
+#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL) && !defined(SD_USE_VULKAN) && !defined(SD_USE_SYCL)
     struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, n_token, d_head]
 #else
     float d_head = (float)q->ne[0];
@@ -1187,9 +1191,10 @@ protected:
     int64_t in_features;
     int64_t out_features;
     bool bias;
+    bool force_f32;
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        if (in_features % ggml_blck_size(wtype) != 0) {
+        if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
             wtype = GGML_TYPE_F32;
         }
         params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
@@ -1201,10 +1206,12 @@ protected:
 public:
     Linear(int64_t in_features,
            int64_t out_features,
-           bool bias = true)
+           bool bias      = true,
+           bool force_f32 = false)
         : in_features(in_features),
           out_features(out_features),
-          bias(bias) {}
+          bias(bias),
+          force_f32(force_f32) {}
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];

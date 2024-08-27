@@ -36,6 +36,8 @@ const char* sample_method_str[] = {
     "dpm++2s_a",
     "dpm++2m",
     "dpm++2mv2",
+    "ipndm",
+    "ipndm_v",
     "lcm",
 };
 
@@ -46,6 +48,7 @@ const char* schedule_str[] = {
     "karras",
     "exponential",
     "ays",
+    "gits",
 };
 
 const char* modes_str[] = {
@@ -195,13 +198,13 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}\n");
+    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}\n");
     printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate.\n");
-    printf("  --schedule {discrete, karras, exponential, ays} Denoiser sigma schedule (default: discrete)\n");
+    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
