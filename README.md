@@ -305,6 +305,10 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 
 [![Contributors](https://contrib.rocks/image?repo=leejet/stable-diffusion.cpp)](https://github.com/leejet/stable-diffusion.cpp/graphs/contributors)
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=leejet/stable-diffusion.cpp&type=Date)](https://star-history.com/#leejet/stable-diffusion.cpp&Date)
+
 ## References
 
 - [ggml](https://github.com/ggerganov/ggml)
