@@ -21,7 +21,7 @@ Inference of Stable Diffusion and Flux in pure C/C++
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA, Metal and SYCL backend for GPU acceleration.
+- Full CUDA, Metal, Vulkan and SYCL backend for GPU acceleration.
 - Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
 - Flash Attention for memory usage optimization (only cpu for now)
@@ -139,6 +139,15 @@ Using Metal makes the computation run on the GPU. Currently, there are some issu
 
 ```
 cmake .. -DSD_METAL=ON
+cmake --build . --config Release
+```
+
+##### Using Vulkan
+
+Install Vulkan SDK from https://www.lunarg.com/vulkan-sdk/.
+
+```
+cmake .. -DSD_VULKAN=ON
 cmake --build . --config Release
 ```
 
