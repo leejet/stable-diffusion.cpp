@@ -282,8 +282,9 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             tokens.insert(tokens.end(), clean_input_ids.begin(), clean_input_ids.end());
             weights.insert(weights.end(), clean_input_ids.size(), curr_weight);
         }
-        tokens.insert(tokens.begin(), tokenizer.BOS_TOKEN_ID);
-        weights.insert(weights.begin(), 1.0);
+        // BUG!! double couting, pad_tokens will add BOS at the beginning
+        // tokens.insert(tokens.begin(), tokenizer.BOS_TOKEN_ID);
+        // weights.insert(weights.begin(), 1.0);
 
         tokenizer.pad_tokens(tokens, weights, max_length, padding);
         int offset = pm_version == VERSION_2 ? 2*num_input_imgs: num_input_imgs;
