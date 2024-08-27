@@ -455,9 +455,9 @@ protected:
 public:
     AutoencodingEngine(bool decode_only       = true,
                        bool use_video_decoder = false,
-                       SDVersion version      = VERSION_1_x)
+                       SDVersion version      = VERSION_SD1)
         : decode_only(decode_only), use_video_decoder(use_video_decoder) {
-        if (version == VERSION_3_2B) {
+        if (version == VERSION_SD3_2B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
             dd_config.z_channels = 16;
             use_quant            = false;
         }
@@ -527,7 +527,7 @@ struct AutoEncoderKL : public GGMLRunner {
                   ggml_type wtype,
                   bool decode_only       = false,
                   bool use_video_decoder = false,
-                  SDVersion version      = VERSION_1_x)
+                  SDVersion version      = VERSION_SD1)
         : decode_only(decode_only), ae(decode_only, use_video_decoder, version), GGMLRunner(backend, wtype) {
         ae.init(params_ctx, wtype);
     }

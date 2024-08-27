@@ -161,7 +161,7 @@ struct PhotoMakerIDEncoderBlock : public CLIPVisionModelProjection {
 
 struct PhotoMakerIDEncoder : public GGMLRunner {
 public:
-    SDVersion version = VERSION_XL;
+    SDVersion version = VERSION_SDXL;
     PhotoMakerIDEncoderBlock id_encoder;
     float style_strength;
 
@@ -175,7 +175,7 @@ public:
     std::vector<float> zeros_right;
 
 public:
-    PhotoMakerIDEncoder(ggml_backend_t backend, ggml_type wtype, SDVersion version = VERSION_XL, float sty = 20.f)
+    PhotoMakerIDEncoder(ggml_backend_t backend, ggml_type wtype, SDVersion version = VERSION_SDXL, float sty = 20.f)
         : GGMLRunner(backend, wtype),
           version(version),
           style_strength(sty) {

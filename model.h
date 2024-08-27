@@ -18,11 +18,13 @@
 #define SD_MAX_DIMS 5
 
 enum SDVersion {
-    VERSION_1_x,
-    VERSION_2_x,
-    VERSION_XL,
+    VERSION_SD1,
+    VERSION_SD2,
+    VERSION_SDXL,
     VERSION_SVD,
-    VERSION_3_2B,
+    VERSION_SD3_2B,
+    VERSION_FLUX_DEV,
+    VERSION_FLUX_SCHNELL,
     VERSION_COUNT,
 };
 
@@ -30,6 +32,7 @@ struct TensorStorage {
     std::string name;
     ggml_type type          = GGML_TYPE_F32;
     bool is_bf16            = false;
+    bool is_f8_e4m3         = false;
     int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
     int n_dims              = 0;
 
@@ -59,7 +62,7 @@ struct TensorStorage {
     }
 
     int64_t nbytes_to_read() const {
-        if (is_bf16) {
+        if (is_bf16 || is_f8_e4m3) {
             return nbytes() / 2;
         } else {
             return nbytes();
@@ -107,6 +110,8 @@ struct TensorStorage {
         const char* type_name = ggml_type_name(type);
         if (is_bf16) {
             type_name = "bf16";
+        } else if (is_f8_e4m3) {
+            type_name = "f8_e4m3";
         }
         ss << name << " | " << type_name << " | ";
         ss << n_dims << " [";
@@ -144,15 +149,20 @@ public:
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     SDVersion get_sd_version();
     ggml_type get_sd_wtype();
+    ggml_type get_conditioner_wtype();
+    ggml_type get_diffusion_model_wtype();
+    ggml_type get_vae_wtype();
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       ggml_backend_t backend,
                       std::set<std::string> ignore_tensors = {});
     bool save_to_gguf_file(const std::string& file_path, ggml_type type);
+    bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
     ~ModelLoader() = default;
 
     static std::string load_merges();
     static std::string load_t5_tokenizer_json();
 };
+
 #endif  // __MODEL_H__
