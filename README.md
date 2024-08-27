@@ -192,7 +192,10 @@ arguments:
   -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)
   -t, --threads N                    number of threads to use during computation (default: -1).
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
-  -m, --model [MODEL]                path to model
+  -m, --model [MODEL]                path to full model
+  --diffusion-model                  path to the standalone diffusion model
+  --clip_l                           path to the clip-l text encoder
+  --t5xxl                            path to the the t5xxl text encoder.
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
@@ -227,6 +230,8 @@ arguments:
   --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
+  --vae-on-cpu                       keep vae in cpu (for low vram)
+  --clip-on-cpu                      keep clip in cpu (for low vram).
   --control-net-cpu                  keep controlnet in cpu (for low vram)
   --canny                            apply canny preprocessor (edge detection)
   --color                            Colors the logging tags according to level
