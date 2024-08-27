@@ -102,7 +102,7 @@ struct SDParams {
 
     //server things
     int port                      = 8080;
-    std::string host              = "localhost";
+    std::string host              = "127.0.0.1";
 };
 
 void print_params(SDParams params) {
@@ -693,7 +693,7 @@ int main(int argc, const char* argv[]) {
     std::thread t([&]() { svr->listen_after_bind(); });
     svr->wait_until_ready();
 
-    printf("server listening");
+    printf("Server listening at %s:%d\n",params.host,params.port);
 
     while(1);
 
