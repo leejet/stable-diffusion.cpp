@@ -541,6 +541,11 @@ public:
                     denoiser->schedule          = std::make_shared<AYSSchedule>();
                     denoiser->schedule->version = version;
                     break;
+                case GITS:
+                    LOG_INFO("Running with GITS schedule");
+                    denoiser->schedule          = std::make_shared<GITSSchedule>();
+                    denoiser->schedule->version = version;
+                    break;
                 case DEFAULT:
                     // Don't touch anything.
                     break;

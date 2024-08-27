@@ -50,6 +50,7 @@ enum schedule_t {
     DISCRETE,
     KARRAS,
     AYS,
+    GITS,
     N_SCHEDULES
 };
 
