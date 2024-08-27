@@ -148,6 +148,9 @@ jobs:
   windows-latest-cmake:
     runs-on: windows-2019
 
+    env:
+      VULKAN_VERSION: 1.3.261.1
+
     strategy:
       matrix:
         include:
@@ -163,6 +166,8 @@ jobs:
             defines: "-DSD_CUBLAS=ON -DSD_BUILD_SHARED_LIBS=ON"
           - build: "rocm5.5"
             defines: '-G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS="gfx1100;gfx1102;gfx1030" -DSD_BUILD_SHARED_LIBS=ON'
+          - build: 'vulkan'
+            defines: "-DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON"
     steps:
       - name: Clone
         id: checkout
@@ -192,6 +197,14 @@ jobs:
         uses: urkle/action-get-ninja@v1
         with:
           version: 1.11.1
+      - name: Install Vulkan SDK
+        id: get_vulkan
+        if: ${{ matrix.build == 'vulkan' }}
+        run: |
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/VulkanSDK-${env:VULKAN_VERSION}-Installer.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
 
       - name: Build
         id: cmake_build
