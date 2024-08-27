@@ -41,6 +41,8 @@ enum sample_method_t {
     DPMPP2S_A,
     DPMPP2M,
     DPMPP2Mv2,
+    IPNDM,
+    IPNDM_V,
     LCM,
     N_SAMPLE_METHODS
 };
