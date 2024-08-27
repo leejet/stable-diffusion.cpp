@@ -693,7 +693,7 @@ int main(int argc, const char* argv[]) {
     std::thread t([&]() { svr->listen_after_bind(); });
     svr->wait_until_ready();
 
-    printf("Server listening at %s:%d\n",params.host,params.port);
+    printf("Server listening at %s:%d\n",params.host.c_str(),params.port);
 
     while(1);
 
