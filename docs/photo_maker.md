@@ -43,6 +43,8 @@ python face_detect.py input_image_dir
 ```
 An ```id_embeds.safetensors``` file will be generated in ```input_images_dir```
 
+**Note: this step is only needed to run once; the same ```id_embeds``` can be reused**
+
 - Run the same command as in version 1 but replacing ```photomaker-v1.safetensors``` with ```photomaker-v2.safetensors```.
 
   You can download ```photomaker-v2.safetensors``` from [here](https://huggingface.co/bssrdf/PhotoMakerV2)
