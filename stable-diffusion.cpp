@@ -538,6 +538,10 @@ public:
                     LOG_INFO("running with Karras schedule");
                     denoiser->schedule = std::make_shared<KarrasSchedule>();
                     break;
+                case EXPONENTIAL:
+                    LOG_INFO("running exponential schedule");
+                    denoiser->schedule = std::make_shared<ExponentialSchedule>();
+                    break;
                 case AYS:
                     LOG_INFO("Running with Align-Your-Steps schedule");
                     denoiser->schedule          = std::make_shared<AYSSchedule>();
