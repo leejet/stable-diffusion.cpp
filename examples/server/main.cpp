@@ -665,6 +665,7 @@ int main(int argc, const char* argv[]) {
             free(results);
             n_prompts++;
         }
+        return 0;
     };
 
 
