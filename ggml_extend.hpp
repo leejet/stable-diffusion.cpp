@@ -349,10 +349,6 @@ __STATIC_INLINE__ void ggml_split_tensor_2d(struct ggml_tensor* input,
     }
 }
 
-__STATIC_INLINE__ float ggml_lerp_f32(const float a, const float b, const float x) {
-    return (1 - x) * a + x * b;
-}
-
 // unclamped -> expects x in the range [0-1]
 __STATIC_INLINE__ float ggml_smootherstep_f32(const float x) {
     GGML_ASSERT(x >= 0.f && x <= 1.f);
