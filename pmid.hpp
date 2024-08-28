@@ -623,7 +623,7 @@ struct PhotoMakerIDEncoder_CLIPInsightfaceExtendtokenBlock : public CLIPVisionMo
 
 struct PhotoMakerIDEncoder : public GGMLRunner {
 public:
-    SDVersion version = VERSION_XL;
+    SDVersion version = VERSION_SDXL;
     PMVersion pm_version = VERSION_1;
     PhotoMakerIDEncoderBlock id_encoder;
     PhotoMakerIDEncoder_CLIPInsightfaceExtendtokenBlock id_encoder2;
@@ -639,7 +639,7 @@ public:
     std::vector<float> zeros_right;
 
 public:
-    PhotoMakerIDEncoder(ggml_backend_t backend, ggml_type wtype, SDVersion version = VERSION_XL, 
+    PhotoMakerIDEncoder(ggml_backend_t backend, ggml_type wtype, SDVersion version = VERSION_SDXL, 
                         PMVersion pm_v = VERSION_1, float sty = 20.f)
         : GGMLRunner(backend, wtype),
           version(version),

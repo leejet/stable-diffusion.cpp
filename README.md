@@ -4,7 +4,7 @@
 
 # stable-diffusion.cpp
 
-Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in pure C/C++
+Inference of Stable Diffusion and Flux in pure C/C++
 
 ## Features
 
@@ -12,15 +12,16 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
 - Super lightweight and without external dependencies
 - SD1.x, SD2.x, SDXL and SD3 support
     - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
+- [Flux-dev/Flux-schnell Support](./docs/flux.md)
 
 - [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) and [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo) support
 - [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
 - 16-bit, 32-bit float support
-- 4-bit, 5-bit and 8-bit integer quantization support
+- 2-bit, 3-bit, 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA, Metal and SYCL backend for GPU acceleration.
+- Full CUDA, Metal, Vulkan and SYCL backend for GPU acceleration.
 - Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
 - Flash Attention for memory usage optimization (only cpu for now)
@@ -57,7 +58,6 @@ Inference of [Stable Diffusion](https://github.com/CompVis/stable-diffusion) in 
     - The current implementation of ggml_conv_2d is slow and has high memory usage
 - [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
 - [ ] Implement Inpainting support
-- [ ] k-quants support
 
 ## Usage
 
@@ -142,6 +142,15 @@ cmake .. -DSD_METAL=ON
 cmake --build . --config Release
 ```
 
+##### Using Vulkan
+
+Install Vulkan SDK from https://www.lunarg.com/vulkan-sdk/.
+
+```
+cmake .. -DSD_VULKAN=ON
+cmake --build . --config Release
+```
+
 ##### Using SYCL
 
 Using SYCL makes the computation run on the Intel GPU. Please make sure you have installed the related driver and [Intel® oneAPI Base toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) before start. More details and steps can refer to [llama.cpp SYCL backend](https://github.com/ggerganov/llama.cpp/blob/master/docs/backend/SYCL.md#linux).
@@ -192,7 +201,10 @@ arguments:
   -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)
   -t, --threads N                    number of threads to use during computation (default: -1).
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
-  -m, --model [MODEL]                path to model
+  -m, --model [MODEL]                path to full model
+  --diffusion-model                  path to the standalone diffusion model
+  --clip_l                           path to the clip-l text encoder
+  --t5xxl                            path to the the t5xxl text encoder.
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
@@ -202,7 +214,7 @@ arguments:
   --normalize-input                  normalize PHOTOMAKER input id images
   --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.
   --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)
-  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)
+  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)
                                      If not specified, the default is the type of the weight file.
   --lora-model-dir [DIR]             lora model directory
   -i, --init-img [IMAGE]             path to the input image, required by img2img
@@ -217,19 +229,21 @@ arguments:
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
-  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}
+  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}
                                      sampling method (default: "euler_a")
   --steps  STEPS                     number of sample steps (default: 20)
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate.
-  --schedule {discrete, karras, ays} Denoiser sigma schedule (default: discrete)
+  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)
   --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
+  --vae-on-cpu                       keep vae in cpu (for low vram)
+  --clip-on-cpu                      keep clip in cpu (for low vram).
   --control-net-cpu                  keep controlnet in cpu (for low vram)
   --canny                            apply canny preprocessor (edge detection)
-  --color                            colors the logging tags according to level
+  --color                            Colors the logging tags according to level
   -v, --verbose                      print extra info
 ```
 
@@ -240,6 +254,7 @@ arguments:
 # ./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 # ./bin/sd -m ../models/sd_xl_base_1.0.safetensors --vae ../models/sdxl_vae-fp16-fix.safetensors -H 1024 -W 1024 -p "a lovely cat" -v
 # ./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable Diffusion CPP\"' --cfg-scale 4.5 --sampling-method euler -v
+# ./bin/sd --diffusion-model  ../models/flux1-dev-q3_k.gguf --vae ../models/ae.sft --clip_l ../models/clip_l.safetensors --t5xxl ../models/t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'" --cfg-scale 1.0 --sampling-method euler -v
 ```
 
 Using formats of different precisions will yield results of varying quality.
@@ -289,6 +304,10 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 Thank you to all the people who have already contributed to stable-diffusion.cpp!
 
 [![Contributors](https://contrib.rocks/image?repo=leejet/stable-diffusion.cpp)](https://github.com/leejet/stable-diffusion.cpp/graphs/contributors)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=leejet/stable-diffusion.cpp&type=Date)](https://star-history.com/#leejet/stable-diffusion.cpp&Date)
 
 ## References
 
