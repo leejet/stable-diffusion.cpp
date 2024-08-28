@@ -388,7 +388,6 @@ public:
                             LOG_ERROR("load photomaker id embed tensors from %s failed", id_embed_path.c_str());
                             return false;
                         }
-
                     }
                 }
             }
@@ -397,14 +396,8 @@ public:
                     LOG_ERROR(" pmid model params buffer allocation failed");
                     return false;
                 }
-                // LOG_INFO("pmid param memory buffer size = %.2fMB ",
-                //     pmid_model->params_buffer_size / 1024.0 / 1024.0);
                 pmid_model->get_param_tensors(tensors, "pmid");
             }
-            // if(stacked_id){
-            //    pmid_model.init_params(GGML_TYPE_F32);
-            //    pmid_model.map_by_name(tensors, "pmid.");
-            // }
         }
 
         struct ggml_init_params params;
