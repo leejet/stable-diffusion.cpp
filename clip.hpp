@@ -388,7 +388,7 @@ public:
                 std::string token_str = token.str();
                 std::u32string utf32_token;
                 for (int i = 0; i < token_str.length(); i++) {
-                    char b = token_str[i];
+                    unsigned char b = token_str[i];
                     utf32_token += byte_encoder[b];
                 }
                 auto bpe_strs = bpe(utf32_token);
