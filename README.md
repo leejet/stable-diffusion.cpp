@@ -172,14 +172,12 @@ Example of text2img by using SYCL backend:
 
 - download `stable-diffusion` model weight, refer to [download-weight](#download-weights).
 
-- run `./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors --cfg-scale 5 --steps 30 --sampling-method euler  -H 512 -W 512 --seed 42 -p "fantasy medieval village world inside a glass sphere , high detail, fantasy, realistic, light effect, hyper detail, volumetric lighting, cinematic, macro, depth of field, blur, red light and clouds from the back, highly detailed epic cinematic concept art cg render made in maya, blender and photoshop, octane render, excellent composition, dynamic dramatic cinematic lighting, aesthetic, very inspirational, world inside a glass sphere by james gurney by artgerm with james jean, joe fenton and tristan eaton by ross tran, fine details, 4k resolution"`
+- run `./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors --cfg-scale 5 --steps 30 --sampling-method euler  -H 1024 -W 1024 --seed 42 -p "fantasy medieval village world inside a glass sphere , high detail, fantasy, realistic, light effect, hyper detail, volumetric lighting, cinematic, macro, depth of field, blur, red light and clouds from the back, highly detailed epic cinematic concept art cg render made in maya, blender and photoshop, octane render, excellent composition, dynamic dramatic cinematic lighting, aesthetic, very inspirational, world inside a glass sphere by james gurney by artgerm with james jean, joe fenton and tristan eaton by ross tran, fine details, 4k resolution"`
 
 <p align="center">
   <img src="./assets/sycl_sd3_output.png" width="360x">
 </p>
 
-> [!NOTE]
-> Try to set smaller image height and width (for example, `-H 512 -W 512`) if you meet `Provided range is out of integer limits. Pass '-fno-sycl-id-queries-fit-in-int' to disable range check.`
 
 
 ##### Using Flash Attention
