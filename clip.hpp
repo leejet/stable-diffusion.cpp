@@ -343,6 +343,14 @@ public:
         }
     }
 
+    std::string clean_up_tokenization(std::string &text){
+
+        std::regex pattern(R"( ,)");
+        // Replace " ," with ","
+        std::string result = std::regex_replace(text, pattern, ",");
+        return result;
+    }
+
     std::string decode(const std::vector<int>& tokens) {
         std::string text = "";
         for (int t : tokens) {
@@ -351,8 +359,12 @@ public:
             std::u32string ts = decoder[t];
             // printf("%d, %s \n", t,  utf32_to_utf8(ts).c_str());
             std::string s = utf32_to_utf8(ts);
-            if (s.length() >= 4 && ends_with(s, "</w>")) {
-                text += " " + s.replace(s.length() - 4, s.length() - 1, "");
+            if (s.length() >= 4 ){
+                if(ends_with(s, "</w>")) {
+                    text += s.replace(s.length() - 4, s.length() - 1, "") + " ";
+                }else{
+                    text += s;
+                }
             } else {
                 text += " " + s;
             }
@@ -364,6 +376,7 @@ public:
 
         // std::string s((char *)bytes.data());
         // std::string s = "";
+        text = clean_up_tokenization(text);
         return trim(text);
     }
 
