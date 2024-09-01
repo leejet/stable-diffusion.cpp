@@ -33,6 +33,9 @@ option(SD_FLASH_ATTN                 "sd: use flash attention for x4 less memory
 option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
 option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
+option(SD_EXAMPLES_GLOVE_GUI         "sd: use glove gui in examples" OFF)
+set(QT_VERSION "6" CACHE STRING "Qt version")
+set_property(CACHE QT_VERSION PROPERTY STRINGS 5 6)
 
 if(SD_CUBLAS)
     message("Use CUBLAS as backend stable-diffusion")
@@ -93,6 +96,12 @@ else()
     message("Build static library")
     set(BUILD_SHARED_LIBS OFF)
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
+endif()
+
+if(SD_BUILD_EXAMPLES AND SD_EXAMPLES_GLOVE_GUI)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+set(CMAKE_AUTOMOC ON)
+find_package(Qt${QT_VERSION} COMPONENTS Widgets REQUIRED)
 endif()
 
 

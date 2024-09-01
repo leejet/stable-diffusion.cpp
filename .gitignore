@@ -11,3 +11,4 @@ test/
 output*.png
 models*
 *.log
+*.json

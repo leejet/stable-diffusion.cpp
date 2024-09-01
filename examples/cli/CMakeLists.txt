@@ -1,6 +1,16 @@
 set(TARGET sd)
 
+if(SD_EXAMPLES_GLOVE_GUI)
+add_executable(${TARGET} main.cpp gui/main_glove.h gui/glove.h)
+target_compile_definitions(${TARGET} PUBLIC -D SD_EXAMPLES_GLOVE_GUI)
+target_link_libraries(${TARGET} PRIVATE stable-diffusion ${CMAKE_THREAD_LIBS_INIT} Qt${QT_VERSION}::Widgets)
+if(MSVC)
+target_compile_options(${TARGET} PUBLIC /bigobj)
+endif()
+else()
 add_executable(${TARGET} main.cpp)
-install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE stable-diffusion ${CMAKE_THREAD_LIBS_INIT})
+endif()
 target_compile_features(${TARGET} PUBLIC cxx_std_11)
+
+install(TARGETS ${TARGET} RUNTIME)

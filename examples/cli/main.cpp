@@ -673,10 +673,20 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     fflush(out_stream);
 }
 
-int main(int argc, const char* argv[]) {
+#ifdef SD_EXAMPLES_GLOVE_GUI
+#include "gui/main_glove.h"
+#endif
+
+int main(int argc, char* argv[]) {
+
+#ifdef SD_EXAMPLES_GLOVE_GUI
+    GLOVE_CLI(GlvSDParams);
+#endif
+
     SDParams params;
 
-    parse_args(argc, argv, params);
+    parse_args(argc, const_cast<const char**>(argv), params);
+
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
 
