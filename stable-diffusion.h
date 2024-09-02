@@ -57,6 +57,14 @@ enum schedule_t {
     N_SCHEDULES
 };
 
+enum prediction_t {
+    DEFAULT_PRED,
+    EPS_PRED,
+    V_PRED,
+    FLOW_PRED,
+    N_PREDICTIONS
+};
+
 // same as enum ggml_type
 enum sd_type_t {
     SD_TYPE_F32  = 0,
@@ -139,6 +147,7 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             enum sd_type_t wtype,
                             enum rng_type_t rng_type,
                             enum schedule_t s,
+                            enum prediction_t p,
                             bool keep_clip_on_cpu,
                             bool keep_control_net_cpu,
                             bool keep_vae_on_cpu);
