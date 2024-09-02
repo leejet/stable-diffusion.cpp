@@ -30,3 +30,25 @@ Example:
 ```bash
 bin/sd -m ../models/sdxlUnstableDiffusers_v11.safetensors  --vae ../models/sdxl_vae.safetensors --stacked-id-embd-dir ../models/photomaker-v1.safetensors --input-id-images-dir ../assets/photomaker_examples/scarletthead_woman -p "a girl img, retro futurism, retro game art style but extremely beautiful, intricate details, masterpiece, best quality, space-themed, cosmic, celestial, stars, galaxies, nebulas, planets, science fiction, highly detailed" -n "realistic, photo-realistic, worst quality, greyscale, bad anatomy, bad hands, error, text" --cfg-scale 5.0  --sampling-method euler -H 1024 -W 1024 --style-ratio 10 --vae-on-cpu -o output.png
 ```
+
+## PhotoMaker Version 2
+
+[PhotoMaker Version 2 (PMV2)](https://github.com/TencentARC/PhotoMaker/blob/main/README_pmv2.md) has some key improvements. Unfortunately it has a very heavy dependency which makes running it a bit involved in ```SD.cpp```. 
+
+Running PMV2 is now a two-step process:
+
+- Run a python script ```face_detect.py``` to obtain **id_embeds** for the given input images
+```
+python face_detect.py input_image_dir
+```
+An ```id_embeds.safetensors``` file will be generated in ```input_images_dir```
+
+**Note: this step is only needed to run once; the same ```id_embeds``` can be reused**
+
+- Run the same command as in version 1 but replacing ```photomaker-v1.safetensors``` with ```photomaker-v2.safetensors```.
+
+  You can download ```photomaker-v2.safetensors``` from [here](https://huggingface.co/bssrdf/PhotoMakerV2)
+
+- All the command line parameters from Version 1 remain the same for Version 2
+
+
