@@ -741,7 +741,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
         v = ggml_reshape_3d(ctx, v, d_head, L_k, n_head * N);  // [N * n_head, L_k, d_head]
         LOG_DEBUG("k->ne[1] == %d", k->ne[1]);
-        kqv = ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0);
+        kqv = ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0, 0);
     } else {
         v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_head, d_head, L_k]
         v = ggml_reshape_3d(ctx, v, L_k, d_head, n_head * N);  // [N * n_head, d_head, L_k]
