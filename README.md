@@ -89,6 +89,8 @@ git submodule update
     - Stable Diffusion 3 2B from https://huggingface.co/stabilityai/stable-diffusion-3-medium
 
     ```shell
+    mkdir models
+    cd models
     curl -L -O https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4.ckpt
     # curl -L -O https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
     # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-2-1/resolve/main/v2-1_768-nonema-pruned.safetensors
