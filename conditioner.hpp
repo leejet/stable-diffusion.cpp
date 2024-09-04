@@ -1206,7 +1206,7 @@ struct FluxCLIPEmbedder : public Conditioner {
                 }
             }
 
-            chunk_hidden_states = ggml_tensor_concat(work_ctx, chunk_hidden_states_l, chunk_hidden_states_t5, 1);  // [n_token*2, 4096]
+            chunk_hidden_states = ggml_tensor_concat(work_ctx, chunk_hidden_states_l_pad, chunk_hidden_states_t5, 1);  // [n_token*2, 4096]
 
             
             int64_t t1 = ggml_time_ms();
