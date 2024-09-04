@@ -1099,6 +1099,7 @@ struct PickleTensorReader {
     ReadPhase phase   = READ_NAME;
     size_t entry_size = 0;
     int32_t nelements = 0;
+    bool read_explict_type = false;
 
     TensorStorage tensor_storage;
 
@@ -1109,6 +1110,11 @@ struct PickleTensorReader {
         if (phase == CHECK_SIZE) {
             if (entry_size == value * ggml_type_size(tensor_storage.type)) {
                 nelements = value;
+                phase     = READ_DIMENS;
+                return true;
+            } else if (!read_explict_type && entry_size == value * ggml_type_size(GGML_TYPE_F16)) {
+                nelements = value;
+                tensor_storage.type = GGML_TYPE_F16;
                 phase     = READ_DIMENS;
                 return true;
             } else {
@@ -1134,12 +1140,14 @@ struct PickleTensorReader {
                 read_global_type = false;
             }
             tensor_storage.type = GGML_TYPE_F32;
+            read_explict_type  = true;
         } else if (str == "HalfStorage") {
             if (read_global_type) {
                 global_type      = GGML_TYPE_F16;
                 read_global_type = false;
             }
             tensor_storage.type = GGML_TYPE_F16;
+            read_explict_type   = true;
         }
     }
 
