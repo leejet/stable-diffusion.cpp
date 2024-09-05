@@ -1087,20 +1087,28 @@ struct FluxCLIPEmbedder : public Conditioner {
         int64_t t0                                 = ggml_time_ms();
         struct ggml_tensor* hidden_states          = NULL;  // [N, n_token, 4096]
         struct ggml_tensor* chunk_hidden_states    = NULL;  // [n_token*2, 4096]
-        struct ggml_tensor* chunk_hidden_states_l  = NULL;  // [n_token, hidden_size_l]
-        struct ggml_tensor* chunk_hidden_states_t5 = NULL;  // [n_token, hidden_size_t5]
         struct ggml_tensor* pooled                 = NULL;  // [768,]
         std::vector<float> hidden_states_vec;
 
-        size_t chunk_len   = 77;
-        size_t chunk_count = clip_l_tokens.size() / chunk_len;
+        size_t chunk_len_l   = 77;
+        size_t chunk_count_l = clip_l_tokens.size() / chunk_len_l;
+
+        size_t chunk_len_t5   = 256;
+        size_t chunk_count_t5 = t5_tokens.size() / chunk_len_t5;
+
+        // TODO: I believe chunk_count_l is actually bigger than chunk_count_t5 
+        // So this ignores some tokens for clip
+        size_t chunk_count = chunk_count_t5; 
+
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
+            struct ggml_tensor* chunk_hidden_states_l  = NULL;  // [n_token, hidden_size_l]
+            struct ggml_tensor* chunk_hidden_states_t5 = NULL;  // [n_token, hidden_size_t5]
             // clip_l
-            {
-                std::vector<int> chunk_tokens(clip_l_tokens.begin() + chunk_idx * chunk_len,
-                                              clip_l_tokens.begin() + (chunk_idx + 1) * chunk_len);
-                std::vector<float> chunk_weights(clip_l_weights.begin() + chunk_idx * chunk_len,
-                                                 clip_l_weights.begin() + (chunk_idx + 1) * chunk_len);
+            if(chunk_idx < chunk_count_l) {
+                std::vector<int> chunk_tokens(clip_l_tokens.begin() + chunk_idx * chunk_len_l,
+                                              clip_l_tokens.begin() + (chunk_idx + 1) * chunk_len_l);
+                std::vector<float> chunk_weights(clip_l_weights.begin() + chunk_idx * chunk_len_l,
+                                                 clip_l_weights.begin() + (chunk_idx + 1) * chunk_len_l);
 
                 auto input_ids       = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
                 size_t max_token_idx = 0;
@@ -1129,7 +1137,6 @@ struct FluxCLIPEmbedder : public Conditioner {
                     ggml_tensor_scale(tensor, (original_mean / new_mean));
                 }
                 if (chunk_idx == 0) {
-                    size_t chunk_len_l = 77;
                     std::vector<int> chunk_tokens(clip_l_tokens.begin(),
                                                 clip_l_tokens.begin() + chunk_len_l);
                     std::vector<float> chunk_weights(clip_l_weights.begin(),
@@ -1157,11 +1164,11 @@ struct FluxCLIPEmbedder : public Conditioner {
             }
 
             // t5
-            {
-                std::vector<int> chunk_tokens(t5_tokens.begin() + chunk_idx * chunk_len,
-                                              t5_tokens.begin() + (chunk_idx + 1) * chunk_len);
-                std::vector<float> chunk_weights(t5_weights.begin() + chunk_idx * chunk_len,
-                                                 t5_weights.begin() + (chunk_idx + 1) * chunk_len);
+            if(chunk_idx < chunk_count_t5) {
+                std::vector<int> chunk_tokens(t5_tokens.begin() + chunk_idx * chunk_len_t5,
+                                              t5_tokens.begin() + (chunk_idx + 1) * chunk_len_t5);
+                std::vector<float> chunk_weights(t5_weights.begin() + chunk_idx * chunk_len_t5,
+                                                 t5_weights.begin() + (chunk_idx + 1) * chunk_len_t5);
 
                 auto input_ids = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
 
@@ -1205,8 +1212,12 @@ struct FluxCLIPEmbedder : public Conditioner {
                     }
                 }
             }
-
-            chunk_hidden_states = ggml_tensor_concat(work_ctx, chunk_hidden_states_l_pad, chunk_hidden_states_t5, 1);  // [n_token*2, 4096]
+            
+            if(chunk_hidden_states_t5 == NULL){
+                chunk_hidden_states = chunk_hidden_states_l_pad;
+            } else {
+                chunk_hidden_states = ggml_tensor_concat(work_ctx, chunk_hidden_states_l_pad, chunk_hidden_states_t5, 1);  // [n_token*2, 4096]
+            }
 
             
             int64_t t1 = ggml_time_ms();
