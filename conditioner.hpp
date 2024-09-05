@@ -1096,9 +1096,7 @@ struct FluxCLIPEmbedder : public Conditioner {
         size_t chunk_len_t5   = 256;
         size_t chunk_count_t5 = t5_tokens.size() / chunk_len_t5;
 
-        // TODO: I believe chunk_count_l is actually bigger than chunk_count_t5 
-        // So this ignores some tokens for clip
-        size_t chunk_count = chunk_count_t5; 
+        size_t chunk_count = std::max(chunk_count_t5, chunk_count_l); 
 
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
             struct ggml_tensor* chunk_hidden_states_l  = NULL;  // [n_token, hidden_size_l]
