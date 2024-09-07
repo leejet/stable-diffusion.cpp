@@ -153,7 +153,8 @@ public:
                         schedule_t schedule,
                         bool clip_on_cpu,
                         bool control_net_cpu,
-                        bool vae_on_cpu) {
+                        bool vae_on_cpu,
+                        bool diffusion_flash_attn) {
         use_tiny_autoencoder = taesd_path.size() > 0;
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
@@ -322,15 +323,21 @@ public:
                 LOG_INFO("CLIP: Using CPU backend");
                 clip_backend = ggml_backend_cpu_init();
             }
+            if (diffusion_flash_attn) {
+                LOG_INFO("Using flash attention in the diffusion model");
+            }
             if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
+                if (diffusion_flash_attn) {
+                    LOG_WARN("flash attention in this diffusion model is currently unsupported!");
+                }
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, conditioner_wtype);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend, diffusion_model_wtype, version);
             } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, conditioner_wtype);
-                diffusion_model  = std::make_shared<FluxModel>(backend, diffusion_model_wtype, version);
+                diffusion_model  = std::make_shared<FluxModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             } else {
                 cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version);
-                diffusion_model  = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version);
+                diffusion_model  = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             }
             cond_stage_model->alloc_params_buffer();
             cond_stage_model->get_param_tensors(tensors);
@@ -1035,7 +1042,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      enum schedule_t s,
                      bool keep_clip_on_cpu,
                      bool keep_control_net_cpu,
-                     bool keep_vae_on_cpu) {
+                     bool keep_vae_on_cpu,
+                     bool diffusion_flash_attn) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == NULL) {
         return NULL;
@@ -1076,7 +1084,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     s,
                                     keep_clip_on_cpu,
                                     keep_control_net_cpu,
-                                    keep_vae_on_cpu)) {
+                                    keep_vae_on_cpu,
+                                    diffusion_flash_attn)) {
         delete sd_ctx->sd;
         sd_ctx->sd = NULL;
         free(sd_ctx);
