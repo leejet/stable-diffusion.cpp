@@ -181,13 +181,7 @@ public:
             LOG_DEBUG("Using CPU backend");
             backend = ggml_backend_cpu_init();
         }
-#ifdef SD_USE_FLASH_ATTENTION
-#if defined(SD_USE_CUBLAS) || defined(SD_USE_METAL) || defined (SD_USE_SYCL) || defined(SD_USE_VULKAN)
-        LOG_WARN("Flash Attention not supported with GPU Backend");
-#else
-        LOG_INFO("Flash Attention enabled");
-#endif
-#endif
+
         ModelLoader model_loader;
 
         vae_tiling = vae_tiling_;
