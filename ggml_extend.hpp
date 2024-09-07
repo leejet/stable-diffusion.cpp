@@ -666,32 +666,6 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> split_qkv(struct ggml_context
     return {q, k, v};
 }
 
-// q: [N * n_head, n_token, d_head]
-// k: [N * n_head, n_k, d_head]
-// v: [N * n_head, d_head, n_k]
-// return: [N * n_head, n_token, d_head]
-__STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx,
-                                                        struct ggml_tensor* q,
-                                                        struct ggml_tensor* k,
-                                                        struct ggml_tensor* v,
-                                                        bool mask = false) {
-#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL) && !defined(SD_USE_VULKAN) && !defined(SD_USE_SYCL)
-    struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, n_token, d_head]
-#else
-    float d_head = (float)q->ne[0];
-
-    struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, n_token, n_k]
-    kq                     = ggml_scale_inplace(ctx, kq, 1.0f / sqrt(d_head));
-    if (mask) {
-        kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
-    }
-    kq = ggml_soft_max_inplace(ctx, kq);
-
-    struct ggml_tensor* kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, n_token, d_head]
-#endif
-    return kqv;
-}
-
 // q: [N, L_q, C] or [N*n_head, L_q, d_head]
 // k: [N, L_k, C] or [N*n_head, L_k, d_head]
 // v: [N, L_k, C] or [N, L_k, n_head, d_head]
@@ -735,29 +709,31 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
 
     float scale = (1.0f / sqrt((float)d_head));
 
-    if (flash_attn) {
-        // TODO: remove before merge
-        LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
-    }
-    // is there anything oddly shaped??
+    //if (flash_attn) {
+    //    LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
+    //}
+    // is there anything oddly shaped?? ping Green-Sky if you can trip this assert
     GGML_ASSERT(((L_k % 256 == 0) && L_q == L_k) || !(L_k % 256 == 0));
 
     bool can_use_flash_attn = true;
     can_use_flash_attn = can_use_flash_attn && L_k % 256 == 0;
     can_use_flash_attn = can_use_flash_attn && d_head % 64 == 0; // double check
 
+    // cuda max d_head seems to be 256, cpu does seem to work with 512
+    can_use_flash_attn = can_use_flash_attn && d_head <= 256; // double check
+
     if (mask != nullptr) {
-        // TODO: figure out if we can bend t5 to work too
+        // TODO(Green-Sky): figure out if we can bend t5 to work too
         can_use_flash_attn = can_use_flash_attn && mask->ne[2] == 1;
         can_use_flash_attn = can_use_flash_attn && mask->ne[3] == 1;
     }
 
-    // TODO: more pad or disable for funny tensor shapes
+    // TODO(Green-Sky): more pad or disable for funny tensor shapes
 
     ggml_tensor* kqv = nullptr;
     //GGML_ASSERT((flash_attn && can_use_flash_attn) || !flash_attn);
     if (can_use_flash_attn && flash_attn) {
-        LOG_DEBUG("using flash attention");
+        //LOG_DEBUG("using flash attention");
         k = ggml_cast(ctx, k, GGML_TYPE_F16);
 
         v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
