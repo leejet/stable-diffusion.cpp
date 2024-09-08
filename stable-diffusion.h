@@ -102,7 +102,8 @@ enum sd_log_level_t {
     SD_LOG_DEBUG,
     SD_LOG_INFO,
     SD_LOG_WARN,
-    SD_LOG_ERROR
+    SD_LOG_ERROR,
+    SD_LOG_PROGRESS
 };
 
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
