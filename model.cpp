@@ -501,6 +501,10 @@ std::string convert_tensor_name(std::string name) {
         } else {
             new_name = name;
         }
+    } else if (starts_with(name, "model.diffusion_model.model.diffusion_model.")) {
+        // trim double prefix
+        // TODO(Green-Sky): this might apply to other prefixes aswell and should be checked differently
+        new_name = name.substr(strlen("model.diffusion_model."));
     } else {
         new_name = name;
     }
@@ -1793,11 +1797,11 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
         }
         ggml_set_name(tensor, name.c_str());
 
-        // LOG_DEBUG("%s %d %s %d[%d %d %d %d] %d[%d %d %d %d]", name.c_str(),
-        // ggml_nbytes(tensor), ggml_type_name(tensor_type),
-        // tensor_storage.n_dims,
-        // tensor_storage.ne[0], tensor_storage.ne[1], tensor_storage.ne[2], tensor_storage.ne[3],
-        // tensor->n_dims, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+        //LOG_DEBUG("%s %d %s %d[%d %d %d %d] %d[%d %d %d %d]", name.c_str(),
+        //    ggml_nbytes(tensor), ggml_type_name(tensor_type),
+        //    tensor_storage.n_dims,
+        //    tensor_storage.ne[0], tensor_storage.ne[1], tensor_storage.ne[2], tensor_storage.ne[3],
+        //    ggml_n_dims(tensor), tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
 
         *dst_tensor = tensor;
 
