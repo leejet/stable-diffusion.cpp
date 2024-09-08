@@ -664,10 +664,12 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
             break;
     }
 
-    if (params->color == true) {
-        fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
-    } else {
-        fprintf(out_stream, "[%-5s] ", level_str);
+    if (level != SD_LOG_PROGRESS){
+        if (params->color) {
+            fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
+        } else {
+            fprintf(out_stream, "[%-5s] ", level_str);
+        }
     }
     fputs(log, out_stream);
     fflush(out_stream);

@@ -58,4 +58,5 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
 #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_ERROR(format, ...) log_printf(SD_LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
+#define LOG_PROGRESS(format, ...) log_printf(SD_LOG_PROGRESS, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #endif  // __UTIL_H__
