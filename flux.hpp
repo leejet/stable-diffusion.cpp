@@ -115,25 +115,28 @@ namespace Flux {
                                                     struct ggml_tensor* q,
                                                     struct ggml_tensor* k,
                                                     struct ggml_tensor* v,
-                                                    struct ggml_tensor* pe) {
+                                                    struct ggml_tensor* pe,
+                                                    bool flash_attn) {
         // q,k,v: [N, L, n_head, d_head]
         // pe: [L, d_head/2, 2, 2]
         // return: [N, L, n_head*d_head]
         q = apply_rope(ctx, q, pe);  // [N*n_head, L, d_head]
         k = apply_rope(ctx, k, pe);  // [N*n_head, L, d_head]
 
-        auto x = ggml_nn_attention_ext(ctx, q, k, v, v->ne[1], NULL, false, true);  // [N, L, n_head*d_head]
+        auto x = ggml_nn_attention_ext(ctx, q, k, v, v->ne[1], NULL, false, true, flash_attn);  // [N, L, n_head*d_head]
         return x;
     }
 
     struct SelfAttention : public GGMLBlock {
     public:
         int64_t num_heads;
+        bool flash_attn;
 
     public:
         SelfAttention(int64_t dim,
                       int64_t num_heads = 8,
-                      bool qkv_bias     = false)
+                      bool qkv_bias     = false,
+                      bool flash_attn   = false)
             : num_heads(num_heads) {
             int64_t head_dim = dim / num_heads;
             blocks["qkv"]    = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
@@ -168,7 +171,7 @@ namespace Flux {
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
             auto qkv = pre_attention(ctx, x);                       // q,k,v: [N, n_token, n_head, d_head]
-            x        = attention(ctx, qkv[0], qkv[1], qkv[2], pe);  // [N, n_token, dim]
+            x        = attention(ctx, qkv[0], qkv[1], qkv[2], pe, flash_attn);  // [N, n_token, dim]
             x        = post_attention(ctx, x);                      // [N, n_token, dim]
             return x;
         }
@@ -237,15 +240,18 @@ namespace Flux {
     }
 
     struct DoubleStreamBlock : public GGMLBlock {
+        bool flash_attn;
     public:
         DoubleStreamBlock(int64_t hidden_size,
                           int64_t num_heads,
                           float mlp_ratio,
-                          bool qkv_bias = false) {
+                          bool qkv_bias = false,
+                          bool flash_attn = false)
+            : flash_attn(flash_attn) {
             int64_t mlp_hidden_dim = hidden_size * mlp_ratio;
             blocks["img_mod"]      = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
             blocks["img_norm1"]    = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
-            blocks["img_attn"]     = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias));
+            blocks["img_attn"]     = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, flash_attn));
 
             blocks["img_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             blocks["img_mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, mlp_hidden_dim));
@@ -254,7 +260,7 @@ namespace Flux {
 
             blocks["txt_mod"]   = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
             blocks["txt_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
-            blocks["txt_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias));
+            blocks["txt_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, flash_attn));
 
             blocks["txt_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             blocks["txt_mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, mlp_hidden_dim));
@@ -316,7 +322,7 @@ namespace Flux {
             auto k = ggml_concat(ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = attention(ctx, q, k, v, pe);                          // [N, n_txt_token + n_img_token, n_head*d_head]
+            auto attn         = attention(ctx, q, k, v, pe, flash_attn);                          // [N, n_txt_token + n_img_token, n_head*d_head]
             attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx,
                                              attn,
@@ -364,13 +370,15 @@ namespace Flux {
         int64_t num_heads;
         int64_t hidden_size;
         int64_t mlp_hidden_dim;
+        bool flash_attn;
 
     public:
         SingleStreamBlock(int64_t hidden_size,
                           int64_t num_heads,
                           float mlp_ratio = 4.0f,
-                          float qk_scale  = 0.f)
-            : hidden_size(hidden_size), num_heads(num_heads) {
+                          float qk_scale  = 0.f,
+                          bool flash_attn = false)
+            : hidden_size(hidden_size), num_heads(num_heads), flash_attn(flash_attn) {
             int64_t head_dim = hidden_size / num_heads;
             float scale      = qk_scale;
             if (scale <= 0.f) {
@@ -433,7 +441,7 @@ namespace Flux {
             auto v           = ggml_reshape_4d(ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
             q                = norm->query_norm(ctx, q);
             k                = norm->key_norm(ctx, k);
-            auto attn        = attention(ctx, q, k, v, pe);  // [N, n_token, hidden_size]
+            auto attn        = attention(ctx, q, k, v, pe, flash_attn);  // [N, n_token, hidden_size]
 
             auto attn_mlp = ggml_concat(ctx, attn, ggml_gelu_inplace(ctx, mlp), 0);  // [N, n_token, hidden_size + mlp_hidden_dim]
             auto output   = linear2->forward(ctx, attn_mlp);                         // [N, n_token, hidden_size]
@@ -492,6 +500,7 @@ namespace Flux {
         int theta                   = 10000;
         bool qkv_bias               = true;
         bool guidance_embed         = true;
+        bool flash_attn             = true;
     };
 
     struct Flux : public GGMLBlock {
@@ -646,13 +655,16 @@ namespace Flux {
                 blocks["double_blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new DoubleStreamBlock(params.hidden_size,
                                                                                                                 params.num_heads,
                                                                                                                 params.mlp_ratio,
-                                                                                                                params.qkv_bias));
+                                                                                                                params.qkv_bias,
+                                                                                                                params.flash_attn));
             }
 
             for (int i = 0; i < params.depth_single_blocks; i++) {
                 blocks["single_blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new SingleStreamBlock(params.hidden_size,
                                                                                                                 params.num_heads,
-                                                                                                                params.mlp_ratio));
+                                                                                                                params.mlp_ratio,
+                                                                                                                0.f,
+                                                                                                                params.flash_attn));
             }
 
             blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, out_channels));
@@ -808,8 +820,10 @@ namespace Flux {
 
         FluxRunner(ggml_backend_t backend,
                    ggml_type wtype,
-                   SDVersion version = VERSION_FLUX_DEV)
+                   SDVersion version = VERSION_FLUX_DEV,
+                   bool flash_attn = false)
             : GGMLRunner(backend, wtype) {
+            flux_params.flash_attn = flash_attn;
             if (version == VERSION_FLUX_SCHNELL) {
                 flux_params.guidance_embed = false;
             }
