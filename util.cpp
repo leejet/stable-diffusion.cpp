@@ -315,7 +315,7 @@ void pretty_progress(int step, int steps, float time) {
         return;
     }
     if (step == 0) {
-        return;
+        //return;   // called from sample in stablediffusion.cpp with step = 0
     }
     std::string progress = "  |";
     int max_progress     = 50;
