@@ -798,21 +798,21 @@ struct SD3CLIPEmbedder : public Conditioner {
                 }
 
                 if (chunk_idx == 0) {
-                    // auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_l_tokenizer.EOS_TOKEN_ID);
-                    // max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
-                    // clip_l->compute(n_threads,
-                    //                 input_ids,
-                    //                 0,
-                    //                 NULL,
-                    //                 max_token_idx,
-                    //                 true,
-                    //                 &pooled_l,
-                    //                 work_ctx);
+                    auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_l_tokenizer.EOS_TOKEN_ID);
+                    max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
+                    clip_l->compute(n_threads,
+                                    input_ids,
+                                    0,
+                                    NULL,
+                                    max_token_idx,
+                                    true,
+                                    &pooled_l,
+                                    work_ctx);
 
                     // clip_l.transformer.text_model.text_projection no in file, ignore
                     // TODO: use torch.eye(embed_dim) as default clip_l.transformer.text_model.text_projection
-                    pooled_l = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 768);
-                    ggml_set_f32(pooled_l, 0.f);
+                    // pooled_l = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 768);
+                    // ggml_set_f32(pooled_l, 0.f);
                 }
             }
 
@@ -852,21 +852,21 @@ struct SD3CLIPEmbedder : public Conditioner {
                 }
 
                 if (chunk_idx == 0) {
-                    // auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_g_tokenizer.EOS_TOKEN_ID);
-                    // max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
-                    // clip_g->compute(n_threads,
-                    //                 input_ids,
-                    //                 0,
-                    //                 NULL,
-                    //                 max_token_idx,
-                    //                 true,
-                    //                 &pooled_g,
-                    //                 work_ctx);
+                    auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_g_tokenizer.EOS_TOKEN_ID);
+                    max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
+                    clip_g->compute(n_threads,
+                                    input_ids,
+                                    0,
+                                    NULL,
+                                    max_token_idx,
+                                    true,
+                                    &pooled_g,
+                                    work_ctx);
                     // clip_l.transformer.text_model.text_projection no in file, ignore pooled_g too
 
                     // TODO: fix pooled_g
-                    pooled_g = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1280);
-                    ggml_set_f32(pooled_g, 0.f);
+                    // pooled_g = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1280);
+                    // ggml_set_f32(pooled_g, 0.f);
                 }
             }
 
