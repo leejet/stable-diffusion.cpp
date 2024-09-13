@@ -1073,7 +1073,7 @@ struct FluxCLIPEmbedder : public Conditioner {
         return {{clip_l_tokens, clip_l_weights}, {t5_tokens, t5_weights}};
     }
 
-    SDCondition get_learned_condition_common(ggml_context* work_ctx,
+      SDCondition get_learned_condition_common(ggml_context* work_ctx,
                                              int n_threads,
                                              std::vector<std::pair<std::vector<int>, std::vector<float>>> token_and_weights,
                                              int clip_skip,
@@ -1084,100 +1084,62 @@ struct FluxCLIPEmbedder : public Conditioner {
         auto& t5_tokens      = token_and_weights[1].first;
         auto& t5_weights     = token_and_weights[1].second;
 
-        int64_t t0                                 = ggml_time_ms();
-        struct ggml_tensor* hidden_states          = NULL;  // [N, n_token, 4096]
-        struct ggml_tensor* chunk_hidden_states    = NULL;  // [n_token*2, 4096]
-        struct ggml_tensor* pooled                 = NULL;  // [768,]
+        int64_t t0                              = ggml_time_ms();
+        struct ggml_tensor* hidden_states       = NULL;  // [N, n_token, 4096]
+        struct ggml_tensor* chunk_hidden_states = NULL;  // [n_token, 4096]
+        struct ggml_tensor* pooled              = NULL;  // [768,]
         std::vector<float> hidden_states_vec;
 
-        size_t chunk_len_l   = 77;
-        size_t chunk_count_l = clip_l_tokens.size() / chunk_len_l;
-
-        size_t chunk_len_t5   = 256;
-        size_t chunk_count_t5 = t5_tokens.size() / chunk_len_t5;
-
-        // TODO: I believe chunk_count_l is actually bigger than chunk_count_t5 
-        // So this ignores some tokens for clip
-        size_t chunk_count = chunk_count_t5; 
-
+        size_t chunk_len   = 256;
+        size_t chunk_count = t5_tokens.size() / chunk_len;
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
-            struct ggml_tensor* chunk_hidden_states_l  = NULL;  // [n_token, hidden_size_l]
-            struct ggml_tensor* chunk_hidden_states_t5 = NULL;  // [n_token, hidden_size_t5]
             // clip_l
-            if(chunk_idx < chunk_count_l) {
-                std::vector<int> chunk_tokens(clip_l_tokens.begin() + chunk_idx * chunk_len_l,
-                                              clip_l_tokens.begin() + (chunk_idx + 1) * chunk_len_l);
-                std::vector<float> chunk_weights(clip_l_weights.begin() + chunk_idx * chunk_len_l,
-                                                 clip_l_weights.begin() + (chunk_idx + 1) * chunk_len_l);
+            if (chunk_idx == 0) {
+                size_t chunk_len_l = 77;
+                std::vector<int> chunk_tokens(clip_l_tokens.begin(),
+                                              clip_l_tokens.begin() + chunk_len_l);
+                std::vector<float> chunk_weights(clip_l_weights.begin(),
+                                                 clip_l_weights.begin() + chunk_len_l);
 
                 auto input_ids       = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
                 size_t max_token_idx = 0;
 
+                auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_l_tokenizer.EOS_TOKEN_ID);
+                max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
+                LOG_INFO("max_token_idx = %d",max_token_idx);
+                
                 clip_l->compute(n_threads,
                                 input_ids,
                                 0,
                                 NULL,
                                 max_token_idx,
-                                false,
-                                &chunk_hidden_states_l,
+                                true,
+                                &pooled,
                                 work_ctx);
-                {
-                    auto tensor         = chunk_hidden_states_l;
-                    float original_mean = ggml_tensor_mean(tensor);
-                    for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
-                        for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
-                            for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
-                                float value = ggml_tensor_get_f32(tensor, i0, i1, i2);
-                                value *= chunk_weights[i1];
-                                ggml_tensor_set_f32(tensor, value, i0, i1, i2);
-                            }
-                        }
-                    }
-                    float new_mean = ggml_tensor_mean(tensor);
-                    ggml_tensor_scale(tensor, (original_mean / new_mean));
-                }
-                if (chunk_idx == 0) {
-                    std::vector<int> chunk_tokens(clip_l_tokens.begin(),
-                                                clip_l_tokens.begin() + chunk_len_l);
-                    std::vector<float> chunk_weights(clip_l_weights.begin(),
-                                                    clip_l_weights.begin() + chunk_len_l);
 
-                    auto input_ids       = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
-                    size_t max_token_idx = 0;
+                LOG_INFO("pooled->ne = [%d, %d, %d, %d] ",pooled->ne[0], pooled->ne[1], pooled->ne[2], pooled->ne[3]);
 
-                    // auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_l_tokenizer.EOS_TOKEN_ID);
-                    // max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
-                    // clip_l->compute(n_threads,
-                    //                 input_ids,
-                    //                 0,
-                    //                 NULL,
-                    //                 max_token_idx,
-                    //                 true,
-                    //                 &pooled,
-                    //                 work_ctx);
-
-                    // clip_l.transformer.text_model.text_projection no in file, ignore
-                    // TODO: use torch.eye(embed_dim) as default clip_l.transformer.text_model.text_projection
-                    pooled = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 768);
-                    ggml_set_f32(pooled, 0.f);
-                }
+                // clip_l.transformer.text_model.text_projection no in file, ignore
+                // TODO: use torch.eye(embed_dim) as default clip_l.transformer.text_model.text_projection
+                // pooled = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 768);
+                // ggml_set_f32(pooled, 0.f);
             }
 
             // t5
-            if(chunk_idx < chunk_count_t5) {
-                std::vector<int> chunk_tokens(t5_tokens.begin() + chunk_idx * chunk_len_t5,
-                                              t5_tokens.begin() + (chunk_idx + 1) * chunk_len_t5);
-                std::vector<float> chunk_weights(t5_weights.begin() + chunk_idx * chunk_len_t5,
-                                                 t5_weights.begin() + (chunk_idx + 1) * chunk_len_t5);
+            {
+                std::vector<int> chunk_tokens(t5_tokens.begin() + chunk_idx * chunk_len,
+                                              t5_tokens.begin() + (chunk_idx + 1) * chunk_len);
+                std::vector<float> chunk_weights(t5_weights.begin() + chunk_idx * chunk_len,
+                                                 t5_weights.begin() + (chunk_idx + 1) * chunk_len);
 
                 auto input_ids = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
 
                 t5->compute(n_threads,
                             input_ids,
-                            &chunk_hidden_states_t5,
+                            &chunk_hidden_states,
                             work_ctx);
                 {
-                    auto tensor         = chunk_hidden_states_t5;
+                    auto tensor         = chunk_hidden_states;
                     float original_mean = ggml_tensor_mean(tensor);
                     for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
                         for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
@@ -1193,33 +1155,6 @@ struct FluxCLIPEmbedder : public Conditioner {
                 }
             }
 
-
-            // TODO: Maybe there's a better way to do the padding?
-            auto chunk_hidden_states_l_pad = ggml_new_tensor_3d(work_ctx,
-                                                                 chunk_hidden_states_l->type,
-                                                                 4096,
-                                                                 chunk_hidden_states_l->ne[1],
-                                                                 chunk_hidden_states_l->ne[2]);  // [n_token, 4096]
-
-            for (int i2 = 0; i2 < chunk_hidden_states_l_pad->ne[2]; i2++) {
-                for (int i1 = 0; i1 < chunk_hidden_states_l_pad->ne[1]; i1++) {
-                    for (int i0 = 0; i0 < chunk_hidden_states_l_pad->ne[0]; i0++) {
-                        float value = 0.f;
-                        if (i0 < chunk_hidden_states_l->ne[0]) {
-                            value = ggml_tensor_get_f32(chunk_hidden_states_l, i0, i1, i2);
-                        }
-                        ggml_tensor_set_f32(chunk_hidden_states_l_pad, value, i0, i1, i2);
-                    }
-                }
-            }
-            
-            if(chunk_hidden_states_t5 == NULL){
-                chunk_hidden_states = chunk_hidden_states_l_pad;
-            } else {
-                chunk_hidden_states = ggml_tensor_concat(work_ctx, chunk_hidden_states_l_pad, chunk_hidden_states_t5, 1);  // [n_token*2, 4096]
-            }
-
-            
             int64_t t1 = ggml_time_ms();
             LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
             if (force_zero_embeddings) {
