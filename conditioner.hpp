@@ -809,10 +809,6 @@ struct SD3CLIPEmbedder : public Conditioner {
                                     &pooled_l,
                                     work_ctx);
 
-                    // clip_l.transformer.text_model.text_projection no in file, ignore
-                    // TODO: use torch.eye(embed_dim) as default clip_l.transformer.text_model.text_projection
-                    // pooled_l = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 768);
-                    // ggml_set_f32(pooled_l, 0.f);
                 }
             }
 
@@ -862,11 +858,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                                     true,
                                     &pooled_g,
                                     work_ctx);
-                    // clip_l.transformer.text_model.text_projection no in file, ignore pooled_g too
 
-                    // TODO: fix pooled_g
-                    // pooled_g = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1280);
-                    // ggml_set_f32(pooled_g, 0.f);
                 }
             }
 
@@ -1116,10 +1108,6 @@ struct FluxCLIPEmbedder : public Conditioner {
                                 &pooled,
                                 work_ctx);
 
-                // clip_l.transformer.text_model.text_projection no in file, ignore
-                // TODO: use torch.eye(embed_dim) as default clip_l.transformer.text_model.text_projection
-                // pooled = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 768);
-                // ggml_set_f32(pooled, 0.f);
             }
 
             // t5
