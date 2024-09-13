@@ -1106,7 +1106,6 @@ struct FluxCLIPEmbedder : public Conditioner {
 
                 auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_l_tokenizer.EOS_TOKEN_ID);
                 max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
-                LOG_INFO("max_token_idx = %d",max_token_idx);
                 
                 clip_l->compute(n_threads,
                                 input_ids,
@@ -1116,8 +1115,6 @@ struct FluxCLIPEmbedder : public Conditioner {
                                 true,
                                 &pooled,
                                 work_ctx);
-
-                LOG_INFO("pooled->ne = [%d, %d, %d, %d] ",pooled->ne[0], pooled->ne[1], pooled->ne[2], pooled->ne[3]);
 
                 // clip_l.transformer.text_model.text_projection no in file, ignore
                 // TODO: use torch.eye(embed_dim) as default clip_l.transformer.text_model.text_projection
