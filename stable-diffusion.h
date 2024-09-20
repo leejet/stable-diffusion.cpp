@@ -107,9 +107,11 @@ enum sd_log_level_t {
 
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
 typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
+typedef void (*sd_result_cb_t)(size_t number, uint8_t* image_data, void* data);
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
+SD_API void sd_set_result_callback(sd_result_cb_t cb, void* data);
 SD_API int32_t get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 

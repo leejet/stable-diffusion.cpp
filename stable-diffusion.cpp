@@ -1081,6 +1081,14 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
     free(sd_ctx);
 }
 
+static sd_result_cb_t sd_result_cb = NULL;
+void* sd_result_cb_data            = NULL;
+
+void sd_set_result_callback(sd_result_cb_t cb, void* data) {
+    sd_result_cb      = cb;
+    sd_result_cb_data = data;
+}
+
 sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            struct ggml_context* work_ctx,
                            ggml_tensor* init_latent,
@@ -1313,6 +1321,13 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+
+        if (sd_result_cb != NULL) {
+            struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, x_0);
+            sd_result_cb(b + 1, sd_tensor_to_image(img), sd_result_cb_data);
+            continue;
+        }
+
         final_latents.push_back(x_0);
     }
 
@@ -1321,6 +1336,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     }
     int64_t t3 = ggml_time_ms();
     LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
+    
+    if (sd_result_cb != NULL) {
+        return NULL;
+    }
 
     // Decode to image
     LOG_INFO("decoding %zu latents", final_latents.size());
