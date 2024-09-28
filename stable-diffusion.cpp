@@ -762,7 +762,8 @@ public:
                         sample_method_t method,
                         const std::vector<float>& sigmas,
                         int start_merge_step,
-                        SDCondition id_cond) {
+                        SDCondition id_cond,
+                        size_t batch_num = 0) {
         size_t steps = sigmas.size() - 1;
         // noise = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(noise);
@@ -886,7 +887,7 @@ public:
                 // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
 
-            send_result_step_callback(denoised, step);
+            send_result_step_callback(denoised, batch_num, step);
 
             return denoised;
         };
@@ -1011,19 +1012,21 @@ public:
         }
 
         struct ggml_tensor* img = decode_first_stage(work_ctx, x);
-        result_cb(number, sd_tensor_to_image(img), result_cb_data);
+        auto image_data         = sd_tensor_to_image(img);
+
+        result_cb(number, image_data, result_cb_data);
     }
 
     sd_result_step_cb_t result_step_cb = nullptr;
     void* result_step_cb_data          = nullptr;
 
-    void send_result_step_callback(ggml_tensor* x, size_t step) {
+    void send_result_step_callback(ggml_tensor* x, size_t number, size_t step) {
         if (result_step_cb == nullptr) {
             return;
         }
 
         struct ggml_init_params params {};
-        params.mem_size   = static_cast<size_t>(10 * 1024) * 1024 * 2;
+        params.mem_size   = static_cast<size_t>(10 * 1024) * 1024;
         params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
@@ -1036,8 +1039,9 @@ public:
         copy_ggml_tensor(result, x);
 
         struct ggml_tensor* img = decode_first_stage(work_ctx, result);
+        result_step_cb(number, step, sd_tensor_to_image(img), result_step_cb_data);
 
-        result_step_cb(step, sd_tensor_to_image(img), result_step_cb_data);
+        ggml_free(work_ctx);
     }
 };
 
@@ -1359,14 +1363,15 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      sample_method,
                                                      sigmas,
                                                      start_merge_step,
-                                                     id_cond);
+                                                     id_cond,
+                                                     b);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
 
         if (sd_ctx->sd->result_cb != nullptr) {
-            sd_ctx->sd->send_result_callback(work_ctx, x_0, b + 1);
+            sd_ctx->sd->send_result_callback(work_ctx, x_0, b);
             continue;
         }
 
