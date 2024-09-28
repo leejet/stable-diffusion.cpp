@@ -290,6 +290,7 @@ These projects wrap `stable-diffusion.cpp` for easier use in other languages/fra
 
 * Golang: [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
 * C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
+* Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
 
 ## UIs
 
