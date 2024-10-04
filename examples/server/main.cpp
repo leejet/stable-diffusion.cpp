@@ -7,9 +7,7 @@
 #include <vector>
 
 // #include "preprocessing.hpp"
-#include "b64.cpp"
 #include "flux.hpp"
-#include "json.hpp"
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -24,7 +22,9 @@
 #define STB_IMAGE_RESIZE_STATIC
 #include "stb_image_resize.h"
 
+#include "b64.cpp"
 #include "httplib.h"
+#include "json.hpp"
 
 const char* rng_type_to_str[] = {
     "std_default",
@@ -565,6 +565,22 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     fflush(out_stream);
 }
 
+void* server_log_params = NULL;
+
+// enable logging in the server
+#define LOG_BUFFER_SIZE 1024
+void sd_log(enum sd_log_level_t level, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    char log[LOG_BUFFER_SIZE];
+    vsnprintf(log, 1024, format, args);
+    strncat(log, "\n", LOG_BUFFER_SIZE - strlen(log));
+
+    sd_log_cb(level, log, server_log_params);
+    va_end(args);
+}
+
 static void log_server_request(const httplib::Request& req, const httplib::Response& res) {
     printf("request: %s %s (%s)\n", req.method.c_str(), req.path.c_str(), req.body.c_str());
 }
@@ -613,7 +629,8 @@ void parseJsonPrompt(std::string json_str, SDParams* params) {
     try {
         std::string sample_method = payload["sample_method"];
         // TODO map to enum value
-        LOG_WARN("sample_method is not supported yet\n");
+        // LOG_WARN("sample_method is not supported yet\n");
+        sd_log(sd_log_level_t::SD_LOG_WARN, "sample_method is not supported yet\n");
     } catch (...) {
     }
     try {
@@ -635,7 +652,8 @@ void parseJsonPrompt(std::string json_str, SDParams* params) {
     try {
         std::string control_cond = payload["control_cond"];
         // TODO map to enum value
-        LOG_WARN("control_cond is not supported yet\n");
+        // LOG_WARN("control_cond is not supported yet\n");
+        sd_log(sd_log_level_t::SD_LOG_WARN, "control_cond is not supported yet\n");
     } catch (...) {
     }
     try {
@@ -664,6 +682,8 @@ int main(int argc, const char* argv[]) {
     parse_args(argc, argv, params);
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
+
+    server_log_params = (void*)&params;
 
     if (params.verbose) {
         print_params(params);
@@ -701,7 +721,8 @@ int main(int argc, const char* argv[]) {
     int n_prompts = 0;
 
     const auto txt2imgRequest = [&sd_ctx, &params, &n_prompts](const httplib::Request& req, httplib::Response& res) {
-        LOG_INFO("raw body is: %s\n", req.body.c_str());
+        // LOG_DEBUG("raw body is: %s\n", req.body.c_str());
+        sd_log(sd_log_level_t::SD_LOG_DEBUG, "raw body is: %s\n", req.body.c_str());
         // parse req.body as json using jsoncpp
         using json = nlohmann::json;
 
@@ -710,7 +731,8 @@ int main(int argc, const char* argv[]) {
             parseJsonPrompt(json_str, &params);
         } catch (json::parse_error& e) {
             // assume the request is just a prompt
-            LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
+            // LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
             std::string prompt = req.body;
             if (!prompt.empty()) {
                 params.prompt = prompt;
@@ -719,9 +741,11 @@ int main(int argc, const char* argv[]) {
             }
         } catch (...) {
             // Handle any other type of exception
-            LOG_ERROR("An unexpected error occurred\n");
+            // LOG_ERROR("An unexpected error occurred\n");
+            sd_log(sd_log_level_t::SD_LOG_ERROR, "An unexpected error occurred\n");
         }
-        LOG_INFO("prompt is: %s\n", params.prompt.c_str());
+        // LOG_DEBUG("prompt is: %s\n", params.prompt.c_str());
+        sd_log(sd_log_level_t::SD_LOG_DEBUG, "prompt is: %s\n", params.prompt.c_str());
 
         {
             sd_image_t* results;
