@@ -810,8 +810,7 @@ int main(int argc, const char* argv[]) {
 
     printf("Server listening at %s:%d\n", params.host.c_str(), params.port);
 
-    while (1)
-        ;
+    t.join();
 
     free_sd_ctx(sd_ctx);
 
