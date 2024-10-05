@@ -1,7 +1,10 @@
 import requests, json, base64
 from io import BytesIO
 from PIL import Image, PngImagePlugin, ImageShow
-from threading import Thread
+import os
+if os.name == 'nt':
+    from threading import Thread
+
 
 from typing import List
 
@@ -128,9 +131,12 @@ def showImages(imgs: List[Image.Image]) -> None:
     None
     """
     for (i,img) in enumerate(imgs):
-        t = Thread(target=show_img, args=(img, f"IMG {i}"))
-        t.setDaemon(True)
-        t.start
+        if os.name == 'nt':
+            t = Thread(target=show_img, args=(img, f"IMG {i}"))
+            t.setDaemon(True)
+            t.start
+        else:
+            show_img(img, f"IMG {i}")
 
 def saveImages(imgs: List[Image.Image], path: str) -> None:
     """
