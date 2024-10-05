@@ -39,7 +39,7 @@ def show_img(img: Image, title = None) -> None:
     info = PngImagePlugin.PngInfo()
     for key, value in img.info.items():
         info.add_text(key, value)
-    tmp = img._dump(title, format=img.format, pnginfo=info)
+    tmp = img._dump(None, format=img.format, pnginfo=info)
     print(f"Image path: {tmp}\n")
     for viewer in ImageShow._viewers:
         if viewer.show_file(tmp,title=title):
@@ -133,8 +133,8 @@ def showImages(imgs: List[Image.Image]) -> None:
     for (i,img) in enumerate(imgs):
         if os.name == 'nt':
             t = Thread(target=show_img, args=(img, f"IMG {i}"))
-            t.setDaemon(True)
-            t.start
+            t.daemon = True
+            t.start()
         else:
             show_img(img, f"IMG {i}")
 
@@ -162,7 +162,7 @@ def saveImages(imgs: List[Image.Image], path: str) -> None:
 
 def _print_usage():
     print("""Example usage (images will be displayed and saved to a temporary file):
-update_url(server=127.0.0.1, port=8080)
+update_url(server="127.0.0.1", port=8080)
 showImages(getImages(sendRequest(json.dumps({'seed': -1, 'batch_count':4, 'sample_steps':24, 'width': 512, 'height':768, 'negative_prompt': "Bad quality", 'prompt': "A beautiful image"}))))""")
     
 if __name__ == "__main__":
