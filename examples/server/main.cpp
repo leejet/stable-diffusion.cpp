@@ -788,7 +788,7 @@ int main(int argc, const char* argv[]) {
                 // Todo: return base64 encoded image via httplib::Response& res
 
                 int len;
-                unsigned char* png = stbi_write_png_to_mem((const unsigned char*)results[i].data, 0, results[i].width, results[i].height, results[i].channel, &len, NULL);
+                unsigned char* png = stbi_write_png_to_mem((const unsigned char*)results[i].data, 0, results[i].width, results[i].height, results[i].channel, &len, get_image_params(params, params.seed + i).c_str());
 
                 std::string data_str(png, png + len);
                 std::string encoded_img = base64_encode(data_str);
