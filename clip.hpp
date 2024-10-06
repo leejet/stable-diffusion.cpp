@@ -76,7 +76,7 @@ public:
     const std::string UNK_TOKEN = "<|endoftext|>";
     const std::string BOS_TOKEN = "<|startoftext|>";
     const std::string EOS_TOKEN = "<|endoftext|>";
-    const std::string PAD_TOEKN = "<|endoftext|>";
+    const std::string PAD_TOKEN = "<|endoftext|>";
 
     const int UNK_TOKEN_ID = 49407;
     const int BOS_TOKEN_ID = 49406;
@@ -388,7 +388,7 @@ public:
                 std::string token_str = token.str();
                 std::u32string utf32_token;
                 for (int i = 0; i < token_str.length(); i++) {
-                    char b = token_str[i];
+                    unsigned char b = token_str[i];
                     utf32_token += byte_encoder[b];
                 }
                 auto bpe_strs = bpe(utf32_token);

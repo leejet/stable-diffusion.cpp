@@ -21,10 +21,10 @@ Inference of Stable Diffusion and Flux in pure C/C++
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA, Metal and SYCL backend for GPU acceleration.
+- Full CUDA, Metal, Vulkan and SYCL backend for GPU acceleration.
 - Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
-- Flash Attention for memory usage optimization (only cpu for now)
+- Flash Attention for memory usage optimization
 - Original `txt2img` and `img2img` mode
 - Negative prompt
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
@@ -142,6 +142,15 @@ cmake .. -DSD_METAL=ON
 cmake --build . --config Release
 ```
 
+##### Using Vulkan
+
+Install Vulkan SDK from https://www.lunarg.com/vulkan-sdk/.
+
+```
+cmake .. -DSD_VULKAN=ON
+cmake --build . --config Release
+```
+
 ##### Using SYCL
 
 Using SYCL makes the computation run on the Intel GPU. Please make sure you have installed the related driver and [Intel® oneAPI Base toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) before start. More details and steps can refer to [llama.cpp SYCL backend](https://github.com/ggerganov/llama.cpp/blob/master/docs/backend/SYCL.md#linux).
@@ -163,23 +172,31 @@ Example of text2img by using SYCL backend:
 
 - download `stable-diffusion` model weight, refer to [download-weight](#download-weights).
 
-- run `./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors --cfg-scale 5 --steps 30 --sampling-method euler  -H 512 -W 512 --seed 42 -p "fantasy medieval village world inside a glass sphere , high detail, fantasy, realistic, light effect, hyper detail, volumetric lighting, cinematic, macro, depth of field, blur, red light and clouds from the back, highly detailed epic cinematic concept art cg render made in maya, blender and photoshop, octane render, excellent composition, dynamic dramatic cinematic lighting, aesthetic, very inspirational, world inside a glass sphere by james gurney by artgerm with james jean, joe fenton and tristan eaton by ross tran, fine details, 4k resolution"`
+- run `./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors --cfg-scale 5 --steps 30 --sampling-method euler  -H 1024 -W 1024 --seed 42 -p "fantasy medieval village world inside a glass sphere , high detail, fantasy, realistic, light effect, hyper detail, volumetric lighting, cinematic, macro, depth of field, blur, red light and clouds from the back, highly detailed epic cinematic concept art cg render made in maya, blender and photoshop, octane render, excellent composition, dynamic dramatic cinematic lighting, aesthetic, very inspirational, world inside a glass sphere by james gurney by artgerm with james jean, joe fenton and tristan eaton by ross tran, fine details, 4k resolution"`
 
 <p align="center">
   <img src="./assets/sycl_sd3_output.png" width="360x">
 </p>
 
-> [!NOTE]
-> Try to set smaller image height and width (for example, `-H 512 -W 512`) if you meet `Provided range is out of integer limits. Pass '-fno-sycl-id-queries-fit-in-int' to disable range check.`
 
 
 ##### Using Flash Attention
 
-Enabling flash attention reduces memory usage by at least 400 MB. At the moment, it is not supported when CUBLAS is enabled because the kernel implementation is missing.
+Enabling flash attention for the diffusion model reduces memory usage by varying amounts of MB.
+eg.:
+ - flux 768x768 ~600mb
+ - SD2 768x768 ~1400mb
 
+For most backends, it slows things down, but for cuda it generally speeds it up too.
+At the moment, it is only supported for some models and some backends (like cpu, cuda/rocm, metal).
+
+Run by adding `--diffusion-fa` to the arguments and watch for:
 ```
-cmake .. -DSD_FLASH_ATTN=ON
-cmake --build . --config Release
+[INFO ] stable-diffusion.cpp:312  - Using flash attention in the diffusion model
+```
+and the compute buffer shrink in the debug log:
+```
+[DEBUG] ggml_extend.hpp:1004 - flux compute buffer size: 650.00 MB(VRAM)
 ```
 
 ### Run
@@ -192,7 +209,10 @@ arguments:
   -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)
   -t, --threads N                    number of threads to use during computation (default: -1).
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
-  -m, --model [MODEL]                path to model
+  -m, --model [MODEL]                path to full model
+  --diffusion-model                  path to the standalone diffusion model
+  --clip_l                           path to the clip-l text encoder
+  --t5xxl                            path to the the t5xxl text encoder.
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
@@ -217,16 +237,21 @@ arguments:
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
-  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}
+  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}
                                      sampling method (default: "euler_a")
   --steps  STEPS                     number of sample steps (default: 20)
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate.
-  --schedule {discrete, karras, ays} Denoiser sigma schedule (default: discrete)
+  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)
   --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
+  --vae-on-cpu                       keep vae in cpu (for low vram)
+  --clip-on-cpu                      keep clip in cpu (for low vram).
+  --diffusion-fa                     use flash attention in the diffusion model (for low vram).
+                                     Might lower quality, since it implies converting k and v to f16.
+                                     This might crash if it is not supported by the backend.
   --control-net-cpu                  keep controlnet in cpu (for low vram)
   --canny                            apply canny preprocessor (edge detection)
   --color                            Colors the logging tags according to level
@@ -290,6 +315,10 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 Thank you to all the people who have already contributed to stable-diffusion.cpp!
 
 [![Contributors](https://contrib.rocks/image?repo=leejet/stable-diffusion.cpp)](https://github.com/leejet/stable-diffusion.cpp/graphs/contributors)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=leejet/stable-diffusion.cpp&type=Date)](https://star-history.com/#leejet/stable-diffusion.cpp&Date)
 
 ## References
 

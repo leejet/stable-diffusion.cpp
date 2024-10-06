@@ -41,6 +41,8 @@ const char* sampling_methods_str[] = {
     "DPM++ (2s)",
     "DPM++ (2M)",
     "modified DPM++ (2M)",
+    "iPNDM",
+    "iPNDM_v",
     "LCM",
 };
 
@@ -149,7 +151,8 @@ public:
                         schedule_t schedule,
                         bool clip_on_cpu,
                         bool control_net_cpu,
-                        bool vae_on_cpu) {
+                        bool vae_on_cpu,
+                        bool diffusion_flash_attn) {
         use_tiny_autoencoder = taesd_path.size() > 0;
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
@@ -160,6 +163,15 @@ public:
         ggml_backend_metal_log_set_callback(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
+#ifdef SD_USE_VULKAN
+        LOG_DEBUG("Using Vulkan backend");
+        for (int device = 0; device < ggml_backend_vk_get_device_count(); ++device) {
+            backend = ggml_backend_vk_init(device);
+        }
+        if(!backend) {
+            LOG_WARN("Failed to initialize Vulkan backend");
+        }
+#endif
 #ifdef SD_USE_SYCL
         LOG_DEBUG("Using SYCL backend");
         backend = ggml_backend_sycl_init(0);
@@ -169,13 +181,7 @@ public:
             LOG_DEBUG("Using CPU backend");
             backend = ggml_backend_cpu_init();
         }
-#ifdef SD_USE_FLASH_ATTENTION
-#if defined(SD_USE_CUBLAS) || defined(SD_USE_METAL) || defined(SD_USE_SYCL)
-        LOG_WARN("Flash Attention not supported with GPU Backend");
-#else
-        LOG_INFO("Flash Attention enabled");
-#endif
-#endif
+
         ModelLoader model_loader;
 
         vae_tiling = vae_tiling_;
@@ -254,7 +260,7 @@ public:
 
         LOG_INFO("Weight type:                 %s", ggml_type_name(model_wtype));
         LOG_INFO("Conditioner weight type:     %s", ggml_type_name(conditioner_wtype));
-        LOG_INFO("Diffsuion model weight type: %s", ggml_type_name(diffusion_model_wtype));
+        LOG_INFO("Diffusion model weight type: %s", ggml_type_name(diffusion_model_wtype));
         LOG_INFO("VAE weight type:             %s", ggml_type_name(vae_wtype));
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
@@ -302,15 +308,21 @@ public:
                 LOG_INFO("CLIP: Using CPU backend");
                 clip_backend = ggml_backend_cpu_init();
             }
+            if (diffusion_flash_attn) {
+                LOG_INFO("Using flash attention in the diffusion model");
+            }
             if (version == VERSION_SD3_2B) {
+                if (diffusion_flash_attn) {
+                    LOG_WARN("flash attention in this diffusion model is currently unsupported!");
+                }
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, conditioner_wtype);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend, diffusion_model_wtype, version);
             } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, conditioner_wtype);
-                diffusion_model  = std::make_shared<FluxModel>(backend, diffusion_model_wtype, version);
+                diffusion_model  = std::make_shared<FluxModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             } else {
                 cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version);
-                diffusion_model  = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version);
+                diffusion_model  = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             }
             cond_stage_model->alloc_params_buffer();
             cond_stage_model->get_param_tensors(tensors);
@@ -527,9 +539,18 @@ public:
                     LOG_INFO("running with Karras schedule");
                     denoiser->schedule = std::make_shared<KarrasSchedule>();
                     break;
+                case EXPONENTIAL:
+                    LOG_INFO("running exponential schedule");
+                    denoiser->schedule = std::make_shared<ExponentialSchedule>();
+                    break;
                 case AYS:
                     LOG_INFO("Running with Align-Your-Steps schedule");
                     denoiser->schedule          = std::make_shared<AYSSchedule>();
+                    denoiser->schedule->version = version;
+                    break;
+                case GITS:
+                    LOG_INFO("Running with GITS schedule");
+                    denoiser->schedule          = std::make_shared<GITSSchedule>();
                     denoiser->schedule->version = version;
                     break;
                 case DEFAULT:
@@ -1005,7 +1026,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      enum schedule_t s,
                      bool keep_clip_on_cpu,
                      bool keep_control_net_cpu,
-                     bool keep_vae_on_cpu) {
+                     bool keep_vae_on_cpu,
+                     bool diffusion_flash_attn) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == NULL) {
         return NULL;
@@ -1044,7 +1066,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     s,
                                     keep_clip_on_cpu,
                                     keep_control_net_cpu,
-                                    keep_vae_on_cpu)) {
+                                    keep_vae_on_cpu,
+                                    diffusion_flash_attn)) {
         delete sd_ctx->sd;
         sd_ctx->sd = NULL;
         free(sd_ctx);

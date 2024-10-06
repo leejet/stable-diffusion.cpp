@@ -101,8 +101,8 @@ public:
     TimestepEmbedder(int64_t hidden_size,
                      int64_t frequency_embedding_size = 256)
         : frequency_embedding_size(frequency_embedding_size) {
-        blocks["mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(frequency_embedding_size, hidden_size));
-        blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
+        blocks["mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(frequency_embedding_size, hidden_size, true, true));
+        blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size, true, true));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* t) {
@@ -125,8 +125,8 @@ struct VectorEmbedder : public GGMLBlock {
 public:
     VectorEmbedder(int64_t input_dim,
                    int64_t hidden_size) {
-        blocks["mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(input_dim, hidden_size));
-        blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
+        blocks["mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(input_dim, hidden_size, true, true));
+        blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size, true, true));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -423,7 +423,7 @@ public:
                int64_t out_channels) {
         // total_out_channels is always None
         blocks["norm_final"]         = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-06f, false));
-        blocks["linear"]             = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, patch_size * patch_size * out_channels));
+        blocks["linear"]             = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, patch_size * patch_size * out_channels, true, true));
         blocks["adaLN_modulation.1"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, 2 * hidden_size));
     }
 
@@ -510,7 +510,7 @@ public:
             blocks["y_embedder"] = std::shared_ptr<GGMLBlock>(new VectorEmbedder(adm_in_channels, hidden_size));
         }
 
-        blocks["context_embedder"] = std::shared_ptr<GGMLBlock>(new Linear(4096, 1536));
+        blocks["context_embedder"] = std::shared_ptr<GGMLBlock>(new Linear(4096, 1536, true, true));
 
         for (int i = 0; i < depth; i++) {
             blocks["joint_blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new JointBlock(hidden_size,
