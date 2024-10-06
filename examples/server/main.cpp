@@ -720,7 +720,9 @@ int main(int argc, const char* argv[]) {
                                   params.schedule,
                                   params.clip_on_cpu,
                                   true,
-                                  params.vae_on_cpu);
+                                  params.vae_on_cpu,
+								  true
+								  );
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
