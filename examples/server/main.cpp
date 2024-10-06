@@ -628,9 +628,18 @@ void parseJsonPrompt(std::string json_str, SDParams* params) {
     }
     try {
         std::string sample_method = payload["sample_method"];
-        // TODO map to enum value
-        // LOG_WARN("sample_method is not supported yet\n");
-        sd_log(sd_log_level_t::SD_LOG_WARN, "sample_method is not supported yet\n");
+
+        int sample_method_found = -1;
+        for (int m = 0; m < N_SAMPLE_METHODS; m++) {
+            if (!strcmp(sample_method.c_str(), sample_method_str[m])) {
+                sample_method_found = m;
+            }
+        }
+        if (sample_method_found >= 0) {
+            params->sample_method = (sample_method_t)sample_method_found;
+        } else {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown sampling method: %s\n", sample_method.c_str());
+        }
     } catch (...) {
     }
     try {
