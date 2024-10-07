@@ -922,7 +922,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
         size_t offset             = data_offset + gguf_get_tensor_offset(ctx_gguf_, i);
 
         if(i==0 && starts_with(name,prefix)){
-            LOG_WARN("Tensors have built-in %s prefix.\n", prefix);
+            LOG_WARN("Tensors have built-in %s prefix.\n", prefix.c_str());
             if(prefix == "model.diffusion_model."){
                 // the user probably used `--diffusion-model` instead of `-m`
                 LOG_WARN("Try using `-m`or `--model` instead of `--diffusion-model`\n");
@@ -1061,7 +1061,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         if(i++==0 && starts_with(name,prefix)){
-            LOG_WARN("Tensors have built-in %s prefix.\n", prefix);
+            LOG_WARN("Tensors have built-in %s prefix.\n", prefix.c_str());
             if(prefix == "model.diffusion_model."){
                 // the user probably used `--diffusion-model` instead of `-m`
                 LOG_WARN("Try using `-m`or `--model` instead of `--diffusion-model`\n");
@@ -1452,7 +1452,7 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
             std::string name = zip_entry_name(zip);
             size_t pos       = name.find("data.pkl");
             if(i==0 && starts_with(name,prefix)){
-                LOG_WARN("Tensors have built-in %s prefix.\n", prefix);
+                LOG_WARN("Tensors have built-in %s prefix.\n", prefix.c_str());
                 if(prefix == "model.diffusion_model."){
                     // the user probably used `--diffusion-model` instead of `-m`
                     LOG_WARN("Try using `-m`or `--model` instead of `--diffusion-model`\n");
