@@ -915,10 +915,19 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
 
     size_t total_size  = 0;
     size_t data_offset = gguf_get_data_offset(ctx_gguf_);
+
     for (int i = 0; i < n_tensors; i++) {
         std::string name          = gguf_get_tensor_name(ctx_gguf_, i);
         struct ggml_tensor* dummy = ggml_get_tensor(ctx_meta_, name.c_str());
         size_t offset             = data_offset + gguf_get_tensor_offset(ctx_gguf_, i);
+
+        if(i==0 && starts_with(name,prefix)){
+            LOG_WARN("Tensors have built-in %s prefix.\n", prefix);
+            if(prefix == "model.diffusion_model."){
+                // the user probably used `--diffusion-model` instead of `-m`
+                LOG_WARN("Try using `-m`or `--model` instead of `--diffusion-model`\n");
+            }
+        }
 
         // LOG_DEBUG("%s", name.c_str());
 
@@ -1000,6 +1009,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 
     nlohmann::json header_ = nlohmann::json::parse(header_buf.data());
 
+    int i =0;
     for (auto& item : header_.items()) {
         std::string name           = item.key();
         nlohmann::json tensor_info = item.value();
@@ -1048,6 +1058,14 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         // ggml_n_dims returns 1 for scalars
         if (n_dims == 0) {
             n_dims = 1;
+        }
+
+        if(i++==0 && starts_with(name,prefix)){
+            LOG_WARN("Tensors have built-in %s prefix.\n", prefix);
+            if(prefix == "model.diffusion_model."){
+                // the user probably used `--diffusion-model` instead of `-m`
+                LOG_WARN("Try using `-m`or `--model` instead of `--diffusion-model`\n");
+            }
         }
 
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
@@ -1433,6 +1451,13 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
         {
             std::string name = zip_entry_name(zip);
             size_t pos       = name.find("data.pkl");
+            if(i==0 && starts_with(name,prefix)){
+                LOG_WARN("Tensors have built-in %s prefix.\n", prefix);
+                if(prefix == "model.diffusion_model."){
+                    // the user probably used `--diffusion-model` instead of `-m`
+                    LOG_WARN("Try using `-m`or `--model` instead of `--diffusion-model`\n");
+                }
+            }
             if (pos != std::string::npos) {
                 std::string dir = name.substr(0, pos);
                 printf("ZIP %d, name = %s, dir = %s \n", i, name.c_str(), dir.c_str());
