@@ -1065,7 +1065,7 @@ struct FluxCLIPEmbedder : public Conditioner {
         return {{clip_l_tokens, clip_l_weights}, {t5_tokens, t5_weights}};
     }
 
-      SDCondition get_learned_condition_common(ggml_context* work_ctx,
+    SDCondition get_learned_condition_common(ggml_context* work_ctx,
                                              int n_threads,
                                              std::vector<std::pair<std::vector<int>, std::vector<float>>> token_and_weights,
                                              int clip_skip,
