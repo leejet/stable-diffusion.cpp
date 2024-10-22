@@ -63,6 +63,7 @@ struct SDParams {
     int n_threads = -1;
     SDMode mode   = TXT2IMG;
 
+    // models
     std::string model_path;
     std::string clip_l_path;
     std::string t5xxl_path;
@@ -71,8 +72,9 @@ struct SDParams {
     // std::string taesd_path;
     std::string embeddings_path;
     std::string stacked_id_embeddings_path;
-    sd_type_t wtype = SD_TYPE_COUNT;
     std::string lora_model_dir;
+
+    sd_type_t wtype = SD_TYPE_COUNT;
     std::string output_path = "output.png";
     std::string input_path;
 
@@ -99,6 +101,9 @@ struct SDParams {
     bool clip_on_cpu              = false;
     bool vae_on_cpu               = false;
     bool color                    = false;
+
+    // Photomaker params
+    std::string input_id_images_path;
 
     // server things
     int port         = 8080;
@@ -660,6 +665,7 @@ void parseJsonPrompt(std::string json_str, SDParams* params) {
 
     try {
         std::string control_cond = payload["control_cond"];
+
         // TODO map to enum value
         // LOG_WARN("control_cond is not supported yet\n");
         sd_log(sd_log_level_t::SD_LOG_WARN, "control_cond is not supported yet\n");
@@ -667,10 +673,16 @@ void parseJsonPrompt(std::string json_str, SDParams* params) {
     }
     try {
         float control_strength = payload["control_strength"];
+        // params->control_strength = control_strength;
+        // LOG_WARN("control_strength is not supported yet\n");
+        sd_log(sd_log_level_t::SD_LOG_WARN, "control_strength is not supported yet\n", params);
     } catch (...) {
     }
     try {
         float style_strength = payload["style_strength"];
+        // params->style_strength = style_strength;
+        // LOG_WARN("style_strength is not supported yet\n");
+        sd_log(sd_log_level_t::SD_LOG_WARN, "style_strength is not supported yet\n", params);
     } catch (...) {
     }
     try {
@@ -681,6 +693,7 @@ void parseJsonPrompt(std::string json_str, SDParams* params) {
     try {
         std::string input_id_images_path = payload["input_id_images_path"];
         // TODO replace with b64 image maybe?
+        params->input_id_images_path = input_id_images_path;
     } catch (...) {
     }
 }
@@ -774,7 +787,7 @@ int main(int argc, const char* argv[]) {
                               1,
                               params.style_ratio,
                               params.normalize_input,
-                              "");
+                              params.input_id_images_path.c_str());
 
             if (results == NULL) {
                 printf("generate failed\n");
