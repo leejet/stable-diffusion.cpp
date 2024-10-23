@@ -71,6 +71,7 @@ struct SDParams {
     SDMode mode   = TXT2IMG;
 
     std::string model_path;
+    std::string clip_g_path;
     std::string clip_l_path;
     std::string t5xxl_path;
     std::string diffusion_model_path;
@@ -127,6 +128,7 @@ void print_params(SDParams params) {
     printf("    mode:              %s\n", modes_str[params.mode]);
     printf("    model_path:        %s\n", params.model_path.c_str());
     printf("    wtype:             %s\n", params.wtype < SD_TYPE_COUNT ? sd_type_name(params.wtype) : "unspecified");
+    printf("    clip_g_path:       %s\n", params.clip_g_path.c_str());
     printf("    clip_l_path:       %s\n", params.clip_l_path.c_str());
     printf("    t5xxl_path:        %s\n", params.t5xxl_path.c_str());
     printf("    diffusion_model_path:   %s\n", params.diffusion_model_path.c_str());
@@ -175,6 +177,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to full model\n");
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
+    printf("  --clip_g                           path to the clip-g text encoder\n");
     printf("  --clip_l                           path to the clip-l text encoder\n");
     printf("  --t5xxl                            path to the the t5xxl text encoder.\n");
     printf("  --vae [VAE]                        path to vae\n");
@@ -256,6 +259,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.model_path = argv[i];
+        } else if (arg == "--clip_g") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.clip_g_path = argv[i];
         } else if (arg == "--clip_l") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -764,6 +773,7 @@ int main(int argc, const char* argv[]) {
     }
 
     sd_ctx_t* sd_ctx = new_sd_ctx(params.model_path.c_str(),
+                                  params.clip_g_path.c_str(),
                                   params.clip_l_path.c_str(),
                                   params.t5xxl_path.c_str(),
                                   params.diffusion_model_path.c_str(),
