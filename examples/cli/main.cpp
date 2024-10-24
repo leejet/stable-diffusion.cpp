@@ -69,9 +69,9 @@ enum SDMode {
 struct SDParams {
     int n_threads = -1;
     SDMode mode   = TXT2IMG;
-
     std::string model_path;
     std::string clip_l_path;
+    std::string clip_g_path;
     std::string t5xxl_path;
     std::string diffusion_model_path;
     std::string vae_path;
@@ -128,6 +128,7 @@ void print_params(SDParams params) {
     printf("    model_path:        %s\n", params.model_path.c_str());
     printf("    wtype:             %s\n", params.wtype < SD_TYPE_COUNT ? sd_type_name(params.wtype) : "unspecified");
     printf("    clip_l_path:       %s\n", params.clip_l_path.c_str());
+    printf("    clip_g_path:       %s\n", params.clip_g_path.c_str());
     printf("    t5xxl_path:        %s\n", params.t5xxl_path.c_str());
     printf("    diffusion_model_path:   %s\n", params.diffusion_model_path.c_str());
     printf("    vae_path:          %s\n", params.vae_path.c_str());
@@ -171,23 +172,24 @@ void print_usage(int argc, const char* argv[]) {
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
     printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)\n");
-    printf("  -t, --threads N                    number of threads to use during computation (default: -1).\n");
+    printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to full model\n");
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
     printf("  --clip_l                           path to the clip-l text encoder\n");
-    printf("  --t5xxl                            path to the the t5xxl text encoder.\n");
+    printf("  --clip_g                           path to the clip-l text encoder\n");
+    printf("  --t5xxl                            path to the the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
-    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
-    printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings.\n");
-    printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir.\n");
+    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
+    printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings\n");
+    printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir\n");
     printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
-    printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
+    printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now\n");
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)\n");
-    printf("                                     If not specified, the default is the type of the weight file.\n");
+    printf("                                     If not specified, the default is the type of the weight file\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
@@ -206,13 +208,13 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
-    printf("  -b, --batch-count COUNT            number of images to generate.\n");
+    printf("  -b, --batch-count COUNT            number of images to generate\n");
     printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
     printf("  --vae-on-cpu                       keep vae in cpu (for low vram)\n");
-    printf("  --clip-on-cpu                      keep clip in cpu (for low vram).\n");
+    printf("  --clip-on-cpu                      keep clip in cpu (for low vram)\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            Colors the logging tags according to level\n");
@@ -262,6 +264,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.clip_l_path = argv[i];
+        } else if (arg == "--clip_g") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.clip_g_path = argv[i];
         } else if (arg == "--t5xxl") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -765,6 +773,7 @@ int main(int argc, const char* argv[]) {
 
     sd_ctx_t* sd_ctx = new_sd_ctx(params.model_path.c_str(),
                                   params.clip_l_path.c_str(),
+                                  params.clip_g_path.c_str(),
                                   params.t5xxl_path.c_str(),
                                   params.diffusion_model_path.c_str(),
                                   params.vae_path.c_str(),
