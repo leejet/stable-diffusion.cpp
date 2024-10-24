@@ -712,7 +712,7 @@ public:
             auto text_projection = params["text_projection"];
             ggml_tensor* pooled  = ggml_view_1d(ctx, x, hidden_size, x->nb[1] * max_token_idx);
             if (text_projection != NULL) {
-                pooled           = ggml_mul_mat(ctx, ggml_cont(ctx, ggml_transpose(ctx, text_projection)), pooled);
+                pooled           = ggml_nn_linear(ctx, pooled, text_projection, NULL);
             } else {
                 LOG_DEBUG("Missing text_projection matrix, assuming identity...");
             }
