@@ -107,6 +107,8 @@ enum sd_log_level_t {
 
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
 typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
+typedef void (*sd_result_cb_t)(size_t number, uint8_t* image_data, void* data);
+typedef void (*sd_result_step_cb_t)(size_t number, size_t step, uint8_t* image_data, void* data);
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
@@ -145,6 +147,8 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             bool keep_vae_on_cpu);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
+SD_API void sd_ctx_set_result_callback(sd_ctx_t* sd_ctx, sd_result_cb_t cb, void* data);
+SD_API void sd_ctx_set_result_step_callback(sd_ctx_t* sd_ctx, sd_result_step_cb_t cb, void* data);
 
 SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            const char* prompt,
