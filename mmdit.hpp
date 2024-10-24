@@ -142,29 +142,77 @@ public:
     }
 };
 
+class RMSNorm : public UnaryBlock {
+protected:
+    int64_t hidden_size;
+    float eps;
+
+    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+        params["weight"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
+    }
+
+public:
+    RMSNorm(int64_t hidden_size,
+            float eps = 1e-06f)
+        : hidden_size(hidden_size),
+          eps(eps) {}
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* w = params["weight"];
+        x                     = ggml_rms_norm(ctx, x, eps);
+        x                     = ggml_mul(ctx, x, w);
+        return x;
+    }
+};
+
 class SelfAttention : public GGMLBlock {
 public:
     int64_t num_heads;
     bool pre_only;
+    std::string qk_norm;
 
 public:
     SelfAttention(int64_t dim,
-                  int64_t num_heads = 8,
-                  bool qkv_bias     = false,
-                  bool pre_only     = false)
-        : num_heads(num_heads), pre_only(pre_only) {
-        // qk_norm is always None
-        blocks["qkv"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
+                  int64_t num_heads   = 8,
+                  std::string qk_norm = "",
+                  bool qkv_bias       = false,
+                  bool pre_only       = false)
+        : num_heads(num_heads), pre_only(pre_only), qk_norm(qk_norm) {
+        int64_t d_head = dim / num_heads;
+        blocks["qkv"]  = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
         if (!pre_only) {
             blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
+        }
+        if (qk_norm == "rms") {
+            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6));
+            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new RMSNorm(d_head, 1.0e-6));
+        } else if (qk_norm == "ln") {
+            blocks["ln_q"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6));
+            blocks["ln_k"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_head, 1.0e-6));
         }
     }
 
     std::vector<struct ggml_tensor*> pre_attention(struct ggml_context* ctx, struct ggml_tensor* x) {
         auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
 
-        auto qkv = qkv_proj->forward(ctx, x);
-        return split_qkv(ctx, qkv);
+        auto qkv         = qkv_proj->forward(ctx, x);
+        auto qkv_vec     = split_qkv(ctx, qkv);
+        int64_t head_dim = qkv_vec[0]->ne[0] / num_heads;
+        auto q           = ggml_reshape_4d(ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
+        auto k           = ggml_reshape_4d(ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
+        auto v           = qkv_vec[2];                                                                                   // [N, n_token, n_head*d_head]
+
+        if (qk_norm == "rms" || qk_norm == "ln") {
+            auto ln_q = std::dynamic_pointer_cast<UnaryBlock>(blocks["ln_q"]);
+            auto ln_k = std::dynamic_pointer_cast<UnaryBlock>(blocks["ln_k"]);
+            q         = ln_q->forward(ctx, q);
+            k         = ln_k->forward(ctx, k);
+        }
+
+        q = ggml_reshape_3d(ctx, q, q->ne[0] * q->ne[1], q->ne[2], q->ne[3]);  // [N, n_token, n_head*d_head]
+        k = ggml_reshape_3d(ctx, k, k->ne[0] * k->ne[1], k->ne[2], k->ne[3]);  // [N, n_token, n_head*d_head]
+
+        return {q, k, v};
     }
 
     struct ggml_tensor* post_attention(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -208,16 +256,16 @@ public:
 public:
     DismantledBlock(int64_t hidden_size,
                     int64_t num_heads,
-                    float mlp_ratio = 4.0,
-                    bool qkv_bias   = false,
-                    bool pre_only   = false)
+                    float mlp_ratio     = 4.0,
+                    std::string qk_norm = "",
+                    bool qkv_bias       = false,
+                    bool pre_only       = false)
         : num_heads(num_heads), pre_only(pre_only) {
         // rmsnorm is always Flase
         // scale_mod_only is always Flase
         // swiglu is always Flase
-        // qk_norm is always Flase
         blocks["norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-06f, false));
-        blocks["attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, pre_only));
+        blocks["attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qk_norm, qkv_bias, pre_only));
 
         if (!pre_only) {
             blocks["norm2"]        = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-06f, false));
@@ -396,12 +444,12 @@ struct JointBlock : public GGMLBlock {
 public:
     JointBlock(int64_t hidden_size,
                int64_t num_heads,
-               float mlp_ratio = 4.0,
-               bool qkv_bias   = false,
-               bool pre_only   = false) {
-        // qk_norm is always Flase
-        blocks["context_block"] = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qkv_bias, pre_only));
-        blocks["x_block"]       = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qkv_bias, false));
+               float mlp_ratio     = 4.0,
+               std::string qk_norm = "",
+               bool qkv_bias       = false,
+               bool pre_only       = false) {
+        blocks["context_block"] = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qk_norm, qkv_bias, pre_only));
+        blocks["x_block"]       = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qk_norm, qkv_bias, false));
     }
 
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
@@ -455,18 +503,20 @@ public:
 struct MMDiT : public GGMLBlock {
     // Diffusion model with a Transformer backbone.
 protected:
-    SDVersion version          = VERSION_SD3_2B;
-    int64_t input_size         = -1;
-    int64_t patch_size         = 2;
-    int64_t in_channels        = 16;
-    int64_t depth              = 24;
-    float mlp_ratio            = 4.0f;
-    int64_t adm_in_channels    = 2048;
-    int64_t out_channels       = 16;
-    int64_t pos_embed_max_size = 192;
-    int64_t num_patchs         = 36864;  // 192 * 192
-    int64_t context_size       = 4096;
+    SDVersion version                = VERSION_SD3_2B;
+    int64_t input_size               = -1;
+    int64_t patch_size               = 2;
+    int64_t in_channels              = 16;
+    int64_t depth                    = 24;
+    float mlp_ratio                  = 4.0f;
+    int64_t adm_in_channels          = 2048;
+    int64_t out_channels             = 16;
+    int64_t pos_embed_max_size       = 192;
+    int64_t num_patchs               = 36864;  // 192 * 192
+    int64_t context_size             = 4096;
+    int64_t context_embedder_out_dim = 1536;
     int64_t hidden_size;
+    std::string qk_norm;
 
     void init_params(struct ggml_context* ctx, ggml_type wtype) {
         params["pos_embed"] = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hidden_size, num_patchs, 1);
@@ -481,23 +531,36 @@ public:
         // rmsnorm is alwalys False
         // scale_mod_only is alwalys False
         // swiglu is alwalys False
-        // qk_norm is always None
         // qkv_bias is always True
         // context_processor_layers is always None
         // pos_embed_scaling_factor is not used
         // pos_embed_offset is not used
         // context_embedder_config is always {'target': 'torch.nn.Linear', 'params': {'in_features': 4096, 'out_features': 1536}}
         if (version == VERSION_SD3_2B) {
-            input_size         = -1;
-            patch_size         = 2;
-            in_channels        = 16;
-            depth              = 24;
-            mlp_ratio          = 4.0f;
-            adm_in_channels    = 2048;
-            out_channels       = 16;
-            pos_embed_max_size = 192;
-            num_patchs         = 36864;  // 192 * 192
-            context_size       = 4096;
+            input_size               = -1;
+            patch_size               = 2;
+            in_channels              = 16;
+            depth                    = 24;
+            mlp_ratio                = 4.0f;
+            adm_in_channels          = 2048;
+            out_channels             = 16;
+            pos_embed_max_size       = 192;
+            num_patchs               = 36864;  // 192 * 192
+            context_size             = 4096;
+            context_embedder_out_dim = 1536;
+        } else if (version == VERSION_SD3_5_8B) {
+            input_size               = -1;
+            patch_size               = 2;
+            in_channels              = 16;
+            depth                    = 38;
+            mlp_ratio                = 4.0f;
+            adm_in_channels          = 2048;
+            out_channels             = 16;
+            pos_embed_max_size       = 192;
+            num_patchs               = 36864;  // 192 * 192
+            context_size             = 4096;
+            context_embedder_out_dim = 2432;
+            qk_norm                  = "rms";
         }
         int64_t default_out_channels = in_channels;
         hidden_size                  = 64 * depth;
@@ -510,12 +573,13 @@ public:
             blocks["y_embedder"] = std::shared_ptr<GGMLBlock>(new VectorEmbedder(adm_in_channels, hidden_size));
         }
 
-        blocks["context_embedder"] = std::shared_ptr<GGMLBlock>(new Linear(4096, 1536, true, true));
+        blocks["context_embedder"] = std::shared_ptr<GGMLBlock>(new Linear(4096, context_embedder_out_dim, true, true));
 
         for (int i = 0; i < depth; i++) {
             blocks["joint_blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new JointBlock(hidden_size,
                                                                                                     num_heads,
                                                                                                     mlp_ratio,
+                                                                                                    qk_norm,
                                                                                                     true,
                                                                                                     i == depth - 1));
         }

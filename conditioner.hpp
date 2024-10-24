@@ -1001,8 +1001,8 @@ struct FluxCLIPEmbedder : public Conditioner {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
-        clip_l->get_param_tensors(tensors, "text_encoders.clip_l.text_model");
-        t5->get_param_tensors(tensors, "text_encoders.t5xxl");
+        clip_l->get_param_tensors(tensors, "text_encoders.clip_l.transformer.text_model");
+        t5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
     }
 
     void alloc_params_buffer() {

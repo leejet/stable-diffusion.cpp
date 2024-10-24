@@ -124,6 +124,7 @@ typedef struct sd_ctx_t sd_ctx_t;
 
 SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             const char* clip_l_path,
+                            const char* clip_g_path,
                             const char* t5xxl_path,
                             const char* diffusion_model_path,
                             const char* vae_path,

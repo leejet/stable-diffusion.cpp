@@ -457,7 +457,7 @@ public:
                        bool use_video_decoder = false,
                        SDVersion version      = VERSION_SD1)
         : decode_only(decode_only), use_video_decoder(use_video_decoder) {
-        if (version == VERSION_SD3_2B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+        if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
             dd_config.z_channels = 16;
             use_quant            = false;
         }
