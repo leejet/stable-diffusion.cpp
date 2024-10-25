@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sun Aug 18 15:52:46 2024
-
-@author: merli
-"""
 import os
 import sys
 
@@ -45,7 +39,6 @@ if __name__ == "__main__":
     face_detector = FaceAnalysis2(providers=['CPUExecutionProvider'], allowed_modules=['detection', 'recognition'])
     face_detector.prepare(ctx_id=0, det_size=(640, 640))
     #input_folder_name = './scarletthead_woman'
-    #input_folder_name = './Elizabeth'
     input_folder_name = sys.argv[1]
     image_basename_list = os.listdir(input_folder_name)
     image_path_list = sorted([os.path.join(input_folder_name, basename) for basename in image_basename_list])
