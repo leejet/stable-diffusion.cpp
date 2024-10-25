@@ -146,7 +146,6 @@ public:
                         const std::string control_net_path,
                         const std::string embeddings_path,
                         const std::string id_embeddings_path,
-                        const std::string input_id_images_path,
                         const std::string& taesd_path,
                         bool vae_tiling_,
                         ggml_type wtype,
@@ -378,17 +377,6 @@ public:
                     LOG_WARN("loading stacked ID embedding from '%s' failed", id_embeddings_path.c_str());
                 } else {
                     stacked_id = true;
-                }
-                if(stacked_id){
-                    if(id_embeddings_path.find("v2") != std::string::npos) {
-                        std::string id_embed_path = path_join(input_id_images_path, "id_embeds.safetensors");
-                        pmid_id_embeds = std::make_shared<PhotoMakerIDEmbed>(backend, model_wtype,
-                               &model_loader, id_embed_path, "pmid.");                        
-                        if (!pmid_id_embeds->load_from_file(true)) {
-                            LOG_ERROR("load photomaker id embed tensors from %s failed", id_embed_path.c_str());
-                            return false;
-                        }
-                    }
                 }
             }
             if (stacked_id) {
@@ -1032,7 +1020,6 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      const char* lora_model_dir_c_str,
                      const char* embed_dir_c_str,
                      const char* id_embed_dir_c_str,
-                     const char* input_id_images_dir_c_str,
                      bool vae_decode_only,
                      bool vae_tiling,
                      bool free_params_immediately,
@@ -1056,7 +1043,6 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
     std::string control_net_path(control_net_path_c_str);
     std::string embd_path(embed_dir_c_str);
     std::string id_embd_path(id_embed_dir_c_str);
-    std::string input_id_images_path(input_id_images_dir_c_str);
     std::string lora_model_dir(lora_model_dir_c_str);
 
     sd_ctx->sd = new StableDiffusionGGML(n_threads,
@@ -1076,7 +1062,6 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     control_net_path,
                                     embd_path,
                                     id_embd_path,
-                                    input_id_images_path,
                                     taesd_path,
                                     vae_tiling,
                                     (ggml_type)wtype,
@@ -1226,7 +1211,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
             class_tokens_mask = std::get<1>(cond_tup);  //
             struct ggml_tensor* id_embeds = NULL;
             if(pmv2){
-                id_embeds = sd_ctx->sd->pmid_id_embeds->get();                
+                // id_embeds = sd_ctx->sd->pmid_id_embeds->get();
+                id_embeds = load_tensor_from_file(work_ctx, path_join(input_id_images_path, "id_embeds.bin"));
                 // print_ggml_tensor(id_embeds, true, "id_embeds:");
             }
             id_cond.c_crossattn = sd_ctx->sd->id_encoder(work_ctx, init_img, id_cond.c_crossattn, id_embeds, class_tokens_mask);

@@ -68,11 +68,28 @@ if __name__ == "__main__":
     
     id_embeds = torch.stack(id_embed_list)    
     
-    for r in id_embeds:
-        print(r)
-    #torch.save(id_embeds, input_folder_name+'/id_embeds.pt');
-    weights = dict()
-    weights["id_embeds"] = id_embeds
-    save_file(weights, input_folder_name+'/id_embeds.safetensors')
+    # for r in id_embeds:
+    #     print(r)
+    # #torch.save(id_embeds, input_folder_name+'/id_embeds.pt');
+    # weights = dict()
+    # weights["id_embeds"] = id_embeds
+    # save_file(weights, input_folder_name+'/id_embeds.safetensors')
+
+    binary_data = id_embeds.numpy().tobytes()
+    two = 4
+    zero = 0
+    one = 1
+    tensor_name = "id_embeds"
+# Write binary data to a file
+    with open(input_folder_name+'/id_embeds.bin', "wb") as f:
+        f.write(two.to_bytes(4, byteorder='little'))
+        f.write((len(tensor_name)).to_bytes(4, byteorder='little'))
+        f.write(zero.to_bytes(4, byteorder='little'))
+        f.write((id_embeds.shape[1]).to_bytes(4, byteorder='little'))
+        f.write((id_embeds.shape[0]).to_bytes(4, byteorder='little'))
+        f.write(one.to_bytes(4, byteorder='little'))
+        f.write(one.to_bytes(4, byteorder='little'))
+        f.write(tensor_name.encode('ascii'))
+        f.write(binary_data)
 
     
