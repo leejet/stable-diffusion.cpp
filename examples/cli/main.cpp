@@ -7,9 +7,8 @@
 #include <vector>
 
 // #include "preprocessing.hpp"
-#include "mmdit.hpp"
+#include "flux.hpp"
 #include "stable-diffusion.h"
-#include "t5.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
@@ -37,6 +36,8 @@ const char* sample_method_str[] = {
     "dpm++2s_a",
     "dpm++2m",
     "dpm++2mv2",
+    "ipndm",
+    "ipndm_v",
     "lcm",
 };
 
@@ -45,7 +46,9 @@ const char* schedule_str[] = {
     "default",
     "discrete",
     "karras",
+    "exponential",
     "ays",
+    "gits",
 };
 
 const char* modes_str[] = {
@@ -66,8 +69,11 @@ enum SDMode {
 struct SDParams {
     int n_threads = -1;
     SDMode mode   = TXT2IMG;
-
     std::string model_path;
+    std::string clip_l_path;
+    std::string clip_g_path;
+    std::string t5xxl_path;
+    std::string diffusion_model_path;
     std::string vae_path;
     std::string taesd_path;
     std::string esrgan_path;
@@ -85,6 +91,7 @@ struct SDParams {
     std::string negative_prompt;
     float min_cfg     = 1.0f;
     float cfg_scale   = 7.0f;
+    float guidance    = 3.5f;
     float style_ratio = 20.f;
     int clip_skip     = -1;  // <= 0 represents unspecified
     int width         = 512;
@@ -120,6 +127,10 @@ void print_params(SDParams params) {
     printf("    mode:              %s\n", modes_str[params.mode]);
     printf("    model_path:        %s\n", params.model_path.c_str());
     printf("    wtype:             %s\n", params.wtype < SD_TYPE_COUNT ? sd_type_name(params.wtype) : "unspecified");
+    printf("    clip_l_path:       %s\n", params.clip_l_path.c_str());
+    printf("    clip_g_path:       %s\n", params.clip_g_path.c_str());
+    printf("    t5xxl_path:        %s\n", params.t5xxl_path.c_str());
+    printf("    diffusion_model_path:   %s\n", params.diffusion_model_path.c_str());
     printf("    vae_path:          %s\n", params.vae_path.c_str());
     printf("    taesd_path:        %s\n", params.taesd_path.c_str());
     printf("    esrgan_path:       %s\n", params.esrgan_path.c_str());
@@ -128,7 +139,7 @@ void print_params(SDParams params) {
     printf("    stacked_id_embeddings_path:   %s\n", params.stacked_id_embeddings_path.c_str());
     printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
     printf("    style ratio:       %.2f\n", params.style_ratio);
-    printf("    normzalize input image :  %s\n", params.normalize_input ? "true" : "false");
+    printf("    normalize input image :  %s\n", params.normalize_input ? "true" : "false");
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
@@ -140,6 +151,7 @@ void print_params(SDParams params) {
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
     printf("    min_cfg:           %.2f\n", params.min_cfg);
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
+    printf("    guidance:          %.2f\n", params.guidance);
     printf("    clip_skip:         %d\n", params.clip_skip);
     printf("    width:             %d\n", params.width);
     printf("    height:            %d\n", params.height);
@@ -160,20 +172,24 @@ void print_usage(int argc, const char* argv[]) {
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
     printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)\n");
-    printf("  -t, --threads N                    number of threads to use during computation (default: -1).\n");
+    printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
-    printf("  -m, --model [MODEL]                path to model\n");
+    printf("  -m, --model [MODEL]                path to full model\n");
+    printf("  --diffusion-model                  path to the standalone diffusion model\n");
+    printf("  --clip_l                           path to the clip-l text encoder\n");
+    printf("  --clip_g                           path to the clip-l text encoder\n");
+    printf("  --t5xxl                            path to the the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
-    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings.\n");
-    printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings.\n");
-    printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir.\n");
+    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
+    printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings\n");
+    printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir\n");
     printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
-    printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.\n");
+    printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now\n");
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
-    printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0)\n");
-    printf("                                     If not specified, the default is the type of the weight file.\n");
+    printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)\n");
+    printf("                                     If not specified, the default is the type of the weight file\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
@@ -187,16 +203,18 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, lcm}\n");
+    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}\n");
     printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
-    printf("  -b, --batch-count COUNT            number of images to generate.\n");
-    printf("  --schedule {discrete, karras, ays} Denoiser sigma schedule (default: discrete)\n");
+    printf("  -b, --batch-count COUNT            number of images to generate\n");
+    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
+    printf("  --vae-on-cpu                       keep vae in cpu (for low vram)\n");
+    printf("  --clip-on-cpu                      keep clip in cpu (for low vram)\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            Colors the logging tags according to level\n");
@@ -240,6 +258,30 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.model_path = argv[i];
+        } else if (arg == "--clip_l") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.clip_l_path = argv[i];
+        } else if (arg == "--clip_g") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.clip_g_path = argv[i];
+        } else if (arg == "--t5xxl") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.t5xxl_path = argv[i];
+        } else if (arg == "--diffusion-model") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.diffusion_model_path = argv[i];
         } else if (arg == "--vae") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -302,8 +344,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 params.wtype = SD_TYPE_Q5_1;
             } else if (type == "q8_0") {
                 params.wtype = SD_TYPE_Q8_0;
+            } else if (type == "q2_k") {
+                params.wtype = SD_TYPE_Q2_K;
+            } else if (type == "q3_k") {
+                params.wtype = SD_TYPE_Q3_K;
+            } else if (type == "q4_k") {
+                params.wtype = SD_TYPE_Q4_K;
             } else {
-                fprintf(stderr, "error: invalid weight format %s, must be one of [f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0]\n",
+                fprintf(stderr, "error: invalid weight format %s, must be one of [f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k]\n",
                         type.c_str());
                 exit(1);
             }
@@ -359,6 +407,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.cfg_scale = std::stof(argv[i]);
+        } else if (arg == "--guidance") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.guidance = std::stof(argv[i]);
         } else if (arg == "--strength") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -501,8 +555,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         exit(1);
     }
 
-    if (params.model_path.length() == 0) {
-        fprintf(stderr, "error: the following arguments are required: model_path\n");
+    if (params.model_path.length() == 0 && params.diffusion_model_path.length() == 0) {
+        fprintf(stderr, "error: the following arguments are required: model_path/diffusion_model\n");
         print_usage(argc, argv);
         exit(1);
     }
@@ -570,6 +624,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
     }
     parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
+    parameter_string += "Guidance: " + std::to_string(params.guidance) + ", ";
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
@@ -723,6 +778,10 @@ int main(int argc, const char* argv[]) {
     }
 
     sd_ctx_t* sd_ctx = new_sd_ctx(params.model_path.c_str(),
+                                  params.clip_l_path.c_str(),
+                                  params.clip_g_path.c_str(),
+                                  params.t5xxl_path.c_str(),
+                                  params.diffusion_model_path.c_str(),
                                   params.vae_path.c_str(),
                                   params.taesd_path.c_str(),
                                   params.controlnet_path.c_str(),
@@ -776,6 +835,7 @@ int main(int argc, const char* argv[]) {
                           params.negative_prompt.c_str(),
                           params.clip_skip,
                           params.cfg_scale,
+                          params.guidance,
                           params.width,
                           params.height,
                           params.sample_method,
@@ -836,6 +896,7 @@ int main(int argc, const char* argv[]) {
                               params.negative_prompt.c_str(),
                               params.clip_skip,
                               params.cfg_scale,
+                              params.guidance,
                               params.width,
                               params.height,
                               params.sample_method,

@@ -27,25 +27,33 @@ option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_CUBLAS                     "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
+option(SD_VULKAN                     "sd: vulkan backend" OFF)
+option(SD_SYCL                       "sd: sycl backend" OFF)
 option(SD_FLASH_ATTN                 "sd: use flash attention for x4 less memory usage" OFF)
 option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
 option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
 if(SD_CUBLAS)
-	message("Use CUBLAS as backend stable-diffusion")
+    message("-- Use CUBLAS as backend stable-diffusion")
     set(GGML_CUDA ON)
     add_definitions(-DSD_USE_CUBLAS)
 endif()
 
 if(SD_METAL)
-	message("Use Metal as backend stable-diffusion")
+    message("-- Use Metal as backend stable-diffusion")
     set(GGML_METAL ON)
     add_definitions(-DSD_USE_METAL)
 endif()
 
+if (SD_VULKAN)
+    message("-- Use Vulkan as backend stable-diffusion")
+    set(GGML_VULKAN ON)
+    add_definitions(-DSD_USE_VULKAN)
+endif ()
+
 if (SD_HIPBLAS)
-    message("Use HIPBLAS as backend stable-diffusion")
+    message("-- Use HIPBLAS as backend stable-diffusion")
     set(GGML_HIPBLAS ON)
     add_definitions(-DSD_USE_CUBLAS)
     if(SD_FAST_SOFTMAX)
@@ -54,7 +62,7 @@ if (SD_HIPBLAS)
 endif ()
 
 if(SD_FLASH_ATTN)
-    message("Use Flash Attention for memory optimization")
+    message("-- Use Flash Attention for memory optimization")
     add_definitions(-DSD_USE_FLASH_ATTENTION)
 endif()
 
@@ -68,7 +76,7 @@ file(GLOB SD_LIB_SOURCES
 
 # we can get only one share lib
 if(SD_BUILD_SHARED_LIBS)
-    message("Build shared library")
+    message("-- Build shared library")
     message(${SD_LIB_SOURCES})
     set(BUILD_SHARED_LIBS OFF)
     add_library(${SD_LIB} SHARED ${SD_LIB_SOURCES})
@@ -76,11 +84,25 @@ if(SD_BUILD_SHARED_LIBS)
     target_compile_definitions(${SD_LIB} PRIVATE -DSD_BUILD_DLL)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
-    message("Build static library")
+    message("-- Build static library")
     set(BUILD_SHARED_LIBS OFF)
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
 endif()
 
+if(SD_SYCL)
+    message("-- Use SYCL as backend stable-diffusion")
+    set(GGML_SYCL ON)
+    add_definitions(-DSD_USE_SYCL)
+    # disable fast-math on host, see:
+    # https://www.intel.com/content/www/us/en/docs/cpp-compiler/developer-guide-reference/2021-10/fp-model-fp.html
+    if (WIN32)
+        set(SYCL_COMPILE_OPTIONS /fp:precise)
+    else()
+        set(SYCL_COMPILE_OPTIONS -fp-model=precise)
+    endif()
+    message("-- Turn off fast-math for host in SYCL backend")
+    target_compile_options(${SD_LIB} PRIVATE ${SYCL_COMPILE_OPTIONS})
+endif()
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
@@ -88,7 +110,10 @@ set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 add_definitions(-DGGML_MAX_NAME=128)
 
 # deps
-add_subdirectory(ggml)
+# Only add ggml if it hasn't been added yet
+if (NOT TARGET ggml)
+    add_subdirectory(ggml)
+endif()
 
 add_subdirectory(thirdparty)
 

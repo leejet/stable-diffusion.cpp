@@ -1,6 +1,7 @@
 #ifndef __DIFFUSION_MODEL_H__
 #define __DIFFUSION_MODEL_H__
 
+#include "flux.hpp"
 #include "mmdit.hpp"
 #include "unet.hpp"
 
@@ -11,6 +12,7 @@ struct DiffusionModel {
                          struct ggml_tensor* context,
                          struct ggml_tensor* c_concat,
                          struct ggml_tensor* y,
+                         struct ggml_tensor* guidance,
                          int num_video_frames                      = -1,
                          std::vector<struct ggml_tensor*> controls = {},
                          float control_strength                    = 0.f,
@@ -29,7 +31,7 @@ struct UNetModel : public DiffusionModel {
 
     UNetModel(ggml_backend_t backend,
               ggml_type wtype,
-              SDVersion version = VERSION_1_x)
+              SDVersion version = VERSION_SD1)
         : unet(backend, wtype, version) {
     }
 
@@ -63,6 +65,7 @@ struct UNetModel : public DiffusionModel {
                  struct ggml_tensor* context,
                  struct ggml_tensor* c_concat,
                  struct ggml_tensor* y,
+                 struct ggml_tensor* guidance,
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
@@ -77,7 +80,7 @@ struct MMDiTModel : public DiffusionModel {
 
     MMDiTModel(ggml_backend_t backend,
                ggml_type wtype,
-               SDVersion version = VERSION_3_2B)
+               SDVersion version = VERSION_SD3_2B)
         : mmdit(backend, wtype, version) {
     }
 
@@ -111,12 +114,62 @@ struct MMDiTModel : public DiffusionModel {
                  struct ggml_tensor* context,
                  struct ggml_tensor* c_concat,
                  struct ggml_tensor* y,
+                 struct ggml_tensor* guidance,
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
                  struct ggml_tensor** output               = NULL,
                  struct ggml_context* output_ctx           = NULL) {
         return mmdit.compute(n_threads, x, timesteps, context, y, output, output_ctx);
+    }
+};
+
+struct FluxModel : public DiffusionModel {
+    Flux::FluxRunner flux;
+
+    FluxModel(ggml_backend_t backend,
+              ggml_type wtype,
+              SDVersion version = VERSION_FLUX_DEV)
+        : flux(backend, wtype, version) {
+    }
+
+    void alloc_params_buffer() {
+        flux.alloc_params_buffer();
+    }
+
+    void free_params_buffer() {
+        flux.free_params_buffer();
+    }
+
+    void free_compute_buffer() {
+        flux.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
+        flux.get_param_tensors(tensors, "model.diffusion_model");
+    }
+
+    size_t get_params_buffer_size() {
+        return flux.get_params_buffer_size();
+    }
+
+    int64_t get_adm_in_channels() {
+        return 768;
+    }
+
+    void compute(int n_threads,
+                 struct ggml_tensor* x,
+                 struct ggml_tensor* timesteps,
+                 struct ggml_tensor* context,
+                 struct ggml_tensor* c_concat,
+                 struct ggml_tensor* y,
+                 struct ggml_tensor* guidance,
+                 int num_video_frames                      = -1,
+                 std::vector<struct ggml_tensor*> controls = {},
+                 float control_strength                    = 0.f,
+                 struct ggml_tensor** output               = NULL,
+                 struct ggml_context* output_ctx           = NULL) {
+        return flux.compute(n_threads, x, timesteps, context, y, guidance, output, output_ctx);
     }
 };
 
