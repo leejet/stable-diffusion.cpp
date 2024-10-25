@@ -82,6 +82,7 @@ struct SDParams {
     std::string stacked_id_embeddings_path;
     std::string input_id_images_path;
     sd_type_t wtype = SD_TYPE_COUNT;
+    sd_type_t ftype = SD_TYPE_COUNT;
     std::string lora_model_dir;
     std::string output_path = "output.png";
     std::string input_path;
@@ -126,7 +127,8 @@ void print_params(SDParams params) {
     printf("    n_threads:         %d\n", params.n_threads);
     printf("    mode:              %s\n", modes_str[params.mode]);
     printf("    model_path:        %s\n", params.model_path.c_str());
-    printf("    wtype:             %s\n", params.wtype < SD_TYPE_COUNT ? sd_type_name(params.wtype) : "unspecified");
+    printf("    wtype:             %s\n", params.wtype < SD_TYPE_COUNT ? sd_type_name(params.wtype) : "unspecified");    
+    printf("    fallback_type:     %s\n", params.ftype < SD_TYPE_COUNT ? sd_type_name(params.ftype) : "unspecified");
     printf("    clip_l_path:       %s\n", params.clip_l_path.c_str());
     printf("    clip_g_path:       %s\n", params.clip_g_path.c_str());
     printf("    t5xxl_path:        %s\n", params.t5xxl_path.c_str());
@@ -190,6 +192,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)\n");
     printf("                                     If not specified, the default is the type of the weight file\n");
+    printf("  --fallback-type [TYPE]             weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0) to be used as fallback for convert\n");
+    printf("                                     Used only if --type is q2_k, q3_k, or q4_k. The default is the type of the weight file\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
@@ -352,6 +356,31 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 params.wtype = SD_TYPE_Q4_K;
             } else {
                 fprintf(stderr, "error: invalid weight format %s, must be one of [f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k]\n",
+                        type.c_str());
+                exit(1);
+            }
+        } else if (arg == "--fallback-type") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            std::string type = argv[i];
+            if (type == "f32") {
+                params.ftype = SD_TYPE_F32;
+            } else if (type == "f16") {
+                params.ftype = SD_TYPE_F16;
+            } else if (type == "q4_0") {
+                params.ftype = SD_TYPE_Q4_0;
+            } else if (type == "q4_1") {
+                params.ftype = SD_TYPE_Q4_1;
+            } else if (type == "q5_0") {
+                params.ftype = SD_TYPE_Q5_0;
+            } else if (type == "q5_1") {
+                params.ftype = SD_TYPE_Q5_1;
+            } else if (type == "q8_0") {
+                params.ftype = SD_TYPE_Q8_0;
+            } else {
+                fprintf(stderr, "error: invalid fallback weight format %s, must be one of [f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0]\n",
                         type.c_str());
                 exit(1);
             }
@@ -694,7 +723,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if (params.mode == CONVERT) {
-        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype);
+        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype, params.ftype);
         if (!success) {
             fprintf(stderr,
                     "convert '%s'/'%s' to '%s' failed\n",

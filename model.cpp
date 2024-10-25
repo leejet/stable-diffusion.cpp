@@ -1758,9 +1758,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
 bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type) {
     const std::string& name = tensor_storage.name;
     if (type != GGML_TYPE_COUNT) {
-        if (ggml_is_quantized(type) && tensor_storage.ne[0] % ggml_blck_size(type) != 0) {
-            // Pass, do not convert
-        } else if (ends_with(name, ".bias")) {
+        if (ends_with(name, ".bias")) {
             // Pass, do not convert
         } else if (ends_with(name, ".scale")) {
             // Pass, do not convert
@@ -1786,11 +1784,37 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
     return false;
 }
 
-bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type) {
+bool ModelLoader::tensor_can_be_converted(const TensorStorage& tensor_storage, ggml_type type) {
+    return !ggml_is_quantized(type) || tensor_storage.ne[0] % ggml_blck_size(type) == 0;
+}
+
+void ModelLoader::tensor_set_type(ggml_type& tensor_type, const TensorStorage& tensor_storage, ggml_type type, ggml_type fallback_type) {
+    if (tensor_should_be_converted(tensor_storage, type)) {
+        if (tensor_can_be_converted(tensor_storage, type)) {
+            tensor_type = type;
+        } else {
+            if ((type == GGML_TYPE_Q2_K ||
+                 type == GGML_TYPE_Q3_K ||
+                 type == GGML_TYPE_Q4_K ||
+                 type == GGML_TYPE_Q5_K ||
+                 type == GGML_TYPE_Q6_K ||
+                 type == GGML_TYPE_Q8_K) &&
+                fallback_type != GGML_TYPE_COUNT) {
+                // try use fallback quant instead of k quant
+                if (tensor_can_be_converted(tensor_storage, fallback_type)) {
+                    // fallback works
+                    tensor_type = fallback_type;
+                }
+            }
+        }
+    }
+}
+
+bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type, ggml_type fallback_type /*= GGML_TYPE_COUNT*/) {
     auto backend    = ggml_backend_cpu_init();
     size_t mem_size = 1 * 1024 * 1024;  // for padding
     mem_size += tensor_storages.size() * ggml_tensor_overhead();
-    mem_size += get_params_mem_size(backend, type);
+    mem_size += get_params_mem_size(backend, type, fallback_type);
     LOG_INFO("model tensors mem size: %.2fMB", mem_size / 1024.f / 1024.f);
     ggml_context* ggml_ctx = ggml_init({mem_size, NULL, false});
 
@@ -1800,9 +1824,7 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
         const std::string& name = tensor_storage.name;
 
         ggml_type tensor_type = tensor_storage.type;
-        if (tensor_should_be_converted(tensor_storage, type)) {
-            tensor_type = type;
-        }
+        tensor_set_type(tensor_type, tensor_storage, type, fallback_type);
 
         ggml_tensor* tensor = ggml_new_tensor(ggml_ctx, tensor_type, tensor_storage.n_dims, tensor_storage.ne);
         if (tensor == NULL) {
@@ -1836,7 +1858,7 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
     return success;
 }
 
-int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type) {
+int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type, ggml_type fallback_type /*= GGML_TYPE_COUNT*/) {
     size_t alignment = 128;
     if (backend != NULL) {
         alignment = ggml_backend_get_alignment(backend);
@@ -1851,16 +1873,14 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
     }
 
     for (auto& tensor_storage : processed_tensor_storages) {
-        if (tensor_should_be_converted(tensor_storage, type)) {
-            tensor_storage.type = type;
-        }
+        tensor_set_type(tensor_storage.type, tensor_storage, type, fallback_type);
         mem_size += tensor_storage.nbytes() + alignment;
     }
 
     return mem_size;
 }
 
-bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type) {
+bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type, sd_type_t fallback_type /*= SD_TYPE_COUNT*/) {
     ModelLoader model_loader;
 
     if (!model_loader.init_from_file(input_path)) {
@@ -1874,6 +1894,6 @@ bool convert(const char* input_path, const char* vae_path, const char* output_pa
             return false;
         }
     }
-    bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type);
+    bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, (ggml_type)fallback_type);
     return success;
 }

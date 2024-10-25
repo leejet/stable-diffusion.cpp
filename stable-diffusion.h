@@ -208,7 +208,7 @@ SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor);
 
-SD_API bool convert(const char* input_path, const char* vae_path, const char* output_path, enum sd_type_t output_type);
+SD_API bool convert(const char* input_path, const char* vae_path, const char* output_path, enum sd_type_t output_type, enum sd_type_t fallback_type = SD_TYPE_COUNT);
 
 SD_API uint8_t* preprocess_canny(uint8_t* img,
                                  int width,
