@@ -149,6 +149,8 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
+typedef void (*step_callback_t)(int, struct ggml_tensor*, enum SDVersion);
+
 SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            const char* prompt,
                            const char* negative_prompt,
@@ -170,7 +172,8 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            size_t skip_layers_count,
                            float slg_scale,
                            float skip_layer_start,
-                           float skip_layer_end);
+                           float skip_layer_end,
+                           step_callback_t step_callback = NULL);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
