@@ -804,19 +804,8 @@ public:
                         float slg_scale              = 0,
                         float skip_layer_start       = 0.01,
                         float skip_layer_end         = 0.2,
-                        ggml_tensor* noise_mask      = nullptr) {
-        LOG_DEBUG("Sample");
-        struct ggml_init_params params;
-        size_t data_size = ggml_row_size(init_latent->type, init_latent->ne[0]);
-        for (int i = 1; i < 4; i++) {
-            data_size *= init_latent->ne[i];
-        }
-        data_size += 1024;
-        params.mem_size       = data_size * 3;
-        params.mem_buffer     = NULL;
-        params.no_alloc       = false;
-        ggml_context* tmp_ctx = ggml_init(params);
-
+                        ggml_tensor* noise_mask      = nullptr,
+                        std::function<void(int, ggml_tensor*, SDVersion)> step_callback = nullptr) {
         size_t steps = sigmas.size() - 1;
         // noise = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(noise);
@@ -988,6 +977,9 @@ public:
                 }
             }
 
+            if (step_callback != nullptr) {
+                step_callback(step, denoised, version);
+            }
             return denoised;
         };
 
@@ -1213,7 +1205,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float slg_scale              = 0,
                            float skip_layer_start       = 0.01,
                            float skip_layer_end         = 0.2,
-                           ggml_tensor* masked_image    = NULL) {
+                           ggml_tensor* masked_image    = NULL,
+                           std::function<void(int, ggml_tensor*, SDVersion)> step_callback = nullptr) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1470,7 +1463,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      slg_scale,
                                                      skip_layer_start,
                                                      skip_layer_end,
-                                                     noise_mask);
+                                                     noise_mask,
+                                                     step_callback);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
@@ -1543,7 +1537,8 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     size_t skip_layers_count = 0,
                     float slg_scale          = 0,
                     float skip_layer_start   = 0.01,
-                    float skip_layer_end     = 0.2) {
+                    float skip_layer_end     = 0.2,
+                    step_callback_t step_callback) {
     std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
@@ -1621,7 +1616,8 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                skip_layers_vec,
                                                slg_scale,
                                                skip_layer_start,
-                                               skip_layer_end);
+                                               skip_layer_end,
+                                               step_callback);
 
     size_t t1 = ggml_time_ms();
 
