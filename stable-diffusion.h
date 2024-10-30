@@ -149,7 +149,7 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
-typedef void (*step_callback_t)(int, struct ggml_tensor*, enum SDVersion);
+typedef void (*step_callback_t)(int, struct ggml_tensor*, int);
 
 SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            const char* prompt,

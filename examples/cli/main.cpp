@@ -1050,7 +1050,7 @@ int main(int argc, const char* argv[]) {
                           params.slg_scale,
                           params.skip_layer_start,
                           params.skip_layer_end,
-                          step_callback);
+                          (step_callback_t)step_callback);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
