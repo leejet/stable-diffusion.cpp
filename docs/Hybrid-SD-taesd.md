@@ -8,7 +8,8 @@ Download the model weight [Hybrid-sd-tinyvae](https://huggingface.co/cqyan/hybri
 ```bash
 curl -L -O https://huggingface.co/cqyan/hybrid-sd-tinyvae/blob/main/diffusion_pytorch_model.safetensors
 ```
-T2I Comparison using one A100 GPU, The image order from left to right : SD1.4-VAE -> TAESD -> Hybrid-sd-tinyvae
+
+T2I Comparison using one A100 GPU, with default setting,  The image order from left to right : SD1.4-VAE -> TAESD -> Hybrid-sd-tinyvae
 ![alt text](image.png)
 ![alt text](image-1.png)
 Specify the model path using the `--taesd PATH` parameter. example:
@@ -26,10 +27,12 @@ Download the model weight [Hybrid-sd-tinyvae-xl](https://huggingface.co/cqyan/hy
 ```bash
 curl -L -O https://huggingface.co/cqyan/hybrid-sd-tinyvae-xl/blob/main/diffusion_pytorch_model.safetensors
 ```
-T2I Comparison using one A100 GPU, The image order from left to right : SD1.4-VAE -> TAESD -> Hybrid-sd-tinyvae
+T2I Comparison using one A100 GPU, with setting `-H 1024 -W 1024 --steps 40 --type f16 --seed 42 --cfg-scale 7 --sampling-method dpm++2m` \
+The image order from left to right : SD1.4-VAE -> TAESD -> Hybrid-sd-tinyvae
 ![alt text](image-2.png)
 ![alt text](image-3.png)
 Specify the model path using the `--taesd PATH` parameter. example:
 ```bash
-sd -m ../models/sd_xl_base_1.0.safetensors -p "a lovely cat" --taesd ../models/diffusion_pytorch_model.safetensors
+./bin/sd -m ../models/sd_xl_base_1.0.safetensors -p "a lovely cat" --taesd ../models/diffusion_pytorch_model.safetensors -H 1024 -W 1024 --steps 40 --type f16 --seed 42 --cfg-scale 7 --sampling-method dpm++2m --rng cuda -v
+
 ```
