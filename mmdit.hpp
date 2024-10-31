@@ -147,8 +147,9 @@ protected:
     int64_t hidden_size;
     float eps;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["weight"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
+    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+        params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
 
 public:
@@ -652,8 +653,9 @@ protected:
     int64_t hidden_size;
     std::string qk_norm;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["pos_embed"] = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hidden_size, num_patchs, 1);
+    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "pos_embed") != tensor_types.end()) ? tensor_types[prefix + "pos_embed"] : GGML_TYPE_F32;
+        params["pos_embed"]  = ggml_new_tensor_3d(ctx, wtype, hidden_size, num_patchs, 1);
     }
 
 public:
@@ -875,10 +877,11 @@ struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
     MMDiTRunner(ggml_backend_t backend,
-                ggml_type wtype,
-                SDVersion version = VERSION_SD3_2B)
-        : GGMLRunner(backend, wtype), mmdit(version) {
-        mmdit.init(params_ctx, wtype);
+                std::map<std::string, enum ggml_type>& tensor_types = std::map<std::string, enum ggml_type>(),
+                const std::string prefix                            = "",
+                SDVersion version                                   = VERSION_SD3_2B)
+        : GGMLRunner(backend), mmdit(version) {
+        mmdit.init(params_ctx, tensor_types, prefix);
     }
 
     std::string get_desc() {
@@ -975,7 +978,7 @@ struct MMDiTRunner : public GGMLRunner {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
         ggml_backend_t backend             = ggml_backend_cpu_init();
         ggml_type model_data_type          = GGML_TYPE_F16;
-        std::shared_ptr<MMDiTRunner> mmdit = std::shared_ptr<MMDiTRunner>(new MMDiTRunner(backend, model_data_type));
+        std::shared_ptr<MMDiTRunner> mmdit = std::shared_ptr<MMDiTRunner>(new MMDiTRunner(backend));
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 

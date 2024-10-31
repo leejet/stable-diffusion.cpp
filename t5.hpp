@@ -357,7 +357,7 @@ public:
 
         BuildTrie(&pieces);
     }
-    ~T5UniGramTokenizer(){};
+    ~T5UniGramTokenizer() {};
 
     std::string Normalize(const std::string& input) const {
         // Ref: https://github.com/huggingface/tokenizers/blob/1ff56c0c70b045f0cd82da1af9ac08cd4c7a6f9f/bindings/python/py_src/tokenizers/implementations/sentencepiece_unigram.py#L29
@@ -441,8 +441,9 @@ protected:
     int64_t hidden_size;
     float eps;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["weight"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
+    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+        params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
 
 public:
@@ -717,14 +718,15 @@ struct T5Runner : public GGMLRunner {
     std::vector<int> relative_position_bucket_vec;
 
     T5Runner(ggml_backend_t backend,
-             ggml_type wtype,
+             std::map<std::string, enum ggml_type>& tensor_types,
+             const std::string prefix,
              int64_t num_layers = 24,
              int64_t model_dim  = 4096,
              int64_t ff_dim     = 10240,
              int64_t num_heads  = 64,
              int64_t vocab_size = 32128)
-        : GGMLRunner(backend, wtype), model(num_layers, model_dim, ff_dim, num_heads, vocab_size) {
-        model.init(params_ctx, wtype);
+        : GGMLRunner(backend), model(num_layers, model_dim, ff_dim, num_heads, vocab_size) {
+        model.init(params_ctx, tensor_types, prefix);
     }
 
     std::string get_desc() {
@@ -855,13 +857,14 @@ struct T5Embedder {
     T5Runner model;
 
     T5Embedder(ggml_backend_t backend,
-               ggml_type wtype,
-               int64_t num_layers = 24,
-               int64_t model_dim  = 4096,
-               int64_t ff_dim     = 10240,
-               int64_t num_heads  = 64,
-               int64_t vocab_size = 32128)
-        : model(backend, wtype, num_layers, model_dim, ff_dim, num_heads, vocab_size) {
+               std::map<std::string, enum ggml_type>& tensor_types = std::map<std::string, enum ggml_type>(),
+               const std::string prefix                            = "",
+               int64_t num_layers                                  = 24,
+               int64_t model_dim                                   = 4096,
+               int64_t ff_dim                                      = 10240,
+               int64_t num_heads                                   = 64,
+               int64_t vocab_size                                  = 32128)
+        : model(backend, tensor_types, prefix, num_layers, model_dim, ff_dim, num_heads, vocab_size) {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -951,7 +954,7 @@ struct T5Embedder {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
         ggml_backend_t backend         = ggml_backend_cpu_init();
         ggml_type model_data_type      = GGML_TYPE_F32;
-        std::shared_ptr<T5Embedder> t5 = std::shared_ptr<T5Embedder>(new T5Embedder(backend, model_data_type));
+        std::shared_ptr<T5Embedder> t5 = std::shared_ptr<T5Embedder>(new T5Embedder(backend));
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 

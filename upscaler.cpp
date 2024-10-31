@@ -38,7 +38,7 @@ struct UpscalerGGML {
             backend = ggml_backend_cpu_init();
         }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
-        esrgan_upscaler = std::make_shared<ESRGAN>(backend, model_data_type);
+        esrgan_upscaler = std::make_shared<ESRGAN>(backend);
         if (!esrgan_upscaler->load_from_file(esrgan_path)) {
             return false;
         }
@@ -96,8 +96,7 @@ struct upscaler_ctx_t {
 };
 
 upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
-                                 int n_threads,
-                                 enum sd_type_t wtype) {
+                                 int n_threads) {
     upscaler_ctx_t* upscaler_ctx = (upscaler_ctx_t*)malloc(sizeof(upscaler_ctx_t));
     if (upscaler_ctx == NULL) {
         return NULL;

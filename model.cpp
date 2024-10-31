@@ -927,6 +927,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
         GGML_ASSERT(ggml_nbytes(dummy) == tensor_storage.nbytes());
 
         tensor_storages.push_back(tensor_storage);
+        tensor_storages_types[tensor_storage.name] = tensor_storage.type;
     }
 
     gguf_free(ctx_gguf_);
@@ -1071,6 +1072,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         tensor_storages.push_back(tensor_storage);
+        tensor_storages_types[tensor_storage.name] = tensor_storage.type;
 
         // LOG_DEBUG("%s %s", tensor_storage.to_string().c_str(), dtype.c_str());
     }
@@ -1296,7 +1298,7 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                                  zip_t* zip,
                                  std::string dir,
                                  size_t file_index,
-                                 const std::string& prefix) {
+                                 const std::string prefix) {
     uint8_t* buffer_end = buffer + buffer_size;
     if (buffer[0] == 0x80) {  // proto
         if (buffer[1] != 2) {
@@ -1401,6 +1403,8 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                         // printf(" ZIP got tensor %s \n ", reader.tensor_storage.name.c_str());
                         reader.tensor_storage.name = prefix + reader.tensor_storage.name;
                         tensor_storages.push_back(reader.tensor_storage);
+                        tensor_storages_types[reader.tensor_storage.name] = reader.tensor_storage.type;
+
                         // LOG_DEBUG("%s", reader.tensor_storage.name.c_str());
                         // reset
                         reader = PickleTensorReader();

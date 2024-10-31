@@ -170,7 +170,7 @@ protected:
                         zip_t* zip,
                         std::string dir,
                         size_t file_index,
-                        const std::string& prefix);
+                        const std::string prefix);
 
     bool init_from_gguf_file(const std::string& file_path, const std::string& prefix = "");
     bool init_from_safetensors_file(const std::string& file_path, const std::string& prefix = "");
@@ -178,6 +178,8 @@ protected:
     bool init_from_diffusers_file(const std::string& file_path, const std::string& prefix = "");
 
 public:
+    std::map<std::string, enum ggml_type> tensor_storages_types;
+
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     SDVersion get_sd_version();
     ggml_type get_sd_wtype();

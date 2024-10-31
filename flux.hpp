@@ -35,8 +35,9 @@ namespace Flux {
         int64_t hidden_size;
         float eps;
 
-        void init_params(struct ggml_context* ctx, ggml_type wtype) {
-            params["scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
+        void init_params(struct ggml_context* ctx, const std::string prefix, std::map<std::string, enum ggml_type>& tensor_types, std::map<std::string, struct ggml_tensor*>& params) {
+            ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "scale") != tensor_types.end()) ? tensor_types[prefix + "scale"] : GGML_TYPE_F32;
+            params["scale"] = ggml_new_tensor_1d(ctx, wtype, hidden_size);
         }
 
     public:
@@ -829,10 +830,11 @@ namespace Flux {
         std::vector<float> pe_vec;  // for cache
 
         FluxRunner(ggml_backend_t backend,
-                   ggml_type wtype,
-                   SDVersion version = VERSION_FLUX_DEV,
+                   std::map<std::string, enum ggml_type>& tensor_types = std::map<std::string, enum ggml_type>(),
+                   const std::string prefix                            = "",
+                   SDVersion version                                   = VERSION_FLUX_DEV,
                    bool flash_attn   = false)
-            : GGMLRunner(backend, wtype) {
+            : GGMLRunner(backend) {
             flux_params.flash_attn = flash_attn;
             if (version == VERSION_FLUX_SCHNELL) {
                 flux_params.guidance_embed = false;
@@ -841,7 +843,7 @@ namespace Flux {
                 flux_params.depth = 8;
             }
             flux = Flux(flux_params);
-            flux.init(params_ctx, wtype);
+            flux.init(params_ctx, tensor_types, prefix);
         }
 
         std::string get_desc() {
@@ -959,7 +961,7 @@ namespace Flux {
             // ggml_backend_t backend    = ggml_backend_cuda_init(0);
             ggml_backend_t backend           = ggml_backend_cpu_init();
             ggml_type model_data_type        = GGML_TYPE_Q8_0;
-            std::shared_ptr<FluxRunner> flux = std::shared_ptr<FluxRunner>(new FluxRunner(backend, model_data_type));
+            std::shared_ptr<FluxRunner> flux = std::shared_ptr<FluxRunner>(new FluxRunner(backend));
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 

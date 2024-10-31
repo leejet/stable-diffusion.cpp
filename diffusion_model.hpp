@@ -31,10 +31,11 @@ struct UNetModel : public DiffusionModel {
     UNetModelRunner unet;
 
     UNetModel(ggml_backend_t backend,
-              ggml_type wtype,
+              std::map<std::string, enum ggml_type>& tensor_types,
               SDVersion version = VERSION_SD1,
               bool flash_attn   = false)
-        : unet(backend, wtype, version, flash_attn) {
+        : unet(backend, version, flash_attn) {
+        unet.init_params(tensor_types, "model.diffusion_model");
     }
 
     void alloc_params_buffer() {
@@ -83,9 +84,9 @@ struct MMDiTModel : public DiffusionModel {
     MMDiTRunner mmdit;
 
     MMDiTModel(ggml_backend_t backend,
-               ggml_type wtype,
+               std::map<std::string, enum ggml_type>& tensor_types,
                SDVersion version = VERSION_SD3_2B)
-        : mmdit(backend, wtype, version) {
+        : mmdit(backend, tensor_types, "model.diffusion_model", version) {
     }
 
     void alloc_params_buffer() {
@@ -133,10 +134,10 @@ struct FluxModel : public DiffusionModel {
     Flux::FluxRunner flux;
 
     FluxModel(ggml_backend_t backend,
-              ggml_type wtype,
+              std::map<std::string, enum ggml_type>& tensor_types,
               SDVersion version = VERSION_FLUX_DEV,
               bool flash_attn   = false)
-        : flux(backend, wtype, version, flash_attn) {
+        : flux(backend, tensor_types, "model.diffusion_model", version, flash_attn) {
     }
 
     void alloc_params_buffer() {

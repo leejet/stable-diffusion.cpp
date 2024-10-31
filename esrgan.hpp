@@ -142,10 +142,11 @@ struct ESRGAN : public GGMLRunner {
     int scale     = 4;
     int tile_size = 128;  // avoid cuda OOM for 4gb VRAM
 
-    ESRGAN(ggml_backend_t backend,
-           ggml_type wtype)
-        : GGMLRunner(backend, wtype) {
-        rrdb_net.init(params_ctx, wtype);
+    ESRGAN(ggml_backend_t backend)
+        : GGMLRunner(backend) {
+    }
+    void init_params(std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix) {
+        rrdb_net.init(params_ctx, tensor_types, prefix);
     }
 
     std::string get_desc() {
