@@ -824,13 +824,15 @@ namespace Flux {
     };
 
     struct FluxRunner : public GGMLRunner {
+        static std::map<std::string, enum ggml_type> empty_tensor_types;
+
     public:
         FluxParams flux_params;
         Flux flux;
         std::vector<float> pe_vec;  // for cache
 
         FluxRunner(ggml_backend_t backend,
-                   std::map<std::string, enum ggml_type>& tensor_types = std::map<std::string, enum ggml_type>(),
+                   std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
                    const std::string prefix                            = "",
                    SDVersion version                                   = VERSION_FLUX_DEV,
                    bool flash_attn   = false)

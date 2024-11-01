@@ -856,8 +856,10 @@ struct T5Embedder {
     T5UniGramTokenizer tokenizer;
     T5Runner model;
 
+    static std::map<std::string, enum ggml_type> empty_tensor_types;
+
     T5Embedder(ggml_backend_t backend,
-               std::map<std::string, enum ggml_type>& tensor_types = std::map<std::string, enum ggml_type>(),
+               std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
                const std::string prefix                            = "",
                int64_t num_layers                                  = 24,
                int64_t model_dim                                   = 4096,

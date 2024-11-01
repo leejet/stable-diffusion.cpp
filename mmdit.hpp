@@ -872,12 +872,13 @@ public:
         return x;
     }
 };
-
 struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
+    static std::map<std::string, enum ggml_type> empty_tensor_types;
+
     MMDiTRunner(ggml_backend_t backend,
-                std::map<std::string, enum ggml_type>& tensor_types = std::map<std::string, enum ggml_type>(),
+                std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
                 const std::string prefix                            = "",
                 SDVersion version                                   = VERSION_SD3_2B)
         : GGMLRunner(backend), mmdit(version) {
