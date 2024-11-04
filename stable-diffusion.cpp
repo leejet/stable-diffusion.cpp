@@ -773,10 +773,10 @@ public:
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         SDCondition id_cond,
-                        std::vector<int> skip_layers                                    = {},
-                        float slg_scale                                                 = 2.5,
-                        float skip_layer_start                                          = 0.01,
-                        float skip_layer_end                                            = 0.2) {
+                        std::vector<int> skip_layers = {},
+                        float slg_scale              = 2.5,
+                        float skip_layer_start       = 0.01,
+                        float skip_layer_end         = 0.2) {
         size_t steps = sigmas.size() - 1;
         // noise = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(noise);
@@ -875,7 +875,7 @@ public:
                 negative_data = (float*)out_uncond->data;
             }
 
-            bool has_skiplayer     = skip_layers.size() > 0;
+            bool has_skiplayer     = skip_layers.size() > 0 && slg_scale != 0.0;
             int stepCount          = sigmas.size();
             has_skiplayer          = has_skiplayer && step > (int)(skip_layer_start * stepCount) && step < (int)(skip_layer_end * stepCount);
             float* skip_layer_data = NULL;
@@ -1144,10 +1144,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float style_ratio,
                            bool normalize_input,
                            std::string input_id_images_path,
-                           std::vector<int> skip_layers                                    = {},
-                           float slg_scale                                                 = 2.5,
-                           float skip_layer_start                                          = 0.01,
-                           float skip_layer_end                                            = 0.2) {
+                           std::vector<int> skip_layers = {},
+                           float slg_scale              = 2.5,
+                           float skip_layer_start       = 0.01,
+                           float skip_layer_end         = 0.2) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
