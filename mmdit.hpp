@@ -801,7 +801,8 @@ public:
     struct ggml_tensor* forward_core_with_concat(struct ggml_context* ctx,
                                                  struct ggml_tensor* x,
                                                  struct ggml_tensor* c_mod,
-                                                 struct ggml_tensor* context) {
+                                                 struct ggml_tensor* context,
+                                                 std::vector<int> skip_layers = std::vector<int>()) {
         // x: [N, H*W, hidden_size]
         // context: [N, n_context, d_context]
         // c: [N, hidden_size]
@@ -809,6 +810,11 @@ public:
         auto final_layer = std::dynamic_pointer_cast<FinalLayer>(blocks["final_layer"]);
 
         for (int i = 0; i < depth; i++) {
+            // skip iteration if i is in skip_layers
+            if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), i) != skip_layers.end()) {
+                continue;
+            }
+
             auto block = std::dynamic_pointer_cast<JointBlock>(blocks["joint_blocks." + std::to_string(i)]);
 
             auto context_x = block->forward(ctx, context, x, c_mod);
@@ -824,8 +830,9 @@ public:
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* t,
-                                struct ggml_tensor* y       = NULL,
-                                struct ggml_tensor* context = NULL) {
+                                struct ggml_tensor* y        = NULL,
+                                struct ggml_tensor* context  = NULL,
+                                std::vector<int> skip_layers = std::vector<int>()) {
         // Forward pass of DiT.
         // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
         // t: (N,) tensor of diffusion timesteps
@@ -856,7 +863,7 @@ public:
             context = context_embedder->forward(ctx, context);  // [N, L, D] aka [N, L, 1536]
         }
 
-        x = forward_core_with_concat(ctx, x, c, context);  // (N, H*W, patch_size ** 2 * out_channels)
+        x = forward_core_with_concat(ctx, x, c, context, skip_layers);  // (N, H*W, patch_size ** 2 * out_channels)
 
         x = unpatchify(ctx, x, h, w);  // [N, C, H, W]
 
@@ -885,7 +892,8 @@ struct MMDiTRunner : public GGMLRunner {
     struct ggml_cgraph* build_graph(struct ggml_tensor* x,
                                     struct ggml_tensor* timesteps,
                                     struct ggml_tensor* context,
-                                    struct ggml_tensor* y) {
+                                    struct ggml_tensor* y,
+                                    std::vector<int> skip_layers = std::vector<int>()) {
         struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, MMDIT_GRAPH_SIZE, false);
 
         x         = to_backend(x);
@@ -897,7 +905,8 @@ struct MMDiTRunner : public GGMLRunner {
                                                 x,
                                                 timesteps,
                                                 y,
-                                                context);
+                                                context,
+                                                skip_layers);
 
         ggml_build_forward_expand(gf, out);
 
@@ -910,13 +919,14 @@ struct MMDiTRunner : public GGMLRunner {
                  struct ggml_tensor* context,
                  struct ggml_tensor* y,
                  struct ggml_tensor** output     = NULL,
-                 struct ggml_context* output_ctx = NULL) {
+                 struct ggml_context* output_ctx = NULL,
+                 std::vector<int> skip_layers = std::vector<int>()) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
         // context: [N, max_position, hidden_size]([N, 154, 4096]) or [1, max_position, hidden_size]
         // y: [N, adm_in_channels] or [1, adm_in_channels]
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(x, timesteps, context, y);
+            return build_graph(x, timesteps, context, y, skip_layers);
         };
 
         GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);

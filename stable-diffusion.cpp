@@ -772,7 +772,11 @@ public:
                         sample_method_t method,
                         const std::vector<float>& sigmas,
                         int start_merge_step,
-                        SDCondition id_cond) {
+                        SDCondition id_cond,
+                        std::vector<int> skip_layers                                    = {},
+                        float slg_scale                                                 = 2.5,
+                        float skip_layer_start                                          = 0.01,
+                        float skip_layer_end                                            = 0.2) {
         size_t steps = sigmas.size() - 1;
         // noise = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(noise);
@@ -870,6 +874,30 @@ public:
                                          &out_uncond);
                 negative_data = (float*)out_uncond->data;
             }
+
+            bool has_skiplayer     = skip_layers.size() > 0;
+            int stepCount          = sigmas.size();
+            has_skiplayer          = has_skiplayer && step > (int)(skip_layer_start * stepCount) && step < (int)(skip_layer_end * stepCount);
+            float* skip_layer_data = NULL;
+            if (has_skiplayer) {
+                LOG_DEBUG("Skipping layers at step %d\n", step);
+                ggml_tensor* out_skip = ggml_dup_tensor(work_ctx, x);
+                // skip layer (same as conditionned)
+                diffusion_model->compute(n_threads,
+                                         noised_input,
+                                         timesteps,
+                                         cond.c_crossattn,
+                                         cond.c_concat,
+                                         cond.c_vector,
+                                         guidance_tensor,
+                                         -1,
+                                         controls,
+                                         control_strength,
+                                         &out_skip,
+                                         NULL,
+                                         skip_layers);
+                skip_layer_data = (float*)out_skip->data;
+            }
             float* vec_denoised  = (float*)denoised->data;
             float* vec_input     = (float*)input->data;
             float* positive_data = (float*)out_cond->data;
@@ -885,6 +913,9 @@ public:
                     } else {
                         latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
                     }
+                }
+                if (has_skiplayer) {
+                    latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
                 }
                 // v = latent_result, eps = latent_result
                 // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
@@ -1112,7 +1143,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float control_strength,
                            float style_ratio,
                            bool normalize_input,
-                           std::string input_id_images_path) {
+                           std::string input_id_images_path,
+                           std::vector<int> skip_layers                                    = {},
+                           float slg_scale                                                 = 2.5,
+                           float skip_layer_start                                          = 0.01,
+                           float skip_layer_end                                            = 0.2) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1321,7 +1356,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      sample_method,
                                                      sigmas,
                                                      start_merge_step,
-                                                     id_cond);
+                                                     id_cond,
+                                                     skip_layers,
+                                                     slg_scale,
+                                                     skip_layer_start,
+                                                     skip_layer_end);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -1387,7 +1426,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str) {
+                    const char* input_id_images_path_c_str,
+                    std::vector<int> skip_layers,
+                    float slg_scale,
+                    float skip_layer_start,
+                    float skip_layer_end) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1455,7 +1498,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                control_strength,
                                                style_ratio,
                                                normalize_input,
-                                               input_id_images_path_c_str);
+                                               input_id_images_path_c_str,
+                                               skip_layers,
+                                               slg_scale,
+                                               skip_layer_start,
+                                               skip_layer_end);
 
     size_t t1 = ggml_time_ms();
 
@@ -1482,7 +1529,11 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str) {
+                    const char* input_id_images_path_c_str,
+                    std::vector<int> skip_layers,
+                    float slg_scale,
+                    float skip_layer_start,
+                    float skip_layer_end) {
     LOG_DEBUG("img2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1556,7 +1607,11 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                control_strength,
                                                style_ratio,
                                                normalize_input,
-                                               input_id_images_path_c_str);
+                                               input_id_images_path_c_str,
+                                               skip_layers,
+                                               slg_scale,
+                                               skip_layer_start,
+                                               skip_layer_end);
 
     size_t t2 = ggml_time_ms();
 
