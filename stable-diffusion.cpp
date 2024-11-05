@@ -787,12 +787,19 @@ public:
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, noise);
 
         bool has_unconditioned = cfg_scale != 1.0 && uncond.c_crossattn != NULL;
+        bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
+
 
         // denoise wrapper
         struct ggml_tensor* out_cond   = ggml_dup_tensor(work_ctx, x);
         struct ggml_tensor* out_uncond = NULL;
+        struct ggml_tensor* out_skip = NULL;
+
         if (has_unconditioned) {
             out_uncond = ggml_dup_tensor(work_ctx, x);
+        }
+        if (has_skiplayer) {
+            out_skip = ggml_dup_tensor(work_ctx, x);
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -875,13 +882,11 @@ public:
                 negative_data = (float*)out_uncond->data;
             }
 
-            bool has_skiplayer     = skip_layers.size() > 0 && slg_scale != 0.0;
             int stepCount          = sigmas.size();
-            has_skiplayer          = has_skiplayer && step > (int)(skip_layer_start * stepCount) && step < (int)(skip_layer_end * stepCount);
+            bool is_skiplayer_step = has_skiplayer && step > (int)(skip_layer_start * stepCount) && step < (int)(skip_layer_end * stepCount);
             float* skip_layer_data = NULL;
-            if (has_skiplayer) {
+            if (is_skiplayer_step) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
-                ggml_tensor* out_skip = ggml_dup_tensor(work_ctx, x);
                 // skip layer (same as conditionned)
                 diffusion_model->compute(n_threads,
                                          noised_input,
@@ -914,7 +919,7 @@ public:
                         latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
                     }
                 }
-                if (has_skiplayer) {
+                if (is_skiplayer_step) {
                     latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
                 }
                 // v = latent_result, eps = latent_result
