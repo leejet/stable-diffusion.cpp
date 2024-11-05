@@ -156,6 +156,7 @@ void print_params(SDParams params) {
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
     printf("    min_cfg:           %.2f\n", params.min_cfg);
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
+    printf("    slg_scale:         %.2f\n", params.slg_scale);
     printf("    guidance:          %.2f\n", params.guidance);
     printf("    clip_skip:         %d\n", params.clip_skip);
     printf("    width:             %d\n", params.width);
@@ -202,11 +203,12 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
-    printf("  --slg                              enable skip layer guidance (CFG variant)\n");
-    printf("  --skip_layers LAYERS               Layers to skip for skip layer CFG (requires --slg): (default: [7,8,9])\n");
-    printf("  --slg-scale SCALE                  skip layer guidance scale (requires --slg): (default: 2.5)\n");
-    printf("  --skip_layer_start START           skip layer enabling point (* steps) (requires --slg): (default: 0.01)\n");
-    printf("  --skip_layer_end END               skip layer enabling point (* steps) (requires --slg): (default: 0.2)\n");
+    printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
+    printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
+    printf("  --skip_layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
+    printf("  --skip_layer_start START           SLG enabling point: (default: 0.01)\n");
+    printf("  --skip_layer_end END               SLG disabling point: (default: 0.2)\n");
+    printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
     printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%%)\n");
     printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
@@ -233,7 +235,6 @@ void print_usage(int argc, const char* argv[]) {
 
 void parse_args(int argc, const char** argv, SDParams& params) {
     bool invalid_arg = false;
-    bool cfg_skip    = false;
     std::string arg;
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -545,8 +546,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.verbose = true;
         } else if (arg == "--color") {
             params.color = true;
-        } else if (arg == "--slg") {
-            cfg_skip = true;
+        } else if (arg == "--slg-scale") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.slg_scale = std::stof(argv[i]);
         } else if (arg == "--skip-layers") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -584,12 +589,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             if (invalid_arg) {
                 break;
             }
-        } else if (arg == "--slg-scale") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.slg_scale = std::stof(argv[i]);
         } else if (arg == "--skip-layer-start") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -615,11 +614,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
     if (params.n_threads <= 0) {
         params.n_threads = get_num_physical_cores();
-    }
-
-    if (!cfg_skip) {
-        // set skip_layers to empty
-        params.skip_layers.clear();
     }
 
     if (params.mode != CONVERT && params.mode != IMG2VID && params.prompt.length() == 0) {
@@ -697,6 +691,16 @@ std::string get_image_params(SDParams params, int64_t seed) {
     }
     parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
+    if (params.slg_scale != 0 && params.skip_layers.size() != 0) {
+        parameter_string += "SLG scale: " + std::to_string(params.cfg_scale) + ", ";
+        parameter_string += "Skip layers: [";
+        for (const auto& layer : params.skip_layers) {
+            parameter_string += std::to_string(layer) + ", ";
+        }
+        parameter_string += "], ";
+        parameter_string += "Skip layer start: " + std::to_string(params.skip_layer_start) + ", ";
+        parameter_string += "Skip layer end: " + std::to_string(params.skip_layer_end) + ", ";
+    }
     parameter_string += "Guidance: " + std::to_string(params.guidance) + ", ";
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
