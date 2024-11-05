@@ -799,7 +799,12 @@ public:
             out_uncond = ggml_dup_tensor(work_ctx, x);
         }
         if (has_skiplayer) {
-            out_skip = ggml_dup_tensor(work_ctx, x);
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_2B || version == VERSION_SD3_5_8B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+                out_skip = ggml_dup_tensor(work_ctx, x);
+            } else {
+                has_skiplayer = false;
+                LOG_WARN("SLG is incompatible with %s models", model_version_to_str[version]);
+            }
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
