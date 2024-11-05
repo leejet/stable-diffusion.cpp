@@ -35,7 +35,7 @@ namespace Flux {
         int64_t hidden_size;
         float eps;
 
-        void init_params(struct ggml_context* ctx, const std::string prefix, std::map<std::string, enum ggml_type>& tensor_types, std::map<std::string, struct ggml_tensor*>& params) {
+        void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
             ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "scale") != tensor_types.end()) ? tensor_types[prefix + "scale"] : GGML_TYPE_F32;
             params["scale"] = ggml_new_tensor_1d(ctx, wtype, hidden_size);
         }
