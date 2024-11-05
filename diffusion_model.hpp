@@ -73,6 +73,7 @@ struct UNetModel : public DiffusionModel {
                  struct ggml_tensor** output               = NULL,
                  struct ggml_context* output_ctx           = NULL,
                  std::vector<int> skip_layers              = std::vector<int>()) {
+        (void)skip_layers;  // SLG doesn't work with UNet models
         return unet.compute(n_threads, x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength, output, output_ctx);
     }
 };
@@ -173,7 +174,7 @@ struct FluxModel : public DiffusionModel {
                  struct ggml_tensor** output               = NULL,
                  struct ggml_context* output_ctx           = NULL,
                  std::vector<int> skip_layers              = std::vector<int>()) {
-        return flux.compute(n_threads, x, timesteps, context, y, guidance, output, output_ctx);
+        return flux.compute(n_threads, x, timesteps, context, y, guidance, output, output_ctx, skip_layers);
     }
 };
 

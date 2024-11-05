@@ -711,7 +711,8 @@ namespace Flux {
                                          struct ggml_tensor* timesteps,
                                          struct ggml_tensor* y,
                                          struct ggml_tensor* guidance,
-                                         struct ggml_tensor* pe) {
+                                         struct ggml_tensor* pe,
+                                         std::vector<int> skip_layers = std::vector<int>()) {
             auto img_in      = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
             auto time_in     = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);
             auto vector_in   = std::dynamic_pointer_cast<MLPEmbedder>(blocks["vector_in"]);
@@ -733,6 +734,10 @@ namespace Flux {
             txt = txt_in->forward(ctx, txt);
 
             for (int i = 0; i < params.depth; i++) {
+                if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), i) != skip_layers.end()) {
+                    continue;
+                }
+
                 auto block = std::dynamic_pointer_cast<DoubleStreamBlock>(blocks["double_blocks." + std::to_string(i)]);
 
                 auto img_txt = block->forward(ctx, img, txt, vec, pe);
@@ -742,6 +747,9 @@ namespace Flux {
 
             auto txt_img = ggml_concat(ctx, txt, img, 1);  // [N, n_txt_token + n_img_token, hidden_size]
             for (int i = 0; i < params.depth_single_blocks; i++) {
+                if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), i + params.depth) != skip_layers.end()) {
+                    continue;
+                }
                 auto block = std::dynamic_pointer_cast<SingleStreamBlock>(blocks["single_blocks." + std::to_string(i)]);
 
                 txt_img = block->forward(ctx, txt_img, vec, pe);
@@ -769,7 +777,8 @@ namespace Flux {
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* y,
                                     struct ggml_tensor* guidance,
-                                    struct ggml_tensor* pe) {
+                                    struct ggml_tensor* pe,
+                                    std::vector<int> skip_layers = std::vector<int>()) {
             // Forward pass of DiT.
             // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
             // timestep: (N,) tensor of diffusion timesteps
@@ -791,7 +800,7 @@ namespace Flux {
             // img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch_size, pw=patch_size)
             auto img = patchify(ctx, x, patch_size);  // [N, h*w, C * patch_size * patch_size]
 
-            auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe);  // [N, h*w, C * patch_size * patch_size]
+            auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe, skip_layers);  // [N, h*w, C * patch_size * patch_size]
 
             // rearrange(out, "b (h w) (c ph pw) -> b c (h ph) (w pw)", h=h_len, w=w_len, ph=2, pw=2)
             out = unpatchify(ctx, out, (H + pad_h) / patch_size, (W + pad_w) / patch_size, patch_size);  // [N, C, H + pad_h, W + pad_w]
@@ -829,7 +838,8 @@ namespace Flux {
                                         struct ggml_tensor* timesteps,
                                         struct ggml_tensor* context,
                                         struct ggml_tensor* y,
-                                        struct ggml_tensor* guidance) {
+                                        struct ggml_tensor* guidance,
+                                        std::vector<int> skip_layers = std::vector<int>()) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
 
@@ -856,7 +866,8 @@ namespace Flux {
                                                    context,
                                                    y,
                                                    guidance,
-                                                   pe);
+                                                   pe,
+                                                   skip_layers);
 
             ggml_build_forward_expand(gf, out);
 
@@ -870,14 +881,15 @@ namespace Flux {
                      struct ggml_tensor* y,
                      struct ggml_tensor* guidance,
                      struct ggml_tensor** output     = NULL,
-                     struct ggml_context* output_ctx = NULL) {
+                     struct ggml_context* output_ctx = NULL,
+                     std::vector<int> skip_layers    = std::vector<int>()) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
             // y: [N, adm_in_channels] or [1, adm_in_channels]
             // guidance: [N, ]
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, y, guidance);
+                return build_graph(x, timesteps, context, y, guidance, skip_layers);
             };
 
             GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
