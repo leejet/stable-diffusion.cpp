@@ -52,6 +52,8 @@ void pretty_progress(int step, int steps, float time);
 
 void notify_vae_stage();
 
+void send_sampled_image(uint8_t* img, int width, int height);
+
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 
 std::string trim(const std::string& s);

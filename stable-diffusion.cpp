@@ -62,13 +62,19 @@ void calculate_alphas_cumprod(float* alphas_cumprod,
 /*=============================================== StableDiffusionGGML ================================================*/
 
 #define FOR_SAMPLE                  \
+ggml_tensor* taesd_cache = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, x->ne[0]*8, x->ne[1]*8, 3, x->ne[3]);  \
 for (int i = 0; i < steps; i++) {   \
     if(request_cancel) {            \
         request_cancel = false;     \
         return NULL;                \
     }                               \
 
-#define FOR_SAMPLE_END }            \
+#define FOR_SAMPLE_END                                  \
+    if(taesd_decoding_rt) {                             \
+        ggml_tensor* decoded = compute_sample_decoder(taesd_cache, x); \
+        send_sampled_image(sd_tensor_to_image(decoded), decoded->ne[0], decoded->ne[1]);    \
+    }   \
+}                                                   \
 
 class StableDiffusionGGML {
 public:
@@ -97,6 +103,7 @@ public:
 
     std::string taesd_path;
     bool use_tiny_autoencoder = false;
+    bool taesd_decoding_rt    = false;
     bool vae_tiling           = false;
     bool stacked_id           = false;
 
@@ -154,8 +161,9 @@ public:
                         schedule_t schedule,
                         bool clip_on_cpu,
                         bool control_net_cpu,
-                        bool vae_on_cpu) {
-        use_tiny_autoencoder = taesd_path.size() > 0;
+                        bool vae_on_cpu, bool taesd_inmediate) {
+        use_tiny_autoencoder = taesd_path.size() > 0 && !taesd_inmediate;
+        taesd_decoding_rt = taesd_inmediate && taesd_path.size() > 0;
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
@@ -262,7 +270,9 @@ public:
                 first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend, vae_type, vae_decode_only);
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
-            } else {
+            }
+
+            if(use_tiny_autoencoder || taesd_decoding_rt) {
                 tae_first_stage = std::make_shared<TinyAutoEncoder>(backend, model_data_type, vae_decode_only);
             }
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
@@ -366,10 +376,12 @@ public:
             if (!use_tiny_autoencoder) {
                 vae_params_mem_size = first_stage_model->get_params_buffer_size();
             } else {
+                vae_params_mem_size = tae_first_stage->get_params_buffer_size();
+            }
+            if(taesd_decoding_rt) {
                 if (!tae_first_stage->load_from_file(taesd_path)) {
                     return false;
                 }
-                vae_params_mem_size = tae_first_stage->get_params_buffer_size();
             }
             size_t control_net_params_mem_size = 0;
             if (control_net) {
@@ -449,6 +461,21 @@ public:
             LOG_INFO("running in eps-prediction mode");
         }
 
+        set_schedule(schedule, true);
+
+        for (int i = 0; i < TIMESTEPS; i++) {
+            denoiser->schedule->alphas_cumprod[i] = ((float*)alphas_cumprod_tensor->data)[i];
+            denoiser->schedule->sigmas[i]         = std::sqrt((1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
+            denoiser->schedule->log_sigmas[i]     = std::log(denoiser->schedule->sigmas[i]);
+        }
+
+        LOG_DEBUG("finished loaded file");
+        ggml_free(ctx);
+        model_loaded = true;
+        return true;
+    }
+
+    void set_schedule(schedule_t schedule, bool loading_model) {
         if (schedule != DEFAULT) {
             switch (schedule) {
                 case DISCRETE:
@@ -473,16 +500,14 @@ public:
             }
         }
 
-        for (int i = 0; i < TIMESTEPS; i++) {
-            denoiser->schedule->alphas_cumprod[i] = ((float*)alphas_cumprod_tensor->data)[i];
-            denoiser->schedule->sigmas[i]         = std::sqrt((1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
-            denoiser->schedule->log_sigmas[i]     = std::log(denoiser->schedule->sigmas[i]);
+        if(!loading_model) {
+            calculate_alphas_cumprod(denoiser->schedule->alphas_cumprod);
+            for (int i = 0; i < TIMESTEPS; i++) {
+                denoiser->schedule->alphas_cumprod[i] = denoiser->schedule->alphas_cumprod[i];
+                denoiser->schedule->sigmas[i]         = std::sqrt((1 - denoiser->schedule->alphas_cumprod[i]) / denoiser->schedule->alphas_cumprod[i]);
+                denoiser->schedule->log_sigmas[i]     = std::log(denoiser->schedule->sigmas[i]);
+            }
         }
-
-        LOG_DEBUG("finished loaded file");
-        ggml_free(ctx);
-        model_loaded = true;
-        return true;
     }
 
     bool is_using_v_parameterization_for_sd2(ggml_context* work_ctx) {
@@ -886,7 +911,7 @@ public:
             out_uncond = ggml_dup_tensor(work_ctx, x);
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
-
+        
         auto denoise = [&](ggml_tensor* input, float sigma, int step) {
             if (step == 1) {
                 pretty_progress(0, (int)steps, 0);
@@ -1410,6 +1435,13 @@ FOR_SAMPLE_END
         return latent;
     }
 
+    ggml_tensor* compute_sample_decoder(ggml_tensor* taesd_cache, ggml_tensor* x) {
+        tae_first_stage->compute(n_threads, x, true, &taesd_cache);
+        tae_first_stage->free_compute_buffer();
+        ggml_tensor_clamp(taesd_cache, 0.0f, 1.0f);
+        return taesd_cache;
+    }
+
     ggml_tensor* compute_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode) {
         if(request_cancel) {
             request_cancel = false;
@@ -1525,7 +1557,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     s,
                                     keep_clip_on_cpu,
                                     keep_control_net_cpu,
-                                    keep_vae_on_cpu)) {
+                                    keep_vae_on_cpu, true)) {
         delete sd_ctx->sd;
         sd_ctx->sd = NULL;
         free(sd_ctx);
@@ -1533,6 +1565,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
     }
     return sd_ctx;
 }
+
+// required by server example
 
 sd_ctx_t* new_sd_ctx_direct(
                             const char* lora_model_dir,
@@ -1560,6 +1594,13 @@ bool     sd_model_is_loaded(sd_ctx_t* sd_ctx) {
     return sd_ctx->sd->model_loaded;
 }
 
+void    sd_set_schedule(sd_ctx_t* sd_ctx, schedule_t schedule) {
+    if(sd_model_is_loaded(sd_ctx)) {
+        sd_ctx->sd->set_schedule(schedule, false);
+    }
+}
+
+
 void load_model(sd_ctx_t* sd_ctx,
                             const char* model_path_c_str,
                             const char* vae_path_c_str,
@@ -1585,7 +1626,7 @@ void load_model(sd_ctx_t* sd_ctx,
                                     s,
                                     false,
                                     keep_control_net_cpu,
-                                    false)) {
+                                    false, true)) {
         delete sd_ctx->sd;
         sd_ctx->sd = NULL;
         free(sd_ctx);

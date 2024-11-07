@@ -49,7 +49,7 @@ static std::string sd_basename(const std::string& path) {
 struct server_params
 {
     std::string hostname = "127.0.0.1";
-    std::string public_path = "public";
+    std::string public_path = "examples/server/public";
     int32_t port = 7860;
     int32_t read_timeout = 600;
     int32_t write_timeout = 600;
@@ -141,6 +141,7 @@ struct sd_params {
     int64_t seed               = 42;
     bool verbose               = false;
     bool vae_tiling            = false;
+    bool change_schedule       = false;
 };
 
 const char* rng_type_to_str[] = {
@@ -265,12 +266,6 @@ static void server_params_parse(int argc, char **argv, server_params &sparams,
                         type.c_str());
                 exit(1);
             }
-        } else if (arg == "--clip-skip") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            params.clip_skip = std::stoi(argv[i]);
         } else if (arg == "--lora-model-dir") {
             if (++i >= argc)
             {
@@ -344,6 +339,12 @@ static void parse_options_generation(const json &body, sd_params& params)
     params.cfg_scale = json_value(body, "cfg_scale", default_params.cfg_scale);
     params.stream = json_value(body, "stream", default_params.stream);
     params.vae_tiling = json_value(body, "vae_tiling", default_params.vae_tiling);
+    params.clip_skip = json_value(body, "clip_skip", default_params.clip_skip);
+    schedule_t schedule = json_value(body, "schedule", default_params.schedule);
+    if(schedule != params.schedule) {
+        params.schedule = schedule;
+        params.change_schedule = true;
+    }
 }
 
 std::string get_image_params(sd_params params, int64_t seed) {
@@ -371,7 +372,7 @@ struct shared_data {
     sd_ctx_t* sd;
 };
 
-void progressFunction(int step, int steps, float time, bool new_image, void* data) {
+void sample_function(int step, int steps, float time, bool new_image, void* data) {
     if(steps == 0) {
         return;
     }
@@ -395,7 +396,22 @@ void progressFunction(int step, int steps, float time, bool new_image, void* dat
     }
 }
 
-void vaeStage(void* data) {
+
+void pass_image_sampled(uint8_t* img, int width, int height, void* data) {
+    shared_data* sh = static_cast<shared_data*>(data);
+    int len;
+    uint8_t* png = stbi_write_png_to_mem((const unsigned char *) img, 0, width, height, 3, &len, "");
+    json pdata = {{"type", "sampled_image"}, {"data", base64_encode(png, len) }};
+    free(img);
+    std::string data_str = "data: " +
+        pdata.dump(-1, ' ', false, json::error_handler_t::replace) +
+        "\n\n";
+    if(!sh->sink->write(data_str.c_str(), data_str.size())) {
+        sd_request_cancel(sh->sd);
+    }
+}
+
+void vae_stage(void* data) {
     json pdata = {{"type", "status"}, { "decoding", true }};
     std::string data_str = "data: " +
         pdata.dump(-1, ' ', false, json::error_handler_t::replace) +
@@ -507,6 +523,33 @@ int main(int argc, char **argv)
                 res.set_content(data.dump(), "application/json");
             });
 
+    svr.Get("/cancel", [&sd](const httplib::Request & /*req*/, httplib::Response &res)
+            {
+                res.set_header("Access-Control-Allow-Origin", "*");
+                json data = {
+                    { "status", "done" }
+                };
+                sd_request_cancel(sd);
+                res.set_content(data.dump(), "application/json");
+            });
+
+     svr.Post("/placeholder", [&params](const httplib::Request & req, httplib::Response &res)
+            {
+                res.set_header("Access-Control-Allow-Origin", "*");
+                json params_json = json::parse(req.body);
+                parse_options_generation(params_json, params);
+                uint32_t data_size = params.width * params.height * 3;
+                uint8_t* blank = (uint8_t*)malloc(data_size);
+                bool dark = json_value(params_json, "dark_mode", false);
+                for(int i = 0; i < data_size; i++) {
+                    blank[i] = dark ? 0 : 255;
+                }
+                int len;
+                uint8_t* png = stbi_write_png_to_mem((const unsigned char *) blank, 0, params.width, params.height, 3, &len, "");
+                json data = {{"data", base64_encode(png, len) }};
+                res.set_content(data.dump(), "application/json");
+            });
+
     svr.Post("/txt2img", [&sd, &params, &sdreq](const httplib::Request &req, httplib::Response &res)
             {
                 parse_options_generation(json::parse(req.body), params);
@@ -518,10 +561,10 @@ int main(int argc, char **argv)
                             sdreq.request_load_model = true;
                         } else {
                             json data = {{"type", "status"}, { "loaded", true }};
-                                std::string data_str = "data: " +
-                                    data.dump(-1, ' ', false, json::error_handler_t::replace) +
-                                    "\n\n";
-                                sink.write(data_str.c_str(), data_str.size());
+                            std::string data_str = "data: " +
+                                data.dump(-1, ' ', false, json::error_handler_t::replace) +
+                                "\n\n";
+                            sink.write(data_str.c_str(), data_str.size());
                         }
                         shared_data* sh = new shared_data{&sink, sd};
                         // send progressions metrics
@@ -536,8 +579,9 @@ int main(int argc, char **argv)
                                 if(!sink.write(data_str.c_str(), data_str.size())) {
                                     return false;
                                 }
-                                sd_set_progress_callback(progressFunction, sh);
-                                sd_set_vae_callback(vaeStage, sh);
+                                sd_set_progress_callback(sample_function, sh);
+                                sd_set_vae_callback(vae_stage, sh);
+                                sd_set_image_callback(pass_image_sampled, sh);
                                 need_model_notification = false;
                             }
                             if(sdreq.images_ready) {
@@ -547,11 +591,11 @@ int main(int argc, char **argv)
                                 for(int i = 0; i < params.batch_count; i ++) {
                                     int len;
                                     uint8_t* png = stbi_write_png_to_mem((const unsigned char *) sdreq.images[i].data, 0, params.width, params.height, 3, &len, get_image_params(params, params.seed + i).c_str());
-                                    json data = {{ "type", "image" }, {"data", base64_encode(png, len) }, { "seed", sdreq.images[i].seed }, {"stop", i == params.batch_count - 1}};
+                                    json data = {{ "type", "image" }, {"data", base64_encode(png, len) }, { "seed", sdreq.images[i].seed }, {"index", i} , {"stop", i == params.batch_count - 1}};
                                     std::string data_str = "data: " +
                                         data.dump(-1, ' ', false, json::error_handler_t::replace) +
                                         "\n\n";
-                                    if(!sink.write(data_str.c_str(), data_str.size())){
+                                    if(!sink.write(data_str.c_str(), data_str.size())) {
                                         return false;
                                     }
                                 }
@@ -634,6 +678,8 @@ int main(int argc, char **argv)
         }
         return 0;
     });
+
+    // processor loop
     while(true) {
         if(sdreq.request_load_model) {
             load_model(sd,
@@ -644,9 +690,13 @@ int main(int argc, char **argv)
             sdreq.request_load_model = false;
         }
         if(sdreq.need_attend) {
+            if(params.change_schedule) {
+                sd_set_schedule(sd, params.schedule);
+                params.change_schedule = true;
+            }
             sdreq.images = txt2img(sd,
                             params.prompt.c_str(),
-                            params.negative_prompt.c_str(), 0,
+                            params.negative_prompt.c_str(), params.clip_skip,
                             params.cfg_scale, params.width, params.height,
                             params.sample_method, params.sample_steps, params.seed,
                             params.batch_count, NULL, 0.0f, 0.0f, 0.0f, "", params.vae_tiling);

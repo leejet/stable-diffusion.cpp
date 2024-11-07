@@ -101,10 +101,12 @@ enum sd_log_level_t {
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
 typedef void (*sd_progress_cb_t)(int step, int steps, float time, bool start, void* data);
 typedef void (*sd_vae_stage_cb_t)(void* data); // notify is vae phase
+typedef void (*sd_image_decoded_t)(uint8_t* img, int width, int height, void* data); // notify is vae phase
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
 SD_API void sd_set_vae_callback(sd_vae_stage_cb_t cb, void* data);
+SD_API void sd_set_image_callback(sd_image_decoded_t cb, void* data);
 SD_API int32_t get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 
@@ -142,6 +144,8 @@ SD_API sd_ctx_t* new_sd_ctx_direct(
                             int n_threads,
                             enum rng_type_t rng_type);
 
+SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
+
 SD_API bool     sd_model_is_loaded(sd_ctx_t* sd_ctx);
 
 SD_API void sd_request_cancel(sd_ctx_t* sd_ctx);
@@ -156,7 +160,7 @@ SD_API void     load_model(sd_ctx_t* sd_ctx,
                             enum schedule_t s,
                             bool keep_control_net_cpu);
 
-SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
+SD_API void    sd_set_schedule(sd_ctx_t* sd_ctx, schedule_t schedule);
 
 SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            const char* prompt,

@@ -235,7 +235,7 @@ body {
 
 .row-gen {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr 2fr;
+    grid-template-columns: 1fr 1fr 3fr;
 }
 
 .btn-download {
@@ -441,7 +441,7 @@ body {
 
 .select-option:hover,
 .select-option:focus {
-    color: #0537b4;
+    color: #255ae0;
 }
 
 @keyframes HideList {
@@ -453,112 +453,33 @@ body {
     }
 }
 
-.progress-background {
-    position: fixed;
-    bottom: -10vh;
-    width: 100vw;
-    height: 10vh;
-    z-index: 10;
-    background: linear-gradient(to bottom, #fefefe4e, transparent);
-    transition: ease all 0.6s;
-    backdrop-filter: blur(0px);
-}
-
-.show-progress {
-    bottom: 0px;
-    display: block;
-    backdrop-filter: blur(10px);
-}
-
-.progress-steps {
-    display: none;
-    font-size: 13px;
-    height: 5rem;
-    margin: 0;
-    padding-top: 15px;
-    border-radius: 5px;
-}
-
-.show-steps {
-    display: block;
-}
-
-.progress-steps li {
-    list-style: none;
-    float: left;
-    width: 25%;
+.progress-bar {
     position: relative;
-    text-align: center;
-    transition: all ease 0.5s;
+    width: 100%;
+    height: 3px;
+    background: #f0efef;
 }
 
-.progress-steps li::before {
-    content: attr(data-state);
-    width: 30px;
-    height: 30px;
-    border: 2px solid #9e9c9c;
-    border-top: transparent;
-    display: block;
-    text-align: center;
-    margin: 0 auto 10px;
-    border-radius: 50%;
-    line-height: 30px;
-    z-index: 100;
-    transition: all ease 1s;
-}
-
-.progress-steps .waiting::before {
-    animation: spin 0.5s linear infinite;
-}
-
-@keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-.progress-steps li::after {
-    width: calc(100% - 32px);
-    content: '';
-    position: absolute;
-    height: 2px;
-    top: 15px;
-    z-index: 30;
-    left: calc(-50% + 16px);
-    background-color: #9e9c9c;
-}
-
-.progress-steps li:first-child::after {
-    content: none;
-}
-
-.progress-steps li.ready {
-    color: #3eff3e !important;
-}
-
-.progress-steps li.ready::before {
-    border: 2px solid #3eff3e;
-}
-
-.progress-steps li.ready + li::after {
-    background: linear-gradient(to right, #9e9c9c 30%, #3cff3c 50%,#9e9c9c 70%);
+.indeterminate {
+    background: linear-gradient(to right, #f0efef 30%, #4248f6 50%,#f0efef 70%);
+    background-size: 200% 200%;
     animation: Animation 1s linear infinite;
-    background-size: 200% 200%;
 }
 
-.progress-steps li.cancel::before {
-    border: 2px solid #ff2323;
+.progress-bar::before {
+    width: var(--porcent-prog, 0%);
+    height: 3px;
+    position: absolute;
+    top: 0px;
+    left: 0px;
+    content: '';
+    background-color: #0363f2;
 }
 
-.progress-steps li.cancel + li::after {
-    background: linear-gradient(to right, #9e9c9c 30%, #ff1212 50%,#9e9c9c 70%);
-    animation: Animation 2s linear infinite;
-    background-size: 200% 200%;
+.progress-text {
+    font-size: 14px;
+    text-align: center;
 }
-
 
 @keyframes Animation {
     0% {
@@ -571,6 +492,7 @@ body {
         background-position: 150% 50%;
     }
 }
+
 
 .button-holo {
     align-items: center;
@@ -636,9 +558,7 @@ body {
 }
 
 .image-gallery .images {
-    display: inline-block;
     vertical-align: top;
-    width: 15rem;
     height: 100%;
     max-height: 100%;
     overflow-y: scroll;
@@ -646,91 +566,55 @@ body {
 
 .image-gallery .item {
     display: inline-block;
-    width: calc(50% - 0.4rem);
-    padding: 0.3rem 0.2rem;
+    width: calc(25% - 0.4rem);
+    padding: 0.1rem 0.1rem;
+    overflow: hidden;
+}
+
+.image-gallery .not-available {
+    position: relative;
+}
+
+.image-gallery .not-available::before {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    content: '';
+    background: linear-gradient(to right, transparent 15%, #e7e7e7 50%, transparent 85%);
+    width: calc(100% - 6px);
+    height: calc(100% - 6px);
+    z-index: 1;
+    background-size: 200% 200%;
+    animation: Animation 1s ease-in infinite;
+}
+
+.image-gallery .processing-this::after {
+    display: block;
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    content: '';
+    z-index: -1;
+    background: linear-gradient(to right, transparent, #1b63f2 50%, transparent);
+    width: 100%;
+    height: 100%;
+    transform-origin: bottom right;
+    animation: animate 2s linear infinite;
+}
+
+@keyframes animate {
+    0% {
+        transform: rotate(0deg);
+    }
+    
+    100% {
+        transform: rotate(360deg);
+    }
 }
 
 .image-gallery .item img {
     width: 100%;
-    animation: ImageAdded 1s ease forwards;
 }
-
-@keyframes ImageAdded {
-    from {
-        transform: scale(0);
-    }
-    to {
-        transform: scale(1);
-    }
-}
-
-.image-gallery .item .selected {
-    border: 2px solid #0363f2;
-}
-
-.image-gallery img {
-    border-radius: 5px;
-}
-
-.image-gallery .preview {
-    display: inline-block;
-    max-height: 100%;
-    margin: 5px;
-}
-
-.image-gallery .image-preview {
-    height: 95%;
-}
-
-.image-preview img {
-    height: 100%;
-    max-width: 100%;
-    animation: ImageAdded 1s ease forwards;
-}
-
-.image-info {
-    display: none;
-}
-
-.resize-params-height {
-    max-height: calc(90vh - var(--height-params));
-}
-
-.text-info-def {
-    opacity: 0;
-    position: absolute;
-    top: 0;
-    left: 0;
-    transition: ease-in all 0.1s;
-    padding-left: 5px;
-    padding-top: 5px;
-    color: white;
-    white-space: pre-line;
-}
-
-.box-def {
-    border-radius: 5px;
-    position: absolute;
-    top: 0;
-    padding-left: 5px;
-    padding-top: 5px;
-    width: 100%;
-    height: 100%;
-    backdrop-filter: blur(0px);
-    transition: ease-in all 0.2s;
-    opacity: 0;
-}
-
-.show-box-info {
-    backdrop-filter: blur(5px);
-    background-color: #181717a6;
-    opacity: 1;
-}
-
-.show-text-info {
-    opacity: 1;
-}
-
 
 .modal {
     position: fixed;
@@ -744,12 +628,11 @@ body {
     align-items: center;
     justify-content: center;
     transition: 0.4s;
+    z-index: 2;
 }
 
 .modal-container {
     display: flex;
-    max-width: 720px;
-    width: 100%;
     border-radius: 10px;
     overflow: hidden;
     position: absolute;
@@ -772,10 +655,32 @@ body {
 
 .modal-left {
     padding: 60px 30px 20px;
-    flex: 1.5;
+    flex: 1;
     transition-duration: 0.5s;
     transform: translateY(80px);
     opacity: 0;
+}
+
+.modal-right {
+    flex: 4;
+    height: 80vh;
+    font-size: 0;
+    transition: 0.3s;
+    margin: 0;
+    background: radial-gradient(#015e97, #190f11);
+    -webkit-animation: fadeIn 1 1s ease-out;
+    -moz-animation: fadeIn 1 1s ease-out;
+    -o-animation: fadeIn 1 1s ease-out;
+    animation: fadeIn 1 1s ease-out;
+}
+
+
+.modal-right img {
+    height: 100%;
+    transform: scale(2);
+    -o-object-fit: cover;
+       object-fit: cover;
+    transition-duration: 1.2s;
 }
 
 .modal.is-open {
@@ -796,6 +701,10 @@ body {
     transition-delay: 0.1s;
 }
 
+.modal.is-open .modal-right img {
+    transform: scale(1);
+}
+
 .icon-button {
     outline: 0;
     position: absolute;
@@ -808,6 +717,57 @@ body {
     padding: 0;
     cursor: pointer;
     fill: currentColor;
+}
+
+.modal-container-preview {
+    border-radius: 10px;
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    transition-duration: 0.3s;
+    transform: translateY(100px) scale(0.4);
+    background: white;
+}
+
+.modal-left-preview {
+    display: grid;
+    padding: 10px 20px;
+    transition-duration: 0.5s;
+    transform: translateY(80px);
+    opacity: 0;
+    grid-template-columns: 3fr 1fr 1fr;
+}
+
+.modal-right-preview {
+    height: 75vh;
+    font-size: 0;
+    transition: 0.3s;
+    position: relative;
+    overflow: hidden;
+    background: radial-gradient(#5199c7, #161616);
+}
+
+.modal-right-preview img {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: top left;
+    height: 100%;
+    pointer-events: none;
+    user-select: none;
+}
+
+.modal.is-open .modal-container-preview {
+    opacity: 1;
+    transition-duration: 0.6s;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+}
+
+.modal.is-open .modal-left-preview {
+    transform: translateY(0);
+    opacity: 1;
+    transition-delay: 0.1s;
 }
 
 @media (max-width: 750px) {
@@ -931,6 +891,15 @@ body {
     background: black;
 }
 
+.dark-mode .modal-container-preview {
+    color: white;
+    background: black;
+}
+
+.dark-mode .modal-container-preview .icon-button{
+    color: white;
+}
+
 .dark-mode .modal-container .icon-button {
     color: white;
 }
@@ -959,96 +928,33 @@ body {
     box-shadow: 4px 2px 8px #f3f2f22a;
 }
 
-.dark-mode .progress-background  {
-    background: linear-gradient(to bottom, #5453535b, transparent);
+.dark-mode .progress-bar {
+    background: #797979;
 }
 
-.dark-mode .progress-steps li {
-    color: white;
-}
-
-.dark-mode .progress-steps li.ready + li::after {
-    background: linear-gradient(to right, #9e9c9c 35%, #11ff11 50%,#9e9c9c 65%);
+.dark-mode .indeterminate {
+    background: linear-gradient(to right, #1d1d1d 30%, #4693f8 50%, #1d1d1d 70%);
     background-size: 200% 200%;
+    animation: Animation 1s linear infinite;
 }
-
-@media only screen and (max-height: 700px) {
-    .progress-background {
-        height: 15vh;
-        bottom: -15vh;
-    }
-
-    .show-progress {
-        bottom: 0px;
-    }
-
-    .resize-params-height {
-        max-height: calc(85vh - 2.67rem - 0.67rem);
-    }
-}
-
-@media only screen and (max-height: 500px) {
-    .progress-background {
-        height: 15vh;
-        bottom: -15vh;
-    }
-    
-    .show-progress {
-        bottom: 0px;
-    }
-
-    .progress-steps {
-        padding-top: 5px;
-        padding-bottom: 5px;
-        height: 4rem;
-    }
-
-    .resize-params-height {
-        max-height: calc(85vh - var(--height-params));
-    }
-}
-
 
 @media only screen and (max-width: 1300px) {
-    .image-gallery .images {
-        width: 8rem;
-    }
-
     .image-gallery .item {
-        display: block;
-        width: calc(100% - 0.4rem);
+        width: calc(50% - 0.4rem);
         padding: 0.3rem 0.2rem;
     }
 }
 
 @media only screen and (max-width: 1300px) and (max-height: 700px) {
-    .image-gallery .images {
-        width: 5rem;
-    }
-
     .image-gallery .item {
-        display: block;
-        width: calc(100% - 0.4rem);
+        width: calc(50% - 0.6rem);
         padding: 0.3rem 0.2rem;
-    }
-
-    .image-gallery .image-preview {
-        height: 85%;
     }
 }
 
 @media only screen and (max-width: 1300px) and (max-height: 500px) {
-    .image-gallery .images {
-        width: 5rem;
-    }
-
     .image-gallery .item {
-        display: block;
-        width: calc(100% - 0.4rem);
+        width: calc(50% - 0.6rem);
         padding: 0.3rem 0.2rem;
-    }
-
-    .image-gallery .image-preview {
-        height: 85%;
     }
 }

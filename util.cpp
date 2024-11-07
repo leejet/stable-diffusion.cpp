@@ -236,6 +236,9 @@ void* sd_progress_cb_data              = NULL;
 static sd_vae_stage_cb_t sd_vae_cb = NULL;
 void* sd_vae_cb_data          = NULL;
 
+static sd_image_decoded_t sd_img_cb = NULL;
+void* sd_img_cb_data          = NULL;
+
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
     return converter.from_bytes(utf8_str);
@@ -355,6 +358,12 @@ void notify_vae_stage() {
     }
 }
 
+void send_sampled_image(uint8_t* img, int width, int height) {
+    if (sd_img_cb) {
+        sd_img_cb(img, width, height, sd_img_cb_data);
+    }
+}
+
 std::string ltrim(const std::string& s) {
     auto it = std::find_if(s.begin(), s.end(), [](int ch) {
         return !std::isspace(ch);
@@ -410,6 +419,11 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
 void sd_set_vae_callback(sd_vae_stage_cb_t cb, void* data) {
     sd_vae_cb = cb;
     sd_vae_cb_data = data;
+}
+
+void sd_set_image_callback(sd_image_decoded_t cb, void* data) {
+    sd_img_cb = cb;
+    sd_img_cb_data = data;
 }
 
 const char* sd_get_system_info() {
