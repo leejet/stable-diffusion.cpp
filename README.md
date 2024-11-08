@@ -10,7 +10,7 @@ Inference of Stable Diffusion and Flux in pure C/C++
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
 - Super lightweight and without external dependencies
-- SD1.x, SD2.x, SDXL and SD3 support
+- SD1.x, SD2.x, SDXL and [SD3/SD3.5](./docs/sd3.md) support
     - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
 - [Flux-dev/Flux-schnell Support](./docs/flux.md)
 
@@ -197,23 +197,24 @@ usage: ./bin/sd [arguments]
 arguments:
   -h, --help                         show this help message and exit
   -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)
-  -t, --threads N                    number of threads to use during computation (default: -1).
+  -t, --threads N                    number of threads to use during computation (default: -1)
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
   -m, --model [MODEL]                path to full model
   --diffusion-model                  path to the standalone diffusion model
   --clip_l                           path to the clip-l text encoder
-  --t5xxl                            path to the the t5xxl text encoder.
+  --clip_g                           path to the clip-l text encoder
+  --t5xxl                            path to the the t5xxl text encoder
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
-  --embd-dir [EMBEDDING_PATH]        path to embeddings.
-  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings.
-  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir.
+  --embd-dir [EMBEDDING_PATH]        path to embeddings
+  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings
+  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir
   --normalize-input                  normalize PHOTOMAKER input id images
-  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now.
+  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now
   --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)
   --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)
-                                     If not specified, the default is the type of the weight file.
+                                     If not specified, the default is the type of the weight file
   --lora-model-dir [DIR]             lora model directory
   -i, --init-img [IMAGE]             path to the input image, required by img2img
   --control-image [IMAGE]            path to image condition, control net
@@ -232,13 +233,13 @@ arguments:
   --steps  STEPS                     number of sample steps (default: 20)
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
-  -b, --batch-count COUNT            number of images to generate.
+  -b, --batch-count COUNT            number of images to generate
   --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)
   --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
   --vae-on-cpu                       keep vae in cpu (for low vram)
-  --clip-on-cpu                      keep clip in cpu (for low vram).
+  --clip-on-cpu                      keep clip in cpu (for low vram)
   --control-net-cpu                  keep controlnet in cpu (for low vram)
   --canny                            apply canny preprocessor (edge detection)
   --color                            Colors the logging tags according to level
@@ -253,6 +254,7 @@ arguments:
 # ./bin/sd -m ../models/sd_xl_base_1.0.safetensors --vae ../models/sdxl_vae-fp16-fix.safetensors -H 1024 -W 1024 -p "a lovely cat" -v
 # ./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable Diffusion CPP\"' --cfg-scale 4.5 --sampling-method euler -v
 # ./bin/sd --diffusion-model  ../models/flux1-dev-q3_k.gguf --vae ../models/ae.sft --clip_l ../models/clip_l.safetensors --t5xxl ../models/t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'" --cfg-scale 1.0 --sampling-method euler -v
+# ./bin/sd -m  ..\models\sd3.5_large.safetensors --clip_l ..\models\clip_l.safetensors --clip_g ..\models\clip_g.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable diffusion 3.5 Large\"' --cfg-scale 4.5 --sampling-method euler -v
 ```
 
 Using formats of different precisions will yield results of varying quality.

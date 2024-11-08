@@ -368,8 +368,8 @@ __STATIC_INLINE__ void ggml_merge_tensor_2d(struct ggml_tensor* input,
     int64_t height   = input->ne[1];
     int64_t channels = input->ne[2];
 
-    int64_t img_width    = output->ne[0];
-    int64_t img_height   = output->ne[1];
+    int64_t img_width  = output->ne[0];
+    int64_t img_height = output->ne[1];
 
     GGML_ASSERT(input->type == GGML_TYPE_F32 && output->type == GGML_TYPE_F32);
     for (int iy = 0; iy < height; iy++) {
@@ -380,7 +380,7 @@ __STATIC_INLINE__ void ggml_merge_tensor_2d(struct ggml_tensor* input,
                     float old_value = ggml_tensor_get_f32(output, x + ix, y + iy, k);
 
                     const float x_f_0 = (x > 0) ? ix / float(overlap) : 1;
-                    const float x_f_1 = (x < (img_width - width)) ? (width - ix) / float(overlap) : 1 ;
+                    const float x_f_1 = (x < (img_width - width)) ? (width - ix) / float(overlap) : 1;
                     const float y_f_0 = (y > 0) ? iy / float(overlap) : 1;
                     const float y_f_1 = (y < (img_height - height)) ? (height - iy) / float(overlap) : 1;
 
@@ -390,8 +390,7 @@ __STATIC_INLINE__ void ggml_merge_tensor_2d(struct ggml_tensor* input,
                     ggml_tensor_set_f32(
                         output,
                         old_value + new_value * ggml_smootherstep_f32(y_f) * ggml_smootherstep_f32(x_f),
-                        x + ix, y + iy, k
-                    );
+                        x + ix, y + iy, k);
                 } else {
                     ggml_tensor_set_f32(output, new_value, x + ix, y + iy, k);
                 }

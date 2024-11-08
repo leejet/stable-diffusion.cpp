@@ -31,7 +31,8 @@ const char* model_version_to_str[] = {
     "SVD",
     "SD3 2B",
     "Flux Dev",
-    "Flux Schnell"};
+    "Flux Schnell",
+    "SD3.5 8B"};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -139,6 +140,7 @@ public:
 
     bool load_from_file(const std::string& model_path,
                         const std::string& clip_l_path,
+                        const std::string& clip_g_path,
                         const std::string& t5xxl_path,
                         const std::string& diffusion_model_path,
                         const std::string& vae_path,
@@ -167,7 +169,7 @@ public:
         for (int device = 0; device < ggml_backend_vk_get_device_count(); ++device) {
             backend = ggml_backend_vk_init(device);
         }
-        if(!backend) {
+        if (!backend) {
             LOG_WARN("Failed to initialize Vulkan backend");
         }
 #endif
@@ -181,7 +183,7 @@ public:
             backend = ggml_backend_cpu_init();
         }
 #ifdef SD_USE_FLASH_ATTENTION
-#if defined(SD_USE_CUBLAS) || defined(SD_USE_METAL) || defined (SD_USE_SYCL) || defined(SD_USE_VULKAN)
+#if defined(SD_USE_CUBLAS) || defined(SD_USE_METAL) || defined(SD_USE_SYCL) || defined(SD_USE_VULKAN)
         LOG_WARN("Flash Attention not supported with GPU Backend");
 #else
         LOG_INFO("Flash Attention enabled");
@@ -200,14 +202,21 @@ public:
 
         if (clip_l_path.size() > 0) {
             LOG_INFO("loading clip_l from '%s'", clip_l_path.c_str());
-            if (!model_loader.init_from_file(clip_l_path, "text_encoders.clip_l.")) {
+            if (!model_loader.init_from_file(clip_l_path, "text_encoders.clip_l.transformer.")) {
                 LOG_WARN("loading clip_l from '%s' failed", clip_l_path.c_str());
+            }
+        }
+
+        if (clip_g_path.size() > 0) {
+            LOG_INFO("loading clip_g from '%s'", clip_g_path.c_str());
+            if (!model_loader.init_from_file(clip_g_path, "text_encoders.clip_g.transformer.")) {
+                LOG_WARN("loading clip_g from '%s' failed", clip_g_path.c_str());
             }
         }
 
         if (t5xxl_path.size() > 0) {
             LOG_INFO("loading t5xxl from '%s'", t5xxl_path.c_str());
-            if (!model_loader.init_from_file(t5xxl_path, "text_encoders.t5xxl.")) {
+            if (!model_loader.init_from_file(t5xxl_path, "text_encoders.t5xxl.transformer.")) {
                 LOG_WARN("loading t5xxl from '%s' failed", t5xxl_path.c_str());
             }
         }
@@ -279,7 +288,7 @@ public:
                     "try specifying SDXL VAE FP16 Fix with the --vae parameter. "
                     "You can find it here: https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors");
             }
-        } else if (version == VERSION_SD3_2B) {
+        } else if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
             scale_factor = 1.5305f;
         } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
             scale_factor = 0.3611;
@@ -302,7 +311,7 @@ public:
         } else {
             clip_backend   = backend;
             bool use_t5xxl = false;
-            if (version == VERSION_SD3_2B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
                 use_t5xxl = true;
             }
             if (!ggml_backend_is_cpu(backend) && use_t5xxl && conditioner_wtype != GGML_TYPE_F32) {
@@ -313,7 +322,7 @@ public:
                 LOG_INFO("CLIP: Using CPU backend");
                 clip_backend = ggml_backend_cpu_init();
             }
-            if (version == VERSION_SD3_2B) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, conditioner_wtype);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend, diffusion_model_wtype, version);
             } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
@@ -511,7 +520,7 @@ public:
             is_using_v_parameterization = true;
         }
 
-        if (version == VERSION_SD3_2B) {
+        if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
             LOG_INFO("running in FLOW mode");
             denoiser = std::make_shared<DiscreteFlowDenoiser>();
         } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
@@ -939,7 +948,7 @@ public:
         if (use_tiny_autoencoder) {
             C = 4;
         } else {
-            if (version == VERSION_SD3_2B) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
                 C = 32;
             } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
                 C = 32;
@@ -1008,6 +1017,7 @@ struct sd_ctx_t {
 
 sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      const char* clip_l_path_c_str,
+                     const char* clip_g_path_c_str,
                      const char* t5xxl_path_c_str,
                      const char* diffusion_model_path_c_str,
                      const char* vae_path_c_str,
@@ -1032,6 +1042,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
     }
     std::string model_path(model_path_c_str);
     std::string clip_l_path(clip_l_path_c_str);
+    std::string clip_g_path(clip_g_path_c_str);
     std::string t5xxl_path(t5xxl_path_c_str);
     std::string diffusion_model_path(diffusion_model_path_c_str);
     std::string vae_path(vae_path_c_str);
@@ -1052,6 +1063,7 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
 
     if (!sd_ctx->sd->load_from_file(model_path,
                                     clip_l_path,
+                                    clip_g_path,
                                     t5xxl_path_c_str,
                                     diffusion_model_path,
                                     vae_path,
@@ -1269,7 +1281,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     // Sample
     std::vector<struct ggml_tensor*> final_latents;  // collect latents to decode
     int C = 4;
-    if (sd_ctx->sd->version == VERSION_SD3_2B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
         C = 16;
     } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
         C = 16;
@@ -1382,7 +1394,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    if (sd_ctx->sd->version == VERSION_SD3_2B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
         params.mem_size *= 3;
     }
     if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
@@ -1408,7 +1420,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
 
     int C = 4;
-    if (sd_ctx->sd->version == VERSION_SD3_2B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
         C = 16;
     } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
         C = 16;
@@ -1416,7 +1428,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     int W                    = width / 8;
     int H                    = height / 8;
     ggml_tensor* init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
-    if (sd_ctx->sd->version == VERSION_SD3_2B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
         ggml_set_f32(init_latent, 0.0609f);
     } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
         ggml_set_f32(init_latent, 0.1159f);
@@ -1477,7 +1489,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    if (sd_ctx->sd->version == VERSION_SD3_2B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
         params.mem_size *= 2;
     }
     if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
