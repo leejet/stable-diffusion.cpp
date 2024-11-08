@@ -610,9 +610,9 @@ static std::string sd_basename(const std::string& path) {
 }
 
 std::string get_image_params(SDParams params, int64_t seed) {
-    std::string parameter_string = params.prompt + "\n";
+    std::string parameter_string = "Prompt: '" + params.prompt + "', ";
     if (params.negative_prompt.size() != 0) {
-        parameter_string += "Negative prompt: " + params.negative_prompt + "\n";
+        parameter_string += "Negative prompt: '" + params.negative_prompt + "', ";
     }
     parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
