@@ -34,6 +34,7 @@ struct TensorStorage {
     ggml_type type          = GGML_TYPE_F32;
     bool is_bf16            = false;
     bool is_f8_e4m3         = false;
+    bool is_f8_e5m2         = false;
     int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
     int n_dims              = 0;
 
@@ -63,7 +64,7 @@ struct TensorStorage {
     }
 
     int64_t nbytes_to_read() const {
-        if (is_bf16 || is_f8_e4m3) {
+        if (is_bf16 || is_f8_e4m3 || is_f8_e5m2) {
             return nbytes() / 2;
         } else {
             return nbytes();
@@ -113,6 +114,8 @@ struct TensorStorage {
             type_name = "bf16";
         } else if (is_f8_e4m3) {
             type_name = "f8_e4m3";
+        } else if (is_f8_e5m2) {
+            type_name = "f8_e5m2";
         }
         ss << name << " | " << type_name << " | ";
         ss << n_dims << " [";

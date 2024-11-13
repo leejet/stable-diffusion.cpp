@@ -614,6 +614,48 @@ uint16_t f8_e4m3_to_f16(uint8_t f8) {
     return ggml_fp32_to_fp16(*reinterpret_cast<const float*>(&result));
 }
 
+
+uint16_t f8_e5m2_to_f16(uint8_t fp8) {
+    uint8_t sign = (fp8 >> 7) & 0x1;
+    uint8_t exponent = (fp8 >> 2) & 0x1F;
+    uint8_t mantissa = fp8 & 0x3;
+
+    uint16_t fp16_sign = sign << 15;
+    uint16_t fp16_exponent;
+    uint16_t fp16_mantissa;
+
+    if (exponent == 0 && mantissa == 0) { //zero
+        return fp16_sign;
+    }
+
+    if (exponent == 0x1F) { //NAN and INF
+        fp16_exponent = 0x1F;
+        fp16_mantissa = mantissa ? (mantissa << 8) : 0;
+        return fp16_sign | (fp16_exponent << 10) | fp16_mantissa;
+    }
+
+    if (exponent == 0) { //subnormal numbers
+        fp16_exponent = 0;
+        fp16_mantissa = (mantissa << 8);
+        return fp16_sign | fp16_mantissa;
+    }
+
+    //normal numbers
+    int16_t true_exponent = (int16_t)exponent - 15 + 15;
+    if (true_exponent <= 0) {
+        fp16_exponent = 0;
+        fp16_mantissa = (mantissa << 8);
+    } else if (true_exponent >= 0x1F) {
+        fp16_exponent = 0x1F;
+        fp16_mantissa = 0;
+    } else {
+        fp16_exponent = (uint16_t)true_exponent;
+        fp16_mantissa = mantissa << 8;
+    }
+
+    return fp16_sign | (fp16_exponent << 10) | fp16_mantissa;
+}
+
 void bf16_to_f32_vec(uint16_t* src, float* dst, int64_t n) {
     // support inplace op
     for (int64_t i = n - 1; i >= 0; i--) {
@@ -625,6 +667,12 @@ void f8_e4m3_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
     // support inplace op
     for (int64_t i = n - 1; i >= 0; i--) {
         dst[i] = f8_e4m3_to_f16(src[i]);
+    }
+}
+void f8_e5m2_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
+    // support inplace op
+    for (int64_t i = n - 1; i >= 0; i--) {
+        dst[i] = f8_e5m2_to_f16(src[i]);
     }
 }
 
@@ -863,6 +911,8 @@ ggml_type str_to_ggml_type(const std::string& dtype) {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F8_E4M3") {
         ttype = GGML_TYPE_F16;
+    } else if (dtype == "F8_E5M2") {
+        ttype = GGML_TYPE_F16;
     }
     return ttype;
 }
@@ -974,6 +1024,10 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
         } else if (dtype == "F8_E4M3") {
             tensor_storage.is_f8_e4m3 = true;
+            // f8 -> f16
+            GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
+        } else if (dtype == "F8_E5M2") {
+            tensor_storage.is_f8_e5m2 = true;
             // f8 -> f16
             GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
         } else {
@@ -1629,6 +1683,9 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     } else if (tensor_storage.is_f8_e4m3) {
                         // inplace op
                         f8_e4m3_to_f16_vec((uint8_t*)dst_tensor->data, (uint16_t*)dst_tensor->data, tensor_storage.nelements());
+                    } else if (tensor_storage.is_f8_e5m2) {
+                        // inplace op
+                        f8_e5m2_to_f16_vec((uint8_t*)dst_tensor->data, (uint16_t*)dst_tensor->data, tensor_storage.nelements());
                     }
                 } else {
                     read_buffer.resize(tensor_storage.nbytes());
@@ -1640,6 +1697,9 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     } else if (tensor_storage.is_f8_e4m3) {
                         // inplace op
                         f8_e4m3_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
+                    } else if (tensor_storage.is_f8_e5m2) {
+                        // inplace op
+                        f8_e5m2_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
                     }
 
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
@@ -1655,6 +1715,9 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                 } else if (tensor_storage.is_f8_e4m3) {
                     // inplace op
                     f8_e4m3_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
+                } else if (tensor_storage.is_f8_e5m2) {
+                    // inplace op
+                    f8_e5m2_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
                 }
 
                 if (tensor_storage.type == dst_tensor->type) {
