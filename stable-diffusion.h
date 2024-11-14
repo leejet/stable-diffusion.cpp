@@ -143,9 +143,9 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             bool keep_clip_on_cpu,
                             bool keep_control_net_cpu,
                             bool keep_vae_on_cpu,
-                            int model_backend_index = -1,
-                            int clip_backend_index = -1,
-							int vae_backend_index = -1);
+                            int model_backend_index,
+                            int clip_backend_index,
+			    int vae_backend_index);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
