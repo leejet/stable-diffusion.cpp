@@ -5,6 +5,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <stdexcept>
 
 // #include "preprocessing.hpp"
 #include "flux.hpp"
@@ -119,6 +120,10 @@ struct SDParams {
     bool canny_preprocess         = false;
     bool color                    = false;
     int upscale_repeats           = 1;
+    
+    int model_backend_index = -1;
+    int clip_backend_index = -1;
+    int vae_backend_index = -1;
 };
 
 void print_params(SDParams params) {
@@ -164,6 +169,9 @@ void print_params(SDParams params) {
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
+    printf("	model_backend_index %d\n", params.model_backend_index);
+    printf("	clip_backend_index %d\n", params.clip_backend_index);
+    printf("	vae_backend_index  %d\n", params.vae_backend_index);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -219,6 +227,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            Colors the logging tags according to level\n");
     printf("  -v, --verbose                      print extra info\n");
+    printf("  --model-backend-index              specify which device the model defaults to using\n");
+	printf("  --clip-backend-index               specify which device the CLIP model uses\n");
+    printf("  --vae-backend-index                specify which device the VAE model uses\n");
 }
 
 void parse_args(int argc, const char** argv, SDParams& params) {
@@ -534,7 +545,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.verbose = true;
         } else if (arg == "--color") {
             params.color = true;
-        } else {
+        }
+        else if (arg == "--model-backend-index") {
+			params.model_backend_index = std::stoi(argv[++i]);
+		} else if (arg == "--clip-backend-index") {
+			params.clip_backend_index = std::stoi(argv[++i]);
+		} else if (arg == "--vae-backend-index") {
+			params.vae_backend_index = std::stoi(argv[++i]);
+		} else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
             exit(1);
@@ -791,7 +809,10 @@ int main(int argc, const char* argv[]) {
                                   params.schedule,
                                   params.clip_on_cpu,
                                   params.control_net_cpu,
-                                  params.vae_on_cpu);
+                                  params.vae_on_cpu,
+                                  params.model_backend_index,
+                                  params.clip_backend_index,
+								  params.vae_backend_index);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
