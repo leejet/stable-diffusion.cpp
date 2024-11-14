@@ -123,8 +123,8 @@ public:
         } else if (rng_type == CUDA_RNG) {
             rng = std::make_shared<PhiloxRNG>();
         }
-    }					
-	
+    }
+
     ~StableDiffusionGGML() {
         if (clip_backend != backend) {
             ggml_backend_free(clip_backend);
@@ -171,16 +171,15 @@ public:
 #ifdef SD_USE_VULKAN
         LOG_DEBUG("Using Vulkan backend");
         if (model_backend_index == -1) {
-			// default behavior, last device selected
-			for (int device = 0; device < ggml_backend_vk_get_device_count(); ++device) {
-				backend = ggml_backend_vk_init(device);
-			}
-			if (!backend) {
-				LOG_WARN("Failed to initialize Vulkan backend");
-			}
-		} else {
-			backend = ggml_backend_vk_init(model_backend_index);
+		// default behavior, use last device selected
+		int device = ggml_backend_vk_get_device_count() - 1;
+		backend = ggml_backend_vk_init(device);
+		if (!backend) {
+			LOG_WARN("Failed to initialize Vulkan backend");
 		}
+	} else {
+		backend = ggml_backend_vk_init(model_backend_index);
+	}
 #endif
 #ifdef SD_USE_SYCL
         LOG_DEBUG("Using SYCL backend");
