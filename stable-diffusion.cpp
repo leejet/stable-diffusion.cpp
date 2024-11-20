@@ -47,6 +47,8 @@ const char* sampling_methods_str[] = {
     "LCM",
 };
 
+//static_assert((int)SD_TYPE_COUNT == (int)GGML_TYPE_COUNT);
+
 /*================================================== Helper Functions ================================================*/
 
 void calculate_alphas_cumprod(float* alphas_cumprod,
