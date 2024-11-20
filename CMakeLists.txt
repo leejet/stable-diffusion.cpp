@@ -75,7 +75,6 @@ file(GLOB SD_LIB_SOURCES
     "*.hpp"
 )
 
-# we can get only one share lib
 if(SD_BUILD_SHARED_LIBS)
     message("-- Build shared library")
     message(${SD_LIB_SOURCES})
@@ -88,7 +87,9 @@ if(SD_BUILD_SHARED_LIBS)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
     message("-- Build static library")
-    set(BUILD_SHARED_LIBS OFF)
+    if(NOT SD_BUILD_SHARED_GGML_LIB)
+        set(BUILD_SHARED_LIBS OFF)
+    endif()
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
 endif()
 
