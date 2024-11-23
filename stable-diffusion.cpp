@@ -780,7 +780,7 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<int> skip_layers = {},
-                        float slg_scale              = 2.5,
+                        float slg_scale              = 0,
                         float skip_layer_start       = 0.01,
                         float skip_layer_end         = 0.2) {
         size_t steps = sigmas.size() - 1;
@@ -1162,7 +1162,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            bool normalize_input,
                            std::string input_id_images_path,
                            std::vector<int> skip_layers = {},
-                           float slg_scale              = 2.5,
+                           float slg_scale              = 0,
                            float skip_layer_start       = 0.01,
                            float skip_layer_end         = 0.2) {
     if (seed < 0) {
@@ -1454,7 +1454,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
                     std::vector<int> skip_layers = {},
-                    float slg_scale              = 2.5,
+                    float slg_scale              = 0,
                     float skip_layer_start       = 0.01,
                     float skip_layer_end         = 0.2) {
     LOG_DEBUG("txt2img %dx%d", width, height);
@@ -1557,7 +1557,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
                     std::vector<int> skip_layers = {},
-                    float slg_scale              = 2.5,
+                    float slg_scale              = 0,
                     float skip_layer_start       = 0.01,
                     float skip_layer_end         = 0.2) {
     LOG_DEBUG("img2img %dx%d", width, height);
