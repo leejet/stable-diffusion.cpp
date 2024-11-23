@@ -789,11 +789,10 @@ public:
         bool has_unconditioned = cfg_scale != 1.0 && uncond.c_crossattn != NULL;
         bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
 
-
         // denoise wrapper
         struct ggml_tensor* out_cond   = ggml_dup_tensor(work_ctx, x);
         struct ggml_tensor* out_uncond = NULL;
-        struct ggml_tensor* out_skip = NULL;
+        struct ggml_tensor* out_skip   = NULL;
 
         if (has_unconditioned) {
             out_uncond = ggml_dup_tensor(work_ctx, x);
@@ -887,8 +886,8 @@ public:
                 negative_data = (float*)out_uncond->data;
             }
 
-            int stepCount          = sigmas.size();
-            bool is_skiplayer_step = has_skiplayer && step > (int)(skip_layer_start * stepCount) && step < (int)(skip_layer_end * stepCount);
+            int step_count         = sigmas.size();
+            bool is_skiplayer_step = has_skiplayer && step > (int)(skip_layer_start * step_count) && step < (int)(skip_layer_end * step_count);
             float* skip_layer_data = NULL;
             if (is_skiplayer_step) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);

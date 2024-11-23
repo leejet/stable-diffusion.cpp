@@ -920,7 +920,7 @@ struct MMDiTRunner : public GGMLRunner {
                  struct ggml_tensor* y,
                  struct ggml_tensor** output     = NULL,
                  struct ggml_context* output_ctx = NULL,
-                 std::vector<int> skip_layers = std::vector<int>()) {
+                 std::vector<int> skip_layers    = std::vector<int>()) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
         // context: [N, max_position, hidden_size]([N, 154, 4096]) or [1, max_position, hidden_size]
