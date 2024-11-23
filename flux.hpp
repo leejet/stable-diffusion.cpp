@@ -822,7 +822,7 @@ namespace Flux {
             if (version == VERSION_FLUX_SCHNELL) {
                 flux_params.guidance_embed = false;
             }
-            if (version == VERSION_FLUX_LITE){
+            if (version == VERSION_FLUX_LITE) {
                 flux_params.depth = 8;
             }
             flux = Flux(flux_params);
