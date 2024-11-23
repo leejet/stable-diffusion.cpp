@@ -991,7 +991,11 @@ int main(int argc, const char* argv[]) {
                               params.control_strength,
                               params.style_ratio,
                               params.normalize_input,
-                              params.input_id_images_path.c_str());
+                              params.input_id_images_path.c_str(),
+                              params.skip_layers,
+                              params.slg_scale,
+                              params.skip_layer_start,
+                              params.skip_layer_end);
         }
     }
 
