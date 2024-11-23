@@ -1453,10 +1453,12 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float style_ratio,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
-                    std::vector<int> skip_layers = {},
-                    float slg_scale              = 0,
-                    float skip_layer_start       = 0.01,
-                    float skip_layer_end         = 0.2) {
+                    int* skip_layers         = NULL,
+                    size_t skip_layers_count = 0,
+                    float slg_scale          = 0,
+                    float skip_layer_start   = 0.01,
+                    float skip_layer_end     = 0.2) {
+    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1525,7 +1527,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                style_ratio,
                                                normalize_input,
                                                input_id_images_path_c_str,
-                                               skip_layers,
+                                               skip_layers_vec,
                                                slg_scale,
                                                skip_layer_start,
                                                skip_layer_end);
@@ -1556,10 +1558,12 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float style_ratio,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
-                    std::vector<int> skip_layers = {},
-                    float slg_scale              = 0,
-                    float skip_layer_start       = 0.01,
-                    float skip_layer_end         = 0.2) {
+                    int* skip_layers         = NULL,
+                    size_t skip_layers_count = 0,
+                    float slg_scale          = 0,
+                    float skip_layer_start   = 0.01,
+                    float skip_layer_end     = 0.2) {
+    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
     LOG_DEBUG("img2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1634,7 +1638,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                style_ratio,
                                                normalize_input,
                                                input_id_images_path_c_str,
-                                               skip_layers,
+                                               skip_layers_vec,
                                                slg_scale,
                                                skip_layer_start,
                                                skip_layer_end);
