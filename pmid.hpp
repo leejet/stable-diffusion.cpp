@@ -608,7 +608,7 @@ struct PhotoMakerIDEncoder_CLIPInsightfaceExtendtokenBlock : public CLIPVisionMo
 struct PhotoMakerIDEncoder : public GGMLRunner {
 public:
     SDVersion version    = VERSION_SDXL;
-    PMVersion pm_version = VERSION_1;
+    PMVersion pm_version = PM_VERSION_1;
     PhotoMakerIDEncoderBlock id_encoder;
     PhotoMakerIDEncoder_CLIPInsightfaceExtendtokenBlock id_encoder2;
     float style_strength;
@@ -623,14 +623,14 @@ public:
     std::vector<float> zeros_right;
 
 public:
-    PhotoMakerIDEncoder(ggml_backend_t backend, ggml_type wtype, SDVersion version = VERSION_SDXL, PMVersion pm_v = VERSION_1, float sty = 20.f)
+    PhotoMakerIDEncoder(ggml_backend_t backend, ggml_type wtype, SDVersion version = VERSION_SDXL, PMVersion pm_v = PM_VERSION_1, float sty = 20.f)
         : GGMLRunner(backend, wtype),
           version(version),
           pm_version(pm_v),
           style_strength(sty) {
-        if (pm_version == VERSION_1) {
+        if (pm_version == PM_VERSION_1) {
             id_encoder.init(params_ctx, wtype);
-        } else if (pm_version == VERSION_2) {
+        } else if (pm_version == PM_VERSION_2) {
             id_encoder2.init(params_ctx, wtype);
         }
     }
@@ -644,9 +644,9 @@ public:
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        if (pm_version == VERSION_1)
+        if (pm_version == PM_VERSION_1)
             id_encoder.get_param_tensors(tensors, prefix);
-        else if (pm_version == VERSION_2)
+        else if (pm_version == PM_VERSION_2)
             id_encoder2.get_param_tensors(tensors, prefix);
     }
 
@@ -734,14 +734,14 @@ public:
             }
         }
         struct ggml_tensor* updated_prompt_embeds = NULL;
-        if (pm_version == VERSION_1)
+        if (pm_version == PM_VERSION_1)
             updated_prompt_embeds = id_encoder.forward(ctx0,
                                                        id_pixel_values_d,
                                                        prompt_embeds_d,
                                                        class_tokens_mask_d,
                                                        class_tokens_mask_pos,
                                                        left, right);
-        else if (pm_version == VERSION_2)
+        else if (pm_version == PM_VERSION_2)
             updated_prompt_embeds = id_encoder2.forward(ctx0,
                                                         id_pixel_values_d,
                                                         prompt_embeds_d,

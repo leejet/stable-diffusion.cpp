@@ -44,7 +44,7 @@ struct Conditioner {
 // Ref: https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/cad87bf4e3e0b0a759afa94e933527c3123d59bc/modules/sd_hijack_clip.py#L283
 struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     SDVersion version    = VERSION_SD1;
-    PMVersion pm_version = VERSION_1;
+    PMVersion pm_version = PM_VERSION_1;
     CLIPTokenizer tokenizer;
     ggml_type wtype;
     std::shared_ptr<CLIPTextModelRunner> text_model;
@@ -60,7 +60,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                       ggml_type wtype,
                                       const std::string& embd_dir,
                                       SDVersion version = VERSION_SD1,
-                                      PMVersion pv      = VERSION_1,
+                                      PMVersion pv      = PM_VERSION_1,
                                       int clip_skip     = -1)
         : version(version), pm_version(pv), tokenizer(version == VERSION_SD2 ? 0 : 49407), embd_dir(embd_dir), wtype(wtype) {
         if (clip_skip <= 0) {
@@ -270,7 +270,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 std::vector<int> clean_input_ids_tmp;
                 for (uint32_t i = 0; i < class_token_index[0]; i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
-                for (uint32_t i = 0; i < (pm_version == VERSION_2 ? 2 * num_input_imgs : num_input_imgs); i++)
+                for (uint32_t i = 0; i < (pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs); i++)
                     clean_input_ids_tmp.push_back(class_token);
                 for (uint32_t i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
@@ -286,7 +286,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         // weights.insert(weights.begin(), 1.0);
 
         tokenizer.pad_tokens(tokens, weights, max_length, padding);
-        int offset = pm_version == VERSION_2 ? 2 * num_input_imgs : num_input_imgs;
+        int offset = pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs;
         for (uint32_t i = 0; i < tokens.size(); i++) {
             // if (class_idx + 1 <= i && i < class_idx + 1 + 2*num_input_imgs) // photomaker V2 has num_tokens(=2)*num_input_imgs
             if (class_idx + 1 <= i && i < class_idx + 1 + offset)  // photomaker V2 has num_tokens(=2)*num_input_imgs

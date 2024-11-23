@@ -31,9 +31,30 @@ enum SDVersion {
     VERSION_COUNT,
 };
 
+static inline bool sd_version_is_flux(SDVersion version) {
+    if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL || version == VERSION_FLUX_LITE) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_sd3(SDVersion version) {
+    if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_dit(SDVersion version) {
+    if (sd_version_is_flux(version) || sd_version_is_sd3(version)) {
+        return true;
+    }
+    return false;
+}
+
 enum PMVersion {
-    VERSION_1,
-    VERSION_2,
+    PM_VERSION_1,
+    PM_VERSION_2,
 };
 
 struct TensorStorage {
