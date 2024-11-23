@@ -164,7 +164,7 @@ jobs:
             defines: "-DGGML_AVX512=ON -DSD_BUILD_SHARED_LIBS=ON"
           - build: "cuda12"
             defines: "-DSD_CUBLAS=ON -DSD_BUILD_SHARED_LIBS=ON"
-          - build: "rocm5.5"
+          - build: "rocm"
             defines: '-G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS="gfx1100;gfx1102;gfx1030" -DSD_BUILD_SHARED_LIBS=ON'
           - build: 'vulkan'
             defines: "-DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON"
@@ -186,10 +186,22 @@ jobs:
 
       - name: Install rocm-toolkit
         id: rocm-toolkit
-        if: ${{ matrix.build == 'rocm5.5' }}
-        uses: Cyberhan123/rocm-toolkit@v0.1.0
-        with:
-          rocm: "5.5.0"
+        if: ${{ matrix.build == 'rocm' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          write-host "Downloading AMD HIP SDK Installer"
+          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
+          write-host "Installing AMD HIP SDK"
+          Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -Wait
+          write-host "Completed AMD HIP SDK installation"
+          Add-Content $env:HIP_PATH $(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
+          Add-Content $env:GITHUB_PATH "${env:HIP_PATH}"
+
+      - name: Verify ROCm
+        id: rocm-verify
+        if: ${{ matrix.build == 'rocm' }}
+        run: |
+          & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
 
       - name: Install Ninja
         id: install-ninja
@@ -197,6 +209,7 @@ jobs:
         uses: urkle/action-get-ninja@v1
         with:
           version: 1.11.1
+
       - name: Install Vulkan SDK
         id: get_vulkan
         if: ${{ matrix.build == 'vulkan' }}
