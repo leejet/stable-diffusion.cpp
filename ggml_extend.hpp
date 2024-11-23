@@ -1053,6 +1053,11 @@ public:
                   params_buffer_size / (1024.0 * 1024.0),
                   ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
                   num_tensors);
+        // printf("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)\n",
+        //           get_desc().c_str(),
+        //           params_buffer_size / (1024.0 * 1024.0),
+        //           ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
+        //           num_tensors);          
         return true;
     }
 
@@ -1222,7 +1227,8 @@ protected:
         params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
         if (bias) {
             params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_features);
-        }
+        }       
+
     }
 
 public:

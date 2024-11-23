@@ -32,7 +32,9 @@ const char* model_version_to_str[] = {
     "SD3 2B",
     "Flux Dev",
     "Flux Schnell",
-    "SD3.5 8B"};
+    "SD3.5 8B",
+    "SD3.5 2B",
+    "Flux Lite 8B"};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -93,6 +95,7 @@ public:
     std::shared_ptr<ControlNet> control_net;
     std::shared_ptr<PhotoMakerIDEncoder> pmid_model;
     std::shared_ptr<LoraModel> pmid_lora;
+    std::shared_ptr<PhotoMakerIDEmbed> pmid_id_embeds;
 
     std::string taesd_path;
     bool use_tiny_autoencoder = false;
@@ -283,9 +286,9 @@ public:
                     "try specifying SDXL VAE FP16 Fix with the --vae parameter. "
                     "You can find it here: https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors");
             }
-        } else if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
+        } else if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
             scale_factor = 1.5305f;
-        } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+        } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL || version == VERSION_FLUX_LITE) {
             scale_factor = 0.3611;
             // TODO: shift_factor
         }
@@ -306,7 +309,7 @@ public:
         } else {
             clip_backend   = backend;
             bool use_t5xxl = false;
-            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL || version == VERSION_FLUX_LITE) {
                 use_t5xxl = true;
             }
             if (!ggml_backend_is_cpu(backend) && use_t5xxl && conditioner_wtype != GGML_TYPE_F32) {
@@ -320,17 +323,21 @@ public:
             if (diffusion_flash_attn) {
                 LOG_INFO("Using flash attention in the diffusion model");
             }
-            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
                 if (diffusion_flash_attn) {
                     LOG_WARN("flash attention in this diffusion model is currently unsupported!");
                 }
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, conditioner_wtype);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend, diffusion_model_wtype, version);
-            } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+            } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL || version == VERSION_FLUX_LITE) {
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, conditioner_wtype);
                 diffusion_model  = std::make_shared<FluxModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             } else {
-                cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version);
+                 if(id_embeddings_path.find("v2") != std::string::npos) {
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version, VERSION_2);
+                 }else{
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version);
+                 }
                 diffusion_model  = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             }
             cond_stage_model->alloc_params_buffer();
@@ -365,7 +372,12 @@ public:
                 control_net = std::make_shared<ControlNet>(controlnet_backend, diffusion_model_wtype, version);
             }
 
-            pmid_model = std::make_shared<PhotoMakerIDEncoder>(clip_backend, model_wtype, version);
+            if(id_embeddings_path.find("v2") != std::string::npos) {
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_wtype, version, VERSION_2);
+                LOG_INFO("using PhotoMaker Version 2");
+            } else {
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_wtype, version);
+            }
             if (id_embeddings_path.size() > 0) {
                 pmid_lora = std::make_shared<LoraModel>(backend, model_wtype, id_embeddings_path, "");
                 if (!pmid_lora->load_from_file(true)) {
@@ -384,14 +396,8 @@ public:
                     LOG_ERROR(" pmid model params buffer allocation failed");
                     return false;
                 }
-                // LOG_INFO("pmid param memory buffer size = %.2fMB ",
-                //     pmid_model->params_buffer_size / 1024.0 / 1024.0);
                 pmid_model->get_param_tensors(tensors, "pmid");
             }
-            // if(stacked_id){
-            //    pmid_model.init_params(GGML_TYPE_F32);
-            //    pmid_model.map_by_name(tensors, "pmid.");
-            // }
         }
 
         struct ggml_init_params params;
@@ -521,10 +527,10 @@ public:
             is_using_v_parameterization = true;
         }
 
-        if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
+        if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
             LOG_INFO("running in FLOW mode");
             denoiser = std::make_shared<DiscreteFlowDenoiser>();
-        } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+        } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL || version == VERSION_FLUX_LITE) {
             LOG_INFO("running in Flux FLOW mode");
             float shift = 1.15f;
             if (version == VERSION_FLUX_SCHNELL) {
@@ -674,10 +680,10 @@ public:
     ggml_tensor* id_encoder(ggml_context* work_ctx,
                             ggml_tensor* init_img,
                             ggml_tensor* prompts_embeds,
+                            ggml_tensor* id_embeds,
                             std::vector<bool>& class_tokens_mask) {
         ggml_tensor* res = NULL;
-        pmid_model->compute(n_threads, init_img, prompts_embeds, class_tokens_mask, &res, work_ctx);
-
+        pmid_model->compute(n_threads, init_img, prompts_embeds, id_embeds, class_tokens_mask, &res, work_ctx);
         return res;
     }
 
@@ -772,7 +778,11 @@ public:
                         sample_method_t method,
                         const std::vector<float>& sigmas,
                         int start_merge_step,
-                        SDCondition id_cond) {
+                        SDCondition id_cond,
+                        std::vector<int> skip_layers = {},
+                        float slg_scale              = 2.5,
+                        float skip_layer_start       = 0.01,
+                        float skip_layer_end         = 0.2) {
         size_t steps = sigmas.size() - 1;
         // noise = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(noise);
@@ -783,12 +793,23 @@ public:
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, noise);
 
         bool has_unconditioned = cfg_scale != 1.0 && uncond.c_crossattn != NULL;
+        bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
 
         // denoise wrapper
         struct ggml_tensor* out_cond   = ggml_dup_tensor(work_ctx, x);
         struct ggml_tensor* out_uncond = NULL;
+        struct ggml_tensor* out_skip   = NULL;
+
         if (has_unconditioned) {
             out_uncond = ggml_dup_tensor(work_ctx, x);
+        }
+        if (has_skiplayer) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_2B || version == VERSION_SD3_5_8B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+                out_skip = ggml_dup_tensor(work_ctx, x);
+            } else {
+                has_skiplayer = false;
+                LOG_WARN("SLG is incompatible with %s models", model_version_to_str[version]);
+            }
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -870,6 +891,28 @@ public:
                                          &out_uncond);
                 negative_data = (float*)out_uncond->data;
             }
+
+            int step_count         = sigmas.size();
+            bool is_skiplayer_step = has_skiplayer && step > (int)(skip_layer_start * step_count) && step < (int)(skip_layer_end * step_count);
+            float* skip_layer_data = NULL;
+            if (is_skiplayer_step) {
+                LOG_DEBUG("Skipping layers at step %d\n", step);
+                // skip layer (same as conditionned)
+                diffusion_model->compute(n_threads,
+                                         noised_input,
+                                         timesteps,
+                                         cond.c_crossattn,
+                                         cond.c_concat,
+                                         cond.c_vector,
+                                         guidance_tensor,
+                                         -1,
+                                         controls,
+                                         control_strength,
+                                         &out_skip,
+                                         NULL,
+                                         skip_layers);
+                skip_layer_data = (float*)out_skip->data;
+            }
             float* vec_denoised  = (float*)denoised->data;
             float* vec_input     = (float*)input->data;
             float* positive_data = (float*)out_cond->data;
@@ -885,6 +928,9 @@ public:
                     } else {
                         latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
                     }
+                }
+                if (is_skiplayer_step) {
+                    latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
                 }
                 // v = latent_result, eps = latent_result
                 // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
@@ -949,9 +995,9 @@ public:
         if (use_tiny_autoencoder) {
             C = 4;
         } else {
-            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
                 C = 32;
-            } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+            } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL || version == VERSION_FLUX_LITE) {
                 C = 32;
             }
         }
@@ -1114,7 +1160,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float control_strength,
                            float style_ratio,
                            bool normalize_input,
-                           std::string input_id_images_path) {
+                           std::string input_id_images_path,
+                           std::vector<int> skip_layers = {},
+                           float slg_scale              = 2.5,
+                           float skip_layer_start       = 0.01,
+                           float skip_layer_end         = 0.2) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1164,11 +1214,15 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         }
         // preprocess input id images
         std::vector<sd_image_t*> input_id_images;
+        bool pmv2 = sd_ctx->sd->pmid_model->get_version() == VERSION_2;
         if (sd_ctx->sd->pmid_model && input_id_images_path.size() > 0) {
             std::vector<std::string> img_files = get_files_from_dir(input_id_images_path);
             for (std::string img_file : img_files) {
                 int c = 0;
                 int width, height;
+                if(ends_with(img_file, "safetensors")){
+                    continue;
+                }                    
                 uint8_t* input_image_buffer = stbi_load(img_file.c_str(), &width, &height, &c, 3);
                 if (input_image_buffer == NULL) {
                     LOG_ERROR("PhotoMaker load image from '%s' failed", img_file.c_str());
@@ -1216,8 +1270,13 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                                                                  sd_ctx->sd->diffusion_model->get_adm_in_channels());
             id_cond           = std::get<0>(cond_tup);
             class_tokens_mask = std::get<1>(cond_tup);  //
-
-            id_cond.c_crossattn = sd_ctx->sd->id_encoder(work_ctx, init_img, id_cond.c_crossattn, class_tokens_mask);
+            struct ggml_tensor* id_embeds = NULL;
+            if(pmv2){
+                // id_embeds = sd_ctx->sd->pmid_id_embeds->get();
+                id_embeds = load_tensor_from_file(work_ctx, path_join(input_id_images_path, "id_embeds.bin"));
+                // print_ggml_tensor(id_embeds, true, "id_embeds:");
+            }
+            id_cond.c_crossattn = sd_ctx->sd->id_encoder(work_ctx, init_img, id_cond.c_crossattn, id_embeds, class_tokens_mask);
             t1                  = ggml_time_ms();
             LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
             if (sd_ctx->sd->free_params_immediately) {
@@ -1284,9 +1343,9 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     // Sample
     std::vector<struct ggml_tensor*> final_latents;  // collect latents to decode
     int C = 4;
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         C = 16;
-    } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
+    } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL || sd_ctx->sd->version == VERSION_FLUX_LITE) {
         C = 16;
     }
     int W = width / 8;
@@ -1323,7 +1382,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      sample_method,
                                                      sigmas,
                                                      start_merge_step,
-                                                     id_cond);
+                                                     id_cond,
+                                                     skip_layers,
+                                                     slg_scale,
+                                                     skip_layer_start,
+                                                     skip_layer_end);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -1389,7 +1452,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str) {
+                    const char* input_id_images_path_c_str,
+                    std::vector<int> skip_layers,
+                    float slg_scale,
+                    float skip_layer_start,
+                    float skip_layer_end) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1397,10 +1464,10 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         params.mem_size *= 3;
     }
-    if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
+    if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL || sd_ctx->sd->version == VERSION_FLUX_LITE) {
         params.mem_size *= 4;
     }
     if (sd_ctx->sd->stacked_id) {
@@ -1423,17 +1490,17 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
 
     int C = 4;
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         C = 16;
-    } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
+    } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL || sd_ctx->sd->version == VERSION_FLUX_LITE) {
         C = 16;
     }
     int W                    = width / 8;
     int H                    = height / 8;
     ggml_tensor* init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         ggml_set_f32(init_latent, 0.0609f);
-    } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
+    } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL || sd_ctx->sd->version == VERSION_FLUX_LITE) {
         ggml_set_f32(init_latent, 0.1159f);
     } else {
         ggml_set_f32(init_latent, 0.f);
@@ -1457,7 +1524,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                control_strength,
                                                style_ratio,
                                                normalize_input,
-                                               input_id_images_path_c_str);
+                                               input_id_images_path_c_str,
+                                               skip_layers,
+                                               slg_scale,
+                                               skip_layer_start,
+                                               skip_layer_end);
 
     size_t t1 = ggml_time_ms();
 
@@ -1484,7 +1555,11 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str) {
+                    const char* input_id_images_path_c_str,
+                    std::vector<int> skip_layers,
+                    float slg_scale,
+                    float skip_layer_start,
+                    float skip_layer_end) {
     LOG_DEBUG("img2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1492,10 +1567,10 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         params.mem_size *= 2;
     }
-    if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
+    if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL || sd_ctx->sd->version == VERSION_FLUX_LITE) {
         params.mem_size *= 3;
     }
     if (sd_ctx->sd->stacked_id) {
@@ -1558,7 +1633,11 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                control_strength,
                                                style_ratio,
                                                normalize_input,
-                                               input_id_images_path_c_str);
+                                               input_id_images_path_c_str,
+                                               skip_layers,
+                                               slg_scale,
+                                               skip_layer_start,
+                                               skip_layer_end);
 
     size_t t2 = ggml_time_ms();
 
