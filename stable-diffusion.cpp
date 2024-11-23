@@ -156,7 +156,8 @@ public:
                         schedule_t schedule,
                         bool clip_on_cpu,
                         bool control_net_cpu,
-                        bool vae_on_cpu) {
+                        bool vae_on_cpu,
+                        bool diffusion_flash_attn) {
         use_tiny_autoencoder = taesd_path.size() > 0;
 #ifdef SD_USE_CUBLAS
         LOG_DEBUG("Using CUDA backend");
@@ -185,13 +186,7 @@ public:
             LOG_DEBUG("Using CPU backend");
             backend = ggml_backend_cpu_init();
         }
-#ifdef SD_USE_FLASH_ATTENTION
-#if defined(SD_USE_CUBLAS) || defined(SD_USE_METAL) || defined(SD_USE_SYCL) || defined(SD_USE_VULKAN)
-        LOG_WARN("Flash Attention not supported with GPU Backend");
-#else
-        LOG_INFO("Flash Attention enabled");
-#endif
-#endif
+
         ModelLoader model_loader;
 
         vae_tiling = vae_tiling_;
@@ -325,19 +320,25 @@ public:
                 LOG_INFO("CLIP: Using CPU backend");
                 clip_backend = ggml_backend_cpu_init();
             }
+            if (diffusion_flash_attn) {
+                LOG_INFO("Using flash attention in the diffusion model");
+            }
             if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
+                if (diffusion_flash_attn) {
+                    LOG_WARN("flash attention in this diffusion model is currently unsupported!");
+                }
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, conditioner_wtype);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend, diffusion_model_wtype, version);
             } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL || version == VERSION_FLUX_LITE) {
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, conditioner_wtype);
-                diffusion_model  = std::make_shared<FluxModel>(backend, diffusion_model_wtype, version);
+                diffusion_model  = std::make_shared<FluxModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             } else {
-                 if(id_embeddings_path.find("v2") != std::string::npos) {
+                if (id_embeddings_path.find("v2") != std::string::npos) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version, VERSION_2);
-                 }else{
+                } else {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version);
-                 }
-                diffusion_model  = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version);
+                }
+                diffusion_model = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             }
             cond_stage_model->alloc_params_buffer();
             cond_stage_model->get_param_tensors(tensors);
@@ -371,7 +372,7 @@ public:
                 control_net = std::make_shared<ControlNet>(controlnet_backend, diffusion_model_wtype, version);
             }
 
-            if(id_embeddings_path.find("v2") != std::string::npos) {
+            if (id_embeddings_path.find("v2") != std::string::npos) {
                 pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_wtype, version, VERSION_2);
                 LOG_INFO("using PhotoMaker Version 2");
             } else {
@@ -1081,7 +1082,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      enum schedule_t s,
                      bool keep_clip_on_cpu,
                      bool keep_control_net_cpu,
-                     bool keep_vae_on_cpu) {
+                     bool keep_vae_on_cpu,
+                     bool diffusion_flash_attn) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == NULL) {
         return NULL;
@@ -1122,7 +1124,8 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     s,
                                     keep_clip_on_cpu,
                                     keep_control_net_cpu,
-                                    keep_vae_on_cpu)) {
+                                    keep_vae_on_cpu,
+                                    diffusion_flash_attn)) {
         delete sd_ctx->sd;
         sd_ctx->sd = NULL;
         free(sd_ctx);
@@ -1217,9 +1220,9 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
             for (std::string img_file : img_files) {
                 int c = 0;
                 int width, height;
-                if(ends_with(img_file, "safetensors")){
+                if (ends_with(img_file, "safetensors")) {
                     continue;
-                }                    
+                }
                 uint8_t* input_image_buffer = stbi_load(img_file.c_str(), &width, &height, &c, 3);
                 if (input_image_buffer == NULL) {
                     LOG_ERROR("PhotoMaker load image from '%s' failed", img_file.c_str());
@@ -1257,18 +1260,18 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                 else
                     sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
             }
-            t0                = ggml_time_ms();
-            auto cond_tup     = sd_ctx->sd->cond_stage_model->get_learned_condition_with_trigger(work_ctx,
-                                                                                                 sd_ctx->sd->n_threads, prompt,
-                                                                                                 clip_skip,
-                                                                                                 width,
-                                                                                                 height,
-                                                                                                 num_input_images,
-                                                                                                 sd_ctx->sd->diffusion_model->get_adm_in_channels());
-            id_cond           = std::get<0>(cond_tup);
-            class_tokens_mask = std::get<1>(cond_tup);  //
+            t0                            = ggml_time_ms();
+            auto cond_tup                 = sd_ctx->sd->cond_stage_model->get_learned_condition_with_trigger(work_ctx,
+                                                                                                             sd_ctx->sd->n_threads, prompt,
+                                                                                                             clip_skip,
+                                                                                                             width,
+                                                                                                             height,
+                                                                                                             num_input_images,
+                                                                                                             sd_ctx->sd->diffusion_model->get_adm_in_channels());
+            id_cond                       = std::get<0>(cond_tup);
+            class_tokens_mask             = std::get<1>(cond_tup);  //
             struct ggml_tensor* id_embeds = NULL;
-            if(pmv2){
+            if (pmv2) {
                 // id_embeds = sd_ctx->sd->pmid_id_embeds->get();
                 id_embeds = load_tensor_from_file(work_ctx, path_join(input_id_images_path, "id_embeds.bin"));
                 // print_ggml_tensor(id_embeds, true, "id_embeds:");

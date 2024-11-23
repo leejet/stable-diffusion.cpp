@@ -245,16 +245,19 @@ protected:
     int64_t context_dim;
     int64_t n_head;
     int64_t d_head;
+    bool flash_attn;
 
 public:
     CrossAttention(int64_t query_dim,
                    int64_t context_dim,
                    int64_t n_head,
-                   int64_t d_head)
+                   int64_t d_head,
+                   bool flash_attn = false)
         : n_head(n_head),
           d_head(d_head),
           query_dim(query_dim),
-          context_dim(context_dim) {
+          context_dim(context_dim),
+          flash_attn(flash_attn) {
         int64_t inner_dim = d_head * n_head;
 
         blocks["to_q"] = std::shared_ptr<GGMLBlock>(new Linear(query_dim, inner_dim, false));
@@ -283,7 +286,7 @@ public:
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
         auto v = to_v->forward(ctx, context);  // [N, n_context, inner_dim]
 
-        x = ggml_nn_attention_ext(ctx, q, k, v, n_head, NULL, false);  // [N, n_token, inner_dim]
+        x = ggml_nn_attention_ext(ctx, q, k, v, n_head, NULL, false, false, flash_attn);  // [N, n_token, inner_dim]
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]
         return x;
@@ -301,15 +304,16 @@ public:
                           int64_t n_head,
                           int64_t d_head,
                           int64_t context_dim,
-                          bool ff_in = false)
+                          bool ff_in      = false,
+                          bool flash_attn = false)
         : n_head(n_head), d_head(d_head), ff_in(ff_in) {
         // disable_self_attn is always False
         // disable_temporal_crossattention is always False
         // switch_temporal_ca_to_sa is always False
         // inner_dim is always None or equal to dim
         // gated_ff is always True
-        blocks["attn1"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, dim, n_head, d_head));
-        blocks["attn2"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, context_dim, n_head, d_head));
+        blocks["attn1"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, dim, n_head, d_head, flash_attn));
+        blocks["attn2"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, context_dim, n_head, d_head, flash_attn));
         blocks["ff"]    = std::shared_ptr<GGMLBlock>(new FeedForward(dim, dim));
         blocks["norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
         blocks["norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
@@ -374,7 +378,8 @@ public:
                        int64_t n_head,
                        int64_t d_head,
                        int64_t depth,
-                       int64_t context_dim)
+                       int64_t context_dim,
+                       bool flash_attn = false)
         : in_channels(in_channels),
           n_head(n_head),
           d_head(d_head),
@@ -388,7 +393,7 @@ public:
 
         for (int i = 0; i < depth; i++) {
             std::string name = "transformer_blocks." + std::to_string(i);
-            blocks[name]     = std::shared_ptr<GGMLBlock>(new BasicTransformerBlock(inner_dim, n_head, d_head, context_dim));
+            blocks[name]     = std::shared_ptr<GGMLBlock>(new BasicTransformerBlock(inner_dim, n_head, d_head, context_dim, false, flash_attn));
         }
 
         blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}));

@@ -183,7 +183,7 @@ public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1)
+    UnetModelBlock(SDVersion version = VERSION_SD1, bool flash_attn = false)
         : version(version) {
         if (version == VERSION_SD2) {
             context_dim       = 1024;
@@ -242,7 +242,7 @@ public:
             if (version == VERSION_SVD) {
                 return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim);
             } else {
-                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim);
+                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, flash_attn);
             }
         };
 
@@ -533,8 +533,9 @@ struct UNetModelRunner : public GGMLRunner {
 
     UNetModelRunner(ggml_backend_t backend,
                     ggml_type wtype,
-                    SDVersion version = VERSION_SD1)
-        : GGMLRunner(backend, wtype), unet(version) {
+                    SDVersion version = VERSION_SD1,
+                    bool flash_attn   = false)
+        : GGMLRunner(backend, wtype), unet(version, flash_attn) {
         unet.init(params_ctx, wtype);
     }
 
