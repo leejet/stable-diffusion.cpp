@@ -13,6 +13,7 @@
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "ggml.h"
 
 #include "stable-diffusion.h"
@@ -733,25 +734,25 @@ void convert_tensor(void* src,
         if (src_type == GGML_TYPE_F16) {
             ggml_fp16_to_fp32_row((ggml_fp16_t*)src, (float*)dst, n);
         } else {
-            auto qtype = ggml_internal_get_type_traits(src_type);
-            if (qtype.to_float == NULL) {
+            auto qtype = ggml_get_type_traits(src_type);
+            if (qtype->to_float == NULL) {
                 throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
                                                 ggml_type_name(src_type)));
             }
-            qtype.to_float(src, (float*)dst, n);
+            qtype->to_float(src, (float*)dst, n);
         }
     } else {
         // src_type == GGML_TYPE_F16 => dst_type is quantized
         // src_type is quantized => dst_type == GGML_TYPE_F16 or dst_type is quantized
-        auto qtype = ggml_internal_get_type_traits(src_type);
-        if (qtype.to_float == NULL) {
+        auto qtype = ggml_get_type_traits(src_type);
+        if (qtype->to_float == NULL) {
             throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
                                             ggml_type_name(src_type)));
         }
         std::vector<char> buf;
         buf.resize(sizeof(float) * n);
         char* src_data_f32 = buf.data();
-        qtype.to_float(src, (float*)src_data_f32, n);
+        qtype->to_float(src, (float*)src_data_f32, n);
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src_data_f32, (ggml_fp16_t*)dst, n);
         } else {

@@ -22,6 +22,7 @@
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "ggml.h"
 
 #ifdef SD_USE_CUBLAS
@@ -100,17 +101,11 @@ __STATIC_INLINE__ ggml_fp16_t ggml_tensor_get_f16(const ggml_tensor* tensor, int
 
 static struct ggml_tensor* get_tensor_from_graph(struct ggml_cgraph* gf, const char* name) {
     struct ggml_tensor* res = NULL;
-    for (int i = 0; i < gf->n_nodes; i++) {
-        // printf("%d, %s \n", i, gf->nodes[i]->name);
-        if (strcmp(ggml_get_name(gf->nodes[i]), name) == 0) {
-            res = gf->nodes[i];
-            break;
-        }
-    }
-    for (int i = 0; i < gf->n_leafs; i++) {
-        // printf("%d, %s \n", i, gf->leafs[i]->name);
-        if (strcmp(ggml_get_name(gf->leafs[i]), name) == 0) {
-            res = gf->leafs[i];
+    for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+        struct ggml_tensor* node = ggml_graph_node(gf, i);
+        // printf("%d, %s \n", i, ggml_get_name(node));
+        if (strcmp(ggml_get_name(node), name) == 0) {
+            res = node;
             break;
         }
     }
@@ -1129,7 +1124,7 @@ public:
         ggml_graph_print(gf);
 #endif
         if (output != NULL) {
-            auto result = gf->nodes[gf->n_nodes - 1];
+            auto result = ggml_graph_node(gf, -1);
             if (*output == NULL && output_ctx != NULL) {
                 *output = ggml_dup_tensor(output_ctx, result);
             }
