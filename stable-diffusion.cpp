@@ -32,7 +32,8 @@ const char* model_version_to_str[] = {
     "SD3 2B",
     "Flux Dev",
     "Flux Schnell",
-    "SD3.5 8B"};
+    "SD3.5 8B",
+    "SD3.5 2B"};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -288,7 +289,7 @@ public:
                     "try specifying SDXL VAE FP16 Fix with the --vae parameter. "
                     "You can find it here: https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors");
             }
-        } else if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
+        } else if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
             scale_factor = 1.5305f;
         } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
             scale_factor = 0.3611;
@@ -311,7 +312,7 @@ public:
         } else {
             clip_backend   = backend;
             bool use_t5xxl = false;
-            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
                 use_t5xxl = true;
             }
             if (!ggml_backend_is_cpu(backend) && use_t5xxl && conditioner_wtype != GGML_TYPE_F32) {
@@ -322,7 +323,7 @@ public:
                 LOG_INFO("CLIP: Using CPU backend");
                 clip_backend = ggml_backend_cpu_init();
             }
-            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, conditioner_wtype);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend, diffusion_model_wtype, version);
             } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
@@ -520,7 +521,7 @@ public:
             is_using_v_parameterization = true;
         }
 
-        if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
+        if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
             LOG_INFO("running in FLOW mode");
             denoiser = std::make_shared<DiscreteFlowDenoiser>();
         } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
@@ -771,7 +772,11 @@ public:
                         sample_method_t method,
                         const std::vector<float>& sigmas,
                         int start_merge_step,
-                        SDCondition id_cond) {
+                        SDCondition id_cond,
+                        std::vector<int> skip_layers = {},
+                        float slg_scale              = 2.5,
+                        float skip_layer_start       = 0.01,
+                        float skip_layer_end         = 0.2) {
         size_t steps = sigmas.size() - 1;
         // noise = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(noise);
@@ -782,12 +787,23 @@ public:
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, noise);
 
         bool has_unconditioned = cfg_scale != 1.0 && uncond.c_crossattn != NULL;
+        bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
 
         // denoise wrapper
         struct ggml_tensor* out_cond   = ggml_dup_tensor(work_ctx, x);
         struct ggml_tensor* out_uncond = NULL;
+        struct ggml_tensor* out_skip   = NULL;
+
         if (has_unconditioned) {
             out_uncond = ggml_dup_tensor(work_ctx, x);
+        }
+        if (has_skiplayer) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_2B || version == VERSION_SD3_5_8B || version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
+                out_skip = ggml_dup_tensor(work_ctx, x);
+            } else {
+                has_skiplayer = false;
+                LOG_WARN("SLG is incompatible with %s models", model_version_to_str[version]);
+            }
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -869,6 +885,28 @@ public:
                                          &out_uncond);
                 negative_data = (float*)out_uncond->data;
             }
+
+            int step_count         = sigmas.size();
+            bool is_skiplayer_step = has_skiplayer && step > (int)(skip_layer_start * step_count) && step < (int)(skip_layer_end * step_count);
+            float* skip_layer_data = NULL;
+            if (is_skiplayer_step) {
+                LOG_DEBUG("Skipping layers at step %d\n", step);
+                // skip layer (same as conditionned)
+                diffusion_model->compute(n_threads,
+                                         noised_input,
+                                         timesteps,
+                                         cond.c_crossattn,
+                                         cond.c_concat,
+                                         cond.c_vector,
+                                         guidance_tensor,
+                                         -1,
+                                         controls,
+                                         control_strength,
+                                         &out_skip,
+                                         NULL,
+                                         skip_layers);
+                skip_layer_data = (float*)out_skip->data;
+            }
             float* vec_denoised  = (float*)denoised->data;
             float* vec_input     = (float*)input->data;
             float* positive_data = (float*)out_cond->data;
@@ -884,6 +922,9 @@ public:
                     } else {
                         latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
                     }
+                }
+                if (is_skiplayer_step) {
+                    latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
                 }
                 // v = latent_result, eps = latent_result
                 // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
@@ -948,7 +989,7 @@ public:
         if (use_tiny_autoencoder) {
             C = 4;
         } else {
-            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B) {
+            if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
                 C = 32;
             } else if (version == VERSION_FLUX_DEV || version == VERSION_FLUX_SCHNELL) {
                 C = 32;
@@ -1111,7 +1152,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float control_strength,
                            float style_ratio,
                            bool normalize_input,
-                           std::string input_id_images_path) {
+                           std::string input_id_images_path,
+                           std::vector<int> skip_layers = {},
+                           float slg_scale              = 2.5,
+                           float skip_layer_start       = 0.01,
+                           float skip_layer_end         = 0.2) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1281,7 +1326,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     // Sample
     std::vector<struct ggml_tensor*> final_latents;  // collect latents to decode
     int C = 4;
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         C = 16;
     } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
         C = 16;
@@ -1320,7 +1365,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      sample_method,
                                                      sigmas,
                                                      start_merge_step,
-                                                     id_cond);
+                                                     id_cond,
+                                                     skip_layers,
+                                                     slg_scale,
+                                                     skip_layer_start,
+                                                     skip_layer_end);
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -1386,7 +1435,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str) {
+                    const char* input_id_images_path_c_str,
+                    std::vector<int> skip_layers,
+                    float slg_scale,
+                    float skip_layer_start,
+                    float skip_layer_end) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1394,7 +1447,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         params.mem_size *= 3;
     }
     if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
@@ -1420,7 +1473,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
 
     int C = 4;
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         C = 16;
     } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
         C = 16;
@@ -1428,7 +1481,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     int W                    = width / 8;
     int H                    = height / 8;
     ggml_tensor* init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         ggml_set_f32(init_latent, 0.0609f);
     } else if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
         ggml_set_f32(init_latent, 0.1159f);
@@ -1454,7 +1507,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                control_strength,
                                                style_ratio,
                                                normalize_input,
-                                               input_id_images_path_c_str);
+                                               input_id_images_path_c_str,
+                                               skip_layers,
+                                               slg_scale,
+                                               skip_layer_start,
+                                               skip_layer_end);
 
     size_t t1 = ggml_time_ms();
 
@@ -1481,7 +1538,11 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str) {
+                    const char* input_id_images_path_c_str,
+                    std::vector<int> skip_layers,
+                    float slg_scale,
+                    float skip_layer_start,
+                    float skip_layer_end) {
     LOG_DEBUG("img2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1489,7 +1550,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B) {
+    if (sd_ctx->sd->version == VERSION_SD3_2B || sd_ctx->sd->version == VERSION_SD3_5_8B || sd_ctx->sd->version == VERSION_SD3_5_2B) {
         params.mem_size *= 2;
     }
     if (sd_ctx->sd->version == VERSION_FLUX_DEV || sd_ctx->sd->version == VERSION_FLUX_SCHNELL) {
@@ -1555,7 +1616,11 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                control_strength,
                                                style_ratio,
                                                normalize_input,
-                                               input_id_images_path_c_str);
+                                               input_id_images_path_c_str,
+                                               skip_layers,
+                                               slg_scale,
+                                               skip_layer_start,
+                                               skip_layer_end);
 
     size_t t2 = ggml_time_ms();
 
