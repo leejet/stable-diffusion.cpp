@@ -1378,6 +1378,9 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.8") != std::string::npos) {
             is_lite = false;
         }
+        if (tensor_storage.name.find("joint_blocks.0.x_block.attn2.ln_q.weight") != std::string::npos) {
+            return VERSION_SD3_5_2B;
+        }
         if (tensor_storage.name.find("joint_blocks.37.x_block.attn.ln_q.weight") != std::string::npos) {
             return VERSION_SD3_5_8B;
         }
