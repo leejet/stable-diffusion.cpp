@@ -31,6 +31,11 @@ enum SDVersion {
     VERSION_COUNT,
 };
 
+enum PMVersion {
+    VERSION_1,
+    VERSION_2,
+};
+
 struct TensorStorage {
     std::string name;
     ggml_type type          = GGML_TYPE_F32;
@@ -162,6 +167,7 @@ public:
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       ggml_backend_t backend,
                       std::set<std::string> ignore_tensors = {});
+                      
     bool save_to_gguf_file(const std::string& file_path, ggml_type type);
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);

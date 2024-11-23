@@ -146,6 +146,33 @@ std::unordered_map<std::string, std::string> vae_decoder_name_map = {
     {"first_stage_model.decoder.mid.attn_1.to_v.weight", "first_stage_model.decoder.mid.attn_1.v.weight"},
 };
 
+std::unordered_map<std::string, std::string> pmid_v2_name_map = {
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.fc1.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.0.1.3.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.fc2.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.fc1.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.1.1.3.weight",
+     "pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.fc2.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.fc1.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.2.1.3.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.fc2.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.weight",
+    "pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.fc1.weight"},
+    {"pmid.qformer_perceiver.perceiver_resampler.layers.3.1.3.weight",
+     "pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.fc2.weight"},
+    {"pmid.qformer_perceiver.token_proj.0.bias",
+     "pmid.qformer_perceiver.token_proj.fc1.bias"},
+    {"pmid.qformer_perceiver.token_proj.2.bias",
+     "pmid.qformer_perceiver.token_proj.fc2.bias"},
+    {"pmid.qformer_perceiver.token_proj.0.weight",
+     "pmid.qformer_perceiver.token_proj.fc1.weight"},
+    {"pmid.qformer_perceiver.token_proj.2.weight",
+     "pmid.qformer_perceiver.token_proj.fc2.weight"},
+};
+
 std::string convert_open_clip_to_hf_clip(const std::string& name) {
     std::string new_name = name;
     std::string prefix;
@@ -208,6 +235,13 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
 std::string convert_vae_decoder_name(const std::string& name) {
     if (vae_decoder_name_map.find(name) != vae_decoder_name_map.end()) {
         return vae_decoder_name_map[name];
+    }
+    return name;
+}
+
+std::string convert_pmid_v2_name(const std::string& name) {
+    if (pmid_v2_name_map.find(name) != pmid_v2_name_map.end()) {
+        return pmid_v2_name_map[name];
     }
     return name;
 }
@@ -443,6 +477,8 @@ std::string convert_tensor_name(std::string name) {
         new_name = convert_open_clip_to_hf_clip(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
         new_name = convert_vae_decoder_name(name);
+    } else if (starts_with(name, "pmid.qformer_perceiver")) {
+        new_name = convert_pmid_v2_name(name);
     } else if (starts_with(name, "control_model.")) {  // for controlnet pth models
         size_t pos = name.find('.');
         if (pos != std::string::npos) {
@@ -1015,7 +1051,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
-        tensor_storage.reverse_ne();
+        tensor_storage.reverse_ne();        
 
         size_t tensor_data_size = end - begin;
 
@@ -1362,7 +1398,7 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                         reader.tensor_storage.reverse_ne();
                         reader.tensor_storage.file_index = file_index;
                         // if(strcmp(prefix.c_str(), "scarlett") == 0)
-                        // printf(" got tensor %s \n ", reader.tensor_storage.name.c_str());
+                        // printf(" ZIP got tensor %s \n ", reader.tensor_storage.name.c_str());
                         reader.tensor_storage.name = prefix + reader.tensor_storage.name;
                         tensor_storages.push_back(reader.tensor_storage);
                         // LOG_DEBUG("%s", reader.tensor_storage.name.c_str());
@@ -1398,7 +1434,9 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
             std::string name = zip_entry_name(zip);
             size_t pos       = name.find("data.pkl");
             if (pos != std::string::npos) {
+
                 std::string dir = name.substr(0, pos);
+                printf("ZIP %d, name = %s, dir = %s \n", i, name.c_str(), dir.c_str());
                 void* pkl_data  = NULL;
                 size_t pkl_size;
                 zip_entry_read(zip, &pkl_data, &pkl_size);
