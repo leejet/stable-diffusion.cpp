@@ -279,12 +279,12 @@ std::string path_join(const std::string& p1, const std::string& p2) {
 std::vector<std::string> splitString(const std::string& str, char delimiter) {
     std::vector<std::string> result;
     size_t start = 0;
-    size_t end = str.find(delimiter);
+    size_t end   = str.find(delimiter);
 
     while (end != std::string::npos) {
         result.push_back(str.substr(start, end - start));
         start = end + 1;
-        end = str.find(delimiter, start);
+        end   = str.find(delimiter, start);
     }
 
     // Add the last segment after the last delimiter
@@ -292,7 +292,6 @@ std::vector<std::string> splitString(const std::string& str, char delimiter) {
 
     return result;
 }
-
 
 sd_image_t* preprocess_id_image(sd_image_t* img) {
     int shortest_edge   = 224;

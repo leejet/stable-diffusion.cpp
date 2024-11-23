@@ -483,7 +483,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         } else if (arg == "--vae-on-cpu") {
             params.vae_on_cpu = true;  // will slow down latent decoding but necessary for low MEM GPUs
         } else if (arg == "--diffusion-fa") {
-            params.diffusion_flash_attn = true; // can reduce MEM significantly
+            params.diffusion_flash_attn = true;  // can reduce MEM significantly
         } else if (arg == "--canny") {
             params.canny_preprocess = true;
         } else if (arg == "-b" || arg == "--batch-count") {

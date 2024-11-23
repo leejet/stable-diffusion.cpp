@@ -33,7 +33,7 @@ struct UNetModel : public DiffusionModel {
     UNetModel(ggml_backend_t backend,
               ggml_type wtype,
               SDVersion version = VERSION_SD1,
-              bool flash_attn = false)
+              bool flash_attn   = false)
         : unet(backend, wtype, version, flash_attn) {
     }
 
@@ -135,7 +135,7 @@ struct FluxModel : public DiffusionModel {
     FluxModel(ggml_backend_t backend,
               ggml_type wtype,
               SDVersion version = VERSION_FLUX_DEV,
-              bool flash_attn = false)
+              bool flash_attn   = false)
         : flux(backend, wtype, version, flash_attn) {
     }
 

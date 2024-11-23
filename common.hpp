@@ -304,7 +304,7 @@ public:
                           int64_t n_head,
                           int64_t d_head,
                           int64_t context_dim,
-                          bool ff_in = false,
+                          bool ff_in      = false,
                           bool flash_attn = false)
         : n_head(n_head), d_head(d_head), ff_in(ff_in) {
         // disable_self_attn is always False

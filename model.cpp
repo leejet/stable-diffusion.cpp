@@ -148,19 +148,19 @@ std::unordered_map<std::string, std::string> vae_decoder_name_map = {
 
 std::unordered_map<std::string, std::string> pmid_v2_name_map = {
     {"pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.weight",
-    "pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.fc1.weight"},
+     "pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.fc1.weight"},
     {"pmid.qformer_perceiver.perceiver_resampler.layers.0.1.3.weight",
-    "pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.fc2.weight"},
+     "pmid.qformer_perceiver.perceiver_resampler.layers.0.1.1.fc2.weight"},
     {"pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.weight",
-    "pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.fc1.weight"},
+     "pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.fc1.weight"},
     {"pmid.qformer_perceiver.perceiver_resampler.layers.1.1.3.weight",
      "pmid.qformer_perceiver.perceiver_resampler.layers.1.1.1.fc2.weight"},
     {"pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.weight",
-    "pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.fc1.weight"},
+     "pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.fc1.weight"},
     {"pmid.qformer_perceiver.perceiver_resampler.layers.2.1.3.weight",
-    "pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.fc2.weight"},
+     "pmid.qformer_perceiver.perceiver_resampler.layers.2.1.1.fc2.weight"},
     {"pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.weight",
-    "pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.fc1.weight"},
+     "pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.fc1.weight"},
     {"pmid.qformer_perceiver.perceiver_resampler.layers.3.1.3.weight",
      "pmid.qformer_perceiver.perceiver_resampler.layers.3.1.1.fc2.weight"},
     {"pmid.qformer_perceiver.token_proj.0.bias",
@@ -650,9 +650,8 @@ uint16_t f8_e4m3_to_f16(uint8_t f8) {
     return ggml_fp32_to_fp16(*reinterpret_cast<const float*>(&result));
 }
 
-
 uint16_t f8_e5m2_to_f16(uint8_t fp8) {
-    uint8_t sign = (fp8 >> 7) & 0x1;
+    uint8_t sign     = (fp8 >> 7) & 0x1;
     uint8_t exponent = (fp8 >> 2) & 0x1F;
     uint8_t mantissa = fp8 & 0x3;
 
@@ -660,23 +659,23 @@ uint16_t f8_e5m2_to_f16(uint8_t fp8) {
     uint16_t fp16_exponent;
     uint16_t fp16_mantissa;
 
-    if (exponent == 0 && mantissa == 0) { //zero
+    if (exponent == 0 && mantissa == 0) {  // zero
         return fp16_sign;
     }
 
-    if (exponent == 0x1F) { //NAN and INF
+    if (exponent == 0x1F) {  // NAN and INF
         fp16_exponent = 0x1F;
         fp16_mantissa = mantissa ? (mantissa << 8) : 0;
         return fp16_sign | (fp16_exponent << 10) | fp16_mantissa;
     }
 
-    if (exponent == 0) { //subnormal numbers
+    if (exponent == 0) {  // subnormal numbers
         fp16_exponent = 0;
         fp16_mantissa = (mantissa << 8);
         return fp16_sign | fp16_mantissa;
     }
 
-    //normal numbers
+    // normal numbers
     int16_t true_exponent = (int16_t)exponent - 15 + 15;
     if (true_exponent <= 0) {
         fp16_exponent = 0;
@@ -1051,7 +1050,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
-        tensor_storage.reverse_ne();        
+        tensor_storage.reverse_ne();
 
         size_t tensor_data_size = end - begin;
 
@@ -1434,10 +1433,9 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
             std::string name = zip_entry_name(zip);
             size_t pos       = name.find("data.pkl");
             if (pos != std::string::npos) {
-
                 std::string dir = name.substr(0, pos);
                 printf("ZIP %d, name = %s, dir = %s \n", i, name.c_str(), dir.c_str());
-                void* pkl_data  = NULL;
+                void* pkl_data = NULL;
                 size_t pkl_size;
                 zip_entry_read(zip, &pkl_data, &pkl_size);
 

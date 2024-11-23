@@ -333,12 +333,12 @@ public:
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, conditioner_wtype);
                 diffusion_model  = std::make_shared<FluxModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             } else {
-                 if(id_embeddings_path.find("v2") != std::string::npos) {
+                if (id_embeddings_path.find("v2") != std::string::npos) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version, VERSION_2);
-                 }else{
+                } else {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version);
-                 }
-                diffusion_model  = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
+                }
+                diffusion_model = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
             }
             cond_stage_model->alloc_params_buffer();
             cond_stage_model->get_param_tensors(tensors);
@@ -372,7 +372,7 @@ public:
                 control_net = std::make_shared<ControlNet>(controlnet_backend, diffusion_model_wtype, version);
             }
 
-            if(id_embeddings_path.find("v2") != std::string::npos) {
+            if (id_embeddings_path.find("v2") != std::string::npos) {
                 pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_wtype, version, VERSION_2);
                 LOG_INFO("using PhotoMaker Version 2");
             } else {
@@ -1220,9 +1220,9 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
             for (std::string img_file : img_files) {
                 int c = 0;
                 int width, height;
-                if(ends_with(img_file, "safetensors")){
+                if (ends_with(img_file, "safetensors")) {
                     continue;
-                }                    
+                }
                 uint8_t* input_image_buffer = stbi_load(img_file.c_str(), &width, &height, &c, 3);
                 if (input_image_buffer == NULL) {
                     LOG_ERROR("PhotoMaker load image from '%s' failed", img_file.c_str());
@@ -1260,18 +1260,18 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                 else
                     sd_mul_images_to_tensor(init_image->data, init_img, i, NULL, NULL);
             }
-            t0                = ggml_time_ms();
-            auto cond_tup     = sd_ctx->sd->cond_stage_model->get_learned_condition_with_trigger(work_ctx,
-                                                                                                 sd_ctx->sd->n_threads, prompt,
-                                                                                                 clip_skip,
-                                                                                                 width,
-                                                                                                 height,
-                                                                                                 num_input_images,
-                                                                                                 sd_ctx->sd->diffusion_model->get_adm_in_channels());
-            id_cond           = std::get<0>(cond_tup);
-            class_tokens_mask = std::get<1>(cond_tup);  //
+            t0                            = ggml_time_ms();
+            auto cond_tup                 = sd_ctx->sd->cond_stage_model->get_learned_condition_with_trigger(work_ctx,
+                                                                                                             sd_ctx->sd->n_threads, prompt,
+                                                                                                             clip_skip,
+                                                                                                             width,
+                                                                                                             height,
+                                                                                                             num_input_images,
+                                                                                                             sd_ctx->sd->diffusion_model->get_adm_in_channels());
+            id_cond                       = std::get<0>(cond_tup);
+            class_tokens_mask             = std::get<1>(cond_tup);  //
             struct ggml_tensor* id_embeds = NULL;
-            if(pmv2){
+            if (pmv2) {
                 // id_embeds = sd_ctx->sd->pmid_id_embeds->get();
                 id_embeds = load_tensor_from_file(work_ctx, path_join(input_id_images_path, "id_embeds.bin"));
                 // print_ggml_tensor(id_embeds, true, "id_embeds:");

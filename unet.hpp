@@ -534,7 +534,7 @@ struct UNetModelRunner : public GGMLRunner {
     UNetModelRunner(ggml_backend_t backend,
                     ggml_type wtype,
                     SDVersion version = VERSION_SD1,
-                    bool flash_attn = false)
+                    bool flash_attn   = false)
         : GGMLRunner(backend, wtype), unet(version, flash_attn) {
         unet.init(params_ctx, wtype);
     }

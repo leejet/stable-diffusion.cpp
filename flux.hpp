@@ -170,9 +170,9 @@ namespace Flux {
             // x: [N, n_token, dim]
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
-            auto qkv = pre_attention(ctx, x);                       // q,k,v: [N, n_token, n_head, d_head]
+            auto qkv = pre_attention(ctx, x);                                   // q,k,v: [N, n_token, n_head, d_head]
             x        = attention(ctx, qkv[0], qkv[1], qkv[2], pe, flash_attn);  // [N, n_token, dim]
-            x        = post_attention(ctx, x);                      // [N, n_token, dim]
+            x        = post_attention(ctx, x);                                  // [N, n_token, dim]
             return x;
         }
     };
@@ -241,11 +241,12 @@ namespace Flux {
 
     struct DoubleStreamBlock : public GGMLBlock {
         bool flash_attn;
+
     public:
         DoubleStreamBlock(int64_t hidden_size,
                           int64_t num_heads,
                           float mlp_ratio,
-                          bool qkv_bias = false,
+                          bool qkv_bias   = false,
                           bool flash_attn = false)
             : flash_attn(flash_attn) {
             int64_t mlp_hidden_dim = hidden_size * mlp_ratio;
@@ -322,7 +323,7 @@ namespace Flux {
             auto k = ggml_concat(ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = attention(ctx, q, k, v, pe, flash_attn);                          // [N, n_txt_token + n_img_token, n_head*d_head]
+            auto attn         = attention(ctx, q, k, v, pe, flash_attn);              // [N, n_txt_token + n_img_token, n_head*d_head]
             attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx,
                                              attn,
@@ -830,7 +831,7 @@ namespace Flux {
         FluxRunner(ggml_backend_t backend,
                    ggml_type wtype,
                    SDVersion version = VERSION_FLUX_DEV,
-                   bool flash_attn = false)
+                   bool flash_attn   = false)
             : GGMLRunner(backend, wtype) {
             flux_params.flash_attn = flash_attn;
             if (version == VERSION_FLUX_SCHNELL) {

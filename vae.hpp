@@ -103,7 +103,7 @@ public:
         v      = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, h, w, in_channels]
         v      = ggml_reshape_3d(ctx, v, c, h * w, n);              // [N, h * w, in_channels]
 
-        //h_ = ggml_nn_attention(ctx, q, k, v, false);  // [N, h * w, in_channels]
+        // h_ = ggml_nn_attention(ctx, q, k, v, false);  // [N, h * w, in_channels]
         h_ = ggml_nn_attention_ext(ctx, q, k, v, 1, nullptr, false, true, false);
 
         h_ = ggml_cont(ctx, ggml_permute(ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
