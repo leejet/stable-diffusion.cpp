@@ -798,7 +798,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                 }
 
                 if (chunk_idx == 0) {
-                    auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_l_tokenizer.EOS_TOKEN_ID);
+                    auto it       = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_l_tokenizer.EOS_TOKEN_ID);
                     max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
                     clip_l->compute(n_threads,
                                     input_ids,
@@ -808,7 +808,6 @@ struct SD3CLIPEmbedder : public Conditioner {
                                     true,
                                     &pooled_l,
                                     work_ctx);
-
                 }
             }
 
@@ -848,7 +847,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                 }
 
                 if (chunk_idx == 0) {
-                    auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_g_tokenizer.EOS_TOKEN_ID);
+                    auto it       = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_g_tokenizer.EOS_TOKEN_ID);
                     max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
                     clip_g->compute(n_threads,
                                     input_ids,
@@ -858,7 +857,6 @@ struct SD3CLIPEmbedder : public Conditioner {
                                     true,
                                     &pooled_g,
                                     work_ctx);
-
                 }
             }
 
@@ -1096,9 +1094,9 @@ struct FluxCLIPEmbedder : public Conditioner {
                 auto input_ids       = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
                 size_t max_token_idx = 0;
 
-                auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_l_tokenizer.EOS_TOKEN_ID);
+                auto it       = std::find(chunk_tokens.begin(), chunk_tokens.end(), clip_l_tokenizer.EOS_TOKEN_ID);
                 max_token_idx = std::min<size_t>(std::distance(chunk_tokens.begin(), it), chunk_tokens.size() - 1);
-                
+
                 clip_l->compute(n_threads,
                                 input_ids,
                                 0,
@@ -1107,7 +1105,6 @@ struct FluxCLIPEmbedder : public Conditioner {
                                 true,
                                 &pooled,
                                 work_ctx);
-
             }
 
             // t5
