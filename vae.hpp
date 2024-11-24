@@ -99,12 +99,10 @@ public:
         k      = ggml_cont(ctx, ggml_permute(ctx, k, 1, 2, 0, 3));  // [N, h, w, in_channels]
         k      = ggml_reshape_3d(ctx, k, c, h * w, n);              // [N, h * w, in_channels]
 
-        auto v = v_proj->forward(ctx, h_);                          // [N, in_channels, h, w]
-        v      = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, h, w, in_channels]
-        v      = ggml_reshape_3d(ctx, v, c, h * w, n);              // [N, h * w, in_channels]
+        auto v = v_proj->forward(ctx, h_);              // [N, in_channels, h, w]
+        v      = ggml_reshape_3d(ctx, v, h * w, c, n);  // [N, in_channels, h * w]
 
-        // h_ = ggml_nn_attention(ctx, q, k, v, false);  // [N, h * w, in_channels]
-        h_ = ggml_nn_attention_ext(ctx, q, k, v, 1, nullptr, false, true, false);
+        h_ = ggml_nn_attention(ctx, q, k, v, false);  // [N, h * w, in_channels]
 
         h_ = ggml_cont(ctx, ggml_permute(ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
         h_ = ggml_reshape_4d(ctx, h_, w, h, c, n);               // [N, in_channels, h, w]
