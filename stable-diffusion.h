@@ -166,10 +166,11 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            float style_strength,
                            bool normalize_input,
                            const char* input_id_images_path,
-                           std::vector<int> skip_layers = {},
-                           float slg_scale              = 2.5,
-                           float skip_layer_start       = 0.01,
-                           float skip_layer_end         = 0.2);
+                           int* skip_layers,
+                           size_t skip_layers_count,
+                           float slg_scale,
+                           float skip_layer_start,
+                           float skip_layer_end);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
@@ -190,10 +191,11 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            float style_strength,
                            bool normalize_input,
                            const char* input_id_images_path,
-                           std::vector<int> skip_layers = {},
-                           float slg_scale              = 2.5,
-                           float skip_layer_start       = 0.01,
-                           float skip_layer_end         = 0.2);
+                           int* skip_layers,
+                           size_t skip_layers_count,
+                           float slg_scale,
+                           float skip_layer_start,
+                           float skip_layer_end);
 
 SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
