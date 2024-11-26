@@ -358,7 +358,7 @@ public:
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else {
-                tae_first_stage = std::make_shared<TinyAutoEncoder>(backend, vae_decode_only);
+                tae_first_stage = std::make_shared<TinyAutoEncoder>(backend, model_loader.tensor_storages_types, "decoder.layers", vae_decode_only);
             }
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
 
@@ -370,7 +370,7 @@ public:
                 } else {
                     controlnet_backend = backend;
                 }
-                control_net = std::make_shared<ControlNet>(controlnet_backend, version);
+                control_net = std::make_shared<ControlNet>(controlnet_backend, model_loader.tensor_storages_types, version);
             }
 
             if (id_embeddings_path.find("v2") != std::string::npos) {
