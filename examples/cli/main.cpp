@@ -1033,7 +1033,8 @@ int main(int argc, const char* argv[]) {
                               params.sample_method,
                               params.sample_steps,
                               params.strength,
-                              params.seed);
+                              params.seed,
+                              (step_callback_t)step_callback);
             if (results == NULL) {
                 printf("generate failed\n");
                 free_sd_ctx(sd_ctx);
@@ -1081,7 +1082,8 @@ int main(int argc, const char* argv[]) {
                               params.skip_layers.size(),
                               params.slg_scale,
                               params.skip_layer_start,
-                              params.skip_layer_end);
+                              params.skip_layer_end,
+                              (step_callback_t)step_callback);
         }
     }
 
