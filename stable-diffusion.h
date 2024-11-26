@@ -173,7 +173,7 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            float slg_scale,
                            float skip_layer_start,
                            float skip_layer_end,
-                           step_callback_t step_callback = NULL);
+                           step_callback_t step_callback);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
