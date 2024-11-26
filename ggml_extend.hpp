@@ -746,21 +746,31 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_chunk(struct ggml_contex
 typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
 // Tiling
-__STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
+__STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing, bool scaled_out = true) {
     output = ggml_set_f32(output, 0);
 
     int input_width   = (int)input->ne[0];
     int input_height  = (int)input->ne[1];
     int output_width  = (int)output->ne[0];
     int output_height = (int)output->ne[1];
+
+    int input_tile_size, output_tile_size;
+    if (scaled_out) {
+        input_tile_size  = tile_size;
+        output_tile_size = tile_size * scale;
+    } else {
+        input_tile_size  = tile_size * scale;
+        output_tile_size = tile_size;
+    }
+
     GGML_ASSERT(input_width % 2 == 0 && input_height % 2 == 0 && output_width % 2 == 0 && output_height % 2 == 0);  // should be multiple of 2
 
-    int tile_overlap     = (int32_t)(tile_size * tile_overlap_factor);
-    int non_tile_overlap = tile_size - tile_overlap;
+    int tile_overlap     = (int32_t)(input_tile_size * tile_overlap_factor);
+    int non_tile_overlap = input_tile_size - tile_overlap;
 
     struct ggml_init_params params = {};
-    params.mem_size += tile_size * tile_size * input->ne[2] * sizeof(float);                       // input chunk
-    params.mem_size += (tile_size * scale) * (tile_size * scale) * output->ne[2] * sizeof(float);  // output chunk
+    params.mem_size += input_tile_size * input_tile_size * input->ne[2] * sizeof(float);     // input chunk
+    params.mem_size += output_tile_size * output_tile_size * output->ne[2] * sizeof(float);  // output chunk
     params.mem_size += 3 * ggml_tensor_overhead();
     params.mem_buffer = NULL;
     params.no_alloc   = false;
@@ -775,8 +785,8 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
     }
 
     // tiling
-    ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_size, tile_size, input->ne[2], 1);
-    ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, tile_size * scale, tile_size * scale, output->ne[2], 1);
+    ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, input_tile_size, input_tile_size, input->ne[2], 1);
+    ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, output_tile_size, output_tile_size, output->ne[2], 1);
     on_processing(input_tile, NULL, true);
     int num_tiles = ceil((float)input_width / non_tile_overlap) * ceil((float)input_height / non_tile_overlap);
     LOG_INFO("processing %i tiles", num_tiles);
@@ -785,19 +795,23 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
     bool last_y = false, last_x = false;
     float last_time = 0.0f;
     for (int y = 0; y < input_height && !last_y; y += non_tile_overlap) {
-        if (y + tile_size >= input_height) {
-            y      = input_height - tile_size;
+        if (y + input_tile_size >= input_height) {
+            y      = input_height - input_tile_size;
             last_y = true;
         }
         for (int x = 0; x < input_width && !last_x; x += non_tile_overlap) {
-            if (x + tile_size >= input_width) {
-                x      = input_width - tile_size;
+            if (x + input_tile_size >= input_width) {
+                x      = input_width - input_tile_size;
                 last_x = true;
             }
             int64_t t1 = ggml_time_ms();
             ggml_split_tensor_2d(input, input_tile, x, y);
             on_processing(input_tile, output_tile, false);
-            ggml_merge_tensor_2d(output_tile, output, x * scale, y * scale, tile_overlap * scale);
+            if (scaled_out) {
+                ggml_merge_tensor_2d(output_tile, output, x * scale, y * scale, tile_overlap * scale);
+            } else {
+                ggml_merge_tensor_2d(output_tile, output, x / scale, y / scale, tile_overlap / scale);
+            }
             int64_t t2 = ggml_time_ms();
             last_time  = (t2 - t1) / 1000.0f;
             pretty_progress(tile_count, num_tiles, last_time);
