@@ -1607,6 +1607,21 @@ ggml_type ModelLoader::get_vae_wtype() {
     return GGML_TYPE_COUNT;
 }
 
+void ModelLoader::set_wtype_override(ggml_type wtype, std::string prefix) {
+    for (auto& pair : tensor_storages_types) {
+        if (prefix.size() < 1 || pair.first.substr(0, prefix.size()) == prefix) {
+            for (auto& tensor_storage : tensor_storages) {
+                if (tensor_storage.name == pair.first) {
+                    if (tensor_should_be_converted(tensor_storage, wtype)) {
+                        pair.second = wtype;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
 std::string ModelLoader::load_merges() {
     std::string merges_utf8_str(reinterpret_cast<const char*>(merges_utf8_c_str), sizeof(merges_utf8_c_str));
     return merges_utf8_str;

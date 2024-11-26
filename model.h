@@ -186,6 +186,7 @@ public:
     ggml_type get_conditioner_wtype();
     ggml_type get_diffusion_model_wtype();
     ggml_type get_vae_wtype();
+    void set_wtype_override(ggml_type wtype, std::string prefix = "");
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       ggml_backend_t backend,

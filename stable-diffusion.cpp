@@ -264,10 +264,12 @@ public:
             conditioner_wtype     = wtype;
             diffusion_model_wtype = wtype;
             vae_wtype             = wtype;
+            model_loader.set_wtype_override(wtype);
         }
 
         if (version == VERSION_SDXL) {
             vae_wtype = GGML_TYPE_F32;
+            model_loader.set_wtype_override(GGML_TYPE_F32, "vae.");
         }
 
         LOG_INFO("Weight type:                 %s", model_wtype != SD_TYPE_COUNT ? ggml_type_name(model_wtype) : "??");
