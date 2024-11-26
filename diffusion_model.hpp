@@ -34,8 +34,7 @@ struct UNetModel : public DiffusionModel {
               std::map<std::string, enum ggml_type>& tensor_types,
               SDVersion version = VERSION_SD1,
               bool flash_attn   = false)
-        : unet(backend, version, flash_attn) {
-        unet.init_params(tensor_types, "model.diffusion_model");
+        : unet(backend, tensor_types, "model.diffusion_model", version, flash_attn) {
     }
 
     void alloc_params_buffer() {
