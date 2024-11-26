@@ -32,13 +32,16 @@ struct UpscalerGGML {
         LOG_DEBUG("Using SYCL backend");
         backend = ggml_backend_sycl_init(0);
 #endif
-
+        ModelLoader model_loader;
+        if (!model_loader.init_from_file(esrgan_path)) {
+            LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
+        }
         if (!backend) {
             LOG_DEBUG("Using CPU backend");
             backend = ggml_backend_cpu_init();
         }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
-        esrgan_upscaler = std::make_shared<ESRGAN>(backend);
+        esrgan_upscaler = std::make_shared<ESRGAN>(backend, model_loader.tensor_storages_types);
         if (!esrgan_upscaler->load_from_file(esrgan_path)) {
             return false;
         }
