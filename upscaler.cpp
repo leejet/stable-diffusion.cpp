@@ -36,6 +36,7 @@ struct UpscalerGGML {
         if (!model_loader.init_from_file(esrgan_path)) {
             LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
         }
+        model_loader.set_wtype_override(model_data_type);
         if (!backend) {
             LOG_DEBUG("Using CPU backend");
             backend = ggml_backend_cpu_init();
