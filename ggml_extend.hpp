@@ -765,7 +765,7 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
         input_tile_size  = tile_size * scale;
         output_tile_size = tile_size;
     }
-    int num_tiles_x             = (input_width - (int)(input_tile_size * tile_overlap_factor)) / (int)(input_tile_size * (1. - tile_overlap_factor));
+    int num_tiles_x             = (input_width - (int)(input_tile_size * tile_overlap_factor)) / (int)(input_tile_size * (1 - tile_overlap_factor));
     float tile_overlap_factor_x = (float)(input_tile_size * num_tiles_x - input_width) / (float)(input_tile_size * (num_tiles_x - 1));
     if (num_tiles_x <= 1) {
         if (input_width == input_tile_size) {
