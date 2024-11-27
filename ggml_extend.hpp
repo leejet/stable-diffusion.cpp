@@ -510,7 +510,7 @@ __STATIC_INLINE__ void ggml_merge_tensor_2d(struct ggml_tensor* input,
         for (int ix = x_skip; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
                 float new_value = ggml_tensor_get_f32(input, ix, iy, k);
-                if (overlap_x > 0 && overlap_y > 0) {  // blend colors in overlapped area
+                if (overlap_x > 0 || overlap_y > 0) {  // blend colors in overlapped area
                     float old_value = ggml_tensor_get_f32(output, x + ix, y + iy, k);
 
                     const float x_f_0 = (overlap_x > 0 && x > 0) ? (ix - x_skip) / float(overlap_x) : 1;
@@ -765,12 +765,31 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
         input_tile_size  = tile_size * scale;
         output_tile_size = tile_size;
     }
-    int num_tiles_x             = (input_width - (int)(input_tile_size * tile_overlap_factor)) / (int)(input_tile_size * (1 - tile_overlap_factor));
+    int num_tiles_x             = (input_width - (int)(input_tile_size * tile_overlap_factor)) / (int)(input_tile_size * (1. - tile_overlap_factor));
     float tile_overlap_factor_x = (float)(input_tile_size * num_tiles_x - input_width) / (float)(input_tile_size * (num_tiles_x - 1));
+    if (num_tiles_x <= 1) {
+        if (input_width == input_tile_size) {
+            num_tiles_x           = 1;
+            tile_overlap_factor_x = 0;
+        } else {
+            num_tiles_x           = 2;
+            tile_overlap_factor_x = (2 * input_tile_size - input_width) / (float)input_tile_size;
+        }
+    }
 
     int num_tiles_y             = (input_height - (int)(input_tile_size * tile_overlap_factor)) / (int)(input_tile_size * (1 - tile_overlap_factor));
     float tile_overlap_factor_y = (float)(input_tile_size * num_tiles_y - input_height) / (float)(input_tile_size * (num_tiles_y - 1));
+    if (num_tiles_y <= 1) {
+        if (input_height == input_tile_size) {
+            num_tiles_y           = 1;
+            tile_overlap_factor_y = 0;
+        } else {
+            num_tiles_y           = 2;
+            tile_overlap_factor_y = (2 * input_tile_size - input_height) / (float)input_tile_size;
+        }
+    }
 
+    LOG_DEBUG("num tiles : %d, %d ", num_tiles_x, num_tiles_y);
     LOG_DEBUG("optimal overlap : %f, %f (targeting %f)", tile_overlap_factor_x, tile_overlap_factor_y, tile_overlap_factor);
 
     GGML_ASSERT(input_width % 2 == 0 && input_height % 2 == 0 && output_width % 2 == 0 && output_height % 2 == 0);  // should be multiple of 2
