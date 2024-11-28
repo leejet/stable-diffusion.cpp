@@ -352,11 +352,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
                 auto trait = ggml_get_type_traits((ggml_type)i);
                 std::string name(trait->type_name);
-                if (trait->type_size) {
+                if (name == "f32" || trait->to_float && trait->type_size) {
                     if (i)
                         valid_types += ", ";
                     valid_types += name;
                     if (type == name) {
+                        if (ggml_quantize_requires_imatrix((ggml_type)i)) {
+                            printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
+                        }
                         params.wtype = (enum sd_type_t)i;
                         found        = true;
                         break;
