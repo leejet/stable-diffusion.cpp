@@ -346,30 +346,25 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            std::string type = argv[i];
-            if (type == "f32") {
-                params.wtype = SD_TYPE_F32;
-            } else if (type == "f16") {
-                params.wtype = SD_TYPE_F16;
-            } else if (type == "q4_0") {
-                params.wtype = SD_TYPE_Q4_0;
-            } else if (type == "q4_1") {
-                params.wtype = SD_TYPE_Q4_1;
-            } else if (type == "q5_0") {
-                params.wtype = SD_TYPE_Q5_0;
-            } else if (type == "q5_1") {
-                params.wtype = SD_TYPE_Q5_1;
-            } else if (type == "q8_0") {
-                params.wtype = SD_TYPE_Q8_0;
-            } else if (type == "q2_k") {
-                params.wtype = SD_TYPE_Q2_K;
-            } else if (type == "q3_k") {
-                params.wtype = SD_TYPE_Q3_K;
-            } else if (type == "q4_k") {
-                params.wtype = SD_TYPE_Q4_K;
-            } else {
-                fprintf(stderr, "error: invalid weight format %s, must be one of [f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k]\n",
-                        type.c_str());
+            std::string type        = argv[i];
+            bool found              = false;
+            std::string valid_types = "";
+            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+                auto trait = ggml_get_type_traits((ggml_type)i);
+                std::string name(trait->type_name);
+                if (i)
+                    valid_types += ", ";
+                valid_types += name;
+                if (type == name) {
+                    params.wtype = (enum sd_type_t)i;
+                    found        = true;
+                    break;
+                }
+            }
+            if (!found) {
+                fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
+                        type.c_str(),
+                        valid_types.c_str());
                 exit(1);
             }
         } else if (arg == "--lora-model-dir") {
