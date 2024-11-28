@@ -765,9 +765,20 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
         input_tile_size  = tile_size * scale;
         output_tile_size = tile_size;
     }
-    int num_tiles_x             = (input_width - (int)(input_tile_size * tile_overlap_factor)) / (int)(input_tile_size * (1 - tile_overlap_factor));
+    int tile_overlap     = (input_tile_size * tile_overlap_factor);
+    int non_tile_overlap = input_tile_size - tile_overlap;
+
+    int num_tiles_x = (input_width - tile_overlap) / non_tile_overlap;
+    int overshoot_x = ((num_tiles_x + 1) * non_tile_overlap + tile_overlap) % input_width;
+
+    if ((overshoot_x != non_tile_overlap) && (overshoot_x <= num_tiles_x * (input_tile_size / 2 - tile_overlap))) {
+        // if tiles don't fit perfectly using the desired overlap
+        // and there is enough room to squeeze an extra tile without overlap becoming >0.5
+        num_tiles_x++;
+    }
+
     float tile_overlap_factor_x = (float)(input_tile_size * num_tiles_x - input_width) / (float)(input_tile_size * (num_tiles_x - 1));
-    if (num_tiles_x <= 1) {
+    if (num_tiles_x <= 2) {
         if (input_width == input_tile_size) {
             num_tiles_x           = 1;
             tile_overlap_factor_x = 0;
@@ -777,9 +788,17 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
         }
     }
 
-    int num_tiles_y             = (input_height - (int)(input_tile_size * tile_overlap_factor)) / (int)(input_tile_size * (1 - tile_overlap_factor));
+    int num_tiles_y = (input_height - tile_overlap) / non_tile_overlap;
+    int overshoot_y = ((num_tiles_y + 1) * non_tile_overlap + tile_overlap) % input_height;
+
+    if ((overshoot_y != non_tile_overlap) && (overshoot_y <= num_tiles_y * (input_tile_size / 2 - tile_overlap))) {
+        // if tiles don't fit perfectly using the desired overlap
+        // and there is enough room to squeeze an extra tile without overlap becoming >0.5
+        num_tiles_y++;
+    }
+
     float tile_overlap_factor_y = (float)(input_tile_size * num_tiles_y - input_height) / (float)(input_tile_size * (num_tiles_y - 1));
-    if (num_tiles_y <= 1) {
+    if (num_tiles_y <= 2) {
         if (input_height == input_tile_size) {
             num_tiles_y           = 1;
             tile_overlap_factor_y = 0;
