@@ -1459,18 +1459,9 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
 
 SDVersion ModelLoader::get_sd_version() {
     TensorStorage token_embedding_weight;
-    bool is_flux    = false;
-    bool is_schnell = true;
-    bool is_lite    = true;
     for (auto& tensor_storage : tensor_storages) {
-        if (tensor_storage.name.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
-            is_schnell = false;
-        }
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
-            is_flux = true;
-        }
-        if (tensor_storage.name.find("model.diffusion_model.double_blocks.8") != std::string::npos) {
-            is_lite = false;
+            return VERSION_FLUX;
         }
         if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
             return VERSION_SD3;
@@ -1495,16 +1486,7 @@ SDVersion ModelLoader::get_sd_version() {
             // break;
         }
     }
-    if (is_flux) {
-        if (is_schnell) {
-            GGML_ASSERT(!is_lite);
-            return VERSION_FLUX_SCHNELL;
-        } else if (is_lite) {
-            return VERSION_FLUX_LITE;
-        } else {
-            return VERSION_FLUX_DEV;
-        }
-    }
+
     if (token_embedding_weight.ne[0] == 768) {
         return VERSION_SD1;
     } else if (token_embedding_weight.ne[0] == 1024) {

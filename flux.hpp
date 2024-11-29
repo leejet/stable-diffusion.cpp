@@ -834,16 +834,43 @@ namespace Flux {
         FluxRunner(ggml_backend_t backend,
                    std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
                    const std::string prefix                            = "",
-                   SDVersion version                                   = VERSION_FLUX_DEV,
-                   bool flash_attn   = false)
+                   bool flash_attn                                     = false)
             : GGMLRunner(backend) {
-            flux_params.flash_attn = flash_attn;
-            if (version == VERSION_FLUX_SCHNELL) {
-                flux_params.guidance_embed = false;
+            flux_params.flash_attn          = flash_attn;
+            flux_params.guidance_embed      = false;
+            flux_params.depth               = 0;
+            flux_params.depth_single_blocks = 0;
+            for (auto pair : tensor_types) {
+                std::string tensor_name = pair.first;
+                if (tensor_name.find("model.diffusion_model.") == std::string::npos)
+                    continue;
+                if (tensor_name.find("guidance_in.in_layer.weight") != std::string::npos) {
+                    // not schnell
+                    flux_params.guidance_embed = true;
+                }
+                size_t db = tensor_name.find("double_blocks.");
+                if (db != std::string::npos) {
+                    tensor_name     = tensor_name.substr(db);  // remove prefix
+                    int block_depth = atoi(tensor_name.substr(14, tensor_name.find(".", 14)).c_str());
+                    if (block_depth + 1 > flux_params.depth) {
+                        flux_params.depth = block_depth + 1;
+                    }
+                }
+                size_t sb = tensor_name.find("single_blocks.");
+                if (sb != std::string::npos) {
+                    tensor_name     = tensor_name.substr(sb);  // remove prefix
+                    int block_depth = atoi(tensor_name.substr(14, tensor_name.find(".", 14)).c_str());
+                    if (block_depth + 1 > flux_params.depth_single_blocks) {
+                        flux_params.depth_single_blocks = block_depth + 1;
+                    }
+                }
             }
-            if (version == VERSION_FLUX_LITE) {
-                flux_params.depth = 8;
+
+            LOG_INFO("Flux blocks: %d double, %d single", flux_params.depth, flux_params.depth_single_blocks);
+            if (!flux_params.guidance_embed) {
+                LOG_INFO("Flux guidance is disabled (Schnell mode)");
             }
+
             flux = Flux(flux_params);
             flux.init(params_ctx, tensor_types, prefix);
         }

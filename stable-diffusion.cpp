@@ -30,9 +30,7 @@ const char* model_version_to_str[] = {
     "SDXL",
     "SVD",
     "SD3.x",
-    "Flux Dev",
-    "Flux Schnell",
-    "Flux Lite 8B"};
+    "Flux"};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -331,7 +329,7 @@ public:
                 diffusion_model  = std::make_shared<MMDiTModel>(backend, model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
-                diffusion_model  = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn);
+                diffusion_model  = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, diffusion_flash_attn);
             } else {
                 if (id_embeddings_path.find("v2") != std::string::npos) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_loader.tensor_storages_types, embeddings_path, version, PM_VERSION_2);
@@ -533,9 +531,12 @@ public:
             denoiser = std::make_shared<DiscreteFlowDenoiser>();
         } else if (sd_version_is_flux(version)) {
             LOG_INFO("running in Flux FLOW mode");
-            float shift = 1.15f;
-            if (version == VERSION_FLUX_SCHNELL) {
-                shift = 1.0f;  // TODO: validate
+            float shift = 1.0f;  // TODO: validate
+            for (auto pair : model_loader.tensor_storages_types) {
+                if (pair.first.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
+                    shift = 1.15f;
+                    break;
+                }
             }
             denoiser = std::make_shared<FluxFlowDenoiser>(shift);
         } else if (is_using_v_parameterization) {
