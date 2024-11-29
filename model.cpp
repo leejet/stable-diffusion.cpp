@@ -1462,7 +1462,6 @@ SDVersion ModelLoader::get_sd_version() {
     bool is_flux    = false;
     bool is_schnell = true;
     bool is_lite    = true;
-    bool is_sd3     = false;
     for (auto& tensor_storage : tensor_storages) {
         if (tensor_storage.name.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
             is_schnell = false;
@@ -1473,14 +1472,8 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.8") != std::string::npos) {
             is_lite = false;
         }
-        if (tensor_storage.name.find("joint_blocks.0.x_block.attn2.ln_q.weight") != std::string::npos) {
-            return VERSION_SD3_5_2B;
-        }
-        if (tensor_storage.name.find("joint_blocks.37.x_block.attn.ln_q.weight") != std::string::npos) {
-            return VERSION_SD3_5_8B;
-        }
-        if (tensor_storage.name.find("model.diffusion_model.joint_blocks.23.") != std::string::npos) {
-            is_sd3 = true;
+        if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
+            return VERSION_SD3;
         }
         if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos) {
             return VERSION_SDXL;
@@ -1511,9 +1504,6 @@ SDVersion ModelLoader::get_sd_version() {
         } else {
             return VERSION_FLUX_DEV;
         }
-    }
-    if (is_sd3) {
-        return VERSION_SD3_2B;
     }
     if (token_embedding_weight.ne[0] == 768) {
         return VERSION_SD1;

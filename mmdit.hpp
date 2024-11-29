@@ -637,7 +637,6 @@ public:
 struct MMDiT : public GGMLBlock {
     // Diffusion model with a Transformer backbone.
 protected:
-    SDVersion version                = VERSION_SD3_2B;
     int64_t input_size               = -1;
     int64_t patch_size               = 2;
     int64_t in_channels              = 16;
@@ -659,8 +658,7 @@ protected:
     }
 
 public:
-    MMDiT(SDVersion version = VERSION_SD3_2B)
-        : version(version) {
+    MMDiT(std::map<std::string, enum ggml_type>& tensor_types) {
         // input_size is always None
         // learn_sigma is always False
         // register_length is alwalys 0
@@ -672,48 +670,44 @@ public:
         // pos_embed_scaling_factor is not used
         // pos_embed_offset is not used
         // context_embedder_config is always {'target': 'torch.nn.Linear', 'params': {'in_features': 4096, 'out_features': 1536}}
-        if (version == VERSION_SD3_2B) {
-            input_size               = -1;
-            patch_size               = 2;
-            in_channels              = 16;
-            depth                    = 24;
-            mlp_ratio                = 4.0f;
-            adm_in_channels          = 2048;
-            out_channels             = 16;
-            pos_embed_max_size       = 192;
-            num_patchs               = 36864;  // 192 * 192
-            context_size             = 4096;
-            context_embedder_out_dim = 1536;
-        } else if (version == VERSION_SD3_5_8B) {
-            input_size               = -1;
-            patch_size               = 2;
-            in_channels              = 16;
-            depth                    = 38;
-            mlp_ratio                = 4.0f;
-            adm_in_channels          = 2048;
-            out_channels             = 16;
-            pos_embed_max_size       = 192;
-            num_patchs               = 36864;  // 192 * 192
-            context_size             = 4096;
-            context_embedder_out_dim = 2432;
-            qk_norm                  = "rms";
-        } else if (version == VERSION_SD3_5_2B) {
-            input_size               = -1;
-            patch_size               = 2;
-            in_channels              = 16;
-            depth                    = 24;
-            d_self                   = 12;
-            mlp_ratio                = 4.0f;
-            adm_in_channels          = 2048;
-            out_channels             = 16;
-            pos_embed_max_size       = 384;
-            num_patchs               = 147456;
-            context_size             = 4096;
-            context_embedder_out_dim = 1536;
-            qk_norm                  = "rms";
+
+        // read tensors from tensor_types
+        for (auto pair : tensor_types) {
+            std::string tensor_name = pair.first;
+            if (tensor_name.find("model.diffusion_model.") == std::string::npos)
+                continue;
+            size_t jb = tensor_name.find("joint_blocks.");
+            if (jb != std::string::npos) {
+                tensor_name = tensor_name.substr(jb);  // remove prefix
+                int block_depth = atoi(tensor_name.substr(13, tensor_name.find(".", 13)).c_str());
+                if (block_depth + 1 > depth) {
+                    depth = block_depth + 1;
+                }
+                if (tensor_name.find("attn.ln") != std::string::npos) {
+                    if (tensor_name.find(".bias") != std::string::npos) {
+                        qk_norm = "ln";
+                    } else {
+                        qk_norm = "rms";
+                    }
+                }
+                if (tensor_name.find("attn2") != std::string::npos) {
+                    if (block_depth > d_self) {
+                        d_self = block_depth;
+                    }
+                }
+            }
         }
+
+        if (d_self >= 0) {
+            pos_embed_max_size *= 2;
+            num_patchs *= 4;
+        }
+
+        LOG_INFO("MMDiT layers: %d (including %d MMDiT-x layers)", depth, d_self + 1);
+
         int64_t default_out_channels = in_channels;
         hidden_size                  = 64 * depth;
+        context_embedder_out_dim     = 64 * depth;
         int64_t num_heads            = depth;
 
         blocks["x_embedder"] = std::shared_ptr<GGMLBlock>(new PatchEmbed(input_size, patch_size, in_channels, hidden_size, true));
@@ -879,9 +873,8 @@ struct MMDiTRunner : public GGMLRunner {
 
     MMDiTRunner(ggml_backend_t backend,
                 std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
-                const std::string prefix                            = "",
-                SDVersion version                                   = VERSION_SD3_2B)
-        : GGMLRunner(backend), mmdit(version) {
+                const std::string prefix                            = "")
+        : GGMLRunner(backend), mmdit(tensor_types) {
         mmdit.init(params_ctx, tensor_types, prefix);
     }
 

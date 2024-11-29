@@ -83,9 +83,8 @@ struct MMDiTModel : public DiffusionModel {
     MMDiTRunner mmdit;
 
     MMDiTModel(ggml_backend_t backend,
-               std::map<std::string, enum ggml_type>& tensor_types,
-               SDVersion version = VERSION_SD3_2B)
-        : mmdit(backend, tensor_types, "model.diffusion_model", version) {
+               std::map<std::string, enum ggml_type>& tensor_types)
+        : mmdit(backend, tensor_types, "model.diffusion_model") {
     }
 
     void alloc_params_buffer() {

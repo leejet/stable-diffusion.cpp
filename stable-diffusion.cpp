@@ -29,11 +29,9 @@ const char* model_version_to_str[] = {
     "SD 2.x",
     "SDXL",
     "SVD",
-    "SD3 2B",
+    "SD3.x",
     "Flux Dev",
     "Flux Schnell",
-    "SD3.5 8B",
-    "SD3.5 2B",
     "Flux Lite 8B"};
 
 const char* sampling_methods_str[] = {
@@ -330,7 +328,7 @@ public:
                     LOG_WARN("flash attention in this diffusion model is currently unsupported!");
                 }
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
-                diffusion_model  = std::make_shared<MMDiTModel>(backend, model_loader.tensor_storages_types, version);
+                diffusion_model  = std::make_shared<MMDiTModel>(backend, model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
                 diffusion_model  = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn);

@@ -22,11 +22,9 @@ enum SDVersion {
     VERSION_SD2,
     VERSION_SDXL,
     VERSION_SVD,
-    VERSION_SD3_2B,
+    VERSION_SD3,
     VERSION_FLUX_DEV,
     VERSION_FLUX_SCHNELL,
-    VERSION_SD3_5_8B,
-    VERSION_SD3_5_2B,
     VERSION_FLUX_LITE,
     VERSION_COUNT,
 };
@@ -39,7 +37,7 @@ static inline bool sd_version_is_flux(SDVersion version) {
 }
 
 static inline bool sd_version_is_sd3(SDVersion version) {
-    if (version == VERSION_SD3_2B || version == VERSION_SD3_5_8B || version == VERSION_SD3_5_2B) {
+    if (version == VERSION_SD3) {
         return true;
     }
     return false;
