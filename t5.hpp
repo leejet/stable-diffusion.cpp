@@ -357,7 +357,7 @@ public:
 
         BuildTrie(&pieces);
     }
-    ~T5UniGramTokenizer() {};
+    ~T5UniGramTokenizer(){};
 
     std::string Normalize(const std::string& input) const {
         // Ref: https://github.com/huggingface/tokenizers/blob/1ff56c0c70b045f0cd82da1af9ac08cd4c7a6f9f/bindings/python/py_src/tokenizers/implementations/sentencepiece_unigram.py#L29

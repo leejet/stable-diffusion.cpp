@@ -196,7 +196,7 @@ struct TinyAutoEncoder : public GGMLRunner {
           GGMLRunner(backend) {
         taesd.init(params_ctx, tensor_types, prefix);
     }
-    
+
     std::string get_desc() {
         return "taesd";
     }

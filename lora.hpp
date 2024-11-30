@@ -17,7 +17,7 @@ struct LoraModel : public GGMLRunner {
 
     LoraModel(ggml_backend_t backend,
               const std::string& file_path = "",
-              const std::string prefix    = "")
+              const std::string prefix     = "")
         : file_path(file_path), GGMLRunner(backend) {
         if (!model_loader.init_from_file(file_path, prefix)) {
             load_failed = true;

@@ -678,7 +678,7 @@ public:
                 continue;
             size_t jb = tensor_name.find("joint_blocks.");
             if (jb != std::string::npos) {
-                tensor_name = tensor_name.substr(jb);  // remove prefix
+                tensor_name     = tensor_name.substr(jb);  // remove prefix
                 int block_depth = atoi(tensor_name.substr(13, tensor_name.find(".", 13)).c_str());
                 if (block_depth + 1 > depth) {
                     depth = block_depth + 1;

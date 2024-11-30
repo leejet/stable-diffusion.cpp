@@ -675,13 +675,13 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx
 #if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL) && !defined(SD_USE_VULKAN) && !defined(SD_USE_SYCL)
     struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, n_token, d_head]
 #else
-    float d_head = (float)q->ne[0];
+    float d_head           = (float)q->ne[0];
     struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, n_token, n_k]
     kq                     = ggml_scale_inplace(ctx, kq, 1.0f / sqrt(d_head));
     if (mask) {
         kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
     }
-    kq = ggml_soft_max_inplace(ctx, kq);
+    kq                      = ggml_soft_max_inplace(ctx, kq);
     struct ggml_tensor* kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, n_token, d_head]
 #endif
     return kqv;
