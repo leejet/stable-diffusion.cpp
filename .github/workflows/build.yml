@@ -164,8 +164,8 @@ jobs:
             defines: "-DGGML_AVX512=ON -DSD_BUILD_SHARED_LIBS=ON"
           - build: "cuda12"
             defines: "-DSD_CUBLAS=ON -DSD_BUILD_SHARED_LIBS=ON"
-          - build: "rocm5.5"
-            defines: '-G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS="gfx1100;gfx1102;gfx1030" -DSD_BUILD_SHARED_LIBS=ON'
+          # - build: "rocm5.5"
+          #   defines: '-G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS="gfx1100;gfx1102;gfx1030" -DSD_BUILD_SHARED_LIBS=ON'
           - build: 'vulkan'
             defines: "-DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON"
     steps:
