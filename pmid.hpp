@@ -623,15 +623,15 @@ public:
     std::vector<float> zeros_right;
 
 public:
-    PhotoMakerIDEncoder(ggml_backend_t backend, ggml_type wtype, SDVersion version = VERSION_SDXL, PMVersion pm_v = PM_VERSION_1, float sty = 20.f)
-        : GGMLRunner(backend, wtype),
+    PhotoMakerIDEncoder(ggml_backend_t backend, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix, SDVersion version = VERSION_SDXL, PMVersion pm_v = PM_VERSION_1, float sty = 20.f)
+        : GGMLRunner(backend),
           version(version),
           pm_version(pm_v),
           style_strength(sty) {
         if (pm_version == PM_VERSION_1) {
-            id_encoder.init(params_ctx, wtype);
+            id_encoder.init(params_ctx, tensor_types, prefix);
         } else if (pm_version == PM_VERSION_2) {
-            id_encoder2.init(params_ctx, wtype);
+            id_encoder2.init(params_ctx, tensor_types, prefix);
         }
     }
 
@@ -780,11 +780,10 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
     bool applied     = false;
 
     PhotoMakerIDEmbed(ggml_backend_t backend,
-                      ggml_type wtype,
                       ModelLoader* ml,
                       const std::string& file_path = "",
                       const std::string& prefix    = "")
-        : file_path(file_path), GGMLRunner(backend, wtype), model_loader(ml) {
+        : file_path(file_path), GGMLRunner(backend), model_loader(ml) {
         if (!model_loader->init_from_file(file_path, prefix)) {
             load_failed = true;
         }

@@ -927,6 +927,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
         GGML_ASSERT(ggml_nbytes(dummy) == tensor_storage.nbytes());
 
         tensor_storages.push_back(tensor_storage);
+        tensor_storages_types[tensor_storage.name] = tensor_storage.type;
     }
 
     gguf_free(ctx_gguf_);
@@ -1071,6 +1072,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         tensor_storages.push_back(tensor_storage);
+        tensor_storages_types[tensor_storage.name] = tensor_storage.type;
 
         // LOG_DEBUG("%s %s", tensor_storage.to_string().c_str(), dtype.c_str());
     }
@@ -1296,7 +1298,7 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                                  zip_t* zip,
                                  std::string dir,
                                  size_t file_index,
-                                 const std::string& prefix) {
+                                 const std::string prefix) {
     uint8_t* buffer_end = buffer + buffer_size;
     if (buffer[0] == 0x80) {  // proto
         if (buffer[1] != 2) {
@@ -1401,6 +1403,8 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                         // printf(" ZIP got tensor %s \n ", reader.tensor_storage.name.c_str());
                         reader.tensor_storage.name = prefix + reader.tensor_storage.name;
                         tensor_storages.push_back(reader.tensor_storage);
+                        tensor_storages_types[reader.tensor_storage.name] = reader.tensor_storage.type;
+
                         // LOG_DEBUG("%s", reader.tensor_storage.name.c_str());
                         // reset
                         reader = PickleTensorReader();
@@ -1455,28 +1459,12 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
 
 SDVersion ModelLoader::get_sd_version() {
     TensorStorage token_embedding_weight;
-    bool is_flux    = false;
-    bool is_schnell = true;
-    bool is_lite    = true;
-    bool is_sd3     = false;
     for (auto& tensor_storage : tensor_storages) {
-        if (tensor_storage.name.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
-            is_schnell = false;
-        }
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
-            is_flux = true;
+            return VERSION_FLUX;
         }
-        if (tensor_storage.name.find("model.diffusion_model.double_blocks.8") != std::string::npos) {
-            is_lite = false;
-        }
-        if (tensor_storage.name.find("joint_blocks.0.x_block.attn2.ln_q.weight") != std::string::npos) {
-            return VERSION_SD3_5_2B;
-        }
-        if (tensor_storage.name.find("joint_blocks.37.x_block.attn.ln_q.weight") != std::string::npos) {
-            return VERSION_SD3_5_8B;
-        }
-        if (tensor_storage.name.find("model.diffusion_model.joint_blocks.23.") != std::string::npos) {
-            is_sd3 = true;
+        if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
+            return VERSION_SD3;
         }
         if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos) {
             return VERSION_SDXL;
@@ -1498,19 +1486,7 @@ SDVersion ModelLoader::get_sd_version() {
             // break;
         }
     }
-    if (is_flux) {
-        if (is_schnell) {
-            GGML_ASSERT(!is_lite);
-            return VERSION_FLUX_SCHNELL;
-        } else if (is_lite) {
-            return VERSION_FLUX_LITE;
-        } else {
-            return VERSION_FLUX_DEV;
-        }
-    }
-    if (is_sd3) {
-        return VERSION_SD3_2B;
-    }
+
     if (token_embedding_weight.ne[0] == 768) {
         return VERSION_SD1;
     } else if (token_embedding_weight.ne[0] == 1024) {
@@ -1601,6 +1577,21 @@ ggml_type ModelLoader::get_vae_wtype() {
         }
     }
     return GGML_TYPE_COUNT;
+}
+
+void ModelLoader::set_wtype_override(ggml_type wtype, std::string prefix) {
+    for (auto& pair : tensor_storages_types) {
+        if (prefix.size() < 1 || pair.first.substr(0, prefix.size()) == prefix) {
+            for (auto& tensor_storage : tensor_storages) {
+                if (tensor_storage.name == pair.first) {
+                    if (tensor_should_be_converted(tensor_storage, wtype)) {
+                        pair.second = wtype;
+                    }
+                    break;
+                }
+            }
+        }
+    }
 }
 
 std::string ModelLoader::load_merges() {

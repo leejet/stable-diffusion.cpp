@@ -29,12 +29,8 @@ const char* model_version_to_str[] = {
     "SD 2.x",
     "SDXL",
     "SVD",
-    "SD3 2B",
-    "Flux Dev",
-    "Flux Schnell",
-    "SD3.5 8B",
-    "SD3.5 2B",
-    "Flux Lite 8B"};
+    "SD3.x",
+    "Flux"};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -264,16 +260,18 @@ public:
             conditioner_wtype     = wtype;
             diffusion_model_wtype = wtype;
             vae_wtype             = wtype;
+            model_loader.set_wtype_override(wtype);
         }
 
         if (version == VERSION_SDXL) {
             vae_wtype = GGML_TYPE_F32;
+            model_loader.set_wtype_override(GGML_TYPE_F32, "vae.");
         }
 
-        LOG_INFO("Weight type:                 %s", ggml_type_name(model_wtype));
-        LOG_INFO("Conditioner weight type:     %s", ggml_type_name(conditioner_wtype));
-        LOG_INFO("Diffusion model weight type: %s", ggml_type_name(diffusion_model_wtype));
-        LOG_INFO("VAE weight type:             %s", ggml_type_name(vae_wtype));
+        LOG_INFO("Weight type:                 %s", model_wtype != SD_TYPE_COUNT ? ggml_type_name(model_wtype) : "??");
+        LOG_INFO("Conditioner weight type:     %s", conditioner_wtype != SD_TYPE_COUNT ? ggml_type_name(conditioner_wtype) : "??");
+        LOG_INFO("Diffusion model weight type: %s", diffusion_model_wtype != SD_TYPE_COUNT ? ggml_type_name(diffusion_model_wtype) : "??");
+        LOG_INFO("VAE weight type:             %s", vae_wtype != SD_TYPE_COUNT ? ggml_type_name(vae_wtype) : "??");
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
@@ -294,15 +292,15 @@ public:
         }
 
         if (version == VERSION_SVD) {
-            clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend, conditioner_wtype);
+            clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend, model_loader.tensor_storages_types);
             clip_vision->alloc_params_buffer();
             clip_vision->get_param_tensors(tensors);
 
-            diffusion_model = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version);
+            diffusion_model = std::make_shared<UNetModel>(backend, model_loader.tensor_storages_types, version);
             diffusion_model->alloc_params_buffer();
             diffusion_model->get_param_tensors(tensors);
 
-            first_stage_model = std::make_shared<AutoEncoderKL>(backend, vae_wtype, vae_decode_only, true, version);
+            first_stage_model = std::make_shared<AutoEncoderKL>(backend, model_loader.tensor_storages_types, "first_stage_model", vae_decode_only, true, version);
             LOG_DEBUG("vae_decode_only %d", vae_decode_only);
             first_stage_model->alloc_params_buffer();
             first_stage_model->get_param_tensors(tensors, "first_stage_model");
@@ -327,19 +325,20 @@ public:
                 if (diffusion_flash_attn) {
                     LOG_WARN("flash attention in this diffusion model is currently unsupported!");
                 }
-                cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, conditioner_wtype);
-                diffusion_model  = std::make_shared<MMDiTModel>(backend, diffusion_model_wtype, version);
+                cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
+                diffusion_model  = std::make_shared<MMDiTModel>(backend, model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
-                cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, conditioner_wtype);
-                diffusion_model  = std::make_shared<FluxModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
+                cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
+                diffusion_model  = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, diffusion_flash_attn);
             } else {
                 if (id_embeddings_path.find("v2") != std::string::npos) {
-                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version, PM_VERSION_2);
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_loader.tensor_storages_types, embeddings_path, version, PM_VERSION_2);
                 } else {
-                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, conditioner_wtype, embeddings_path, version);
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_loader.tensor_storages_types, embeddings_path, version);
                 }
-                diffusion_model = std::make_shared<UNetModel>(backend, diffusion_model_wtype, version, diffusion_flash_attn);
+                diffusion_model = std::make_shared<UNetModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn);
             }
+
             cond_stage_model->alloc_params_buffer();
             cond_stage_model->get_param_tensors(tensors);
 
@@ -353,11 +352,11 @@ public:
                 } else {
                     vae_backend = backend;
                 }
-                first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend, vae_wtype, vae_decode_only, false, version);
+                first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend, model_loader.tensor_storages_types, "first_stage_model", vae_decode_only, false, version);
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else {
-                tae_first_stage = std::make_shared<TinyAutoEncoder>(backend, vae_wtype, vae_decode_only);
+                tae_first_stage = std::make_shared<TinyAutoEncoder>(backend, model_loader.tensor_storages_types, "decoder.layers", vae_decode_only);
             }
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
 
@@ -369,17 +368,17 @@ public:
                 } else {
                     controlnet_backend = backend;
                 }
-                control_net = std::make_shared<ControlNet>(controlnet_backend, diffusion_model_wtype, version);
+                control_net = std::make_shared<ControlNet>(controlnet_backend, model_loader.tensor_storages_types, version);
             }
 
             if (id_embeddings_path.find("v2") != std::string::npos) {
-                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_wtype, version, PM_VERSION_2);
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_loader.tensor_storages_types, "pmid", version, PM_VERSION_2);
                 LOG_INFO("using PhotoMaker Version 2");
             } else {
-                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_wtype, version);
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_loader.tensor_storages_types, "pmid", version);
             }
             if (id_embeddings_path.size() > 0) {
-                pmid_lora = std::make_shared<LoraModel>(backend, model_wtype, id_embeddings_path, "");
+                pmid_lora = std::make_shared<LoraModel>(backend, id_embeddings_path, "");
                 if (!pmid_lora->load_from_file(true)) {
                     LOG_WARN("load photomaker lora tensors from %s failed", id_embeddings_path.c_str());
                     return false;
@@ -532,9 +531,12 @@ public:
             denoiser = std::make_shared<DiscreteFlowDenoiser>();
         } else if (sd_version_is_flux(version)) {
             LOG_INFO("running in Flux FLOW mode");
-            float shift = 1.15f;
-            if (version == VERSION_FLUX_SCHNELL) {
-                shift = 1.0f;  // TODO: validate
+            float shift = 1.0f;  // TODO: validate
+            for (auto pair : model_loader.tensor_storages_types) {
+                if (pair.first.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
+                    shift = 1.15f;
+                    break;
+                }
             }
             denoiser = std::make_shared<FluxFlowDenoiser>(shift);
         } else if (is_using_v_parameterization) {
@@ -633,7 +635,7 @@ public:
             LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
             return;
         }
-        LoraModel lora(backend, model_wtype, file_path);
+        LoraModel lora(backend, file_path);
         if (!lora.load_from_file()) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
             return;

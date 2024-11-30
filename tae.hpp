@@ -188,12 +188,13 @@ struct TinyAutoEncoder : public GGMLRunner {
     bool decode_only = false;
 
     TinyAutoEncoder(ggml_backend_t backend,
-                    ggml_type wtype,
+                    std::map<std::string, enum ggml_type>& tensor_types,
+                    const std::string prefix,
                     bool decoder_only = true)
         : decode_only(decoder_only),
           taesd(decode_only),
-          GGMLRunner(backend, wtype) {
-        taesd.init(params_ctx, wtype);
+          GGMLRunner(backend) {
+        taesd.init(params_ctx, tensor_types, prefix);
     }
 
     std::string get_desc() {

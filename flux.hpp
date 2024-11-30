@@ -35,8 +35,9 @@ namespace Flux {
         int64_t hidden_size;
         float eps;
 
-        void init_params(struct ggml_context* ctx, ggml_type wtype) {
-            params["scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hidden_size);
+        void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+            ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "scale") != tensor_types.end()) ? tensor_types[prefix + "scale"] : GGML_TYPE_F32;
+            params["scale"] = ggml_new_tensor_1d(ctx, wtype, hidden_size);
         }
 
     public:
@@ -823,25 +824,55 @@ namespace Flux {
     };
 
     struct FluxRunner : public GGMLRunner {
+        static std::map<std::string, enum ggml_type> empty_tensor_types;
+
     public:
         FluxParams flux_params;
         Flux flux;
         std::vector<float> pe_vec;  // for cache
 
         FluxRunner(ggml_backend_t backend,
-                   ggml_type wtype,
-                   SDVersion version = VERSION_FLUX_DEV,
-                   bool flash_attn   = false)
-            : GGMLRunner(backend, wtype) {
-            flux_params.flash_attn = flash_attn;
-            if (version == VERSION_FLUX_SCHNELL) {
-                flux_params.guidance_embed = false;
+                   std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
+                   const std::string prefix                            = "",
+                   bool flash_attn                                     = false)
+            : GGMLRunner(backend) {
+            flux_params.flash_attn          = flash_attn;
+            flux_params.guidance_embed      = false;
+            flux_params.depth               = 0;
+            flux_params.depth_single_blocks = 0;
+            for (auto pair : tensor_types) {
+                std::string tensor_name = pair.first;
+                if (tensor_name.find("model.diffusion_model.") == std::string::npos)
+                    continue;
+                if (tensor_name.find("guidance_in.in_layer.weight") != std::string::npos) {
+                    // not schnell
+                    flux_params.guidance_embed = true;
+                }
+                size_t db = tensor_name.find("double_blocks.");
+                if (db != std::string::npos) {
+                    tensor_name     = tensor_name.substr(db);  // remove prefix
+                    int block_depth = atoi(tensor_name.substr(14, tensor_name.find(".", 14)).c_str());
+                    if (block_depth + 1 > flux_params.depth) {
+                        flux_params.depth = block_depth + 1;
+                    }
+                }
+                size_t sb = tensor_name.find("single_blocks.");
+                if (sb != std::string::npos) {
+                    tensor_name     = tensor_name.substr(sb);  // remove prefix
+                    int block_depth = atoi(tensor_name.substr(14, tensor_name.find(".", 14)).c_str());
+                    if (block_depth + 1 > flux_params.depth_single_blocks) {
+                        flux_params.depth_single_blocks = block_depth + 1;
+                    }
+                }
             }
-            if (version == VERSION_FLUX_LITE) {
-                flux_params.depth = 8;
+
+            LOG_INFO("Flux blocks: %d double, %d single", flux_params.depth, flux_params.depth_single_blocks);
+            if (!flux_params.guidance_embed) {
+                LOG_INFO("Flux guidance is disabled (Schnell mode)");
             }
+
             flux = Flux(flux_params);
-            flux.init(params_ctx, wtype);
+            flux.init(params_ctx, tensor_types, prefix);
         }
 
         std::string get_desc() {
@@ -959,7 +990,7 @@ namespace Flux {
             // ggml_backend_t backend    = ggml_backend_cuda_init(0);
             ggml_backend_t backend           = ggml_backend_cpu_init();
             ggml_type model_data_type        = GGML_TYPE_Q8_0;
-            std::shared_ptr<FluxRunner> flux = std::shared_ptr<FluxRunner>(new FluxRunner(backend, model_data_type));
+            std::shared_ptr<FluxRunner> flux = std::shared_ptr<FluxRunner>(new FluxRunner(backend));
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 

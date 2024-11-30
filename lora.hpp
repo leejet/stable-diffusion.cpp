@@ -16,10 +16,9 @@ struct LoraModel : public GGMLRunner {
     ggml_tensor* zero_index         = NULL;
 
     LoraModel(ggml_backend_t backend,
-              ggml_type wtype,
               const std::string& file_path = "",
-              const std::string& prefix    = "")
-        : file_path(file_path), GGMLRunner(backend, wtype) {
+              const std::string prefix     = "")
+        : file_path(file_path), GGMLRunner(backend) {
         if (!model_loader.init_from_file(file_path, prefix)) {
             load_failed = true;
         }

@@ -532,11 +532,12 @@ struct UNetModelRunner : public GGMLRunner {
     UnetModelBlock unet;
 
     UNetModelRunner(ggml_backend_t backend,
-                    ggml_type wtype,
+                    std::map<std::string, enum ggml_type>& tensor_types,
+                    const std::string prefix,
                     SDVersion version = VERSION_SD1,
                     bool flash_attn   = false)
-        : GGMLRunner(backend, wtype), unet(version, flash_attn) {
-        unet.init(params_ctx, wtype);
+        : GGMLRunner(backend), unet(version, flash_attn) {
+        unet.init(params_ctx, tensor_types, prefix);
     }
 
     std::string get_desc() {

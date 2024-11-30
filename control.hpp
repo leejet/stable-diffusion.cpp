@@ -317,10 +317,10 @@ struct ControlNet : public GGMLRunner {
     bool guided_hint_cached         = false;
 
     ControlNet(ggml_backend_t backend,
-               ggml_type wtype,
+               std::map<std::string, enum ggml_type>& tensor_types,
                SDVersion version = VERSION_SD1)
-        : GGMLRunner(backend, wtype), control_net(version) {
-        control_net.init(params_ctx, wtype);
+        : GGMLRunner(backend), control_net(version) {
+        control_net.init(params_ctx, tensor_types, "");
     }
 
     ~ControlNet() {

@@ -25,6 +25,8 @@
 #include "ggml-cpu.h"
 #include "ggml.h"
 
+#include "model.h"
+
 #ifdef SD_USE_CUBLAS
 #include "ggml-cuda.h"
 #endif
@@ -673,13 +675,13 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx
 #if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL) && !defined(SD_USE_VULKAN) && !defined(SD_USE_SYCL)
     struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, n_token, d_head]
 #else
-    float d_head = (float)q->ne[0];
+    float d_head           = (float)q->ne[0];
     struct ggml_tensor* kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, n_token, n_k]
     kq                     = ggml_scale_inplace(ctx, kq, 1.0f / sqrt(d_head));
     if (mask) {
         kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
     }
-    kq = ggml_soft_max_inplace(ctx, kq);
+    kq                      = ggml_soft_max_inplace(ctx, kq);
     struct ggml_tensor* kqv = ggml_mul_mat(ctx, v, kq);  // [N * n_head, n_token, d_head]
 #endif
     return kqv;
@@ -964,7 +966,6 @@ protected:
 
     std::map<struct ggml_tensor*, const void*> backend_tensor_data_map;
 
-    ggml_type wtype        = GGML_TYPE_F32;
     ggml_backend_t backend = NULL;
 
     void alloc_params_ctx() {
@@ -1040,8 +1041,8 @@ protected:
 public:
     virtual std::string get_desc() = 0;
 
-    GGMLRunner(ggml_backend_t backend, ggml_type wtype = GGML_TYPE_F32)
-        : backend(backend), wtype(wtype) {
+    GGMLRunner(ggml_backend_t backend)
+        : backend(backend) {
         alloc_params_ctx();
     }
 
@@ -1170,20 +1171,22 @@ protected:
     GGMLBlockMap blocks;
     ParameterMap params;
 
-    void init_blocks(struct ggml_context* ctx, ggml_type wtype) {
+    void init_blocks(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
         for (auto& pair : blocks) {
             auto& block = pair.second;
-
-            block->init(ctx, wtype);
+            block->init(ctx, tensor_types, prefix + pair.first);
         }
     }
 
-    virtual void init_params(struct ggml_context* ctx, ggml_type wtype) {}
+    virtual void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {}
 
 public:
-    void init(struct ggml_context* ctx, ggml_type wtype) {
-        init_blocks(ctx, wtype);
-        init_params(ctx, wtype);
+    void init(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
+        if (prefix.size() > 0) {
+            prefix = prefix + ".";
+        }
+        init_blocks(ctx, tensor_types, prefix);
+        init_params(ctx, tensor_types, prefix);
     }
 
     size_t get_params_num() {
@@ -1239,13 +1242,15 @@ protected:
     bool bias;
     bool force_f32;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+        enum ggml_type wtype = (tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
         if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
             wtype = GGML_TYPE_F32;
         }
         params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
         if (bias) {
-            params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_features);
+            enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.ypes.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+            params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_features);
         }
     }
 
@@ -1273,9 +1278,9 @@ class Embedding : public UnaryBlock {
 protected:
     int64_t embedding_dim;
     int64_t num_embeddings;
-
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["weight"] = ggml_new_tensor_2d(ctx, wtype, embedding_dim, num_embeddings);
+    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+        enum ggml_type wtype = (tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+        params["weight"]     = ggml_new_tensor_2d(ctx, wtype, embedding_dim, num_embeddings);
     }
 
 public:
@@ -1313,10 +1318,12 @@ protected:
     std::pair<int, int> dilation;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["weight"] = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kernel_size.second, kernel_size.first, in_channels, out_channels);
+    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F16;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F16;
+        params["weight"]     = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels, out_channels);
         if (bias) {
-            params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
+            enum ggml_type wtype = GGML_TYPE_F32;  // (tensor_types.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+            params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_channels);
         }
     }
 
@@ -1356,10 +1363,12 @@ protected:
     int64_t dilation;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["weight"] = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, 1, kernel_size, in_channels, out_channels);  // 5d => 4d
+    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F16;                                                              //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F16;
+        params["weight"]     = ggml_new_tensor_4d(ctx, wtype, 1, kernel_size, in_channels, out_channels);  // 5d => 4d
         if (bias) {
-            params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
+            enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+            params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_channels);
         }
     }
 
@@ -1398,11 +1407,13 @@ protected:
     bool elementwise_affine;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
         if (elementwise_affine) {
-            params["weight"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, normalized_shape);
+            enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.ypes.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+            params["weight"]     = ggml_new_tensor_1d(ctx, wtype, normalized_shape);
             if (bias) {
-                params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, normalized_shape);
+                enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.ypes.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+                params["bias"]       = ggml_new_tensor_1d(ctx, wtype, normalized_shape);
             }
         }
     }
@@ -1438,10 +1449,12 @@ protected:
     float eps;
     bool affine;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
         if (affine) {
-            params["weight"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_channels);
-            params["bias"]   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, num_channels);
+            enum ggml_type wtype      = GGML_TYPE_F32;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+            enum ggml_type bias_wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+            params["weight"]          = ggml_new_tensor_1d(ctx, wtype, num_channels);
+            params["bias"]            = ggml_new_tensor_1d(ctx, bias_wtype, num_channels);
         }
     }
 
