@@ -196,7 +196,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now\n");
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
-    printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)\n");
+    printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
     printf("                                     If not specified, the default is the type of the weight file\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
@@ -346,30 +346,30 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            std::string type = argv[i];
-            if (type == "f32") {
-                params.wtype = SD_TYPE_F32;
-            } else if (type == "f16") {
-                params.wtype = SD_TYPE_F16;
-            } else if (type == "q4_0") {
-                params.wtype = SD_TYPE_Q4_0;
-            } else if (type == "q4_1") {
-                params.wtype = SD_TYPE_Q4_1;
-            } else if (type == "q5_0") {
-                params.wtype = SD_TYPE_Q5_0;
-            } else if (type == "q5_1") {
-                params.wtype = SD_TYPE_Q5_1;
-            } else if (type == "q8_0") {
-                params.wtype = SD_TYPE_Q8_0;
-            } else if (type == "q2_k") {
-                params.wtype = SD_TYPE_Q2_K;
-            } else if (type == "q3_k") {
-                params.wtype = SD_TYPE_Q3_K;
-            } else if (type == "q4_k") {
-                params.wtype = SD_TYPE_Q4_K;
-            } else {
-                fprintf(stderr, "error: invalid weight format %s, must be one of [f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k]\n",
-                        type.c_str());
+            std::string type        = argv[i];
+            bool found              = false;
+            std::string valid_types = "";
+            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+                auto trait = ggml_get_type_traits((ggml_type)i);
+                std::string name(trait->type_name);
+                if (name == "f32" || trait->to_float && trait->type_size) {
+                    if (i)
+                        valid_types += ", ";
+                    valid_types += name;
+                    if (type == name) {
+                        if (ggml_quantize_requires_imatrix((ggml_type)i)) {
+                            printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
+                        }
+                        params.wtype = (enum sd_type_t)i;
+                        found        = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
+                        type.c_str(),
+                        valid_types.c_str());
                 exit(1);
             }
         } else if (arg == "--lora-model-dir") {
