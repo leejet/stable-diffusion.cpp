@@ -45,7 +45,7 @@ set ninja=C:\Program Files\ninja\ninja.exe
 ```
 ## Building stable-diffusion.cpp
 
-The thing different from the regular CPU build is `-DSD_HIPBLAS=ON` ,
+The thing different from the regular CPU build is `-DSD_HIP=ON` ,
 `-G "Ninja"`, `-DCMAKE_C_COMPILER=clang`, `-DCMAKE_CXX_COMPILER=clang++`, `-DAMDGPU_TARGETS=gfx1100`
 
 >**Notice**: check the `clang` and `clang++` information:
@@ -78,7 +78,7 @@ option:
 ```commandline
 mkdir build
 cd build
-cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS=gfx1100
+cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIP=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS=gfx1100
 cmake --build . --config Release
 ```
 

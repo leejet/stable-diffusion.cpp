@@ -27,7 +27,7 @@
 
 #include "model.h"
 
-#ifdef SD_USE_CUBLAS
+#ifdef SD_USE_CUDA
 #include "ggml-cuda.h"
 #endif
 
@@ -41,6 +41,14 @@
 
 #ifdef SD_USE_SYCL
 #include "ggml-sycl.h"
+#endif
+
+#ifdef SD_USE_CANN
+#include "ggml-cann.h"
+#endif
+
+#ifdef SD_USE_MUSA
+#include "ggml-musa.h"
 #endif
 
 #include "rng.hpp"
@@ -672,7 +680,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx
                                                         struct ggml_tensor* k,
                                                         struct ggml_tensor* v,
                                                         bool mask = false) {
-#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUBLAS) && !defined(SD_USE_METAL) && !defined(SD_USE_VULKAN) && !defined(SD_USE_SYCL)
+#if defined(SD_USE_FLASH_ATTENTION) && !defined(SD_USE_CUDA) && !defined(SD_USE_METAL) && !defined(SD_USE_VULKAN) && !defined(SD_USE_SYCL) && !defined(SD_USE_CANN) && !defined(SD_USE_MUSA)
     struct ggml_tensor* kqv = ggml_flash_attn(ctx, q, k, v, false);  // [N * n_head, n_token, d_head]
 #else
     float d_head           = (float)q->ne[0];
@@ -828,7 +836,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_group_norm(struct ggml_context* ct
 }
 
 __STATIC_INLINE__ void ggml_backend_tensor_get_and_sync(ggml_backend_t backend, const struct ggml_tensor* tensor, void* data, size_t offset, size_t size) {
-#if defined(SD_USE_CUBLAS) || defined(SD_USE_SYCL)
+#if defined(SD_USE_CUDA) || defined(SD_USE_SYCL)
     if (!ggml_backend_is_cpu(backend)) {
         ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
         ggml_backend_synchronize(backend);
@@ -1138,11 +1146,6 @@ public:
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
 
-#ifdef SD_USE_METAL
-        if (ggml_backend_is_metal(backend)) {
-            ggml_backend_metal_set_n_cb(backend, n_threads);
-        }
-#endif
         ggml_backend_graph_compute(backend, gf);
 
 #ifdef GGML_PERF

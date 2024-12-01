@@ -155,27 +155,48 @@ public:
                         bool vae_on_cpu,
                         bool diffusion_flash_attn) {
         use_tiny_autoencoder = taesd_path.size() > 0;
-#ifdef SD_USE_CUBLAS
+#ifdef SD_USE_CUDA
+#ifdef SD_USE_HIP
+        LOG_DEBUG("Using HIP backend");
+#else
+#ifdef SD_USE_MUSA
+        LOG_DEBUG("Using MUSA backend");
+#else
         LOG_DEBUG("Using CUDA backend");
+#endif
+#endif
         backend = ggml_backend_cuda_init(0);
+        if (!backend) {
+            LOG_ERROR("CUDA backend init failed");
+        }
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
-        ggml_backend_metal_log_set_callback(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
+        if (!backend) {
+            LOG_ERROR("Metal backend init failed");
+        }
 #endif
 #ifdef SD_USE_VULKAN
         LOG_DEBUG("Using Vulkan backend");
-        for (int device = 0; device < ggml_backend_vk_get_device_count(); ++device) {
-            backend = ggml_backend_vk_init(device);
-        }
+        backend = ggml_backend_vk_init(0);
         if (!backend) {
-            LOG_WARN("Failed to initialize Vulkan backend");
+            LOG_ERROR("Vulkan backend init failed");
         }
 #endif
 #ifdef SD_USE_SYCL
         LOG_DEBUG("Using SYCL backend");
         backend = ggml_backend_sycl_init(0);
+        if (!backend) {
+            LOG_ERROR("SYCL backend init failed");
+        }
+#endif
+#ifdef SD_USE_CANN
+        LOG_DEBUG("Using CANN backend");
+        backend = ggml_backend_cann_init(0);
+        if (!backend) {
+            LOG_ERROR("CANN backend init failed");
+        }
 #endif
 
         if (!backend) {
