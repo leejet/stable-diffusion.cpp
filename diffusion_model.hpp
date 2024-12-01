@@ -2,6 +2,7 @@
 #define __DIFFUSION_MODEL_H__
 
 #include "flux.hpp"
+#include "ltx.hpp"
 #include "mmdit.hpp"
 #include "unet.hpp"
 
@@ -175,6 +176,56 @@ struct FluxModel : public DiffusionModel {
                  struct ggml_context* output_ctx           = NULL,
                  std::vector<int> skip_layers              = std::vector<int>()) {
         return flux.compute(n_threads, x, timesteps, context, y, guidance, output, output_ctx, skip_layers);
+    }
+};
+
+struct LTXModel : public DiffusionModel {
+    Ltx::LTXRunner ltx;
+
+    LTXModel(ggml_backend_t backend,
+              std::map<std::string, enum ggml_type>& tensor_types,
+              bool flash_attn   = false)
+        : ltx(backend, tensor_types, "model.diffusion_model") {
+    }
+
+    void alloc_params_buffer() {
+        ltx.alloc_params_buffer();
+    }
+
+    void free_params_buffer() {
+        ltx.free_params_buffer();
+    }
+
+    void free_compute_buffer() {
+        ltx.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
+        ltx.get_param_tensors(tensors, "model.diffusion_model");
+    }
+
+    size_t get_params_buffer_size() {
+        return ltx.get_params_buffer_size();
+    }
+
+    int64_t get_adm_in_channels() {
+        return 768;
+    }
+
+    void compute(int n_threads,
+                 struct ggml_tensor* x,
+                 struct ggml_tensor* timesteps,
+                 struct ggml_tensor* context,
+                 struct ggml_tensor* c_concat,
+                 struct ggml_tensor* y,
+                 struct ggml_tensor* guidance,
+                 int num_video_frames                      = -1,
+                 std::vector<struct ggml_tensor*> controls = {},
+                 float control_strength                    = 0.f,
+                 struct ggml_tensor** output               = NULL,
+                 struct ggml_context* output_ctx           = NULL,
+                 std::vector<int> skip_layers              = std::vector<int>()) {
+        return ltx.compute(n_threads, x, timesteps, context, y, output, output_ctx, skip_layers);
     }
 };
 

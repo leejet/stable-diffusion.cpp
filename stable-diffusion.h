@@ -197,6 +197,23 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            float skip_layer_start,
                            float skip_layer_end);
 
+SD_API sd_image_t* txt2vid(sd_ctx_t* sd_ctx,
+                           const char* prompt,
+                           const char* negative_prompt,
+                           int clip_skip,
+                           float cfg_scale,
+                           int width,
+                           int height,
+                           enum sample_method_t sample_method,
+                           int sample_steps,
+                           int64_t seed,
+                           int batch_count,
+                           int* skip_layers,
+                           size_t skip_layers_count,
+                           float slg_scale,
+                           float skip_layer_start,
+                           float skip_layer_end);
+
 SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
                            int width,
