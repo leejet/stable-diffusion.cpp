@@ -1,6 +1,8 @@
 #ifndef __LTX_HPP__
 #define __LTX_HPP__
 
+#include <cstdint>
+#include "ggml.h"
 #include "ggml_extend.hpp"
 #include "model.h"
 
@@ -119,6 +121,30 @@ namespace Ltx {
         }
     };
 
+    class OutProjector : public UnaryBlock {
+        // Basically just a Linear block, but with weird shape?
+    protected:
+        int64_t hidden_size;
+        int64_t out_dim;
+
+        void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
+            enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F32;
+            params["weight"]     = ggml_new_tensor_4d(ctx, wtype, 1, 1, hidden_size, out_dim);
+            params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_dim);
+        }
+
+    public:
+        OutProjector(int64_t hidden_size, int64_t out_dim)
+            : hidden_size(hidden_size),
+              out_dim(out_dim) {
+        }
+
+        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+            struct ggml_tensor* weight = ggml_reshape_2d(ctx, params["weight"], hidden_size, out_dim);
+            return ggml_nn_linear(ctx, x, params["weight"], params["bias"]);
+        }
+    };
+
     class Attention : public GGMLBlock {
     public:
         int64_t num_heads;
@@ -130,10 +156,9 @@ namespace Ltx {
                   std::string qk_norm = "",
                   bool qkv_bias       = false)
             : num_heads(num_heads), qk_norm(qk_norm) {
-
-            blocks["to_q"]   = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
-            blocks["to_k"]   = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
-            blocks["to_v"]   = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
+            blocks["to_q"]     = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
+            blocks["to_k"]     = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
+            blocks["to_v"]     = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
             blocks["to_out.0"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, qkv_bias));
 
             blocks["k_norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(dim, 1.0e-6));
@@ -317,7 +342,7 @@ namespace Ltx {
             }
 
             // params["scale_shift_table"] (in init_params())
-            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, out_channels));
+            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new OutProjector(hidden_size, out_channels));
             LOG_INFO("Loaded");
         }
 
@@ -327,7 +352,7 @@ namespace Ltx {
                                          struct ggml_tensor* shift_scale,
                                          struct ggml_tensor* context,
                                          std::vector<int> skip_layers = std::vector<int>()) {
-            auto final_layer_proj       = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
+            auto final_layer_proj       = std::dynamic_pointer_cast<OutProjector>(blocks["proj_out"]);
             auto final_layer_modulation = params["scale_shift_table"];  // [hidden_size, 2]
 
             // TODO: figure out last layer modulation
