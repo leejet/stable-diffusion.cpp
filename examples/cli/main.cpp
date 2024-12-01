@@ -22,35 +22,6 @@
 #define STB_IMAGE_RESIZE_STATIC
 #include "stb_image_resize.h"
 
-const char* rng_type_to_str[] = {
-    "std_default",
-    "cuda",
-};
-
-// Names of the sampler method, same order as enum sample_method in stable-diffusion.h
-const char* sample_method_str[] = {
-    "euler_a",
-    "euler",
-    "heun",
-    "dpm2",
-    "dpm++2s_a",
-    "dpm++2m",
-    "dpm++2mv2",
-    "ipndm",
-    "ipndm_v",
-    "lcm",
-};
-
-// Names of the sigma schedule overrides, same order as sample_schedule in stable-diffusion.h
-const char* schedule_str[] = {
-    "default",
-    "discrete",
-    "karras",
-    "exponential",
-    "ays",
-    "gits",
-};
-
 const char* modes_str[] = {
     "txt2img",
     "img2img",
@@ -163,11 +134,11 @@ void print_params(SDParams params) {
     printf("    clip_skip:         %d\n", params.clip_skip);
     printf("    width:             %d\n", params.width);
     printf("    height:            %d\n", params.height);
-    printf("    sample_method:     %s\n", sample_method_str[params.sample_method]);
-    printf("    schedule:          %s\n", schedule_str[params.schedule]);
+    printf("    sample_method:     %s\n", sd_sample_method_to_argument(params.sample_method));
+    printf("    schedule:          %s\n", sd_schedule_to_argument(params.schedule));
     printf("    sample_steps:      %d\n", params.sample_steps);
     printf("    strength(img2img): %.2f\n", params.strength);
-    printf("    rng:               %s\n", rng_type_to_str[params.rng_type]);
+    printf("    rng:               %s\n", sd_rng_type_to_argument(params.rng_type));
     printf("    seed:              %ld\n", params.seed);
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
@@ -514,7 +485,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             const char* schedule_selected = argv[i];
             int schedule_found            = -1;
             for (int d = 0; d < N_SCHEDULES; d++) {
-                if (!strcmp(schedule_selected, schedule_str[d])) {
+                if (!strcmp(schedule_selected, sd_schedule_to_argument(static_cast<schedule_t>(d)))) {
                     schedule_found = d;
                 }
             }
@@ -537,7 +508,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             const char* sample_method_selected = argv[i];
             int sample_method_found            = -1;
             for (int m = 0; m < N_SAMPLE_METHODS; m++) {
-                if (!strcmp(sample_method_selected, sample_method_str[m])) {
+                if (!strcmp(sample_method_selected, sd_sample_method_to_argument(static_cast<sample_method_t>(m)))) {
                     sample_method_found = m;
                 }
             }
@@ -712,8 +683,8 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
-    parameter_string += "RNG: " + std::string(rng_type_to_str[params.rng_type]) + ", ";
-    parameter_string += "Sampler: " + std::string(sample_method_str[params.sample_method]);
+    parameter_string += "RNG: " + std::string(sd_rng_type_to_argument(params.rng_type)) + ", ";
+    parameter_string += "Sampler: " + std::string(sd_sample_method_to_argument(params.sample_method));
     if (params.schedule == KARRAS) {
         parameter_string += " karras";
     }

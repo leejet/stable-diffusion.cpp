@@ -47,6 +47,72 @@ const char* sampling_methods_str[] = {
 
 /*================================================== Helper Functions ================================================*/
 
+static const char* rng_types_argument_str[] = {
+    "std_default",
+    "cuda",
+};
+
+rng_type_t sd_argument_to_rng_type(const char* str) {
+    for (int r = 0; r < N_RNG_TYPES; r++) {
+        if (!strcmp(str, rng_types_argument_str[r])) {
+            return (rng_type_t)r;
+        }
+    }
+    return STD_DEFAULT_RNG;
+}
+
+const char* sd_rng_type_to_argument(rng_type_t rng_type) {
+    return rng_types_argument_str[rng_type];
+}
+
+static const char* sample_methods_argument_str[] = {
+    "euler_a",
+    "euler",
+    "heun",
+    "dpm2",
+    "dpm++2s_a",
+    "dpm++2m",
+    "dpm++2mv2",
+    "ipndm",
+    "ipndm_v",
+    "lcm",
+};
+
+sample_method_t sd_argument_to_sample_method(const char* str) {
+    for (int m = 0; m < N_SAMPLE_METHODS; m++) {
+        if (!strcmp(str, sample_methods_argument_str[m])) {
+            return (sample_method_t)m;
+        }
+    }
+    return EULER_A;
+}
+
+const char* sd_sample_method_to_argument(sample_method_t sample_method) {
+    return sample_methods_argument_str[sample_method];
+}
+
+static const char* schedulers_argument_str[] = {
+    "default",
+    "discrete",
+    "karras",
+    "exponential",
+    "ays",
+    "gits",
+};
+
+schedule_t sd_argument_to_schedule(const char* str) {
+    for (int d = 0; d < N_SCHEDULES; d++) {
+        if (!strcmp(str, schedulers_argument_str[d])) {
+            return (schedule_t)d;
+        }
+    }
+    return DEFAULT;
+}
+
+const char* sd_schedule_to_argument(schedule_t schedule) {
+    return schedulers_argument_str[schedule];
+}
+
 void calculate_alphas_cumprod(float* alphas_cumprod,
                               float linear_start = 0.00085f,
                               float linear_end   = 0.0120,
@@ -158,12 +224,10 @@ public:
 #ifdef SD_USE_CUDA
 #ifdef SD_USE_HIP
         LOG_DEBUG("Using HIP backend");
-#else
-#ifdef SD_USE_MUSA
+#elif defined(SD_USE_MUSA)
         LOG_DEBUG("Using MUSA backend");
 #else
         LOG_DEBUG("Using CUDA backend");
-#endif
 #endif
         backend = ggml_backend_cuda_init(0);
         if (!backend) {

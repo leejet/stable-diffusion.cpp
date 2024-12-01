@@ -18,12 +18,10 @@ struct UpscalerGGML {
 #ifdef SD_USE_CUDA
 #ifdef SD_USE_HIP
         LOG_DEBUG("Using HIP backend");
-#else
-#ifdef SD_USE_MUSA
+#elif defined(SD_USE_MUSA)
         LOG_DEBUG("Using MUSA backend");
 #else
         LOG_DEBUG("Using CUDA backend");
-#endif
 #endif
         backend = ggml_backend_cuda_init(0);
         if (!backend) {
