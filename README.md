@@ -232,6 +232,10 @@ arguments:
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
   --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)
+  --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])
+  --skip-layer-start START           SLG enabling point: (default: 0.01)
+  --skip-layer-end END               SLG disabling point: (default: 0.2)
+									 SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])
   --strength STRENGTH                strength for noising/unnoising (default: 0.75)
   --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%)
   --control-strength STRENGTH        strength to apply Control Net (default: 0.9)
