@@ -11,3 +11,5 @@ test/
 output*.png
 models*
 *.log
+.idea/
+cmake-build-*/
