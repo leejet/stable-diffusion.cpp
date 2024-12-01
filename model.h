@@ -15,7 +15,7 @@
 #include "json.hpp"
 #include "zip.h"
 
-#define SD_MAX_DIMS 5
+#define SD_MAX_DIMS 6
 
 enum SDVersion {
     VERSION_SD1,
@@ -24,6 +24,7 @@ enum SDVersion {
     VERSION_SVD,
     VERSION_SD3,
     VERSION_FLUX,
+    VERSION_LTXV,
     VERSION_COUNT,
 };
 
@@ -42,7 +43,7 @@ static inline bool sd_version_is_sd3(SDVersion version) {
 }
 
 static inline bool sd_version_is_dit(SDVersion version) {
-    if (sd_version_is_flux(version) || sd_version_is_sd3(version)) {
+    if (sd_version_is_flux(version) || sd_version_is_sd3(version) || version == VERSION_LTXV) {
         return true;
     }
     return false;
@@ -59,7 +60,7 @@ struct TensorStorage {
     bool is_bf16            = false;
     bool is_f8_e4m3         = false;
     bool is_f8_e5m2         = false;
-    int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
+    int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1, 1};
     int n_dims              = 0;
 
     size_t file_index = 0;

@@ -54,6 +54,7 @@ const char* schedule_str[] = {
 const char* modes_str[] = {
     "txt2img",
     "img2img",
+    "txt2vid",
     "img2vid",
     "convert",
 };
@@ -61,6 +62,7 @@ const char* modes_str[] = {
 enum SDMode {
     TXT2IMG,
     IMG2IMG,
+    TXT2VID,
     IMG2VID,
     CONVERT,
     MODE_COUNT
@@ -264,7 +266,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             }
             if (mode_found == -1) {
                 fprintf(stderr,
-                        "error: invalid mode %s, must be one of [txt2img, img2img, img2vid, convert]\n",
+                        "error: invalid mode %s, must be one of [txt2img, img2img, txt2vid, img2vid, convert]\n",
                         mode_selected);
                 exit(1);
             }
@@ -926,6 +928,23 @@ int main(int argc, const char* argv[]) {
                           params.style_ratio,
                           params.normalize_input,
                           params.input_id_images_path.c_str(),
+                          params.skip_layers.data(),
+                          params.skip_layers.size(),
+                          params.slg_scale,
+                          params.skip_layer_start,
+                          params.skip_layer_end);
+    } else if (params.mode == TXT2VID) {
+        results = txt2vid(sd_ctx,
+                          params.prompt.c_str(),
+                          params.negative_prompt.c_str(),
+                          params.clip_skip,
+                          params.cfg_scale,
+                          params.width,
+                          params.height,
+                          params.sample_method,
+                          params.sample_steps,
+                          params.seed,
+                          params.batch_count,
                           params.skip_layers.data(),
                           params.skip_layers.size(),
                           params.slg_scale,

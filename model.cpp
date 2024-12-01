@@ -1032,19 +1032,19 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         int n_dims              = (int)shape.size();
-        int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1};
+        int64_t ne[SD_MAX_DIMS] = {1, 1, 1, 1, 1, 1};
         for (int i = 0; i < n_dims; i++) {
             ne[i] = shape[i].get<int64_t>();
         }
 
-        if (n_dims == 5) {
-            if (ne[3] == 1 && ne[4] == 1) {
-                n_dims = 4;
-            } else {
-                LOG_ERROR("invalid tensor '%s'", name.c_str());
-                return false;
-            }
-        }
+        // if (n_dims == 5) {
+        //     if (ne[3] == 1 && ne[4] == 1) {
+        //         n_dims = 4;
+        //     } else {
+        //         LOG_ERROR("invalid tensor '%s'", name.c_str());
+        //         return false;
+        //     }
+        // }
 
         // ggml_n_dims returns 1 for scalars
         if (n_dims == 0) {
@@ -1474,6 +1474,9 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (tensor_storage.name.find("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") != std::string::npos) {
             return VERSION_SVD;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.transformer_blocks") != std::string::npos){
+            return VERSION_LTXV;
         }
 
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||

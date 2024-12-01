@@ -30,7 +30,8 @@ const char* model_version_to_str[] = {
     "SDXL",
     "SVD",
     "SD3.x",
-    "Flux"};
+    "Flux",
+    "LTX-Video"};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -330,6 +331,10 @@ public:
             } else if (sd_version_is_flux(version)) {
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
                 diffusion_model  = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, diffusion_flash_attn);
+            } else if (version == VERSION_LTXV) {
+                // TODO: cond for T5 only
+                cond_stage_model = std::make_shared<SimpleT5Embedder>(clip_backend, model_loader.tensor_storages_types);
+                diffusion_model  = std::make_shared<LTXModel>(backend, model_loader.tensor_storages_types, diffusion_flash_attn);
             } else {
                 if (id_embeddings_path.find("v2") != std::string::npos) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_loader.tensor_storages_types, embeddings_path, version, PM_VERSION_2);
@@ -1539,6 +1544,31 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     LOG_INFO("txt2img completed in %.2fs", (t1 - t0) * 1.0f / 1000);
 
     return result_images;
+}
+
+sd_image_t* txt2vid(sd_ctx_t* sd_ctx,
+                    const char* prompt_c_str,
+                    const char* negative_prompt_c_str,
+                    int clip_skip,
+                    float cfg_scale,
+                    int width,
+                    int height,
+                    enum sample_method_t sample_method,
+                    int sample_steps,
+                    int64_t seed,
+                    int batch_count,
+                    int* skip_layers              = NULL,
+                    size_t skip_layers_count      = 0,
+                    float slg_scale               = 0,
+                    float skip_layer_start        = 0.01,
+                    float skip_layer_end          = 0.2) {
+    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
+    LOG_DEBUG("txt2vid %dx%d", width, height);
+    if (sd_ctx == NULL) {
+        return NULL;
+    }
+    LOG_ERROR("Unimplemented");
+    return NULL;
 }
 
 sd_image_t* img2img(sd_ctx_t* sd_ctx,
