@@ -1164,11 +1164,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float style_ratio,
                            bool normalize_input,
                            std::string input_id_images_path,
-                           std::vector<int> skip_layers                                    = {},
-                           float slg_scale                                                 = 0,
-                           float skip_layer_start                                          = 0.01,
-                           float skip_layer_end                                            = 0.2,
-                           ggml_tensor* masked_image                                       = NULL) {
+                           std::vector<int> skip_layers = {},
+                           float slg_scale              = 0,
+                           float skip_layer_start       = 0.01,
+                           float skip_layer_end         = 0.2,
+                           ggml_tensor* masked_image    = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1368,6 +1368,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         if (sd_ctx->sd->version == VERSION_SD1_INPAINT) {
             if (masked_image == NULL) {
                 // no mask, set the whole image as masked
+                LOG_INFO("Missing image mask, using whole frame...");
                 masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2] + 1, 1);
                 for (int64_t x = 0; x < masked_image->ne[0]; x++) {
                     for (int64_t y = 0; y < masked_image->ne[1]; y++) {
@@ -1699,7 +1700,8 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                skip_layers_vec,
                                                slg_scale,
                                                skip_layer_start,
-                                               skip_layer_end);
+                                               skip_layer_end,
+                                               masked_image);
 
     size_t t2 = ggml_time_ms();
 
