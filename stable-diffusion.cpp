@@ -1366,6 +1366,18 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
 
         if (sd_ctx->sd->version == VERSION_SD1_INPAINT) {
+            if (masked_image == NULL) {
+                // no mask, set the whole image as masked
+                masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2] + 1, 1);
+                for (int64_t x = 0; x < masked_image->ne[0]; x++) {
+                    for (int64_t y = 0; y < masked_image->ne[1]; y++) {
+                        ggml_tensor_set_f32(masked_image, 1, x, y, 0);
+                        for (int64_t c = 1; c < masked_image->ne[2]; c++) {
+                            ggml_tensor_set_f32(masked_image, 0, x, y, c);
+                        }
+                    }
+                }
+            }
             cond.c_concat   = masked_image;
             uncond.c_concat = masked_image;
         }
@@ -1514,6 +1526,10 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         ggml_set_f32(init_latent, 0.1159f);
     } else {
         ggml_set_f32(init_latent, 0.f);
+    }
+
+    if (sd_ctx->sd->version == VERSION_SD1_INPAINT) {
+        LOG_WARN("This is an inpainting model, this should only be used in img2img mode with a mask");
     }
 
     sd_image_t* result_images = generate_image(sd_ctx,
