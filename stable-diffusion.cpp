@@ -26,6 +26,7 @@
 
 const char* model_version_to_str[] = {
     "SD 1.x",
+    "SD 1.x Inpaint",
     "SD 2.x",
     "SDXL",
     "SVD",
@@ -1359,8 +1360,18 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         LOG_INFO("generating image: %i/%i - seed %" PRId64, b + 1, batch_count, cur_seed);
 
         sd_ctx->sd->rng->manual_seed(cur_seed);
-        struct ggml_tensor* x_t   = init_latent;
-        struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
+        struct ggml_tensor* x_t;
+        struct ggml_tensor* noise;
+        if (sd_ctx->sd->version == VERSION_SD1_INPAINT) {
+            struct ggml_tensor* mask         = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, 1, 1);
+            struct ggml_tensor* masked_image = ggml_dup_tensor(work_ctx, init_latent);
+
+            x_t   = ggml_concat(work_ctx, ggml_concat(work_ctx, init_latent, masked_image, 2), mask, 2);
+            noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C * 2 + 1, 1);
+        } else {
+            x_t   = init_latent;
+            noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
+        }
         ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
 
         int start_merge_step = -1;
