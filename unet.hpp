@@ -570,6 +570,7 @@ struct UNetModelRunner : public GGMLRunner {
         context   = to_backend(context);
         y         = to_backend(y);
         timesteps = to_backend(timesteps);
+        c_concat  = to_backend(c_concat);
 
         for (int i = 0; i < controls.size(); i++) {
             controls[i] = to_backend(controls[i]);
