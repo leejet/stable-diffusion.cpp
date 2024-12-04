@@ -166,6 +166,7 @@ public:
 // ldm.modules.diffusionmodules.openaimodel.UNetModel
 class UnetModelBlock : public GGMLBlock {
 protected:
+    static std::map<std::string, enum ggml_type> empty_tensor_types;
     SDVersion version = VERSION_SD1;
     // network hparams
     int in_channels                        = 4;
@@ -183,7 +184,7 @@ public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1, bool flash_attn = false)
+    UnetModelBlock(SDVersion version = VERSION_SD1, std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types, bool flash_attn = false)
         : version(version) {
         if (version == VERSION_SD2) {
             context_dim       = 1024;
@@ -203,7 +204,10 @@ public:
             adm_in_channels   = 768;
             num_head_channels = 64;
             num_heads         = -1;
+        } else if (version == VERSION_SD1_INPAINT) {
+            in_channels = 9;
         }
+
         // dims is always 2
         // use_temporal_attention is always True for SVD
 
@@ -536,7 +540,7 @@ struct UNetModelRunner : public GGMLRunner {
                     const std::string prefix,
                     SDVersion version = VERSION_SD1,
                     bool flash_attn   = false)
-        : GGMLRunner(backend), unet(version, flash_attn) {
+        : GGMLRunner(backend), unet(version, tensor_types, flash_attn) {
         unet.init(params_ctx, tensor_types, prefix);
     }
 

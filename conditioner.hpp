@@ -68,7 +68,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 clip_skip = 2;
             }
         }
-        if (version == VERSION_SD1) {
+        if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT) {
             text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, clip_skip);
         } else if (version == VERSION_SD2) {
             text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, clip_skip);

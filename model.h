@@ -19,6 +19,7 @@
 
 enum SDVersion {
     VERSION_SD1,
+    VERSION_SD1_INPAINT,
     VERSION_SD2,
     VERSION_SDXL,
     VERSION_SVD,

@@ -1458,7 +1458,7 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
 }
 
 SDVersion ModelLoader::get_sd_version() {
-    TensorStorage token_embedding_weight;
+    TensorStorage token_embedding_weight, input_block_weight;
     for (auto& tensor_storage : tensor_storages) {
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
             return VERSION_FLUX;
@@ -1485,9 +1485,15 @@ SDVersion ModelLoader::get_sd_version() {
             token_embedding_weight = tensor_storage;
             // break;
         }
+        if (tensor_storage.name == "model.diffusion_model.input_blocks.0.0.weight") {
+            input_block_weight = tensor_storage;
+        }
     }
 
     if (token_embedding_weight.ne[0] == 768) {
+        if(input_block_weight.ne[2]==9){
+            return VERSION_SD1_INPAINT;
+        }
         return VERSION_SD1;
     } else if (token_embedding_weight.ne[0] == 1024) {
         return VERSION_SD2;
