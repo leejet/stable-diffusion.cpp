@@ -1164,10 +1164,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float style_ratio,
                            bool normalize_input,
                            std::string input_id_images_path,
-                           std::vector<int> skip_layers = {},
-                           float slg_scale              = 0,
-                           float skip_layer_start       = 0.01,
-                           float skip_layer_end         = 0.2) {
+                           std::vector<int> skip_layers                                    = {},
+                           float slg_scale                                                 = 0,
+                           float skip_layer_start                                          = 0.01,
+                           float skip_layer_end                                            = 0.2,
+                           ggml_tensor* masked_image                                       = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1360,20 +1361,14 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         LOG_INFO("generating image: %i/%i - seed %" PRId64, b + 1, batch_count, cur_seed);
 
         sd_ctx->sd->rng->manual_seed(cur_seed);
-        struct ggml_tensor* x_t;
-        struct ggml_tensor* noise;
-        if (sd_ctx->sd->version == VERSION_SD1_INPAINT) {
-            struct ggml_tensor* mask         = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, 1, 1);
-            struct ggml_tensor* masked_image = ggml_dup_tensor(work_ctx, init_latent);
-
-            x_t   = ggml_concat(work_ctx, ggml_concat(work_ctx, init_latent, masked_image, 2), mask, 2);
-            noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C * 2 + 1, 1);
-        } else {
-            x_t   = init_latent;
-            noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
-        }
+        struct ggml_tensor* x_t   = init_latent;
+        struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
         ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
 
+        if (sd_ctx->sd->version == VERSION_SD1_INPAINT) {
+            cond.c_concat   = masked_image;
+            uncond.c_concat = masked_image;
+        }
         int start_merge_step = -1;
         if (sd_ctx->sd->stacked_id) {
             start_merge_step = int(sd_ctx->sd->pmid_model->style_strength / 100.f * sample_steps);
@@ -1614,7 +1609,19 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     sd_ctx->sd->rng->manual_seed(seed);
 
     ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+    ggml_tensor* mask_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 1, 1);
+
+    // sd_image_to_tensor(mask.data, mask_img);
+    for (int ix = 0; ix < width; ix++) {
+        for (int iy = 0; iy < height; iy++) {
+            ggml_tensor_set_f32(mask_img, (iy < height / 3 && ix > width / 4 && ix < 3 * width / 4) ? 1 : 0, ix, iy);
+        }
+    }
+
     sd_image_to_tensor(init_image.data, init_img);
+    ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+    sd_apply_mask(init_img, mask_img, masked_img);
+
     ggml_tensor* init_latent = NULL;
     if (!sd_ctx->sd->use_tiny_autoencoder) {
         ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
@@ -1622,12 +1629,38 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     } else {
         init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
     }
+
+    ggml_tensor* masked_image_0 = NULL;
+    if (!sd_ctx->sd->use_tiny_autoencoder) {
+        ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
+        masked_image_0       = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
+    } else {
+        masked_image_0 = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
+    }
+    ggml_tensor* masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, masked_image_0->ne[0], masked_image_0->ne[1], masked_image_0->ne[2] + 1, 1);
+    LOG_INFO("shape: [%d,%d,%d,%d]", masked_image_0->ne[0], masked_image_0->ne[1], masked_image_0->ne[2], masked_image_0->ne[3]);
+    LOG_INFO("shape: [%d,%d,%d,%d]", masked_image->ne[0], masked_image->ne[1], masked_image->ne[2], masked_image->ne[3]);
+    for (int ix = 0; ix < masked_image_0->ne[0]; ix++) {
+        for (int iy = 0; iy < masked_image_0->ne[1]; iy++) {
+            for (int k = 0; k < masked_image_0->ne[2]; k++) {
+                float v = ggml_tensor_get_f32(masked_image_0, ix, iy, k);
+                ggml_tensor_set_f32(masked_image, v, ix, iy, k + 1);
+            }
+            int mx  = ix * 8;
+            int my  = iy * 8;
+            float m = ggml_tensor_get_f32(mask_img, mx, my);
+            ggml_tensor_set_f32(masked_image, m, ix, iy, 0);
+        }
+    }
+
     print_ggml_tensor(init_latent, true);
     size_t t1 = ggml_time_ms();
     LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
     size_t t_enc              = static_cast<size_t>(sample_steps * strength);
+    if (t_enc == sample_steps)
+        t_enc--;
     LOG_INFO("target t_enc is %zu steps", t_enc);
     std::vector<float> sigma_sched;
     sigma_sched.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
