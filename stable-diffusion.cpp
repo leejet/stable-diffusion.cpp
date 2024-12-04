@@ -1549,6 +1549,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
 sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     sd_image_t init_image,
+                    sd_image_t mask,
                     const char* prompt_c_str,
                     const char* negative_prompt_c_str,
                     int clip_skip,
@@ -1611,12 +1612,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
     ggml_tensor* mask_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 1, 1);
 
-    // sd_image_to_tensor(mask.data, mask_img);
-    for (int ix = 0; ix < width; ix++) {
-        for (int iy = 0; iy < height; iy++) {
-            ggml_tensor_set_f32(mask_img, (iy < height / 3 && ix > width / 4 && ix < 3 * width / 4) ? 1 : 0, ix, iy);
-        }
-    }
+    sd_mask_to_tensor(mask.data, mask_img);
 
     sd_image_to_tensor(init_image.data, init_img);
     ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);

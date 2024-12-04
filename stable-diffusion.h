@@ -174,6 +174,7 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
+                           sd_image_t mask_image,
                            const char* prompt,
                            const char* negative_prompt,
                            int clip_skip,
