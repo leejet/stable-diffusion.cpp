@@ -30,6 +30,7 @@ const char* model_version_to_str[] = {
     "SD 2.x",
     "SD 2.x Inpaint",
     "SDXL",
+    "SDXL Inpaint",
     "SVD",
     "SD3.x",
     "Flux"};
