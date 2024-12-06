@@ -33,7 +33,8 @@ const char* model_version_to_str[] = {
     "SDXL Inpaint",
     "SVD",
     "SD3.x",
-    "Flux"};
+    "Flux",
+    "Flux Fill"};
 
 const char* sampling_methods_str[] = {
     "Euler A",
