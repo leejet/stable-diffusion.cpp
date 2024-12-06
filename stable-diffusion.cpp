@@ -1680,8 +1680,6 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
             masked_image_0 = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
         }
         masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, masked_image_0->ne[0], masked_image_0->ne[1], masked_image_0->ne[2] + 1, 1);
-        LOG_INFO("shape: [%d,%d,%d,%d]", masked_image_0->ne[0], masked_image_0->ne[1], masked_image_0->ne[2], masked_image_0->ne[3]);
-        LOG_INFO("shape: [%d,%d,%d,%d]", masked_image->ne[0], masked_image->ne[1], masked_image->ne[2], masked_image->ne[3]);
         for (int ix = 0; ix < masked_image_0->ne[0]; ix++) {
             for (int iy = 0; iy < masked_image_0->ne[1]; iy++) {
                 for (int k = 0; k < masked_image_0->ne[2]; k++) {
