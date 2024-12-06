@@ -1459,6 +1459,7 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
 
 SDVersion ModelLoader::get_sd_version() {
     TensorStorage token_embedding_weight, input_block_weight;
+    bool is_xl = false;
     for (auto& tensor_storage : tensor_storages) {
         if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
             return VERSION_FLUX;
@@ -1467,10 +1468,10 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_SD3;
         }
         if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos) {
-            return VERSION_SDXL;
+            is_xl = true;
         }
         if (tensor_storage.name.find("cond_stage_model.1") != std::string::npos) {
-            return VERSION_SDXL;
+            is_xl = true;
         }
         if (tensor_storage.name.find("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") != std::string::npos) {
             return VERSION_SVD;
@@ -1487,9 +1488,17 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (tensor_storage.name == "model.diffusion_model.input_blocks.0.0.weight") {
             input_block_weight = tensor_storage;
+            if (is_xl)
+                break;
         }
     }
     bool is_inpaint = input_block_weight.ne[2] == 9;
+    if (is_xl) {
+        if (is_inpaint) {
+            return VERSION_SDXL_INPAINT;
+        }
+        return VERSION_SDXL;
+    }
     if (token_embedding_weight.ne[0] == 768) {
         if (is_inpaint) {
             return VERSION_SD1_INPAINT;

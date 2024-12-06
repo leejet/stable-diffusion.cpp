@@ -265,7 +265,7 @@ public:
             model_loader.set_wtype_override(wtype);
         }
 
-        if (version == VERSION_SDXL) {
+        if (sd_version_is_sdxl(version)) {
             vae_wtype = GGML_TYPE_F32;
             model_loader.set_wtype_override(GGML_TYPE_F32, "vae.");
         }
@@ -277,7 +277,7 @@ public:
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
-        if (version == VERSION_SDXL) {
+        if (sd_version_is_sdxl(version)) {
             scale_factor = 0.13025f;
             if (vae_path.size() == 0 && taesd_path.size() == 0) {
                 LOG_WARN(
@@ -1348,7 +1348,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     SDCondition uncond;
     if (cfg_scale != 1.0) {
         bool force_zero_embeddings = false;
-        if (sd_ctx->sd->version == VERSION_SDXL && negative_prompt.size() == 0) {
+        if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.size() == 0) {
             force_zero_embeddings = true;
         }
         uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(work_ctx,
