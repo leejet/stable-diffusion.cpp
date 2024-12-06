@@ -490,6 +490,7 @@ namespace Flux {
 
     struct FluxParams {
         int64_t in_channels         = 64;
+        int64_t out_channels        = 64;
         int64_t vec_in_dim          = 768;
         int64_t context_in_dim      = 4096;
         int64_t hidden_size         = 3072;
@@ -642,7 +643,6 @@ namespace Flux {
         Flux() {}
         Flux(FluxParams params)
             : params(params) {
-            int64_t out_channels = params.in_channels;
             int64_t pe_dim       = params.hidden_size / params.num_heads;
 
             blocks["img_in"]    = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, params.hidden_size, true));
@@ -669,7 +669,7 @@ namespace Flux {
                                                                                                                 params.flash_attn));
             }
 
-            blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, out_channels));
+            blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, params.out_channels));
         }
 
         struct ggml_tensor* patchify(struct ggml_context* ctx,
@@ -834,12 +834,16 @@ namespace Flux {
         FluxRunner(ggml_backend_t backend,
                    std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
                    const std::string prefix                            = "",
+                   SDVersion version                                   = VERSION_FLUX,
                    bool flash_attn                                     = false)
             : GGMLRunner(backend) {
             flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
             flux_params.depth_single_blocks = 0;
+            if (version == VERSION_FLUX_INPAINT) {
+                flux_params.in_channels = 384;
+            }
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find("model.diffusion_model.") == std::string::npos)

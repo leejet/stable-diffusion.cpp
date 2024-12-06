@@ -333,7 +333,11 @@ public:
                 diffusion_model  = std::make_shared<MMDiTModel>(backend, model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
-                diffusion_model  = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, diffusion_flash_attn);
+                diffusion_model  = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn);
+            } else if (version == VERSION_LTXV) {
+                // TODO: cond for T5 only
+                cond_stage_model = std::make_shared<SimpleT5Embedder>(clip_backend, model_loader.tensor_storages_types);
+                diffusion_model  = std::make_shared<LTXModel>(backend, model_loader.tensor_storages_types, diffusion_flash_attn);
             } else {
                 if (id_embeddings_path.find("v2") != std::string::npos) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_loader.tensor_storages_types, embeddings_path, version, PM_VERSION_2);
