@@ -175,7 +175,7 @@ struct FluxModel : public DiffusionModel {
                  struct ggml_tensor** output               = NULL,
                  struct ggml_context* output_ctx           = NULL,
                  std::vector<int> skip_layers              = std::vector<int>()) {
-        return flux.compute(n_threads, x, timesteps, context, y, guidance, output, output_ctx, skip_layers);
+        return flux.compute(n_threads, x, timesteps, context, c_concat, y, guidance, output, output_ctx, skip_layers);
     }
 };
 

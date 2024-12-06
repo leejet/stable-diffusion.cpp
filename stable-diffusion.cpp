@@ -334,10 +334,6 @@ public:
             } else if (sd_version_is_flux(version)) {
                 cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
                 diffusion_model  = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn);
-            } else if (version == VERSION_LTXV) {
-                // TODO: cond for T5 only
-                cond_stage_model = std::make_shared<SimpleT5Embedder>(clip_backend, model_loader.tensor_storages_types);
-                diffusion_model  = std::make_shared<LTXModel>(backend, model_loader.tensor_storages_types, diffusion_flash_attn);
             } else {
                 if (id_embeddings_path.find("v2") != std::string::npos) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_loader.tensor_storages_types, embeddings_path, version, PM_VERSION_2);
@@ -798,6 +794,7 @@ public:
                         float skip_layer_start       = 0.01,
                         float skip_layer_end         = 0.2,
                         ggml_tensor* noise_mask      = nullptr) {
+        LOG_DEBUG("Sample");
         struct ggml_init_params params;
         size_t data_size = ggml_row_size(init_latent->type, init_latent->ne[0]);
         for (int i = 1; i < 4; i++) {
@@ -1394,13 +1391,27 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     ggml_tensor* noise_mask = nullptr;
     if (sd_version_is_inpaint(sd_ctx->sd->version)) {
         if (masked_image == NULL) {
+            int64_t mask_channels = 1;
+            if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
+                mask_channels = 8 * 8;  // flatten the whole mask
+            }
             // no mask, set the whole image as masked
-            masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2] + 1, 1);
+            masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], mask_channels + init_latent->ne[2], 1);
             for (int64_t x = 0; x < masked_image->ne[0]; x++) {
                 for (int64_t y = 0; y < masked_image->ne[1]; y++) {
-                    ggml_tensor_set_f32(masked_image, 1, x, y, 0);
-                    for (int64_t c = 1; c < masked_image->ne[2]; c++) {
-                        ggml_tensor_set_f32(masked_image, 0, x, y, c);
+                    if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
+                        // TODO: this might be wrong
+                        for (int64_t c = 0; c < init_latent->ne[2]; c++) {
+                            ggml_tensor_set_f32(masked_image, 0, x, y, c);
+                        }
+                        for (int64_t c = init_latent->ne[2]; c < masked_image->ne[2]; c++) {
+                            ggml_tensor_set_f32(masked_image, 1, x, y, c);
+                        }
+                    } else {
+                        ggml_tensor_set_f32(masked_image, 1, x, y, 0);
+                        for (int64_t c = 1; c < masked_image->ne[2]; c++) {
+                            ggml_tensor_set_f32(masked_image, 0, x, y, c);
+                        }
                     }
                 }
             }
@@ -1676,6 +1687,10 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     ggml_tensor* masked_image;
 
     if (sd_version_is_inpaint(sd_ctx->sd->version)) {
+        int64_t mask_channels = 1;
+        if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
+            mask_channels = 8 * 8;  // flatten the whole mask
+        }
         ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
         sd_apply_mask(init_img, mask_img, masked_img);
         ggml_tensor* masked_image_0 = NULL;
@@ -1685,17 +1700,33 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         } else {
             masked_image_0 = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
         }
-        masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, masked_image_0->ne[0], masked_image_0->ne[1], masked_image_0->ne[2] + 1, 1);
+        masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, masked_image_0->ne[0], masked_image_0->ne[1], mask_channels + masked_image_0->ne[2], 1);
         for (int ix = 0; ix < masked_image_0->ne[0]; ix++) {
             for (int iy = 0; iy < masked_image_0->ne[1]; iy++) {
-                for (int k = 0; k < masked_image_0->ne[2]; k++) {
-                    float v = ggml_tensor_get_f32(masked_image_0, ix, iy, k);
-                    ggml_tensor_set_f32(masked_image, v, ix, iy, k + 1);
+                int mx = ix * 8;
+                int my = iy * 8;
+                if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
+                    for (int k = 0; k < masked_image_0->ne[2]; k++) {
+                        float v = ggml_tensor_get_f32(masked_image_0, ix, iy, k);
+                        ggml_tensor_set_f32(masked_image, v, ix, iy, k);
+                    }
+                    // "Encode" 8x8 mask chunks into a flattened 1x64 vector, and concatenate to masked image
+                    for (int x = 0; x < 8; x++) {
+                        for (int y = 0; y < 8; y++) {
+                            float m = ggml_tensor_get_f32(mask_img, mx + x, my + y);
+                            // TODO: check if the way the mask is flattened is correct (is it supposed to be x*8+y or x+8*y?)
+                            // python code was using "b (h 8) (w 8) -> b (8 8) h w"
+                            ggml_tensor_set_f32(masked_image, m, ix, iy, masked_image_0->ne[2] + x * 8 + y);
+                        }
+                    }
+                } else {
+                    float m = ggml_tensor_get_f32(mask_img, mx, my);
+                    ggml_tensor_set_f32(masked_image, m, ix, iy, 0);
+                    for (int k = 0; k < masked_image_0->ne[2]; k++) {
+                        float v = ggml_tensor_get_f32(masked_image_0, ix, iy, k);
+                        ggml_tensor_set_f32(masked_image, v, ix, iy, k + mask_channels);
+                    }
                 }
-                int mx  = ix * 8;
-                int my  = iy * 8;
-                float m = ggml_tensor_get_f32(mask_img, mx, my);
-                ggml_tensor_set_f32(masked_image, m, ix, iy, 0);
             }
         }
     } else {

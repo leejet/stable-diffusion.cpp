@@ -1514,7 +1514,7 @@ SDVersion ModelLoader::get_sd_version() {
     if (is_flux) {
         is_inpaint = input_block_weight.ne[0] == 384;
         if (is_inpaint) {
-            return VERSION_FLUX_INPAINT;
+            return VERSION_FLUX_FILL;
         }
         return VERSION_FLUX;
     }
