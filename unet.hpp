@@ -186,7 +186,7 @@ public:
 
     UnetModelBlock(SDVersion version = VERSION_SD1, std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types, bool flash_attn = false)
         : version(version) {
-        if (version == VERSION_SD2) {
+        if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
             num_head_channels = 64;
             num_heads         = -1;
@@ -204,7 +204,8 @@ public:
             adm_in_channels   = 768;
             num_head_channels = 64;
             num_heads         = -1;
-        } else if (version == VERSION_SD1_INPAINT) {
+        }
+        if (sd_version_is_inpaint(version)) {
             in_channels = 9;
         }
 

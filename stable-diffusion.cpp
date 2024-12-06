@@ -28,6 +28,7 @@ const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
     "SD 2.x",
+    "SD 2.x Inpaint",
     "SDXL",
     "SVD",
     "SD3.x",
@@ -518,7 +519,7 @@ public:
 
         // check is_using_v_parameterization_for_sd2
         bool is_using_v_parameterization = false;
-        if (version == VERSION_SD2) {
+        if (sd_version_is_sd2(version)) {
             if (is_using_v_parameterization_for_sd2(ctx)) {
                 is_using_v_parameterization = true;
             }
@@ -601,9 +602,13 @@ public:
 
         struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);
         ggml_set_f32(timesteps, 999);
+
+        struct ggml_tensor* concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 5, 1);
+        ggml_set_f32(timesteps, 0);
+
         int64_t t0              = ggml_time_ms();
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model->compute(n_threads, x_t, timesteps, c, NULL, NULL, NULL, -1, {}, 0.f, &out);
+        diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, -1, {}, 0.f, &out);
         diffusion_model->free_compute_buffer();
 
         double result = 0.f;
@@ -1381,7 +1386,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     int H = height / 8;
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     ggml_tensor* noise_mask = nullptr;
-    if (sd_ctx->sd->version == VERSION_SD1_INPAINT) {
+    if (sd_version_is_inpaint(sd_ctx->sd->version)) {
         if (masked_image == NULL) {
             // no mask, set the whole image as masked
             masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2] + 1, 1);
@@ -1558,7 +1563,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
         ggml_set_f32(init_latent, 0.f);
     }
 
-    if (sd_ctx->sd->version == VERSION_SD1_INPAINT) {
+    if (sd_version_is_inpaint(sd_ctx->sd->version)) {
         LOG_WARN("This is an inpainting model, this should only be used in img2img mode with a mask");
     }
 
@@ -1664,7 +1669,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
 
     ggml_tensor* masked_image;
 
-    if (sd_ctx->sd->version == VERSION_SD1_INPAINT) {
+    if (sd_version_is_inpaint(sd_ctx->sd->version)) {
         ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
         sd_apply_mask(init_img, mask_img, masked_img);
         ggml_tensor* masked_image_0 = NULL;

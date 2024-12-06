@@ -21,6 +21,7 @@ enum SDVersion {
     VERSION_SD1,
     VERSION_SD1_INPAINT,
     VERSION_SD2,
+    VERSION_SD2_INPAINT,
     VERSION_SDXL,
     VERSION_SVD,
     VERSION_SD3,
@@ -42,12 +43,34 @@ static inline bool sd_version_is_sd3(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_sd1(SDVersion version) {
+    if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_sd2(SDVersion version) {
+    if (version == VERSION_SD2 || version == VERSION_SD2_INPAINT) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_inpaint(SDVersion version) {
+    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_dit(SDVersion version) {
     if (sd_version_is_flux(version) || sd_version_is_sd3(version)) {
         return true;
     }
     return false;
 }
+
 
 enum PMVersion {
     PM_VERSION_1,

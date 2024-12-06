@@ -1489,13 +1489,16 @@ SDVersion ModelLoader::get_sd_version() {
             input_block_weight = tensor_storage;
         }
     }
-
+    bool is_inpaint = input_block_weight.ne[2] == 9;
     if (token_embedding_weight.ne[0] == 768) {
-        if(input_block_weight.ne[2]==9){
+        if (is_inpaint) {
             return VERSION_SD1_INPAINT;
         }
         return VERSION_SD1;
     } else if (token_embedding_weight.ne[0] == 1024) {
+        if (is_inpaint) {
+            return VERSION_SD2_INPAINT;
+        }
         return VERSION_SD2;
     }
     return VERSION_COUNT;

@@ -61,16 +61,16 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                       SDVersion version = VERSION_SD1,
                                       PMVersion pv      = PM_VERSION_1,
                                       int clip_skip     = -1)
-        : version(version), pm_version(pv), tokenizer(version == VERSION_SD2 ? 0 : 49407), embd_dir(embd_dir) {
+        : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407), embd_dir(embd_dir) {
         if (clip_skip <= 0) {
             clip_skip = 1;
-            if (version == VERSION_SD2 || version == VERSION_SDXL) {
+            if (sd_version_is_sd2(version) || version == VERSION_SDXL) {
                 clip_skip = 2;
             }
         }
-        if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT) {
+        if (sd_version_is_sd1(version)) {
             text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, clip_skip);
-        } else if (version == VERSION_SD2) {
+        } else if (sd_version_is_sd2(version)) {
             text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, clip_skip);
         } else if (version == VERSION_SDXL) {
             text_model  = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, clip_skip, false);
