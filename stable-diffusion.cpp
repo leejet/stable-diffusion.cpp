@@ -520,7 +520,7 @@ public:
         // check is_using_v_parameterization_for_sd2
         bool is_using_v_parameterization = false;
         if (sd_version_is_sd2(version)) {
-            if (is_using_v_parameterization_for_sd2(ctx)) {
+            if (is_using_v_parameterization_for_sd2(ctx, sd_version_is_inpaint(version))) {
                 is_using_v_parameterization = true;
             }
         } else if (version == VERSION_SVD) {
@@ -594,7 +594,7 @@ public:
         return true;
     }
 
-    bool is_using_v_parameterization_for_sd2(ggml_context* work_ctx) {
+    bool is_using_v_parameterization_for_sd2(ggml_context* work_ctx, bool is_inpaint = false) {
         struct ggml_tensor* x_t = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 4, 1);
         ggml_set_f32(x_t, 0.5);
         struct ggml_tensor* c = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 1024, 2, 1, 1);
@@ -603,7 +603,7 @@ public:
         struct ggml_tensor* timesteps = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, 1);
         ggml_set_f32(timesteps, 999);
 
-        struct ggml_tensor* concat = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 5, 1);
+        struct ggml_tensor* concat = is_inpaint ? ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 5, 1) : NULL;
         ggml_set_f32(timesteps, 0);
 
         int64_t t0              = ggml_time_ms();
@@ -787,11 +787,11 @@ public:
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         SDCondition id_cond,
-                        std::vector<int> skip_layers                                    = {},
-                        float slg_scale                                                 = 0,
-                        float skip_layer_start                                          = 0.01,
-                        float skip_layer_end                                            = 0.2,
-                        ggml_tensor* noise_mask                                         = nullptr) {
+                        std::vector<int> skip_layers = {},
+                        float slg_scale              = 0,
+                        float skip_layer_start       = 0.01,
+                        float skip_layer_end         = 0.2,
+                        ggml_tensor* noise_mask      = nullptr) {
         struct ggml_init_params params;
         size_t data_size = ggml_row_size(init_latent->type, init_latent->ne[0]);
         for (int i = 1; i < 4; i++) {
