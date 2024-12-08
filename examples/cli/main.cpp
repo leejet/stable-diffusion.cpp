@@ -10,6 +10,8 @@
 #include "flux.hpp"
 #include "stable-diffusion.h"
 
+#include "latent-preview.h"
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
 #include "stb_image.h"
@@ -765,6 +767,48 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     fflush(out_stream);
 }
 
+void step_callback(int step, struct ggml_tensor* latents, enum SDVersion version) {
+    const int channel = 3;
+    int width         = latents->ne[0];
+    int height        = latents->ne[1];
+    int dim           = latents->ne[2];
+
+    const float(*latent_rgb_proj)[channel];
+
+    if (dim == 16) {
+        // 16 channels VAE -> Flux or SD3
+
+        if (sd_version_is_sd3(version)) {
+            latent_rgb_proj = sd3_latent_rgb_proj;
+        } else if (sd_version_is_flux(version)) {
+            latent_rgb_proj = flux_latent_rgb_proj;
+        } else {
+            // unknown model
+            return;
+        }
+
+    } else if (dim == 4) {
+        // 4 channels VAE
+        if (version == VERSION_SDXL) {
+            latent_rgb_proj = sdxl_latent_rgb_proj;
+        } else if (version == VERSION_SD1 || version == VERSION_SD2) {
+            latent_rgb_proj = sd_latent_rgb_proj;
+        } else {
+            // unknown model
+            return;
+        }
+    } else {
+        // unknown latent space
+        return;
+    }
+    uint8_t* data = (uint8_t*)malloc(width * height * channel * sizeof(uint8_t));
+    
+    preview_latent_image(data, latents, latent_rgb_proj, width, height, dim);
+
+    stbi_write_png("latent-preview.png", width, height, channel, data, 0);
+    free(data);
+}
+
 int main(int argc, const char* argv[]) {
     SDParams params;
 
@@ -930,7 +974,8 @@ int main(int argc, const char* argv[]) {
                           params.skip_layers.size(),
                           params.slg_scale,
                           params.skip_layer_start,
-                          params.skip_layer_end);
+                          params.skip_layer_end,
+                          (step_callback_t)step_callback);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -951,7 +996,8 @@ int main(int argc, const char* argv[]) {
                               params.sample_method,
                               params.sample_steps,
                               params.strength,
-                              params.seed);
+                              params.seed,
+                              (step_callback_t)step_callback);
             if (results == NULL) {
                 printf("generate failed\n");
                 free_sd_ctx(sd_ctx);
@@ -997,7 +1043,8 @@ int main(int argc, const char* argv[]) {
                               params.skip_layers.size(),
                               params.slg_scale,
                               params.skip_layer_start,
-                              params.skip_layer_end);
+                              params.skip_layer_end,
+                              (step_callback_t)step_callback);
         }
     }
 
