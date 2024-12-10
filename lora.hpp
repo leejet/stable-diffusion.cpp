@@ -87,6 +87,9 @@ struct LoraModel : public GGMLRunner {
                     break;
                 }
             }
+            // if (name.find(".transformer_blocks.0") != std::string::npos) {
+            //     LOG_INFO("%s", name.c_str());
+            // }
 
             if (dry_run) {
                 struct ggml_tensor* real = ggml_new_tensor(params_ctx,
@@ -104,7 +107,7 @@ struct LoraModel : public GGMLRunner {
 
         model_loader.load_tensors(on_new_tensor_cb, backend);
         alloc_params_buffer();
-
+        // exit(0);
         dry_run = false;
         model_loader.load_tensors(on_new_tensor_cb, backend);
 
@@ -171,32 +174,34 @@ struct LoraModel : public GGMLRunner {
                 ggml_tensor* lora_down = NULL;
                 // LOG_DEBUG("k_tensor %s", k_tensor.c_str());
                 if (sd_version_is_flux(version)) {
-                    size_t l1 = key.find("linear1");
+                    size_t l1  = key.find("linear1");
+                    size_t l2  = key.find("linear2");
+                    size_t mod = key.find("modulation.lin");
                     if (l1 != std::string::npos) {
-                        l1 -= 1;
-                        auto split_q_u_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_q" + lora_ups[type] + ".weight";
-                        if (lora_tensors.find(split_q_u_name) != lora_tensors.end()) {
+                        l1--;
+                        auto split_q_d_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_q" + lora_downs[type] + ".weight";
+                        if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
                             // print_ggml_tensor(it.second, true);  //[3072, 21504, 1, 1]
                             // find qkv and mlp up parts in LoRA model
-                            auto split_k_u_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_k" + lora_ups[type] + ".weight";
-                            auto split_v_u_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_v" + lora_ups[type] + ".weight";
-
-                            auto split_q_d_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_q" + lora_downs[type] + ".weight";
                             auto split_k_d_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_k" + lora_downs[type] + ".weight";
                             auto split_v_d_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_v" + lora_downs[type] + ".weight";
 
-                            auto split_m_u_name = lora_pre[type] + key.substr(0, l1) + ".proj_mlp" + lora_ups[type] + ".weight";
+                            auto split_q_u_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_q" + lora_ups[type] + ".weight";
+                            auto split_k_u_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_k" + lora_ups[type] + ".weight";
+                            auto split_v_u_name = lora_pre[type] + key.substr(0, l1) + ".attn.to_v" + lora_ups[type] + ".weight";
+
                             auto split_m_d_name = lora_pre[type] + key.substr(0, l1) + ".proj_mlp" + lora_downs[type] + ".weight";
+                            auto split_m_u_name = lora_pre[type] + key.substr(0, l1) + ".proj_mlp" + lora_ups[type] + ".weight";
 
-                            ggml_tensor* lora_q_up   = NULL;
                             ggml_tensor* lora_q_down = NULL;
-                            ggml_tensor* lora_k_up   = NULL;
+                            ggml_tensor* lora_q_up   = NULL;
                             ggml_tensor* lora_k_down = NULL;
-                            ggml_tensor* lora_v_up   = NULL;
+                            ggml_tensor* lora_k_up   = NULL;
                             ggml_tensor* lora_v_down = NULL;
+                            ggml_tensor* lora_v_up   = NULL;
 
-                            ggml_tensor* lora_m_up   = NULL;
                             ggml_tensor* lora_m_down = NULL;
+                            ggml_tensor* lora_m_up   = NULL;
 
                             lora_q_up = lora_tensors[split_q_u_name];
 
@@ -301,6 +306,38 @@ struct LoraModel : public GGMLRunner {
                             //     // print_ggml_tensor(it.second, true);                     // [3072, 21504, 1, 1]
                             // }
                         }
+                    } else if (l2 != std::string::npos) {
+                        l2--;
+                        std::string lora_down_name = lora_pre[type] + key.substr(0, l2) + ".proj_out" + lora_downs[type] + ".weight";
+                        if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
+                            std::string lora_up_name = lora_pre[type] + key.substr(0, l2) + ".proj_out" + lora_ups[type] + ".weight";
+                            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
+                                lora_up = lora_tensors[lora_up_name];
+                            }
+
+                            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
+                                lora_down = lora_tensors[lora_down_name];
+                            }
+
+                            applied_lora_tensors.insert(lora_up_name);
+                            applied_lora_tensors.insert(lora_down_name);
+                        }
+                    } else if (mod != std::string::npos) {
+                        mod--;
+                        std::string lora_down_name = lora_pre[type] + key.substr(0, mod) + ".norm.linear" + lora_downs[type] + ".weight";
+                        if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
+                            std::string lora_up_name = lora_pre[type] + key.substr(0, mod) + ".norm.linear" + lora_ups[type] + ".weight";
+                            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
+                                lora_up = lora_tensors[lora_up_name];
+                            }
+
+                            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
+                                lora_down = lora_tensors[lora_down_name];
+                            }
+
+                            applied_lora_tensors.insert(lora_up_name);
+                            applied_lora_tensors.insert(lora_down_name);
+                        }
                     }
                 }
 
@@ -380,8 +417,10 @@ struct LoraModel : public GGMLRunner {
             total_lora_tensors_count++;
             if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
                 LOG_WARN("unused lora tensor %s", kv.first.c_str());
-                exit(0);
-
+                print_ggml_tensor(kv.second, true);
+                if (kv.first.find("B") != std::string::npos) {
+                    exit(0);
+                }
             } else {
                 applied_lora_tensors_count++;
             }
