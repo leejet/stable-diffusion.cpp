@@ -173,8 +173,10 @@ struct LoraModel : public GGMLRunner {
                 ggml_tensor* lora_up   = NULL;
                 ggml_tensor* lora_down = NULL;
 
-                std::string alpha_name = "";
-                std::string scale_name = "";
+                std::string alpha_name     = "";
+                std::string scale_name     = "";
+                std::string lora_down_name = "";
+                std::string lora_up_name   = "";
                 // LOG_DEBUG("k_tensor %s", k_tensor.c_str());
                 if (sd_version_is_flux(version)) {
                     size_t linear1    = key.find("linear1");
@@ -221,38 +223,38 @@ struct LoraModel : public GGMLRunner {
                             ggml_tensor* lora_m_down = NULL;
                             ggml_tensor* lora_m_up   = NULL;
 
-                            lora_q_up = lora_tensors[split_q_u_name];
+                            lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
 
                             if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
-                                lora_q_down = lora_tensors[split_q_d_name];
+                                lora_q_down = to_f32(compute_ctx, lora_tensors[split_q_d_name]);
                             }
 
                             if (lora_tensors.find(split_q_u_name) != lora_tensors.end()) {
-                                lora_q_up = lora_tensors[split_q_u_name];
+                                lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
                             }
 
                             if (lora_tensors.find(split_k_d_name) != lora_tensors.end()) {
-                                lora_k_down = lora_tensors[split_k_d_name];
+                                lora_k_down = to_f32(compute_ctx, lora_tensors[split_k_d_name]);
                             }
 
                             if (lora_tensors.find(split_k_u_name) != lora_tensors.end()) {
-                                lora_k_up = lora_tensors[split_k_u_name];
+                                lora_k_up = to_f32(compute_ctx, lora_tensors[split_k_u_name]);
                             }
 
                             if (lora_tensors.find(split_v_d_name) != lora_tensors.end()) {
-                                lora_v_down = lora_tensors[split_v_d_name];
+                                lora_v_down = to_f32(compute_ctx, lora_tensors[split_v_d_name]);
                             }
 
                             if (lora_tensors.find(split_v_u_name) != lora_tensors.end()) {
-                                lora_v_up = lora_tensors[split_v_u_name];
+                                lora_v_up = to_f32(compute_ctx, lora_tensors[split_v_u_name]);
                             }
 
                             if (lora_tensors.find(split_m_d_name) != lora_tensors.end()) {
-                                lora_m_down = lora_tensors[split_m_d_name];
+                                lora_m_down = to_f32(compute_ctx, lora_tensors[split_m_d_name]);
                             }
 
                             if (lora_tensors.find(split_m_u_name) != lora_tensors.end()) {
-                                lora_m_up = lora_tensors[split_m_u_name];
+                                lora_m_up = to_f32(compute_ctx, lora_tensors[split_m_u_name]);
                             }
 
                             // print_ggml_tensor(lora_q_down, true);  //[3072, R, 1, 1]
@@ -300,28 +302,26 @@ struct LoraModel : public GGMLRunner {
                             lora_down = ggml_cont(compute_ctx, lora_down_concat);
                             lora_up   = ggml_cont(compute_ctx, lora_up_concat);
 
-                            std::string lora_down_name = lora_pre[type] + key + lora_downs[type] + ".weight";
-                            std::string lora_up_name   = lora_pre[type] + key + lora_ups[type] + ".weight";
+                            lora_down_name = lora_pre[type] + key + lora_downs[type] + ".weight";
+                            lora_up_name   = lora_pre[type] + key + lora_ups[type] + ".weight";
 
                             lora_tensors[lora_down_name] = lora_down;
                             lora_tensors[lora_up_name]   = lora_up;
 
-                            lora_tensors.erase(split_q_u_name);
-                            lora_tensors.erase(split_k_u_name);
-                            lora_tensors.erase(split_v_u_name);
-                            lora_tensors.erase(split_m_u_name);
+                            // Would be nice to be able to clean up lora_tensors, but it breaks because this is called twice :/
+                            // lora_tensors.erase(split_q_u_name);
+                            // lora_tensors.erase(split_k_u_name);
+                            // lora_tensors.erase(split_v_u_name);
+                            // lora_tensors.erase(split_m_u_name);
 
-                            lora_tensors.erase(split_q_d_name);
-                            lora_tensors.erase(split_k_d_name);
-                            lora_tensors.erase(split_v_d_name);
-                            lora_tensors.erase(split_m_d_name);
-
-                            applied_lora_tensors.insert(lora_down_name);
-                            applied_lora_tensors.insert(lora_up_name);
+                            // lora_tensors.erase(split_q_d_name);
+                            // lora_tensors.erase(split_k_d_name);
+                            // lora_tensors.erase(split_v_d_name);
+                            // lora_tensors.erase(split_m_d_name);
 
                         } else {
-                            // std::string lora_up_name   = lora_pre[type] + key + lora_ups[type] + ".weight";
-                            // std::string lora_down_name = lora_pre[type] + key + lora_downs[type] + ".weight";
+                            // lora_up_name   = lora_pre[type] + key + lora_ups[type] + ".weight";
+                            // lora_down_name = lora_pre[type] + key + lora_downs[type] + ".weight";
                             // if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
                             //     // print_ggml_tensor(lora_tensors[lora_down_name], true);  // [3072, R, 1, 1]
                             //     // print_ggml_tensor(lora_tensors[lora_up_name], true);    // [R, 21504, 1, 1]
@@ -330,9 +330,9 @@ struct LoraModel : public GGMLRunner {
                         }
                     } else if (linear2 != std::string::npos) {
                         linear2--;
-                        std::string lora_down_name = lora_pre[type] + key.substr(0, linear2) + ".proj_out" + lora_downs[type] + ".weight";
+                        lora_down_name = lora_pre[type] + key.substr(0, linear2) + ".proj_out" + lora_downs[type] + ".weight";
                         if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            std::string lora_up_name = lora_pre[type] + key.substr(0, linear2) + ".proj_out" + lora_ups[type] + ".weight";
+                            lora_up_name = lora_pre[type] + key.substr(0, linear2) + ".proj_out" + lora_ups[type] + ".weight";
                             if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
                                 lora_up = lora_tensors[lora_up_name];
                             }
@@ -346,9 +346,9 @@ struct LoraModel : public GGMLRunner {
                         }
                     } else if (modulation != std::string::npos) {
                         modulation--;
-                        std::string lora_down_name = lora_pre[type] + key.substr(0, modulation) + ".norm.linear" + lora_downs[type] + ".weight";
+                        lora_down_name = lora_pre[type] + key.substr(0, modulation) + ".norm.linear" + lora_downs[type] + ".weight";
                         if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            std::string lora_up_name = lora_pre[type] + key.substr(0, modulation) + ".norm.linear" + lora_ups[type] + ".weight";
+                            lora_up_name = lora_pre[type] + key.substr(0, modulation) + ".norm.linear" + lora_ups[type] + ".weight";
                             if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
                                 lora_up = lora_tensors[lora_up_name];
                             }
@@ -391,28 +391,26 @@ struct LoraModel : public GGMLRunner {
                             ggml_tensor* lora_v_down = NULL;
                             ggml_tensor* lora_v_up   = NULL;
 
-                            if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
-                                lora_q_down = lora_tensors[split_q_d_name];
-                            }
+                            lora_q_down = to_f32(compute_ctx, lora_tensors[split_q_d_name]);
 
                             if (lora_tensors.find(split_q_u_name) != lora_tensors.end()) {
-                                lora_q_up = lora_tensors[split_q_u_name];
+                                lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
                             }
 
                             if (lora_tensors.find(split_k_d_name) != lora_tensors.end()) {
-                                lora_k_down = lora_tensors[split_k_d_name];
+                                lora_k_down = to_f32(compute_ctx, lora_tensors[split_k_d_name]);
                             }
 
                             if (lora_tensors.find(split_k_u_name) != lora_tensors.end()) {
-                                lora_k_up = lora_tensors[split_k_u_name];
+                                lora_k_up = to_f32(compute_ctx, lora_tensors[split_k_u_name]);
                             }
 
                             if (lora_tensors.find(split_v_d_name) != lora_tensors.end()) {
-                                lora_v_down = lora_tensors[split_v_d_name];
+                                lora_v_down = to_f32(compute_ctx, lora_tensors[split_v_d_name]);
                             }
 
                             if (lora_tensors.find(split_v_u_name) != lora_tensors.end()) {
-                                lora_v_up = lora_tensors[split_v_u_name];
+                                lora_v_up = to_f32(compute_ctx, lora_tensors[split_v_u_name]);
                             }
 
                             // print_ggml_tensor(lora_q_down, true);  //[3072, R, 1, 1]
@@ -448,22 +446,20 @@ struct LoraModel : public GGMLRunner {
                             lora_down = ggml_cont(compute_ctx, lora_down_concat);
                             lora_up   = ggml_cont(compute_ctx, lora_up_concat);
 
-                            std::string lora_down_name = lora_pre[type] + key + lora_downs[type] + ".weight";
-                            std::string lora_up_name   = lora_pre[type] + key + lora_ups[type] + ".weight";
+                            lora_down_name = lora_pre[type] + key + lora_downs[type] + ".weight";
+                            lora_up_name   = lora_pre[type] + key + lora_ups[type] + ".weight";
 
                             lora_tensors[lora_down_name] = lora_down;
                             lora_tensors[lora_up_name]   = lora_up;
 
-                            lora_tensors.erase(split_q_u_name);
-                            lora_tensors.erase(split_k_u_name);
-                            lora_tensors.erase(split_v_u_name);
+                            // Would be nice to be able to clean up lora_tensors, but it breaks because this is called twice :/
+                            // lora_tensors.erase(split_q_u_name);
+                            // lora_tensors.erase(split_k_u_name);
+                            // lora_tensors.erase(split_v_u_name);
 
-                            lora_tensors.erase(split_q_d_name);
-                            lora_tensors.erase(split_k_d_name);
-                            lora_tensors.erase(split_v_d_name);
-
-                            applied_lora_tensors.insert(lora_down_name);
-                            applied_lora_tensors.insert(lora_up_name);
+                            // lora_tensors.erase(split_q_d_name);
+                            // lora_tensors.erase(split_k_d_name);
+                            // lora_tensors.erase(split_v_d_name);
                         }
                     } else if (txt_attn_proj != std::string::npos || img_attn_proj != std::string::npos) {
                         size_t match         = txt_attn_proj;
@@ -474,9 +470,9 @@ struct LoraModel : public GGMLRunner {
                         }
                         match--;
 
-                        std::string lora_down_name = lora_pre[type] + key.substr(0, match) + new_name + lora_downs[type] + ".weight";
+                        lora_down_name = lora_pre[type] + key.substr(0, match) + new_name + lora_downs[type] + ".weight";
                         if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            std::string lora_up_name = lora_pre[type] + key.substr(0, match) + new_name + lora_ups[type] + ".weight";
+                            lora_up_name = lora_pre[type] + key.substr(0, match) + new_name + lora_ups[type] + ".weight";
                             if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
                                 lora_up = lora_tensors[lora_up_name];
                             }
@@ -507,9 +503,9 @@ struct LoraModel : public GGMLRunner {
                             match = img_mlp_2;
                         }
                         match--;
-                        std::string lora_down_name = lora_pre[type] + key.substr(0, match) + prefix + suffix + lora_downs[type] + ".weight";
+                        lora_down_name = lora_pre[type] + key.substr(0, match) + prefix + suffix + lora_downs[type] + ".weight";
                         if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            std::string lora_up_name = lora_pre[type] + key.substr(0, match) + prefix + suffix + lora_ups[type] + ".weight";
+                            lora_up_name = lora_pre[type] + key.substr(0, match) + prefix + suffix + lora_ups[type] + ".weight";
                             if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
                                 lora_up = lora_tensors[lora_up_name];
                             }
@@ -530,9 +526,9 @@ struct LoraModel : public GGMLRunner {
                         }
                         match--;
 
-                        std::string lora_down_name = lora_pre[type] + key.substr(0, match) + new_name + lora_downs[type] + ".weight";
+                        lora_down_name = lora_pre[type] + key.substr(0, match) + new_name + lora_downs[type] + ".weight";
                         if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            std::string lora_up_name = lora_pre[type] + key.substr(0, match) + new_name + lora_ups[type] + ".weight";
+                            lora_up_name = lora_pre[type] + key.substr(0, match) + new_name + lora_ups[type] + ".weight";
                             if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
                                 lora_up = lora_tensors[lora_up_name];
                             }
@@ -548,7 +544,7 @@ struct LoraModel : public GGMLRunner {
                 }
 
                 if (lora_up == NULL || lora_down == NULL) {
-                    std::string lora_up_name = lora_pre[type] + key + lora_ups[type] + ".weight";
+                    lora_up_name = lora_pre[type] + key + lora_ups[type] + ".weight";
                     if (lora_tensors.find(lora_up_name) == lora_tensors.end()) {
                         if (key == "model_diffusion_model_output_blocks_2_2_conv") {
                             // fix for some sdxl lora, like lcm-lora-xl
@@ -557,9 +553,9 @@ struct LoraModel : public GGMLRunner {
                         }
                     }
 
-                    std::string lora_down_name = lora_pre[type] + key + lora_downs[type] + ".weight";
-                    alpha_name                 = lora_pre[type] + key + ".alpha";
-                    scale_name                 = lora_pre[type] + key + ".scale";
+                    lora_down_name = lora_pre[type] + key + lora_downs[type] + ".weight";
+                    alpha_name     = lora_pre[type] + key + ".alpha";
+                    scale_name     = lora_pre[type] + key + ".scale";
 
                     if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
                         lora_up = lora_tensors[lora_up_name];
@@ -568,14 +564,14 @@ struct LoraModel : public GGMLRunner {
                     if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
                         lora_down = lora_tensors[lora_down_name];
                     }
-                    applied_lora_tensors.insert(lora_up_name);
-                    applied_lora_tensors.insert(lora_down_name);
-                    applied_lora_tensors.insert(alpha_name);
-                    applied_lora_tensors.insert(scale_name);
+                }
+                applied_lora_tensors.insert(lora_up_name);
+                applied_lora_tensors.insert(lora_down_name);
+                applied_lora_tensors.insert(alpha_name);
+                applied_lora_tensors.insert(scale_name);
 
-                    if (lora_up == NULL || lora_down == NULL) {
-                        continue;
-                    }
+                if (lora_up == NULL || lora_down == NULL) {
+                    continue;
                 }
                 // calc_scale
                 int64_t dim       = lora_down->ne[ggml_n_dims(lora_down) - 1];
@@ -622,10 +618,6 @@ struct LoraModel : public GGMLRunner {
             total_lora_tensors_count++;
             if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
                 LOG_WARN("unused lora tensor %s", kv.first.c_str());
-                print_ggml_tensor(kv.second, true);
-                if (kv.first.find("B") != std::string::npos) {
-                    exit(0);
-                }
             } else {
                 applied_lora_tensors_count++;
             }
