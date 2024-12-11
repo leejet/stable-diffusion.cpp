@@ -107,6 +107,8 @@ struct LoraModel : public GGMLRunner {
         dry_run = false;
         model_loader.load_tensors(on_new_tensor_cb, backend);
 
+        LOG_DEBUG("lora type: \"%s\"/\"%s\"", lora_downs[type].c_str(), lora_ups[type].c_str());
+
         LOG_DEBUG("finished loaded lora");
         return true;
     }
@@ -120,29 +122,36 @@ struct LoraModel : public GGMLRunner {
 
     std::vector<std::string> to_lora_keys(std::string blk_name, SDVersion version) {
         std::vector<std::string> keys;
+        // if (!sd_version_is_sd3(version) || blk_name != "model.diffusion_model.pos_embed") {
         size_t k_pos = blk_name.find(".weight");
         if (k_pos == std::string::npos) {
             return keys;
         }
         blk_name = blk_name.substr(0, k_pos);
+        // }
         if (type == REGULAR) {
             keys.push_back(blk_name);
             replace_all_chars(blk_name, '.', '_');
             keys.push_back(blk_name);
             return keys;
         } else if (type == DIFFUSERS || type == DIFFUSERS_2 || DIFFUSERS_3) {
-            // if (sd_version_is_Flux(version)) {
-            if (blk_name.find("model.diffusion_model") != std::string::npos) {
-                blk_name.replace(blk_name.find("model.diffusion_model"), sizeof("model.diffusion_model") - 1, "transformer");
+            if (sd_version_is_dit(version)) {
+                if (blk_name.find("model.diffusion_model") != std::string::npos) {
+                    blk_name.replace(blk_name.find("model.diffusion_model"), sizeof("model.diffusion_model") - 1, "transformer");
+                }
             }
+
             if (blk_name.find(".single_blocks") != std::string::npos) {
                 blk_name.replace(blk_name.find(".single_blocks"), sizeof(".single_blocks") - 1, ".single_transformer_blocks");
             }
             if (blk_name.find(".double_blocks") != std::string::npos) {
                 blk_name.replace(blk_name.find(".double_blocks"), sizeof(".double_blocks") - 1, ".transformer_blocks");
             }
+
+            if (blk_name.find(".joint_blocks") != std::string::npos) {
+                blk_name.replace(blk_name.find(".joint_blocks"), sizeof(".joint_blocks") - 1, ".transformer_blocks");
+            }
             keys.push_back(blk_name);
-            // }
         }
         return keys;
     }
@@ -510,8 +519,199 @@ struct LoraModel : public GGMLRunner {
                             applied_lora_tensors.insert(lora_up_name);
                         }
                     }
-                }
+                } else if (sd_version_is_sd3(version)) {
+                    size_t final_layer_adaLN_modulation     = key.find("final_layer.adaLN_modulation.1");
+                    size_t pos_embed                        = key.find("pos_embed");
+                    size_t final_layer_linear               = key.find("final_layer.linear");
+                    size_t y_embedder_mlp_0                 = key.find("y_embedder.mlp.0");
+                    size_t y_embedder_mlp_2                 = key.find("y_embedder.mlp.2");
+                    size_t t_embedder_mlp_0                 = key.find("t_embedder.mlp.0");
+                    size_t t_embedder_mlp_2                 = key.find("t_embedder.mlp.2");
+                    size_t x_block_mlp_fc1                  = key.find("x_block.mlp.fc1");
+                    size_t x_block_mlp_fc2                  = key.find("x_block.mlp.fc2");
+                    size_t context_block_mlp_fc1            = key.find("context_block.mlp.fc1");
+                    size_t context_block_mlp_fc2            = key.find("context_block.mlp.fc2");
+                    size_t x_block_adaLN_modulation_1       = key.find("x_block.adaLN_modulation.1");
+                    size_t context_block_adaLN_modulation_1 = key.find("context_block.adaLN_modulation.1");
 
+                    size_t context_block_attn_proj = key.find("context_block.attn.proj");
+                    size_t x_block_attn_proj       = key.find("x_block.attn.proj");
+                    size_t x_block_attn2_proj      = key.find("x_block.attn2.proj");
+
+                    size_t context_block_attn_qkv = key.find("context_block.attn.qkv");
+                    size_t x_block_attn_qkv       = key.find("x_block.attn.qkv");
+                    size_t x_block_attn2_qkv      = key.find("x_block.attn2.qkv");
+
+                    size_t match         = std::string::npos;
+                    std::string new_name = "";
+                    if (final_layer_adaLN_modulation != std::string::npos) {
+                        new_name = ".norm_out.linear";
+                        match    = final_layer_adaLN_modulation;
+                    } else if (pos_embed != std::string::npos) {
+                        match    = pos_embed;
+                        new_name = ".pos_embed.proj";
+                    } else if (final_layer_linear != std::string::npos) {
+                        match    = final_layer_linear;
+                        new_name = ".proj_out";
+                    } else if (y_embedder_mlp_0 != std::string::npos) {
+                        match    = y_embedder_mlp_0;
+                        new_name = ".time_text_embed.text_embedder.linear_1";
+                    } else if (y_embedder_mlp_2 != std::string::npos) {
+                        match    = y_embedder_mlp_2;
+                        new_name = ".time_text_embed.text_embedder.linear_2";
+                    } else if (t_embedder_mlp_0 != std::string::npos) {
+                        match    = t_embedder_mlp_0;
+                        new_name = ".time_text_embed.timestep_embedder.linear_1";
+                    } else if (t_embedder_mlp_2 != std::string::npos) {
+                        match    = t_embedder_mlp_2;
+                        new_name = ".time_text_embed.timestep_embedder.linear_2";
+                    } else if (x_block_mlp_fc1 != std::string::npos) {
+                        match    = x_block_mlp_fc1;
+                        new_name = ".ff.net.0.proj";
+                    } else if (x_block_mlp_fc2 != std::string::npos) {
+                        match    = x_block_mlp_fc2;
+                        new_name = ".ff.net.2";
+                    } else if (context_block_mlp_fc1 != std::string::npos) {
+                        match    = context_block_mlp_fc1;
+                        new_name = ".ff_context.net.0.proj";
+                    } else if (context_block_mlp_fc2 != std::string::npos) {
+                        match    = context_block_mlp_fc2;
+                        new_name = ".ff_context.net.2";
+                    } else if (x_block_adaLN_modulation_1 != std::string::npos) {
+                        match    = x_block_adaLN_modulation_1;
+                        new_name = ".norm1.linear";
+                    } else if (context_block_adaLN_modulation_1 != std::string::npos) {
+                        match    = context_block_adaLN_modulation_1;
+                        new_name = ".norm1_context.linear";
+                    } else if (context_block_attn_proj != std::string::npos) {
+                        match    = context_block_attn_proj;
+                        new_name = ".attn.to_add_out";
+                    } else if (x_block_attn_proj != std::string::npos) {
+                        match    = x_block_attn_proj;
+                        new_name = ".attn.to_out.0";
+                    } else if (x_block_attn2_proj != std::string::npos) {
+                        match    = x_block_attn2_proj;
+                        new_name = ".attn2.to_out.0";
+                    }
+
+                    if (match != std::string::npos) {
+                        match--;
+                        lora_down_name = lora_pre[type] + key.substr(0, match) + new_name + lora_downs[type] + ".weight";
+                        if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
+                            lora_up_name = lora_pre[type] + key.substr(0, match) + new_name + lora_ups[type] + ".weight";
+                            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
+                                lora_up = lora_tensors[lora_up_name];
+                            }
+
+                            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
+                                lora_down = lora_tensors[lora_down_name];
+                            }
+
+                            applied_lora_tensors.insert(lora_down_name);
+                            applied_lora_tensors.insert(lora_up_name);
+                        }
+                    }
+                    std::string prefix = "";
+                    std::string suffix = "";
+
+                    if (context_block_attn_qkv != std::string::npos) {
+                        match  = context_block_attn_qkv;
+                        prefix = ".attn.add_";
+                        suffix = "_proj";
+                    } else if (x_block_attn_qkv != std::string::npos) {
+                        match  = x_block_attn_qkv;
+                        prefix = ".attn.to_";
+                        suffix = "";
+                    } else if (x_block_attn2_qkv != std::string::npos) {
+                        match  = x_block_attn2_qkv;
+                        prefix = ".attn2.to_";
+                        suffix = "";
+                    }
+                    if (match != std::string::npos) {
+                        match--;
+                        auto split_q_d_name = lora_pre[type] + key.substr(0, match) + prefix + "q" + suffix + lora_downs[type] + ".weight";
+                        if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
+                            // print_ggml_tensor(it.second, true);  //[3072, 21504, 1, 1]
+                            // find qkv and mlp up parts in LoRA model
+                            auto split_k_d_name = lora_pre[type] + key.substr(0, match) + prefix + "k" + suffix + lora_downs[type] + ".weight";
+                            auto split_v_d_name = lora_pre[type] + key.substr(0, match) + prefix + "v" + suffix + lora_downs[type] + ".weight";
+
+                            auto split_q_u_name = lora_pre[type] + key.substr(0, match) + prefix + "q" + suffix + lora_ups[type] + ".weight";
+                            auto split_k_u_name = lora_pre[type] + key.substr(0, match) + prefix + "k" + suffix + lora_ups[type] + ".weight";
+                            auto split_v_u_name = lora_pre[type] + key.substr(0, match) + prefix + "v" + suffix + lora_ups[type] + ".weight";
+
+                            ggml_tensor* lora_q_down = NULL;
+                            ggml_tensor* lora_q_up   = NULL;
+                            ggml_tensor* lora_k_down = NULL;
+                            ggml_tensor* lora_k_up   = NULL;
+                            ggml_tensor* lora_v_down = NULL;
+                            ggml_tensor* lora_v_up   = NULL;
+
+                            lora_q_down = to_f32(compute_ctx, lora_tensors[split_q_d_name]);
+
+                            if (lora_tensors.find(split_q_u_name) != lora_tensors.end()) {
+                                lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
+                            }
+
+                            if (lora_tensors.find(split_k_d_name) != lora_tensors.end()) {
+                                lora_k_down = to_f32(compute_ctx, lora_tensors[split_k_d_name]);
+                            }
+
+                            if (lora_tensors.find(split_k_u_name) != lora_tensors.end()) {
+                                lora_k_up = to_f32(compute_ctx, lora_tensors[split_k_u_name]);
+                            }
+
+                            if (lora_tensors.find(split_v_d_name) != lora_tensors.end()) {
+                                lora_v_down = to_f32(compute_ctx, lora_tensors[split_v_d_name]);
+                            }
+
+                            if (lora_tensors.find(split_v_u_name) != lora_tensors.end()) {
+                                lora_v_up = to_f32(compute_ctx, lora_tensors[split_v_u_name]);
+                            }
+
+                            // print_ggml_tensor(lora_q_down, true);  //[hidden_size, R, 1, 1]
+                            // print_ggml_tensor(lora_k_down, true);  //[hidden_size, R, 1, 1]
+                            // print_ggml_tensor(lora_v_down, true);  //[hidden_size, R, 1, 1]
+                            // print_ggml_tensor(lora_q_up, true);    //[R, hidden_size, 1, 1]
+                            // print_ggml_tensor(lora_k_up, true);    //[R, hidden_size, 1, 1]
+                            // print_ggml_tensor(lora_v_up, true);    //[R, hidden_size, 1, 1]
+
+                            // these need to be stitched together this way:
+                            //                          |q_up,0   ,0   |
+                            //                          |0   ,k_up,0   |
+                            //                          |0   ,0   ,v_up|
+                            // (q_down,k_down,v_down) . (q   ,k   ,v)
+
+                            // up_concat will be [4608, R*3, 1, 1]
+                            // down_concat will be [R*3, hidden_size, 1, 1]
+                            ggml_tensor* lora_down_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, lora_q_down, lora_k_down, 1), lora_v_down, 1);
+
+                            ggml_tensor* z = ggml_dup_tensor(compute_ctx, lora_q_up);
+                            ggml_scale(compute_ctx, z, 0);
+                            ggml_tensor* zz = ggml_concat(compute_ctx, z, z, 1);
+
+                            ggml_tensor* q_up = ggml_concat(compute_ctx, lora_q_up, zz, 1);
+                            ggml_tensor* k_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, z, lora_k_up, 1), z, 1);
+                            ggml_tensor* v_up = ggml_concat(compute_ctx, zz, lora_v_up, 1);
+                            // print_ggml_tensor(q_up, true);  //[R, hidden_size * 3, 1, 1]
+                            // print_ggml_tensor(k_up, true);  //[R, hidden_size * 3, 1, 1]
+                            // print_ggml_tensor(v_up, true);  //[R, hidden_size * 3, 1, 1]
+                            ggml_tensor* lora_up_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, q_up, k_up, 0), v_up, 0);
+                            // print_ggml_tensor(lora_up_concat, true);  //[R*3, hidden_size * 3, 1, 1]
+
+                            lora_down = ggml_cont(compute_ctx, lora_down_concat);
+                            lora_up   = ggml_cont(compute_ctx, lora_up_concat);
+
+                            applied_lora_tensors.insert(split_q_u_name);
+                            applied_lora_tensors.insert(split_k_u_name);
+                            applied_lora_tensors.insert(split_v_u_name);
+
+                            applied_lora_tensors.insert(split_q_d_name);
+                            applied_lora_tensors.insert(split_k_d_name);
+                            applied_lora_tensors.insert(split_v_d_name);
+                        }
+                    }
+                }
                 if (lora_up == NULL || lora_down == NULL) {
                     lora_up_name = lora_pre[type] + key + lora_ups[type] + ".weight";
                     if (lora_tensors.find(lora_up_name) == lora_tensors.end()) {
@@ -587,6 +787,7 @@ struct LoraModel : public GGMLRunner {
             total_lora_tensors_count++;
             if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
                 LOG_WARN("unused lora tensor %s", kv.first.c_str());
+                print_ggml_tensor(kv.second, true);
             } else {
                 applied_lora_tensors_count++;
             }
