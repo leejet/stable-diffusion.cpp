@@ -6,7 +6,7 @@
 #define LORA_GRAPH_SIZE 10240
 
 struct LoraModel : public GGMLRunner {
-    static enum lora_t {
+    enum lora_t {
         REGULAR      = 0,
         DIFFUSERS    = 1,
         DIFFUSERS_2  = 2,
