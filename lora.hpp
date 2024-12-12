@@ -39,6 +39,55 @@ struct LoraModel : public GGMLRunner {
         "",
     };
 
+    const std::map<std::string, std::string> alt_names = {
+        // mmdit
+        {"final_layer.adaLN_modulation.1", "norm_out.linear"},
+        {"pos_embed", "pos_embed.proj"},
+        {"final_layer.linear", "proj_out"},
+        {"y_embedder.mlp.0", "time_text_embed.text_embedder.linear_1"},
+        {"y_embedder.mlp.2", "time_text_embed.text_embedder.linear_2"},
+        {"t_embedder.mlp.0", "time_text_embed.timestep_embedder.linear_1"},
+        {"t_embedder.mlp.2", "time_text_embed.timestep_embedder.linear_2"},
+        {"x_block.mlp.fc1", "ff.net.0.proj"},
+        {"x_block.mlp.fc2", "ff.net.2"},
+        {"context_block.mlp.fc1", "ff_context.net.0.proj"},
+        {"context_block.mlp.fc2", "ff_context.net.2"},
+        {"x_block.adaLN_modulation.1", "norm1.linear"},
+        {"context_block.adaLN_modulation.1", "norm1_context.linear"},
+        {"context_block.attn.proj", "attn.to_add_out"},
+        {"x_block.attn.proj", "attn.to_out.0"},
+        {"x_block.attn2.proj", "attn2.to_out.0"},
+        // flux
+        // singlestream
+        {"linear2", "proj_out"},
+        {"modulation.lin", "norm.linear"},
+        // doublestream
+        {"txt_attn.proj", "attn.to_add_out"},
+        {"img_attn.proj", "attn.to_out.0"},
+        {"txt_mlp.0", "ff_context.net.0.proj"},
+        {"txt_mlp.2", "ff_context.net.2"},
+        {"img_mlp.0", "ff.net.0.proj"},
+        {"img_mlp.2", "ff.net.2"},
+        {"txt_mod.lin", "norm1_context.linear"},
+        {"img_mod.lin", "norm1.linear"},
+    };
+
+    const std::map<std::string, std::string> qkv_prefixes = {
+        // mmdit
+        {"context_block.attn.qkv", "attn.add_"},  // suffix "_proj"
+        {"x_block.attn.qkv", "attn.to_"},
+        {"x_block.attn2.qkv", "attn2.to_"},
+        // flux
+        // doublestream
+        {"txt_attn.qkv", "attn.add_"},  // suffix "_proj"
+        {"img_attn.qkv", "attn.to_"},
+    };
+    const std::map<std::string, std::string> qkvm_prefixes = {
+        // flux
+        // singlestream
+        {"linear1", ""},
+    };
+
     const std::string* type_fingerprints = lora_ups;
 
     float multiplier = 1.0f;
@@ -104,6 +153,7 @@ struct LoraModel : public GGMLRunner {
 
         model_loader.load_tensors(on_new_tensor_cb, backend);
         alloc_params_buffer();
+        // exit(0);
         dry_run = false;
         model_loader.load_tensors(on_new_tensor_cb, backend);
 
@@ -129,16 +179,10 @@ struct LoraModel : public GGMLRunner {
         }
         blk_name = blk_name.substr(0, k_pos);
         // }
-        if (type == REGULAR) {
-            keys.push_back(blk_name);
-            replace_all_chars(blk_name, '.', '_');
-            keys.push_back(blk_name);
-            return keys;
-        } else if (type == DIFFUSERS || type == DIFFUSERS_2 || DIFFUSERS_3) {
-            if (sd_version_is_dit(version)) {
-                if (blk_name.find("model.diffusion_model") != std::string::npos) {
-                    blk_name.replace(blk_name.find("model.diffusion_model"), sizeof("model.diffusion_model") - 1, "transformer");
-                }
+        keys.push_back(blk_name);
+        if (sd_version_is_dit(version)) {
+            if (blk_name.find("model.diffusion_model") != std::string::npos) {
+                blk_name.replace(blk_name.find("model.diffusion_model"), sizeof("model.diffusion_model") - 1, "transformer");
             }
 
             if (blk_name.find(".single_blocks") != std::string::npos) {
@@ -151,9 +195,37 @@ struct LoraModel : public GGMLRunner {
             if (blk_name.find(".joint_blocks") != std::string::npos) {
                 blk_name.replace(blk_name.find(".joint_blocks"), sizeof(".joint_blocks") - 1, ".transformer_blocks");
             }
-            keys.push_back(blk_name);
+
+            for (const auto& item : alt_names) {
+                size_t match = blk_name.find(item.first);
+                if (match != std::string::npos) {
+                    blk_name = blk_name.substr(0, match) + item.second;
+                }
+            }
+            for (const auto& prefix : qkv_prefixes) {
+                size_t match = blk_name.find(prefix.first);
+                if (match != std::string::npos) {
+                    std::string split_blk = "SPLIT|" + blk_name.substr(0, match) + prefix.second;
+                    keys.push_back(split_blk);
+                }
+            }
+            for (const auto& prefix : qkvm_prefixes) {
+                size_t match = blk_name.find(prefix.first);
+                if (match != std::string::npos) {
+                    std::string split_blk = "SPLIT_L|" + blk_name.substr(0, match) + prefix.second;
+                    keys.push_back(split_blk);
+                }
+            }
         }
-        return keys;
+        keys.push_back(blk_name);
+
+        std::vector<std::string> ret;
+        for (std::string& key : keys) {
+            ret.push_back(key);
+            replace_all_chars(key, '.', '_');
+            ret.push_back(key);
+        }
+        return ret;
     }
 
     struct ggml_cgraph* build_lora_graph(std::map<std::string, struct ggml_tensor*> model_tensors, SDVersion version) {
@@ -179,537 +251,213 @@ struct LoraModel : public GGMLRunner {
                 std::string scale_name     = "";
                 std::string lora_down_name = "";
                 std::string lora_up_name   = "";
-                if (sd_version_is_flux(version)) {
-                    size_t linear1    = key.find("linear1");
-                    size_t linear2    = key.find("linear2");
-                    size_t modulation = key.find("modulation.lin");
 
-                    size_t txt_attn_qkv = key.find("txt_attn.qkv");
-                    size_t img_attn_qkv = key.find("img_attn.qkv");
+                if (starts_with(key, "SPLIT|")) {
+                    key = key.substr(sizeof("SPLIT|") - 1);
+                    // TODO: Handle alphas
+                    std::string suffix  = "";
+                    auto split_q_d_name = lora_pre[type] + key + "q" + suffix + lora_downs[type] + ".weight";
 
-                    size_t txt_attn_proj = key.find("txt_attn.proj");
-                    size_t img_attn_proj = key.find("img_attn.proj");
+                    if (lora_tensors.find(split_q_d_name) == lora_tensors.end()) {
+                        suffix         = "_proj";
+                        split_q_d_name = lora_pre[type] + key + "q" + suffix + lora_downs[type] + ".weight";
+                    }
+                    if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
+                        // print_ggml_tensor(it.second, true);  //[3072, 21504, 1, 1]
+                        // find qkv and mlp up parts in LoRA model
+                        auto split_k_d_name = lora_pre[type] + key + "k" + suffix + lora_downs[type] + ".weight";
+                        auto split_v_d_name = lora_pre[type] + key + "v" + suffix + lora_downs[type] + ".weight";
 
-                    size_t txt_mlp_0 = key.find("txt_mlp.0");
-                    size_t txt_mlp_2 = key.find("txt_mlp.2");
-                    size_t img_mlp_0 = key.find("img_mlp.0");
-                    size_t img_mlp_2 = key.find("img_mlp.2");
+                        auto split_q_u_name = lora_pre[type] + key + "q" + suffix + lora_ups[type] + ".weight";
+                        auto split_k_u_name = lora_pre[type] + key + "k" + suffix + lora_ups[type] + ".weight";
+                        auto split_v_u_name = lora_pre[type] + key + "v" + suffix + lora_ups[type] + ".weight";
 
-                    size_t txt_mod_lin = key.find("txt_mod.lin");
-                    size_t img_mod_lin = key.find("img_mod.lin");
+                        ggml_tensor* lora_q_down = NULL;
+                        ggml_tensor* lora_q_up   = NULL;
+                        ggml_tensor* lora_k_down = NULL;
+                        ggml_tensor* lora_k_up   = NULL;
+                        ggml_tensor* lora_v_down = NULL;
+                        ggml_tensor* lora_v_up   = NULL;
 
-                    if (linear1 != std::string::npos) {
-                        linear1--;
-                        auto split_q_d_name = lora_pre[type] + key.substr(0, linear1) + ".attn.to_q" + lora_downs[type] + ".weight";
-                        if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
-                            // print_ggml_tensor(it.second, true);  //[3072, 21504, 1, 1]
-                            // find qkv and mlp up parts in LoRA model
-                            auto split_k_d_name = lora_pre[type] + key.substr(0, linear1) + ".attn.to_k" + lora_downs[type] + ".weight";
-                            auto split_v_d_name = lora_pre[type] + key.substr(0, linear1) + ".attn.to_v" + lora_downs[type] + ".weight";
+                        lora_q_down = to_f32(compute_ctx, lora_tensors[split_q_d_name]);
 
-                            auto split_q_u_name = lora_pre[type] + key.substr(0, linear1) + ".attn.to_q" + lora_ups[type] + ".weight";
-                            auto split_k_u_name = lora_pre[type] + key.substr(0, linear1) + ".attn.to_k" + lora_ups[type] + ".weight";
-                            auto split_v_u_name = lora_pre[type] + key.substr(0, linear1) + ".attn.to_v" + lora_ups[type] + ".weight";
-
-                            auto split_m_d_name = lora_pre[type] + key.substr(0, linear1) + ".proj_mlp" + lora_downs[type] + ".weight";
-                            auto split_m_u_name = lora_pre[type] + key.substr(0, linear1) + ".proj_mlp" + lora_ups[type] + ".weight";
-
-                            ggml_tensor* lora_q_down = NULL;
-                            ggml_tensor* lora_q_up   = NULL;
-                            ggml_tensor* lora_k_down = NULL;
-                            ggml_tensor* lora_k_up   = NULL;
-                            ggml_tensor* lora_v_down = NULL;
-                            ggml_tensor* lora_v_up   = NULL;
-
-                            ggml_tensor* lora_m_down = NULL;
-                            ggml_tensor* lora_m_up   = NULL;
-
+                        if (lora_tensors.find(split_q_u_name) != lora_tensors.end()) {
                             lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
-
-                            if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
-                                lora_q_down = to_f32(compute_ctx, lora_tensors[split_q_d_name]);
-                            }
-
-                            if (lora_tensors.find(split_q_u_name) != lora_tensors.end()) {
-                                lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
-                            }
-
-                            if (lora_tensors.find(split_k_d_name) != lora_tensors.end()) {
-                                lora_k_down = to_f32(compute_ctx, lora_tensors[split_k_d_name]);
-                            }
-
-                            if (lora_tensors.find(split_k_u_name) != lora_tensors.end()) {
-                                lora_k_up = to_f32(compute_ctx, lora_tensors[split_k_u_name]);
-                            }
-
-                            if (lora_tensors.find(split_v_d_name) != lora_tensors.end()) {
-                                lora_v_down = to_f32(compute_ctx, lora_tensors[split_v_d_name]);
-                            }
-
-                            if (lora_tensors.find(split_v_u_name) != lora_tensors.end()) {
-                                lora_v_up = to_f32(compute_ctx, lora_tensors[split_v_u_name]);
-                            }
-
-                            if (lora_tensors.find(split_m_d_name) != lora_tensors.end()) {
-                                lora_m_down = to_f32(compute_ctx, lora_tensors[split_m_d_name]);
-                            }
-
-                            if (lora_tensors.find(split_m_u_name) != lora_tensors.end()) {
-                                lora_m_up = to_f32(compute_ctx, lora_tensors[split_m_u_name]);
-                            }
-
-                            // print_ggml_tensor(lora_q_down, true);  //[3072, R, 1, 1]
-                            // print_ggml_tensor(lora_k_down, true);  //[3072, R, 1, 1]
-                            // print_ggml_tensor(lora_v_down, true);  //[3072, R, 1, 1]
-                            // print_ggml_tensor(lora_m_down, true);  //[3072, R, 1, 1]
-                            // print_ggml_tensor(lora_q_up, true);  //[R, 3072, 1, 1]
-                            // print_ggml_tensor(lora_k_up, true);  //[R, 3072, 1, 1]
-                            // print_ggml_tensor(lora_v_up, true);  //[R, 3072, 1, 1]
-                            // print_ggml_tensor(lora_m_up, true);  //[R, 12288, 1, 1]
-
-                            // these need to be stitched together this way:
-                            //                                 |q_up,0   ,0   ,0   |
-                            //                                 |0   ,k_up,0   ,0   |
-                            //                                 |0   ,0   ,v_up,0   |
-                            //                                 |0   ,0   ,0   ,m_up|
-                            // (q_down,k_down,v_down,m_down) . (q   ,k   ,v   ,m)
-
-                            // up_concat will be [21504, R*4, 1, 1]
-                            // down_concat will be [R*4, 3072, 1, 1]
-
-                            ggml_tensor* lora_down_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, lora_q_down, lora_k_down, 1), ggml_concat(compute_ctx, lora_v_down, lora_m_down, 1), 1);
-                            // print_ggml_tensor(lora_down_concat, true);  //[3072, R*4, 1, 1]
-
-                            // this also means that if rank is bigger than 672, it is less memory efficient to do it this way (should be fine)
-                            // print_ggml_tensor(lora_q_up, true);  //[3072, R, 1, 1]
-                            ggml_tensor* z     = ggml_dup_tensor(compute_ctx, lora_q_up);
-                            ggml_tensor* mlp_z = ggml_dup_tensor(compute_ctx, lora_m_up);
-                            ggml_scale(compute_ctx, z, 0);
-                            ggml_scale(compute_ctx, mlp_z, 0);
-                            ggml_tensor* zz = ggml_concat(compute_ctx, z, z, 1);
-
-                            ggml_tensor* q_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, lora_q_up, zz, 1), mlp_z, 1);
-                            ggml_tensor* k_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, z, lora_k_up, 1), ggml_concat(compute_ctx, z, mlp_z, 1), 1);
-                            ggml_tensor* v_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, zz, lora_v_up, 1), mlp_z, 1);
-                            ggml_tensor* m_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, zz, z, 1), lora_m_up, 1);
-                            // print_ggml_tensor(q_up, true);  //[R, 21504, 1, 1]
-                            // print_ggml_tensor(k_up, true);  //[R, 21504, 1, 1]
-                            // print_ggml_tensor(v_up, true);  //[R, 21504, 1, 1]
-                            // print_ggml_tensor(m_up, true);  //[R, 21504, 1, 1]
-
-                            ggml_tensor* lora_up_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, q_up, k_up, 0), ggml_concat(compute_ctx, v_up, m_up, 0), 0);
-                            // print_ggml_tensor(lora_up_concat, true);  //[R*4, 21504, 1, 1]
-
-                            lora_down = ggml_cont(compute_ctx, lora_down_concat);
-                            lora_up   = ggml_cont(compute_ctx, lora_up_concat);
-
-                            applied_lora_tensors.insert(split_q_u_name);
-                            applied_lora_tensors.insert(split_k_u_name);
-                            applied_lora_tensors.insert(split_v_u_name);
-                            applied_lora_tensors.insert(split_m_u_name);
-
-                            applied_lora_tensors.insert(split_q_d_name);
-                            applied_lora_tensors.insert(split_k_d_name);
-                            applied_lora_tensors.insert(split_v_d_name);
-                            applied_lora_tensors.insert(split_m_d_name);
                         }
-                    } else if (linear2 != std::string::npos) {
-                        linear2--;
-                        lora_down_name = lora_pre[type] + key.substr(0, linear2) + ".proj_out" + lora_downs[type] + ".weight";
-                        if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            lora_up_name = lora_pre[type] + key.substr(0, linear2) + ".proj_out" + lora_ups[type] + ".weight";
-                            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
-                                lora_up = lora_tensors[lora_up_name];
-                            }
 
-                            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                                lora_down = lora_tensors[lora_down_name];
-                            }
-
-                            applied_lora_tensors.insert(lora_down_name);
-                            applied_lora_tensors.insert(lora_up_name);
+                        if (lora_tensors.find(split_k_d_name) != lora_tensors.end()) {
+                            lora_k_down = to_f32(compute_ctx, lora_tensors[split_k_d_name]);
                         }
-                    } else if (modulation != std::string::npos) {
-                        modulation--;
-                        lora_down_name = lora_pre[type] + key.substr(0, modulation) + ".norm.linear" + lora_downs[type] + ".weight";
-                        if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            lora_up_name = lora_pre[type] + key.substr(0, modulation) + ".norm.linear" + lora_ups[type] + ".weight";
-                            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
-                                lora_up = lora_tensors[lora_up_name];
-                            }
 
-                            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                                lora_down = lora_tensors[lora_down_name];
-                            }
-
-                            applied_lora_tensors.insert(lora_down_name);
-                            applied_lora_tensors.insert(lora_up_name);
+                        if (lora_tensors.find(split_k_u_name) != lora_tensors.end()) {
+                            lora_k_up = to_f32(compute_ctx, lora_tensors[split_k_u_name]);
                         }
+
+                        if (lora_tensors.find(split_v_d_name) != lora_tensors.end()) {
+                            lora_v_down = to_f32(compute_ctx, lora_tensors[split_v_d_name]);
+                        }
+
+                        if (lora_tensors.find(split_v_u_name) != lora_tensors.end()) {
+                            lora_v_up = to_f32(compute_ctx, lora_tensors[split_v_u_name]);
+                        }
+
+                        // print_ggml_tensor(lora_q_down, true);  //[3072, R, 1, 1]
+                        // print_ggml_tensor(lora_k_down, true);  //[3072, R, 1, 1]
+                        // print_ggml_tensor(lora_v_down, true);  //[3072, R, 1, 1]
+                        // print_ggml_tensor(lora_q_up, true);    //[R, 3072, 1, 1]
+                        // print_ggml_tensor(lora_k_up, true);    //[R, 3072, 1, 1]
+                        // print_ggml_tensor(lora_v_up, true);    //[R, 3072, 1, 1]
+
+                        // these need to be stitched together this way:
+                        //                          |q_up,0   ,0   |
+                        //                          |0   ,k_up,0   |
+                        //                          |0   ,0   ,v_up|
+                        // (q_down,k_down,v_down) . (q   ,k   ,v)
+
+                        // up_concat will be [9216, R*3, 1, 1]
+                        // down_concat will be [R*3, 3072, 1, 1]
+                        ggml_tensor* lora_down_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, lora_q_down, lora_k_down, 1), lora_v_down, 1);
+
+                        ggml_tensor* z = ggml_dup_tensor(compute_ctx, lora_q_up);
+                        ggml_scale(compute_ctx, z, 0);
+                        ggml_tensor* zz = ggml_concat(compute_ctx, z, z, 1);
+
+                        ggml_tensor* q_up = ggml_concat(compute_ctx, lora_q_up, zz, 1);
+                        ggml_tensor* k_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, z, lora_k_up, 1), z, 1);
+                        ggml_tensor* v_up = ggml_concat(compute_ctx, zz, lora_v_up, 1);
+                        // print_ggml_tensor(q_up, true);  //[R, 9216, 1, 1]
+                        // print_ggml_tensor(k_up, true);  //[R, 9216, 1, 1]
+                        // print_ggml_tensor(v_up, true);  //[R, 9216, 1, 1]
+                        ggml_tensor* lora_up_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, q_up, k_up, 0), v_up, 0);
+                        // print_ggml_tensor(lora_up_concat, true);  //[R*3, 9216, 1, 1]
+
+                        lora_down = ggml_cont(compute_ctx, lora_down_concat);
+                        lora_up   = ggml_cont(compute_ctx, lora_up_concat);
+
+                        applied_lora_tensors.insert(split_q_u_name);
+                        applied_lora_tensors.insert(split_k_u_name);
+                        applied_lora_tensors.insert(split_v_u_name);
+
+                        applied_lora_tensors.insert(split_q_d_name);
+                        applied_lora_tensors.insert(split_k_d_name);
+                        applied_lora_tensors.insert(split_v_d_name);
                     }
-                    // Double blocks
-                    else if (txt_attn_qkv != std::string::npos || img_attn_qkv != std::string::npos) {
-                        size_t match       = txt_attn_qkv;
-                        std::string prefix = ".attn.add_";
-                        std::string suffix = "_proj";
-                        if (img_attn_qkv != std::string::npos) {
-                            match  = img_attn_qkv;
-                            prefix = ".attn.to_";
-                            suffix = "";
-                        }
-                        match--;
+                }
+                if (starts_with(key, "SPLIT_L|")) {
+                    key = key.substr(sizeof("SPLIT_L|") - 1);
 
-                        auto split_q_d_name = lora_pre[type] + key.substr(0, match) + prefix + "q" + suffix + lora_downs[type] + ".weight";
+                    auto split_q_d_name = lora_pre[type] + key + "attn.to_q" + lora_downs[type] + ".weight";
+                    if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
+                        // print_ggml_tensor(it.second, true);  //[3072, 21504, 1, 1]
+                        // find qkv and mlp up parts in LoRA model
+                        auto split_k_d_name = lora_pre[type] + key + "attn.to_k" + lora_downs[type] + ".weight";
+                        auto split_v_d_name = lora_pre[type] + key + "attn.to_v" + lora_downs[type] + ".weight";
+
+                        auto split_q_u_name = lora_pre[type] + key + "attn.to_q" + lora_ups[type] + ".weight";
+                        auto split_k_u_name = lora_pre[type] + key + "attn.to_k" + lora_ups[type] + ".weight";
+                        auto split_v_u_name = lora_pre[type] + key + "attn.to_v" + lora_ups[type] + ".weight";
+
+                        auto split_m_d_name = lora_pre[type] + key + "proj_mlp" + lora_downs[type] + ".weight";
+                        auto split_m_u_name = lora_pre[type] + key + "proj_mlp" + lora_ups[type] + ".weight";
+
+                        ggml_tensor* lora_q_down = NULL;
+                        ggml_tensor* lora_q_up   = NULL;
+                        ggml_tensor* lora_k_down = NULL;
+                        ggml_tensor* lora_k_up   = NULL;
+                        ggml_tensor* lora_v_down = NULL;
+                        ggml_tensor* lora_v_up   = NULL;
+
+                        ggml_tensor* lora_m_down = NULL;
+                        ggml_tensor* lora_m_up   = NULL;
+
+                        lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
+
                         if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
-                            // print_ggml_tensor(it.second, true);  //[3072, 21504, 1, 1]
-                            // find qkv and mlp up parts in LoRA model
-                            auto split_k_d_name = lora_pre[type] + key.substr(0, match) + prefix + "k" + suffix + lora_downs[type] + ".weight";
-                            auto split_v_d_name = lora_pre[type] + key.substr(0, match) + prefix + "v" + suffix + lora_downs[type] + ".weight";
-
-                            auto split_q_u_name = lora_pre[type] + key.substr(0, match) + prefix + "q" + suffix + lora_ups[type] + ".weight";
-                            auto split_k_u_name = lora_pre[type] + key.substr(0, match) + prefix + "k" + suffix + lora_ups[type] + ".weight";
-                            auto split_v_u_name = lora_pre[type] + key.substr(0, match) + prefix + "v" + suffix + lora_ups[type] + ".weight";
-
-                            ggml_tensor* lora_q_down = NULL;
-                            ggml_tensor* lora_q_up   = NULL;
-                            ggml_tensor* lora_k_down = NULL;
-                            ggml_tensor* lora_k_up   = NULL;
-                            ggml_tensor* lora_v_down = NULL;
-                            ggml_tensor* lora_v_up   = NULL;
-
                             lora_q_down = to_f32(compute_ctx, lora_tensors[split_q_d_name]);
-
-                            if (lora_tensors.find(split_q_u_name) != lora_tensors.end()) {
-                                lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
-                            }
-
-                            if (lora_tensors.find(split_k_d_name) != lora_tensors.end()) {
-                                lora_k_down = to_f32(compute_ctx, lora_tensors[split_k_d_name]);
-                            }
-
-                            if (lora_tensors.find(split_k_u_name) != lora_tensors.end()) {
-                                lora_k_up = to_f32(compute_ctx, lora_tensors[split_k_u_name]);
-                            }
-
-                            if (lora_tensors.find(split_v_d_name) != lora_tensors.end()) {
-                                lora_v_down = to_f32(compute_ctx, lora_tensors[split_v_d_name]);
-                            }
-
-                            if (lora_tensors.find(split_v_u_name) != lora_tensors.end()) {
-                                lora_v_up = to_f32(compute_ctx, lora_tensors[split_v_u_name]);
-                            }
-
-                            // print_ggml_tensor(lora_q_down, true);  //[3072, R, 1, 1]
-                            // print_ggml_tensor(lora_k_down, true);  //[3072, R, 1, 1]
-                            // print_ggml_tensor(lora_v_down, true);  //[3072, R, 1, 1]
-                            // print_ggml_tensor(lora_q_up, true);    //[R, 3072, 1, 1]
-                            // print_ggml_tensor(lora_k_up, true);    //[R, 3072, 1, 1]
-                            // print_ggml_tensor(lora_v_up, true);    //[R, 3072, 1, 1]
-
-                            // these need to be stitched together this way:
-                            //                          |q_up,0   ,0   |
-                            //                          |0   ,k_up,0   |
-                            //                          |0   ,0   ,v_up|
-                            // (q_down,k_down,v_down) . (q   ,k   ,v)
-
-                            // up_concat will be [9216, R*3, 1, 1]
-                            // down_concat will be [R*3, 3072, 1, 1]
-                            ggml_tensor* lora_down_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, lora_q_down, lora_k_down, 1), lora_v_down, 1);
-
-                            ggml_tensor* z = ggml_dup_tensor(compute_ctx, lora_q_up);
-                            ggml_scale(compute_ctx, z, 0);
-                            ggml_tensor* zz = ggml_concat(compute_ctx, z, z, 1);
-
-                            ggml_tensor* q_up = ggml_concat(compute_ctx, lora_q_up, zz, 1);
-                            ggml_tensor* k_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, z, lora_k_up, 1), z, 1);
-                            ggml_tensor* v_up = ggml_concat(compute_ctx, zz, lora_v_up, 1);
-                            // print_ggml_tensor(q_up, true);  //[R, 9216, 1, 1]
-                            // print_ggml_tensor(k_up, true);  //[R, 9216, 1, 1]
-                            // print_ggml_tensor(v_up, true);  //[R, 9216, 1, 1]
-                            ggml_tensor* lora_up_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, q_up, k_up, 0), v_up, 0);
-                            // print_ggml_tensor(lora_up_concat, true);  //[R*3, 9216, 1, 1]
-
-                            lora_down = ggml_cont(compute_ctx, lora_down_concat);
-                            lora_up   = ggml_cont(compute_ctx, lora_up_concat);
-
-                            applied_lora_tensors.insert(split_q_u_name);
-                            applied_lora_tensors.insert(split_k_u_name);
-                            applied_lora_tensors.insert(split_v_u_name);
-
-                            applied_lora_tensors.insert(split_q_d_name);
-                            applied_lora_tensors.insert(split_k_d_name);
-                            applied_lora_tensors.insert(split_v_d_name);
                         }
-                    } else if (txt_attn_proj != std::string::npos || img_attn_proj != std::string::npos) {
-                        size_t match         = txt_attn_proj;
-                        std::string new_name = ".attn.to_add_out";
-                        if (img_attn_proj != std::string::npos) {
-                            match    = img_attn_proj;
-                            new_name = ".attn.to_out.0";
+
+                        if (lora_tensors.find(split_q_u_name) != lora_tensors.end()) {
+                            lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
                         }
-                        match--;
 
-                        lora_down_name = lora_pre[type] + key.substr(0, match) + new_name + lora_downs[type] + ".weight";
-                        if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            lora_up_name = lora_pre[type] + key.substr(0, match) + new_name + lora_ups[type] + ".weight";
-                            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
-                                lora_up = lora_tensors[lora_up_name];
-                            }
-
-                            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                                lora_down = lora_tensors[lora_down_name];
-                            }
-
-                            applied_lora_tensors.insert(lora_down_name);
-                            applied_lora_tensors.insert(lora_up_name);
+                        if (lora_tensors.find(split_k_d_name) != lora_tensors.end()) {
+                            lora_k_down = to_f32(compute_ctx, lora_tensors[split_k_d_name]);
                         }
-                    } else if (txt_mlp_0 != std::string::npos || txt_mlp_2 != std::string::npos || img_mlp_0 != std::string::npos || img_mlp_2 != std::string::npos) {
-                        bool has_two       = txt_mlp_2 != std::string::npos || img_mlp_2 != std::string::npos;
-                        std::string prefix = ".ff_context.net.";
-                        std::string suffix = "0.proj";
-                        if (img_mlp_0 != std::string::npos || img_mlp_2 != std::string::npos) {
-                            prefix = ".ff.net.";
+
+                        if (lora_tensors.find(split_k_u_name) != lora_tensors.end()) {
+                            lora_k_up = to_f32(compute_ctx, lora_tensors[split_k_u_name]);
                         }
-                        if (has_two) {
-                            suffix = "2";
+
+                        if (lora_tensors.find(split_v_d_name) != lora_tensors.end()) {
+                            lora_v_down = to_f32(compute_ctx, lora_tensors[split_v_d_name]);
                         }
-                        size_t match = txt_mlp_0;
-                        if (txt_mlp_2 != std::string::npos) {
-                            match = txt_mlp_2;
-                        } else if (img_mlp_0 != std::string::npos) {
-                            match = img_mlp_0;
-                        } else if (img_mlp_2 != std::string::npos) {
-                            match = img_mlp_2;
+
+                        if (lora_tensors.find(split_v_u_name) != lora_tensors.end()) {
+                            lora_v_up = to_f32(compute_ctx, lora_tensors[split_v_u_name]);
                         }
-                        match--;
-                        lora_down_name = lora_pre[type] + key.substr(0, match) + prefix + suffix + lora_downs[type] + ".weight";
-                        if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            lora_up_name = lora_pre[type] + key.substr(0, match) + prefix + suffix + lora_ups[type] + ".weight";
-                            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
-                                lora_up = lora_tensors[lora_up_name];
-                            }
 
-                            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                                lora_down = lora_tensors[lora_down_name];
-                            }
-
-                            applied_lora_tensors.insert(lora_down_name);
-                            applied_lora_tensors.insert(lora_up_name);
+                        if (lora_tensors.find(split_m_d_name) != lora_tensors.end()) {
+                            lora_m_down = to_f32(compute_ctx, lora_tensors[split_m_d_name]);
                         }
-                    } else if (txt_mod_lin != std::string::npos || img_mod_lin != std::string::npos) {
-                        size_t match         = txt_mod_lin;
-                        std::string new_name = ".norm1_context.linear";
-                        if (img_mod_lin != std::string::npos) {
-                            match    = img_mod_lin;
-                            new_name = ".norm1.linear";
+
+                        if (lora_tensors.find(split_m_u_name) != lora_tensors.end()) {
+                            lora_m_up = to_f32(compute_ctx, lora_tensors[split_m_u_name]);
                         }
-                        match--;
 
-                        lora_down_name = lora_pre[type] + key.substr(0, match) + new_name + lora_downs[type] + ".weight";
-                        if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            lora_up_name = lora_pre[type] + key.substr(0, match) + new_name + lora_ups[type] + ".weight";
-                            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
-                                lora_up = lora_tensors[lora_up_name];
-                            }
+                        // print_ggml_tensor(lora_q_down, true);  //[3072, R, 1, 1]
+                        // print_ggml_tensor(lora_k_down, true);  //[3072, R, 1, 1]
+                        // print_ggml_tensor(lora_v_down, true);  //[3072, R, 1, 1]
+                        // print_ggml_tensor(lora_m_down, true);  //[3072, R, 1, 1]
+                        // print_ggml_tensor(lora_q_up, true);  //[R, 3072, 1, 1]
+                        // print_ggml_tensor(lora_k_up, true);  //[R, 3072, 1, 1]
+                        // print_ggml_tensor(lora_v_up, true);  //[R, 3072, 1, 1]
+                        // print_ggml_tensor(lora_m_up, true);  //[R, 12288, 1, 1]
 
-                            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                                lora_down = lora_tensors[lora_down_name];
-                            }
+                        // these need to be stitched together this way:
+                        //                                 |q_up,0   ,0   ,0   |
+                        //                                 |0   ,k_up,0   ,0   |
+                        //                                 |0   ,0   ,v_up,0   |
+                        //                                 |0   ,0   ,0   ,m_up|
+                        // (q_down,k_down,v_down,m_down) . (q   ,k   ,v   ,m)
 
-                            applied_lora_tensors.insert(lora_down_name);
-                            applied_lora_tensors.insert(lora_up_name);
-                        }
-                    }
-                } else if (sd_version_is_sd3(version)) {
-                    size_t final_layer_adaLN_modulation     = key.find("final_layer.adaLN_modulation.1");
-                    size_t pos_embed                        = key.find("pos_embed");
-                    size_t final_layer_linear               = key.find("final_layer.linear");
-                    size_t y_embedder_mlp_0                 = key.find("y_embedder.mlp.0");
-                    size_t y_embedder_mlp_2                 = key.find("y_embedder.mlp.2");
-                    size_t t_embedder_mlp_0                 = key.find("t_embedder.mlp.0");
-                    size_t t_embedder_mlp_2                 = key.find("t_embedder.mlp.2");
-                    size_t x_block_mlp_fc1                  = key.find("x_block.mlp.fc1");
-                    size_t x_block_mlp_fc2                  = key.find("x_block.mlp.fc2");
-                    size_t context_block_mlp_fc1            = key.find("context_block.mlp.fc1");
-                    size_t context_block_mlp_fc2            = key.find("context_block.mlp.fc2");
-                    size_t x_block_adaLN_modulation_1       = key.find("x_block.adaLN_modulation.1");
-                    size_t context_block_adaLN_modulation_1 = key.find("context_block.adaLN_modulation.1");
+                        // up_concat will be [21504, R*4, 1, 1]
+                        // down_concat will be [R*4, 3072, 1, 1]
 
-                    size_t context_block_attn_proj = key.find("context_block.attn.proj");
-                    size_t x_block_attn_proj       = key.find("x_block.attn.proj");
-                    size_t x_block_attn2_proj      = key.find("x_block.attn2.proj");
+                        ggml_tensor* lora_down_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, lora_q_down, lora_k_down, 1), ggml_concat(compute_ctx, lora_v_down, lora_m_down, 1), 1);
+                        // print_ggml_tensor(lora_down_concat, true);  //[3072, R*4, 1, 1]
 
-                    size_t context_block_attn_qkv = key.find("context_block.attn.qkv");
-                    size_t x_block_attn_qkv       = key.find("x_block.attn.qkv");
-                    size_t x_block_attn2_qkv      = key.find("x_block.attn2.qkv");
+                        // this also means that if rank is bigger than 672, it is less memory efficient to do it this way (should be fine)
+                        // print_ggml_tensor(lora_q_up, true);  //[3072, R, 1, 1]
+                        ggml_tensor* z     = ggml_dup_tensor(compute_ctx, lora_q_up);
+                        ggml_tensor* mlp_z = ggml_dup_tensor(compute_ctx, lora_m_up);
+                        ggml_scale(compute_ctx, z, 0);
+                        ggml_scale(compute_ctx, mlp_z, 0);
+                        ggml_tensor* zz = ggml_concat(compute_ctx, z, z, 1);
 
-                    size_t match         = std::string::npos;
-                    std::string new_name = "";
-                    if (final_layer_adaLN_modulation != std::string::npos) {
-                        new_name = ".norm_out.linear";
-                        match    = final_layer_adaLN_modulation;
-                    } else if (pos_embed != std::string::npos) {
-                        match    = pos_embed;
-                        new_name = ".pos_embed.proj";
-                    } else if (final_layer_linear != std::string::npos) {
-                        match    = final_layer_linear;
-                        new_name = ".proj_out";
-                    } else if (y_embedder_mlp_0 != std::string::npos) {
-                        match    = y_embedder_mlp_0;
-                        new_name = ".time_text_embed.text_embedder.linear_1";
-                    } else if (y_embedder_mlp_2 != std::string::npos) {
-                        match    = y_embedder_mlp_2;
-                        new_name = ".time_text_embed.text_embedder.linear_2";
-                    } else if (t_embedder_mlp_0 != std::string::npos) {
-                        match    = t_embedder_mlp_0;
-                        new_name = ".time_text_embed.timestep_embedder.linear_1";
-                    } else if (t_embedder_mlp_2 != std::string::npos) {
-                        match    = t_embedder_mlp_2;
-                        new_name = ".time_text_embed.timestep_embedder.linear_2";
-                    } else if (x_block_mlp_fc1 != std::string::npos) {
-                        match    = x_block_mlp_fc1;
-                        new_name = ".ff.net.0.proj";
-                    } else if (x_block_mlp_fc2 != std::string::npos) {
-                        match    = x_block_mlp_fc2;
-                        new_name = ".ff.net.2";
-                    } else if (context_block_mlp_fc1 != std::string::npos) {
-                        match    = context_block_mlp_fc1;
-                        new_name = ".ff_context.net.0.proj";
-                    } else if (context_block_mlp_fc2 != std::string::npos) {
-                        match    = context_block_mlp_fc2;
-                        new_name = ".ff_context.net.2";
-                    } else if (x_block_adaLN_modulation_1 != std::string::npos) {
-                        match    = x_block_adaLN_modulation_1;
-                        new_name = ".norm1.linear";
-                    } else if (context_block_adaLN_modulation_1 != std::string::npos) {
-                        match    = context_block_adaLN_modulation_1;
-                        new_name = ".norm1_context.linear";
-                    } else if (context_block_attn_proj != std::string::npos) {
-                        match    = context_block_attn_proj;
-                        new_name = ".attn.to_add_out";
-                    } else if (x_block_attn_proj != std::string::npos) {
-                        match    = x_block_attn_proj;
-                        new_name = ".attn.to_out.0";
-                    } else if (x_block_attn2_proj != std::string::npos) {
-                        match    = x_block_attn2_proj;
-                        new_name = ".attn2.to_out.0";
-                    }
+                        ggml_tensor* q_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, lora_q_up, zz, 1), mlp_z, 1);
+                        ggml_tensor* k_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, z, lora_k_up, 1), ggml_concat(compute_ctx, z, mlp_z, 1), 1);
+                        ggml_tensor* v_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, zz, lora_v_up, 1), mlp_z, 1);
+                        ggml_tensor* m_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, zz, z, 1), lora_m_up, 1);
+                        // print_ggml_tensor(q_up, true);  //[R, 21504, 1, 1]
+                        // print_ggml_tensor(k_up, true);  //[R, 21504, 1, 1]
+                        // print_ggml_tensor(v_up, true);  //[R, 21504, 1, 1]
+                        // print_ggml_tensor(m_up, true);  //[R, 21504, 1, 1]
 
-                    if (match != std::string::npos) {
-                        match--;
-                        lora_down_name = lora_pre[type] + key.substr(0, match) + new_name + lora_downs[type] + ".weight";
-                        if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                            lora_up_name = lora_pre[type] + key.substr(0, match) + new_name + lora_ups[type] + ".weight";
-                            if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
-                                lora_up = lora_tensors[lora_up_name];
-                            }
+                        ggml_tensor* lora_up_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, q_up, k_up, 0), ggml_concat(compute_ctx, v_up, m_up, 0), 0);
+                        // print_ggml_tensor(lora_up_concat, true);  //[R*4, 21504, 1, 1]
 
-                            if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
-                                lora_down = lora_tensors[lora_down_name];
-                            }
+                        lora_down = ggml_cont(compute_ctx, lora_down_concat);
+                        lora_up   = ggml_cont(compute_ctx, lora_up_concat);
 
-                            applied_lora_tensors.insert(lora_down_name);
-                            applied_lora_tensors.insert(lora_up_name);
-                        }
-                    }
-                    std::string prefix = "";
-                    std::string suffix = "";
+                        applied_lora_tensors.insert(split_q_u_name);
+                        applied_lora_tensors.insert(split_k_u_name);
+                        applied_lora_tensors.insert(split_v_u_name);
+                        applied_lora_tensors.insert(split_m_u_name);
 
-                    if (context_block_attn_qkv != std::string::npos) {
-                        match  = context_block_attn_qkv;
-                        prefix = ".attn.add_";
-                        suffix = "_proj";
-                    } else if (x_block_attn_qkv != std::string::npos) {
-                        match  = x_block_attn_qkv;
-                        prefix = ".attn.to_";
-                        suffix = "";
-                    } else if (x_block_attn2_qkv != std::string::npos) {
-                        match  = x_block_attn2_qkv;
-                        prefix = ".attn2.to_";
-                        suffix = "";
-                    }
-                    if (match != std::string::npos) {
-                        match--;
-                        auto split_q_d_name = lora_pre[type] + key.substr(0, match) + prefix + "q" + suffix + lora_downs[type] + ".weight";
-                        if (lora_tensors.find(split_q_d_name) != lora_tensors.end()) {
-                            // print_ggml_tensor(it.second, true);  //[3072, 21504, 1, 1]
-                            // find qkv and mlp up parts in LoRA model
-                            auto split_k_d_name = lora_pre[type] + key.substr(0, match) + prefix + "k" + suffix + lora_downs[type] + ".weight";
-                            auto split_v_d_name = lora_pre[type] + key.substr(0, match) + prefix + "v" + suffix + lora_downs[type] + ".weight";
-
-                            auto split_q_u_name = lora_pre[type] + key.substr(0, match) + prefix + "q" + suffix + lora_ups[type] + ".weight";
-                            auto split_k_u_name = lora_pre[type] + key.substr(0, match) + prefix + "k" + suffix + lora_ups[type] + ".weight";
-                            auto split_v_u_name = lora_pre[type] + key.substr(0, match) + prefix + "v" + suffix + lora_ups[type] + ".weight";
-
-                            ggml_tensor* lora_q_down = NULL;
-                            ggml_tensor* lora_q_up   = NULL;
-                            ggml_tensor* lora_k_down = NULL;
-                            ggml_tensor* lora_k_up   = NULL;
-                            ggml_tensor* lora_v_down = NULL;
-                            ggml_tensor* lora_v_up   = NULL;
-
-                            lora_q_down = to_f32(compute_ctx, lora_tensors[split_q_d_name]);
-
-                            if (lora_tensors.find(split_q_u_name) != lora_tensors.end()) {
-                                lora_q_up = to_f32(compute_ctx, lora_tensors[split_q_u_name]);
-                            }
-
-                            if (lora_tensors.find(split_k_d_name) != lora_tensors.end()) {
-                                lora_k_down = to_f32(compute_ctx, lora_tensors[split_k_d_name]);
-                            }
-
-                            if (lora_tensors.find(split_k_u_name) != lora_tensors.end()) {
-                                lora_k_up = to_f32(compute_ctx, lora_tensors[split_k_u_name]);
-                            }
-
-                            if (lora_tensors.find(split_v_d_name) != lora_tensors.end()) {
-                                lora_v_down = to_f32(compute_ctx, lora_tensors[split_v_d_name]);
-                            }
-
-                            if (lora_tensors.find(split_v_u_name) != lora_tensors.end()) {
-                                lora_v_up = to_f32(compute_ctx, lora_tensors[split_v_u_name]);
-                            }
-
-                            // print_ggml_tensor(lora_q_down, true);  //[hidden_size, R, 1, 1]
-                            // print_ggml_tensor(lora_k_down, true);  //[hidden_size, R, 1, 1]
-                            // print_ggml_tensor(lora_v_down, true);  //[hidden_size, R, 1, 1]
-                            // print_ggml_tensor(lora_q_up, true);    //[R, hidden_size, 1, 1]
-                            // print_ggml_tensor(lora_k_up, true);    //[R, hidden_size, 1, 1]
-                            // print_ggml_tensor(lora_v_up, true);    //[R, hidden_size, 1, 1]
-
-                            // these need to be stitched together this way:
-                            //                          |q_up,0   ,0   |
-                            //                          |0   ,k_up,0   |
-                            //                          |0   ,0   ,v_up|
-                            // (q_down,k_down,v_down) . (q   ,k   ,v)
-
-                            // up_concat will be [4608, R*3, 1, 1]
-                            // down_concat will be [R*3, hidden_size, 1, 1]
-                            ggml_tensor* lora_down_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, lora_q_down, lora_k_down, 1), lora_v_down, 1);
-
-                            ggml_tensor* z = ggml_dup_tensor(compute_ctx, lora_q_up);
-                            ggml_scale(compute_ctx, z, 0);
-                            ggml_tensor* zz = ggml_concat(compute_ctx, z, z, 1);
-
-                            ggml_tensor* q_up = ggml_concat(compute_ctx, lora_q_up, zz, 1);
-                            ggml_tensor* k_up = ggml_concat(compute_ctx, ggml_concat(compute_ctx, z, lora_k_up, 1), z, 1);
-                            ggml_tensor* v_up = ggml_concat(compute_ctx, zz, lora_v_up, 1);
-                            // print_ggml_tensor(q_up, true);  //[R, hidden_size * 3, 1, 1]
-                            // print_ggml_tensor(k_up, true);  //[R, hidden_size * 3, 1, 1]
-                            // print_ggml_tensor(v_up, true);  //[R, hidden_size * 3, 1, 1]
-                            ggml_tensor* lora_up_concat = ggml_concat(compute_ctx, ggml_concat(compute_ctx, q_up, k_up, 0), v_up, 0);
-                            // print_ggml_tensor(lora_up_concat, true);  //[R*3, hidden_size * 3, 1, 1]
-
-                            lora_down = ggml_cont(compute_ctx, lora_down_concat);
-                            lora_up   = ggml_cont(compute_ctx, lora_up_concat);
-
-                            applied_lora_tensors.insert(split_q_u_name);
-                            applied_lora_tensors.insert(split_k_u_name);
-                            applied_lora_tensors.insert(split_v_u_name);
-
-                            applied_lora_tensors.insert(split_q_d_name);
-                            applied_lora_tensors.insert(split_k_d_name);
-                            applied_lora_tensors.insert(split_v_d_name);
-                        }
+                        applied_lora_tensors.insert(split_q_d_name);
+                        applied_lora_tensors.insert(split_k_d_name);
+                        applied_lora_tensors.insert(split_v_d_name);
+                        applied_lora_tensors.insert(split_m_d_name);
                     }
                 }
                 if (lora_up == NULL || lora_down == NULL) {
@@ -788,6 +536,7 @@ struct LoraModel : public GGMLRunner {
             if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
                 LOG_WARN("unused lora tensor %s", kv.first.c_str());
                 print_ggml_tensor(kv.second, true);
+                // exit(0);
             } else {
                 applied_lora_tensors_count++;
             }
