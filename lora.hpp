@@ -243,10 +243,9 @@ struct LoraModel : public GGMLRunner {
             std::vector<std::string> keys = to_lora_keys(k_tensor, version);
             if (keys.size() == 0)
                 continue;
+            ggml_tensor* lora_up   = NULL;
+            ggml_tensor* lora_down = NULL;
             for (auto& key : keys) {
-                ggml_tensor* lora_up   = NULL;
-                ggml_tensor* lora_down = NULL;
-
                 std::string alpha_name         = "";
                 std::string scale_name         = "";
                 std::string split_q_scale_name = "";
@@ -639,6 +638,7 @@ struct LoraModel : public GGMLRunner {
                 }
                 // final_weight = ggml_add_inplace(compute_ctx, weight, updown);  // apply directly
                 ggml_build_forward_expand(gf, final_weight);
+                break;
             }
         }
         size_t total_lora_tensors_count   = 0;
