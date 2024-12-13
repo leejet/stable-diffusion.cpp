@@ -856,6 +856,7 @@ public:
                     first_stage_model->compute(n_threads, latents, true, &result);
                 }
                 first_stage_model->free_compute_buffer();
+                ggml_tensor_scale(latents, scale_factor);
 
                 ggml_tensor_scale_output(result);
             } else if (preview_mode == SD_PREVIEW_TAE) {
