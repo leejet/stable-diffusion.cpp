@@ -109,6 +109,14 @@ enum sd_log_level_t {
     SD_LOG_ERROR
 };
 
+enum sd_preview_policy_t {
+    SD_PREVIEW_NONE,
+    SD_PREVIEW_PROJ,
+    SD_PREVIEW_TAE,
+    SD_PREVIEW_VAE,
+    N_PREVIEWS
+};
+
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
 typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
 
@@ -147,11 +155,12 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             bool keep_clip_on_cpu,
                             bool keep_control_net_cpu,
                             bool keep_vae_on_cpu,
-                            bool diffusion_flash_attn);
+                            bool diffusion_flash_attn,
+                            bool tae_preview_only);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
-typedef void (*step_callback_t)(int, struct ggml_tensor*, int);
+typedef void (*step_callback_t)(int, sd_image_t);
 
 SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            const char* prompt,
@@ -176,6 +185,8 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            float slg_scale,
                            float skip_layer_start,
                            float skip_layer_end,
+                           sd_preview_policy_t preview_mode,
+                           int preview_interval,
                            step_callback_t step_callback);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
@@ -204,6 +215,8 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            float slg_scale,
                            float skip_layer_start,
                            float skip_layer_end,
+                           sd_preview_policy_t preview_mode,
+                           int preview_interval,
                            step_callback_t step_callback);
 
 SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
@@ -219,8 +232,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            enum sample_method_t sample_method,
                            int sample_steps,
                            float strength,
-                           int64_t seed,
-                           step_callback_t step_callback);
+                           int64_t seed);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

@@ -10,8 +10,6 @@
 #include "flux.hpp"
 #include "stable-diffusion.h"
 
-#include "latent-preview.h"
-
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
 #include "stb_image.h"
@@ -60,6 +58,13 @@ const char* modes_str[] = {
     "img2img",
     "img2vid",
     "convert",
+};
+
+const char* previews_str[] = {
+    "none",
+    "proj",
+    "tae",
+    "vae",
 };
 
 enum SDMode {
@@ -131,6 +136,11 @@ struct SDParams {
     float slg_scale              = 0.;
     float skip_layer_start       = 0.01;
     float skip_layer_end         = 0.2;
+
+    sd_preview_policy_t preview_method = SD_PREVIEW_NONE;
+    int preview_interval               = 1;
+    std::string preview_path           = "preview.png";
+    bool taesd_preview                 = false;
 };
 
 void print_params(SDParams params) {
@@ -509,6 +519,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.diffusion_flash_attn = true;  // can reduce MEM significantly
         } else if (arg == "--canny") {
             params.canny_preprocess = true;
+        } else if (arg == "--taesd-preview-only") {
+            params.taesd_preview = true;
         } else if (arg == "-b" || arg == "--batch-count") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -631,6 +643,35 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "--preview") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            const char* preview = argv[i];
+            int preview_method  = -1;
+            for (int m = 0; m < N_PREVIEWS; m++) {
+                if (!strcmp(preview, previews_str[m])) {
+                    preview_method = m;
+                }
+            }
+            if (preview_method == -1) {
+                invalid_arg = true;
+                break;
+            }
+            params.preview_method = (sd_preview_policy_t)preview_method;
+        } else if (arg == "--preview-interval") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.preview_interval = std::stoi(argv[i]);
+        } else if (arg == "--preview-path") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.preview_path = argv[i];
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -789,52 +830,17 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     fflush(out_stream);
 }
 
-void step_callback(int step, struct ggml_tensor* latents, enum SDVersion version) {
-    const int channel = 3;
-    int width         = latents->ne[0];
-    int height        = latents->ne[1];
-    int dim           = latents->ne[2];
+const char* preview_path;
 
-    const float(*latent_rgb_proj)[channel];
-
-    if (dim == 16) {
-        // 16 channels VAE -> Flux or SD3
-
-        if (sd_version_is_sd3(version)) {
-            latent_rgb_proj = sd3_latent_rgb_proj;
-        } else if (sd_version_is_flux(version)) {
-            latent_rgb_proj = flux_latent_rgb_proj;
-        } else {
-            // unknown model
-            return;
-        }
-
-    } else if (dim == 4) {
-        // 4 channels VAE
-        if (version == VERSION_SDXL) {
-            latent_rgb_proj = sdxl_latent_rgb_proj;
-        } else if (version == VERSION_SD1 || version == VERSION_SD2) {
-            latent_rgb_proj = sd_latent_rgb_proj;
-        } else {
-            // unknown model
-            return;
-        }
-    } else {
-        // unknown latent space
-        return;
-    }
-    uint8_t* data = (uint8_t*)malloc(width * height * channel * sizeof(uint8_t));
-    
-    preview_latent_image(data, latents, latent_rgb_proj, width, height, dim);
-
-    stbi_write_png("latent-preview.png", width, height, channel, data, 0);
-    free(data);
+void step_callback(int step, sd_image_t image) {
+    stbi_write_png(preview_path, image.width, image.height, image.channel, image.data, 0);
 }
 
 int main(int argc, const char* argv[]) {
     SDParams params;
 
     parse_args(argc, argv, params);
+    preview_path = params.preview_path.c_str();
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
 
@@ -944,7 +950,8 @@ int main(int argc, const char* argv[]) {
                                   params.clip_on_cpu,
                                   params.control_net_cpu,
                                   params.vae_on_cpu,
-                                  params.diffusion_flash_attn);
+                                  params.diffusion_flash_attn,
+                                  params.taesd_preview);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
@@ -1012,6 +1019,8 @@ int main(int argc, const char* argv[]) {
                           params.slg_scale,
                           params.skip_layer_start,
                           params.skip_layer_end,
+                          params.preview_method,
+                          params.preview_interval,
                           (step_callback_t)step_callback);
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
@@ -1033,8 +1042,7 @@ int main(int argc, const char* argv[]) {
                               params.sample_method,
                               params.sample_steps,
                               params.strength,
-                              params.seed,
-                              (step_callback_t)step_callback);
+                              params.seed);
             if (results == NULL) {
                 printf("generate failed\n");
                 free_sd_ctx(sd_ctx);
@@ -1083,6 +1091,8 @@ int main(int argc, const char* argv[]) {
                               params.slg_scale,
                               params.skip_layer_start,
                               params.skip_layer_end,
+                              params.preview_method,
+                              params.preview_interval,
                               (step_callback_t)step_callback);
         }
     }
