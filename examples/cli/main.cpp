@@ -190,6 +190,8 @@ void print_params(SDParams params) {
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
+    printf("    preview_mode:      %d\n", previews_str[params.preview_method]);
+    printf("    preview_interval:  %d\n", params.preview_interval);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -197,16 +199,17 @@ void print_usage(int argc, const char* argv[]) {
     printf("\n");
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
-    printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)\n");
+    printf("  -M, --mode [MODE]                  run mode (txt2img or img2img or convert, default: txt2img)\n");
     printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to full model\n");
-    printf("  --diffusion-model                  path to the standalone diffusion model\n");
-    printf("  --clip_l                           path to the clip-l text encoder\n");
-    printf("  --clip_g                           path to the clip-g text encoder\n");
-    printf("  --t5xxl                            path to the the t5xxl text encoder\n");
+    printf("  --diffusion-model [MODEL]          path to the standalone diffusion model\n");
+    printf("  --clip_l [ENCODER]                 path to the clip-l text encoder\n");
+    printf("  --clip_g [ENCODER]                 path to the clip-g text encoder\n");
+    printf("  --t5xxl [ENCODER]                  path to the the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
-    printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
+    printf("  --taesd [TAESD]                    path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
+    printf("  --taesd-preview-only               prevents usage of taesd for decoding the final image. (for use with --preview %s)\n", previews_str[SD_PREVIEW_TAE]);
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
     printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings\n");
@@ -255,6 +258,10 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     This might crash if it is not supported by the backend.\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
+    printf("  --preview {%s,%s,%s,%s}            preview method. (default is %s(disabled))\n", previews_str[0], previews_str[1], previews_str[2], previews_str[3], previews_str[SD_PREVIEW_NONE]);
+    printf("                                     %s is the fastest\n", previews_str[SD_PREVIEW_PROJ]);
+    printf("  --preview-interval [N]             How often to save the image preview");
+    printf("  --preview-path [PATH}              path to write preview image to (default: ./preview.png)\n");
     printf("  --color                            Colors the logging tags according to level\n");
     printf("  -v, --verbose                      print extra info\n");
 }
