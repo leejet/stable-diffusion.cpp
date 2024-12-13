@@ -247,10 +247,11 @@ struct LoraModel : public GGMLRunner {
                 ggml_tensor* lora_up   = NULL;
                 ggml_tensor* lora_down = NULL;
 
-                std::string alpha_name     = "";
-                std::string scale_name     = "";
-                std::string lora_down_name = "";
-                std::string lora_up_name   = "";
+                std::string alpha_name         = "";
+                std::string scale_name         = "";
+                std::string split_q_scale_name = "";
+                std::string lora_down_name     = "";
+                std::string lora_up_name       = "";
 
                 if (starts_with(key, "SPLIT|")) {
                     key = key.substr(sizeof("SPLIT|") - 1);
@@ -271,6 +272,14 @@ struct LoraModel : public GGMLRunner {
                         auto split_q_u_name = lora_pre[type] + key + "q" + suffix + lora_ups[type] + ".weight";
                         auto split_k_u_name = lora_pre[type] + key + "k" + suffix + lora_ups[type] + ".weight";
                         auto split_v_u_name = lora_pre[type] + key + "v" + suffix + lora_ups[type] + ".weight";
+
+                        auto split_q_scale_name = lora_pre[type] + key + "q" + suffix + ".scale";
+                        auto split_k_scale_name = lora_pre[type] + key + "k" + suffix + ".scale";
+                        auto split_v_scale_name = lora_pre[type] + key + "v" + suffix + ".scale";
+
+                        auto split_q_alpha_name = lora_pre[type] + key + "q" + suffix + ".alpha";
+                        auto split_k_alpha_name = lora_pre[type] + key + "k" + suffix + ".alpha";
+                        auto split_v_alpha_name = lora_pre[type] + key + "v" + suffix + ".alpha";
 
                         ggml_tensor* lora_q_down = NULL;
                         ggml_tensor* lora_q_up   = NULL;
@@ -300,6 +309,47 @@ struct LoraModel : public GGMLRunner {
                         if (lora_tensors.find(split_v_u_name) != lora_tensors.end()) {
                             lora_v_up = to_f32(compute_ctx, lora_tensors[split_v_u_name]);
                         }
+
+                        float q_rank = lora_q_up->ne[0];
+                        float k_rank = lora_k_up->ne[0];
+                        float v_rank = lora_v_up->ne[0];
+
+                        float lora_q_scale = 1;
+                        float lora_k_scale = 1;
+                        float lora_v_scale = 1;
+
+                        if (lora_tensors.find(split_q_scale_name) != lora_tensors.end()) {
+                            lora_q_scale = ggml_backend_tensor_get_f32(lora_tensors[split_q_scale_name]);
+                            applied_lora_tensors.insert(split_q_scale_name);
+                        }
+                        if (lora_tensors.find(split_k_scale_name) != lora_tensors.end()) {
+                            lora_k_scale = ggml_backend_tensor_get_f32(lora_tensors[split_k_scale_name]);
+                            applied_lora_tensors.insert(split_k_scale_name);
+                        }
+                        if (lora_tensors.find(split_v_scale_name) != lora_tensors.end()) {
+                            lora_v_scale = ggml_backend_tensor_get_f32(lora_tensors[split_v_scale_name]);
+                            applied_lora_tensors.insert(split_v_scale_name);
+                        }
+
+                        if (lora_tensors.find(split_q_alpha_name) != lora_tensors.end()) {
+                            float lora_q_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_q_alpha_name]);
+                            applied_lora_tensors.insert(split_q_alpha_name);
+                            lora_q_scale = lora_q_alpha / q_rank;
+                        }
+                        if (lora_tensors.find(split_k_alpha_name) != lora_tensors.end()) {
+                            float lora_k_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_k_alpha_name]);
+                            applied_lora_tensors.insert(split_k_alpha_name);
+                            lora_k_scale = lora_k_alpha / k_rank;
+                        }
+                        if (lora_tensors.find(split_v_alpha_name) != lora_tensors.end()) {
+                            float lora_v_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_v_alpha_name]);
+                            applied_lora_tensors.insert(split_v_alpha_name);
+                            lora_v_scale = lora_v_alpha / v_rank;
+                        }
+
+                        ggml_scale_inplace(compute_ctx, lora_q_down, lora_q_scale);
+                        ggml_scale_inplace(compute_ctx, lora_k_down, lora_k_scale);
+                        ggml_scale_inplace(compute_ctx, lora_v_down, lora_v_scale);
 
                         // print_ggml_tensor(lora_q_down, true);  //[3072, R, 1, 1]
                         // print_ggml_tensor(lora_k_down, true);  //[3072, R, 1, 1]
@@ -360,6 +410,16 @@ struct LoraModel : public GGMLRunner {
                         auto split_m_d_name = lora_pre[type] + key + "proj_mlp" + lora_downs[type] + ".weight";
                         auto split_m_u_name = lora_pre[type] + key + "proj_mlp" + lora_ups[type] + ".weight";
 
+                        auto split_q_scale_name = lora_pre[type] + key + "attn.to_q" + ".scale";
+                        auto split_k_scale_name = lora_pre[type] + key + "attn.to_k" + ".scale";
+                        auto split_v_scale_name = lora_pre[type] + key + "attn.to_v" + ".scale";
+                        auto split_m_scale_name = lora_pre[type] + key + "proj_mlp" + ".scale";
+
+                        auto split_q_alpha_name = lora_pre[type] + key + "attn.to_q" + ".alpha";
+                        auto split_k_alpha_name = lora_pre[type] + key + "attn.to_k" + ".alpha";
+                        auto split_v_alpha_name = lora_pre[type] + key + "attn.to_v" + ".alpha";
+                        auto split_m_alpha_name = lora_pre[type] + key + "proj_mlp" + ".alpha";
+
                         ggml_tensor* lora_q_down = NULL;
                         ggml_tensor* lora_q_up   = NULL;
                         ggml_tensor* lora_k_down = NULL;
@@ -403,6 +463,59 @@ struct LoraModel : public GGMLRunner {
                         if (lora_tensors.find(split_m_u_name) != lora_tensors.end()) {
                             lora_m_up = to_f32(compute_ctx, lora_tensors[split_m_u_name]);
                         }
+
+                        float q_rank = lora_q_up->ne[0];
+                        float k_rank = lora_k_up->ne[0];
+                        float v_rank = lora_v_up->ne[0];
+                        float m_rank = lora_v_up->ne[0];
+
+                        float lora_q_scale = 1;
+                        float lora_k_scale = 1;
+                        float lora_v_scale = 1;
+                        float lora_m_scale = 1;
+
+                        if (lora_tensors.find(split_q_scale_name) != lora_tensors.end()) {
+                            lora_q_scale = ggml_backend_tensor_get_f32(lora_tensors[split_q_scale_name]);
+                            applied_lora_tensors.insert(split_q_scale_name);
+                        }
+                        if (lora_tensors.find(split_k_scale_name) != lora_tensors.end()) {
+                            lora_k_scale = ggml_backend_tensor_get_f32(lora_tensors[split_k_scale_name]);
+                            applied_lora_tensors.insert(split_k_scale_name);
+                        }
+                        if (lora_tensors.find(split_v_scale_name) != lora_tensors.end()) {
+                            lora_v_scale = ggml_backend_tensor_get_f32(lora_tensors[split_v_scale_name]);
+                            applied_lora_tensors.insert(split_v_scale_name);
+                        }
+                        if (lora_tensors.find(split_m_scale_name) != lora_tensors.end()) {
+                            lora_m_scale = ggml_backend_tensor_get_f32(lora_tensors[split_m_scale_name]);
+                            applied_lora_tensors.insert(split_m_scale_name);
+                        }
+
+                        if (lora_tensors.find(split_q_alpha_name) != lora_tensors.end()) {
+                            float lora_q_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_q_alpha_name]);
+                            applied_lora_tensors.insert(split_q_alpha_name);
+                            lora_q_scale = lora_q_alpha / q_rank;
+                        }
+                        if (lora_tensors.find(split_k_alpha_name) != lora_tensors.end()) {
+                            float lora_k_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_k_alpha_name]);
+                            applied_lora_tensors.insert(split_k_alpha_name);
+                            lora_k_scale = lora_k_alpha / k_rank;
+                        }
+                        if (lora_tensors.find(split_v_alpha_name) != lora_tensors.end()) {
+                            float lora_v_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_v_alpha_name]);
+                            applied_lora_tensors.insert(split_v_alpha_name);
+                            lora_v_scale = lora_v_alpha / v_rank;
+                        }
+                        if (lora_tensors.find(split_m_alpha_name) != lora_tensors.end()) {
+                            float lora_m_alpha = ggml_backend_tensor_get_f32(lora_tensors[split_m_alpha_name]);
+                            applied_lora_tensors.insert(split_m_alpha_name);
+                            lora_m_scale = lora_m_alpha / m_rank;
+                        }
+
+                        ggml_scale_inplace(compute_ctx, lora_q_down, lora_q_scale);
+                        ggml_scale_inplace(compute_ctx, lora_k_down, lora_k_scale);
+                        ggml_scale_inplace(compute_ctx, lora_v_down, lora_v_scale);
+                        ggml_scale_inplace(compute_ctx, lora_m_down, lora_m_scale);
 
                         // print_ggml_tensor(lora_q_down, true);  //[3072, R, 1, 1]
                         // print_ggml_tensor(lora_k_down, true);  //[3072, R, 1, 1]
@@ -534,7 +647,7 @@ struct LoraModel : public GGMLRunner {
         for (auto& kv : lora_tensors) {
             total_lora_tensors_count++;
             if (applied_lora_tensors.find(kv.first) == applied_lora_tensors.end()) {
-                LOG_WARN("unused lora tensor %s", kv.first.c_str());
+                LOG_WARN("unused lora tensor |%s|", kv.first.c_str());
                 print_ggml_tensor(kv.second, true);
                 // exit(0);
             } else {
