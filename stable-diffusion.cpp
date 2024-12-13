@@ -909,7 +909,7 @@ public:
            float skip_layer_start                             = 0.01,
            float skip_layer_end                               = 0.2,
            ggml_tensor* noise_mask                            = nullptr,
-           sd_preview_policy_t preview_mode                   = SD_PREVIEW_PROJ,
+           sd_preview_policy_t preview_mode                   = SD_PREVIEW_NONE,
            int preview_interval                               = 1,
            std::function<void(int, sd_image_t)> step_callback = nullptr) {
         size_t steps = sigmas.size() - 1;
@@ -1325,7 +1325,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float skip_layer_start                             = 0.01,
                            float skip_layer_end                               = 0.2,
                            ggml_tensor* masked_image                          = NULL,
-                           sd_preview_policy_t preview_mode                   = SD_PREVIEW_PROJ,
+                           sd_preview_policy_t preview_mode                   = SD_PREVIEW_NONE,
                            int preview_interval                               = 1,
                            std::function<void(int, sd_image_t)> step_callback = nullptr) {
     if (seed < 0) {
@@ -1661,7 +1661,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float slg_scale                  = 0,
                     float skip_layer_start           = 0.01,
                     float skip_layer_end             = 0.2,
-                    sd_preview_policy_t preview_mode = SD_PREVIEW_PROJ,
+                    sd_preview_policy_t preview_mode = SD_PREVIEW_NONE,
                     int preview_interval             = 1,
                     step_callback_t step_callback    = NULL) {
     std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
@@ -1779,7 +1779,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float slg_scale                  = 0,
                     float skip_layer_start           = 0.01,
                     float skip_layer_end             = 0.2,
-                    sd_preview_policy_t preview_mode = SD_PREVIEW_PROJ,
+                    sd_preview_policy_t preview_mode = SD_PREVIEW_NONE,
                     int preview_interval             = 1,
                     step_callback_t step_callback    = NULL) {
     std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
