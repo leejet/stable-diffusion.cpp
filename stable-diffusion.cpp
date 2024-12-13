@@ -797,10 +797,10 @@ public:
                        sd_preview_policy_t preview_mode,
                        ggml_tensor* result,
                        std::function<void(int, sd_image_t)> step_callback) {
-        const size_t channel = 3;
-        size_t width         = latents->ne[0];
-        size_t height        = latents->ne[1];
-        size_t dim           = latents->ne[2];
+        const uint32_t channel = 3;
+        uint32_t width         = latents->ne[0];
+        uint32_t height        = latents->ne[1];
+        uint32_t dim           = latents->ne[2];
         if (preview_mode == SD_PREVIEW_PROJ) {
             const float(*latent_rgb_proj)[channel];
 
@@ -812,6 +812,7 @@ public:
                 } else if (sd_version_is_flux(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
                 } else {
+                    LOG_WARN("No latent to RGB projection known for this model");
                     // unknown model
                     return;
                 }
@@ -824,9 +825,11 @@ public:
                     latent_rgb_proj = sd_latent_rgb_proj;
                 } else {
                     // unknown model
+                    LOG_WARN("No latent to RGB projection known for this model");
                     return;
                 }
             } else {
+                LOG_WARN("No latent to RGB projection known for this model");
                 // unknown latent space
                 return;
             }
