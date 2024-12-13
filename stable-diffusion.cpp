@@ -1682,6 +1682,9 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
+    if (sd_ctx->sd->first_stage_model != nullptr && sd_ctx->sd->tae_first_stage != nullptr) {
+        params.mem_size *= 2;
+    }
     params.mem_size += width * height * 3 * sizeof(float);
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;
