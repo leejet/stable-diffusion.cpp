@@ -180,6 +180,7 @@ struct LoraModel : public GGMLRunner {
         blk_name = blk_name.substr(0, k_pos);
         // }
         keys.push_back(blk_name);
+        keys.push_back("lora." + blk_name);
         if (sd_version_is_dit(version)) {
             if (blk_name.find("model.diffusion_model") != std::string::npos) {
                 blk_name.replace(blk_name.find("model.diffusion_model"), sizeof("model.diffusion_model") - 1, "transformer");
