@@ -490,6 +490,7 @@ namespace Flux {
 
     struct FluxParams {
         int64_t in_channels         = 64;
+        int64_t out_channels        = 64;
         int64_t vec_in_dim          = 768;
         int64_t context_in_dim      = 4096;
         int64_t hidden_size         = 3072;
@@ -642,8 +643,7 @@ namespace Flux {
         Flux() {}
         Flux(FluxParams params)
             : params(params) {
-            int64_t out_channels = params.in_channels;
-            int64_t pe_dim       = params.hidden_size / params.num_heads;
+            int64_t pe_dim = params.hidden_size / params.num_heads;
 
             blocks["img_in"]    = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, params.hidden_size, true));
             blocks["time_in"]   = std::shared_ptr<GGMLBlock>(new MLPEmbedder(256, params.hidden_size));
@@ -669,7 +669,7 @@ namespace Flux {
                                                                                                                 params.flash_attn));
             }
 
-            blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, out_channels));
+            blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, params.out_channels));
         }
 
         struct ggml_tensor* patchify(struct ggml_context* ctx,
@@ -789,6 +789,7 @@ namespace Flux {
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* timestep,
                                     struct ggml_tensor* context,
+                                    struct ggml_tensor* c_concat,
                                     struct ggml_tensor* y,
                                     struct ggml_tensor* guidance,
                                     struct ggml_tensor* pe,
@@ -797,6 +798,7 @@ namespace Flux {
             // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
             // timestep: (N,) tensor of diffusion timesteps
             // context: (N, L, D)
+            // c_concat: NULL, or for (N,C+M, H, W) for Fill
             // y: (N, adm_in_channels) tensor of class labels
             // guidance: (N,)
             // pe: (L, d_head/2, 2, 2)
@@ -806,6 +808,7 @@ namespace Flux {
 
             int64_t W          = x->ne[0];
             int64_t H          = x->ne[1];
+            int64_t C          = x->ne[2];
             int64_t patch_size = 2;
             int pad_h          = (patch_size - H % patch_size) % patch_size;
             int pad_w          = (patch_size - W % patch_size) % patch_size;
@@ -813,6 +816,19 @@ namespace Flux {
 
             // img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch_size, pw=patch_size)
             auto img = patchify(ctx, x, patch_size);  // [N, h*w, C * patch_size * patch_size]
+
+            if (c_concat != NULL) {
+                ggml_tensor* masked = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], 0);
+                ggml_tensor* mask   = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 8 * 8, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
+
+                masked = ggml_pad(ctx, masked, pad_w, pad_h, 0, 0);
+                mask   = ggml_pad(ctx, mask, pad_w, pad_h, 0, 0);
+
+                masked = patchify(ctx, masked, patch_size);
+                mask   = patchify(ctx, mask, patch_size);
+
+                img = ggml_concat(ctx, img, ggml_concat(ctx, masked, mask, 0), 0);
+            }
 
             auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe, skip_layers);  // [N, h*w, C * patch_size * patch_size]
 
@@ -834,12 +850,16 @@ namespace Flux {
         FluxRunner(ggml_backend_t backend,
                    std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
                    const std::string prefix                            = "",
+                   SDVersion version                                   = VERSION_FLUX,
                    bool flash_attn                                     = false)
             : GGMLRunner(backend) {
             flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
             flux_params.depth_single_blocks = 0;
+            if (version == VERSION_FLUX_FILL) {
+                flux_params.in_channels = 384;
+            }
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find("model.diffusion_model.") == std::string::npos)
@@ -886,14 +906,18 @@ namespace Flux {
         struct ggml_cgraph* build_graph(struct ggml_tensor* x,
                                         struct ggml_tensor* timesteps,
                                         struct ggml_tensor* context,
+                                        struct ggml_tensor* c_concat,
                                         struct ggml_tensor* y,
                                         struct ggml_tensor* guidance,
                                         std::vector<int> skip_layers = std::vector<int>()) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
 
-            x         = to_backend(x);
-            context   = to_backend(context);
+            x       = to_backend(x);
+            context = to_backend(context);
+            if (c_concat != NULL) {
+                c_concat = to_backend(c_concat);
+            }
             y         = to_backend(y);
             timesteps = to_backend(timesteps);
             if (flux_params.guidance_embed) {
@@ -913,6 +937,7 @@ namespace Flux {
                                                    x,
                                                    timesteps,
                                                    context,
+                                                   c_concat,
                                                    y,
                                                    guidance,
                                                    pe,
@@ -927,6 +952,7 @@ namespace Flux {
                      struct ggml_tensor* x,
                      struct ggml_tensor* timesteps,
                      struct ggml_tensor* context,
+                     struct ggml_tensor* c_concat,
                      struct ggml_tensor* y,
                      struct ggml_tensor* guidance,
                      struct ggml_tensor** output     = NULL,
@@ -938,7 +964,7 @@ namespace Flux {
             // y: [N, adm_in_channels] or [1, adm_in_channels]
             // guidance: [N, ]
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, y, guidance, skip_layers);
+                return build_graph(x, timesteps, context, c_concat, y, guidance, skip_layers);
             };
 
             GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -978,7 +1004,7 @@ namespace Flux {
                 struct ggml_tensor* out = NULL;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, y, guidance, &out, work_ctx);
+                compute(8, x, timesteps, context, NULL, y, guidance, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

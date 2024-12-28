@@ -290,6 +290,42 @@ __STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
     }
 }
 
+__STATIC_INLINE__ void sd_mask_to_tensor(const uint8_t* image_data,
+                                         struct ggml_tensor* output,
+                                         bool scale = true) {
+    int64_t width    = output->ne[0];
+    int64_t height   = output->ne[1];
+    int64_t channels = output->ne[2];
+    GGML_ASSERT(channels == 1 && output->type == GGML_TYPE_F32);
+    for (int iy = 0; iy < height; iy++) {
+        for (int ix = 0; ix < width; ix++) {
+            float value = *(image_data + iy * width * channels + ix);
+            if (scale) {
+                value /= 255.f;
+            }
+            ggml_tensor_set_f32(output, value, ix, iy);
+        }
+    }
+}
+
+__STATIC_INLINE__ void sd_apply_mask(struct ggml_tensor* image_data,
+                                     struct ggml_tensor* mask,
+                                     struct ggml_tensor* output) {
+    int64_t width    = output->ne[0];
+    int64_t height   = output->ne[1];
+    int64_t channels = output->ne[2];
+    GGML_ASSERT(output->type == GGML_TYPE_F32);
+    for (int ix = 0; ix < width; ix++) {
+        for (int iy = 0; iy < height; iy++) {
+            float m = ggml_tensor_get_f32(mask, ix, iy);
+            for (int k = 0; k < channels; k++) {
+                float value = ((float)(m < 254.5/255)) * (ggml_tensor_get_f32(image_data, ix, iy, k) - .5) + .5;
+                ggml_tensor_set_f32(output, value, ix, iy, k);
+            }
+        }
+    }
+}
+
 __STATIC_INLINE__ void sd_mul_images_to_tensor(const uint8_t* image_data,
                                                struct ggml_tensor* output,
                                                int idx,
@@ -1144,7 +1180,6 @@ public:
         }
 #endif
         ggml_backend_graph_compute(backend, gf);
-
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif

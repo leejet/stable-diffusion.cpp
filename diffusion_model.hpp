@@ -133,8 +133,9 @@ struct FluxModel : public DiffusionModel {
 
     FluxModel(ggml_backend_t backend,
               std::map<std::string, enum ggml_type>& tensor_types,
-              bool flash_attn = false)
-        : flux(backend, tensor_types, "model.diffusion_model", flash_attn) {
+              SDVersion version = VERSION_FLUX,
+              bool flash_attn   = false)
+        : flux(backend, tensor_types, "model.diffusion_model", version, flash_attn) {
     }
 
     void alloc_params_buffer() {
@@ -174,7 +175,7 @@ struct FluxModel : public DiffusionModel {
                  struct ggml_tensor** output               = NULL,
                  struct ggml_context* output_ctx           = NULL,
                  std::vector<int> skip_layers              = std::vector<int>()) {
-        return flux.compute(n_threads, x, timesteps, context, y, guidance, output, output_ctx, skip_layers);
+        return flux.compute(n_threads, x, timesteps, context, c_concat, y, guidance, output, output_ctx, skip_layers);
     }
 };
 

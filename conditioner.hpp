@@ -61,18 +61,18 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                       SDVersion version = VERSION_SD1,
                                       PMVersion pv      = PM_VERSION_1,
                                       int clip_skip     = -1)
-        : version(version), pm_version(pv), tokenizer(version == VERSION_SD2 ? 0 : 49407), embd_dir(embd_dir) {
+        : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407), embd_dir(embd_dir) {
         if (clip_skip <= 0) {
             clip_skip = 1;
-            if (version == VERSION_SD2 || version == VERSION_SDXL) {
+            if (sd_version_is_sd2(version) || sd_version_is_sdxl(version)) {
                 clip_skip = 2;
             }
         }
-        if (version == VERSION_SD1) {
+        if (sd_version_is_sd1(version)) {
             text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, clip_skip);
-        } else if (version == VERSION_SD2) {
+        } else if (sd_version_is_sd2(version)) {
             text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, clip_skip);
-        } else if (version == VERSION_SDXL) {
+        } else if (sd_version_is_sdxl(version)) {
             text_model  = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, clip_skip, false);
             text_model2 = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, clip_skip, false);
         }
@@ -80,35 +80,35 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
     void set_clip_skip(int clip_skip) {
         text_model->set_clip_skip(clip_skip);
-        if (version == VERSION_SDXL) {
+        if (sd_version_is_sdxl(version)) {
             text_model2->set_clip_skip(clip_skip);
         }
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
         text_model->get_param_tensors(tensors, "cond_stage_model.transformer.text_model");
-        if (version == VERSION_SDXL) {
+        if (sd_version_is_sdxl(version)) {
             text_model2->get_param_tensors(tensors, "cond_stage_model.1.transformer.text_model");
         }
     }
 
     void alloc_params_buffer() {
         text_model->alloc_params_buffer();
-        if (version == VERSION_SDXL) {
+        if (sd_version_is_sdxl(version)) {
             text_model2->alloc_params_buffer();
         }
     }
 
     void free_params_buffer() {
         text_model->free_params_buffer();
-        if (version == VERSION_SDXL) {
+        if (sd_version_is_sdxl(version)) {
             text_model2->free_params_buffer();
         }
     }
 
     size_t get_params_buffer_size() {
         size_t buffer_size = text_model->get_params_buffer_size();
-        if (version == VERSION_SDXL) {
+        if (sd_version_is_sdxl(version)) {
             buffer_size += text_model2->get_params_buffer_size();
         }
         return buffer_size;
@@ -402,7 +402,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             auto input_ids                 = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
             struct ggml_tensor* input_ids2 = NULL;
             size_t max_token_idx           = 0;
-            if (version == VERSION_SDXL) {
+            if (sd_version_is_sdxl(version)) {
                 auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), tokenizer.EOS_TOKEN_ID);
                 if (it != chunk_tokens.end()) {
                     std::fill(std::next(it), chunk_tokens.end(), 0);
@@ -427,7 +427,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                     false,
                                     &chunk_hidden_states1,
                                     work_ctx);
-                if (version == VERSION_SDXL) {
+                if (sd_version_is_sdxl(version)) {
                     text_model2->compute(n_threads,
                                          input_ids2,
                                          0,
@@ -486,7 +486,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                         ggml_nelements(hidden_states) / chunk_hidden_states->ne[0]);
 
         ggml_tensor* vec = NULL;
-        if (version == VERSION_SDXL) {
+        if (sd_version_is_sdxl(version)) {
             int out_dim = 256;
             vec         = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, adm_in_channels);
             // [0:1280]
