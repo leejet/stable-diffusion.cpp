@@ -113,12 +113,12 @@ cmake .. -DGGML_OPENBLAS=ON
 cmake --build . --config Release
 ```
 
-##### Using CUBLAS
+##### Using CUDA
 
 This provides BLAS acceleration using the CUDA cores of your Nvidia GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from here: [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads). Recommended to have at least 4 GB of VRAM.
 
 ```
-cmake .. -DSD_CUBLAS=ON
+cmake .. -DSD_CUDA=ON
 cmake --build . --config Release
 ```
 
