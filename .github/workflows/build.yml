@@ -155,13 +155,13 @@ jobs:
       matrix:
         include:
           - build: "noavx"
-            defines: "-DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DSD_BUILD_SHARED_LIBS=ON"
+            defines: "-DGGML_NATIVE=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DSD_BUILD_SHARED_LIBS=ON"
           - build: "avx2"
-            defines: "-DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON"
+            defines: "-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON"
           - build: "avx"
-            defines: "-DGGML_AVX2=OFF -DSD_BUILD_SHARED_LIBS=ON"
+            defines: "-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DSD_BUILD_SHARED_LIBS=ON"
           - build: "avx512"
-            defines: "-DGGML_AVX512=ON -DSD_BUILD_SHARED_LIBS=ON"
+            defines: "-DGGML_NATIVE=OFF -DGGML_AVX512=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON"
           - build: "cuda12"
             defines: "-DSD_CUDA=ON -DSD_BUILD_SHARED_LIBS=ON"
           # - build: "rocm5.5"
