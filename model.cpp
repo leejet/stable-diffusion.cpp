@@ -1748,9 +1748,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
             }
             return true;
         };
-
+        int tensor_count = 0;
+        int64_t t1       = ggml_time_ms();
         for (auto& tensor_storage : processed_tensor_storages) {
             if (tensor_storage.file_index != file_index) {
+                ++tensor_count;
                 continue;
             }
             ggml_tensor* dst_tensor = NULL;
@@ -1762,6 +1764,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
             }
 
             if (dst_tensor == NULL) {
+                ++tensor_count;
                 continue;
             }
 
@@ -1828,6 +1831,9 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
                 }
             }
+            int64_t t2 = ggml_time_ms();
+            pretty_progress(++tensor_count, processed_tensor_storages.size(), (t2 - t1) / 1000.0f);
+            t1 = t2;
         }
 
         if (zip != NULL) {
