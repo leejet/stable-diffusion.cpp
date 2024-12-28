@@ -642,7 +642,8 @@ public:
         }
 
         lora.multiplier = multiplier;
-        lora.apply(tensors, n_threads);
+        // TODO: send version?
+        lora.apply(tensors, version, n_threads);
         lora.free_params_buffer();
 
         int64_t t1 = ggml_time_ms();
@@ -1206,7 +1207,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->stacked_id) {
         if (!sd_ctx->sd->pmid_lora->applied) {
             t0 = ggml_time_ms();
-            sd_ctx->sd->pmid_lora->apply(sd_ctx->sd->tensors, sd_ctx->sd->n_threads);
+            sd_ctx->sd->pmid_lora->apply(sd_ctx->sd->tensors, sd_ctx->sd->version, sd_ctx->sd->n_threads);
             t1                             = ggml_time_ms();
             sd_ctx->sd->pmid_lora->applied = true;
             LOG_INFO("pmid_lora apply completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
