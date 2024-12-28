@@ -29,6 +29,7 @@ option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
 option(SD_VULKAN                     "sd: vulkan backend" OFF)
 option(SD_SYCL                       "sd: sycl backend" OFF)
+option(SD_MUSA                       "sd: musa backend" OFF)
 option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
 option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
@@ -60,9 +61,18 @@ if (SD_HIPBLAS)
     endif()
 endif ()
 
+if(SD_MUSA)
+    message("-- Use MUSA as backend stable-diffusion")
+    set(GGML_MUSA ON)
+    add_definitions(-DSD_USE_CUBLAS)
+    if(SD_FAST_SOFTMAX)
+        set(GGML_CUDA_FAST_SOFTMAX ON)
+    endif()
+endif()
+
 set(SD_LIB stable-diffusion)
 
-file(GLOB SD_LIB_SOURCES 
+file(GLOB SD_LIB_SOURCES
     "*.h"
     "*.cpp"
     "*.hpp"
