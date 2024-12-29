@@ -186,11 +186,11 @@ void print_params(SDParams params) {
     printf("    sample_steps:      %d\n", params.sample_steps);
     printf("    strength(img2img): %.2f\n", params.strength);
     printf("    rng:               %s\n", rng_type_to_str[params.rng_type]);
-    printf("    seed:              %ld\n", params.seed);
+    printf("    seed:              %lld\n", params.seed);
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
-    printf("    preview_mode:      %d\n", previews_str[params.preview_method]);
+    printf("    preview_mode:      %s\n", previews_str[params.preview_method]);
     printf("    preview_interval:  %d\n", params.preview_interval);
 }
 
