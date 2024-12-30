@@ -521,6 +521,10 @@ public:
             if (is_using_v_parameterization_for_sd2(ctx)) {
                 is_using_v_parameterization = true;
             }
+        } else if (sd_version_is_sdxl(version)) {
+            if (model_loader.tensor_storages_types.find("v_pred") != model_loader.tensor_storages_types.end()) {
+                is_using_v_parameterization = true;
+            }
         } else if (version == VERSION_SVD) {
             // TODO: V_PREDICTION_EDM
             is_using_v_parameterization = true;
