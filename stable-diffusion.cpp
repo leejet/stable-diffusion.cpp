@@ -819,9 +819,9 @@ public:
 
             } else if (dim == 4) {
                 // 4 channels VAE
-                if (version == VERSION_SDXL) {
+                if (sd_version_is_sdxl(version)) {
                     latent_rgb_proj = sdxl_latent_rgb_proj;
-                } else if (version == VERSION_SD1 || version == VERSION_SD2) {
+                } else if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
                     latent_rgb_proj = sd_latent_rgb_proj;
                 } else {
                     // unknown model
@@ -1682,7 +1682,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
-    if (preview_mode!=SD_PREVIEW_NONE && preview_mode!=SD_PREVIEW_PROJ) {
+    if (preview_mode != SD_PREVIEW_NONE && preview_mode != SD_PREVIEW_PROJ) {
         params.mem_size *= 2;
     }
     params.mem_size += width * height * 3 * sizeof(float);
