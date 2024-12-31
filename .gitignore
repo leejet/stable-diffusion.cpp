@@ -1,6 +1,8 @@
 build*/
+cmake-build-*/
 test/
 .vscode/
+.idea/
 .cache/
 *.swp
 .vscode/
