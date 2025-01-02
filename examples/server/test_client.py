@@ -5,6 +5,8 @@ import os
 if os.name == 'nt':
     from threading import Thread
 
+import time
+
 
 from typing import List
 
@@ -83,6 +85,18 @@ def update_url(protocol=None, server=None, port=None, endpoint=None) -> str:
 # set default url value
 update_url()
 
+def poll_result(id: str):
+    global _protocol
+    global _server
+    global _port
+
+    res = {'status':""}
+    while res['status'] != "Done":
+        time.sleep(0.1)
+        res = requests.post(f"{_protocol}://{_server}:{_port}/result", json.dumps({'task_id':id})).json()
+        
+    return json.dumps(res['data'])
+
 def sendRequest(payload: str) -> str:
     """
     Send a POST request to the API endpoint with the provided payload.
@@ -97,7 +111,7 @@ def sendRequest(payload: str) -> str:
     str: The text content of the response from the POST request.
     """
     global url
-    return requests.post(url, payload).text
+    return requests.post(url, payload).json()['task_id']
 
 def getImages(response: str) -> List[Image.Image]:
     """
@@ -163,7 +177,7 @@ def saveImages(imgs: List[Image.Image], path: str) -> None:
 def _print_usage():
     print("""Example usage (images will be displayed and saved to a temporary file):
 update_url(server="127.0.0.1", port=8080)
-showImages(getImages(sendRequest(json.dumps({'seed': -1, 'batch_count':4, 'sample_steps':24, 'width': 512, 'height':768, 'negative_prompt': "Bad quality", 'prompt': "A beautiful image"}))))""")
+showImages(getImages(poll_result(sendRequest(json.dumps({'seed': -1, 'batch_count':4, 'sample_steps':24, 'width': 512, 'height':768, 'negative_prompt': "Bad quality", 'prompt': "A beautiful image"})))))""")
     
 if __name__ == "__main__":
     _print_usage()
