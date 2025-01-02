@@ -854,7 +854,8 @@ void worker_thread() {
             task_queue.pop();
             lock.unlock();
             task();
-            is_busy = false;
+            is_busy         = false;
+            running_task_id = "";
         }
     }
 }
@@ -926,14 +927,16 @@ void start_server(SDParams params) {
         using json          = nlohmann::json;
         std::string task_id = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
 
-        json pending_task_json      = json::object();
-        pending_task_json["status"] = "Pending";
-        pending_task_json["data"]   = json::array();
-        pending_task_json["step"]   = -1;
-        pending_task_json["eta"]    = "?";
+        {
+            json pending_task_json      = json::object();
+            pending_task_json["status"] = "Pending";
+            pending_task_json["data"]   = json::array();
+            pending_task_json["step"]   = -1;
+            pending_task_json["eta"]    = "?";
 
-        std::lock_guard<std::mutex> results_lock(results_mutex);
-        task_results[task_id] = pending_task_json;
+            std::lock_guard<std::mutex> results_lock(results_mutex);
+            task_results[task_id] = pending_task_json;
+        }
 
         auto task = [&req, &sd_ctx, &params, &n_prompts, task_id]() {
             running_task_id = task_id;
@@ -1044,12 +1047,7 @@ void start_server(SDParams params) {
                 end_task_json["eta"]    = "?";
                 std::lock_guard<std::mutex> results_lock(results_mutex);
                 task_results[task_id] = end_task_json;
-                return;
             }
-
-            std::lock_guard<std::mutex> results_lock(results_mutex);
-            task_results[task_id]["status"] = "Failed";
-            return;
         };
         // Add the task to the queue
         add_task(task_id, task);
@@ -1059,20 +1057,321 @@ void start_server(SDParams params) {
         res.set_content(response.dump(), "application/json");
     });
 
-    svr->Post("/result", [](const httplib::Request& req, httplib::Response& res) {
+    svr->Get("/params", [&params](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        json params_json = json::object();
+        params_json["prompt"] = params.lastRequest.prompt;
+        params_json["negative_prompt"] = params.lastRequest.negative_prompt;
+        params_json["clip_skip"] = params.lastRequest.clip_skip;
+        params_json["cfg_scale"] = params.lastRequest.cfg_scale;
+        params_json["guidance"] = params.lastRequest.guidance;
+        params_json["width"] = params.lastRequest.width;
+        params_json["height"] = params.lastRequest.height;
+        params_json["sample_method"] = sample_method_str[params.lastRequest.sample_method];
+        params_json["sample_steps"] = params.lastRequest.sample_steps;
+        params_json["seed"] = params.lastRequest.seed;
+        params_json["batch_count"] = params.lastRequest.batch_count;
+        params_json["normalize_input"] = params.lastRequest.normalize_input;
+        // params_json["input_id_images_path"] = params.input_id_images_path;
+        response["generation_params"] = params_json;
+
+        json context_params = json::object();
+        // Do not expose paths
+        // context_params["model_path"] = params.ctxParams.model_path;
+        // context_params["clip_l_path"] = params.ctxParams.clip_l_path;
+        // context_params["clip_g_path"] = params.ctxParams.clip_g_path;
+        // context_params["t5xxl_path"] = params.ctxParams.t5xxl_path;
+        // context_params["diffusion_model_path"] = params.ctxParams.diffusion_model_path;
+        // context_params["vae_path"] = params.ctxParams.vae_path;
+        // context_params["controlnet_path"] = params.ctxParams.controlnet_path;
+        context_params["lora_model_dir"] = params.ctxParams.lora_model_dir;
+        // context_params["embeddings_path"] = params.ctxParams.embeddings_path;
+        // context_params["stacked_id_embeddings_path"] = params.ctxParams.stacked_id_embeddings_path;
+        context_params["vae_decode_only"] = params.ctxParams.vae_decode_only;
+        context_params["vae_tiling"] = params.ctxParams.vae_tiling;
+        context_params["n_threads"] = params.ctxParams.n_threads;
+        context_params["wtype"] = params.ctxParams.wtype;
+        context_params["rng_type"] = params.ctxParams.rng_type;
+        context_params["schedule"] = params.ctxParams.schedule;
+        context_params["clip_on_cpu"] = params.ctxParams.clip_on_cpu;
+        context_params["control_net_cpu"] = params.ctxParams.control_net_cpu;
+        context_params["vae_on_cpu"] = params.ctxParams.vae_on_cpu;
+        context_params["diffusion_flash_attn"] = params.ctxParams.diffusion_flash_attn;
+        response["context_params"] = context_params;
+
+        res.set_content(response.dump(), "application/json");
+    });
+
+
+    svr->Get("/result", [](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         // Parse task ID from query parameters
         try {
-            std::string task_id = json::parse(req.body)["task_id"];
+            std::string task_id = req.get_param_value("task_id");
             std::lock_guard<std::mutex> lock(results_mutex);
             if (task_results.find(task_id) != task_results.end()) {
                 json result = task_results[task_id];
                 res.set_content(result.dump(), "application/json");
+                // Erase data after sending
+                result["data"]        = json::array();
+                task_results[task_id] = result;
             } else {
                 res.set_content("Cannot find task " + task_id + " in queue", "text/plain");
             }
         } catch (...) {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid request body: %s\n", req.body.c_str());
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Error when fetching result");
+        }
+    });
+
+    svr->Get("/sample_methods", [](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        for (int m = 0; m < N_SAMPLE_METHODS; m++) {
+            response.push_back(sample_method_str[m]);
+        }
+        res.set_content(response.dump(), "application/json");
+    });
+
+    svr->Get("/schedules", [](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        for (int s = 0; s < N_SCHEDULES; s++) {
+            response.push_back(schedule_str[s]);
+        }
+        res.set_content(response.dump(), "application/json");
+    });
+
+
+    svr->Get("/index.html", [](const httplib::Request& req, httplib::Response& res) {
+        try {
+            std::string html_content = R"xxx(
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SDCPP Server</title>
+<style>
+    body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .container {
+            display: flex;
+        width: 80%;
+        background: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+    .input-group {
+        display: flex;
+        align-items: center;
+        margin-bottom: 10px;
+        }
+    .input-group label {
+        width: 150px;
+        text-align: right;
+        margin-right: 10px;
+        }
+    .prompt-input, .param-input {
+        width: 400px;
+        }
+    canvas {
+        border: 1px solid #ccc;
+    }
+    .left-section {
+        flex: 1;
+        padding-right: 20px;
+    }
+    .right-section {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="left-section">
+        <h1>SDCPP Server</h1>
+        <div id="prompts">
+            <div class="input-group">
+                <label for="prompt">Prompt:</label>
+                <input type="text" id="prompt" class="prompt-input">
+            </div>
+            <div class="input-group">
+                <label for="neg_prompt">Negative Prompt:</label>
+                <input type="text" id="neg_prompt" class="prompt-input">
+            </div>
+        </div>
+        <div id="params">
+            <div class="input-group">
+                <label for="width">Width:</label>
+                <input type="number" id="width" class="param-input">
+            </div>
+            <div class="input-group">
+                <label for="height">Height:</label>
+                <input type="number" id="height" class="param-input">
+            </div>
+            <div class="input-group">
+                <label for="cfg_scale">CFG Scale:</label>
+                <input type="number" id="cfg_scale" class="param-input">
+            </div>
+            <div class="input-group">
+                <label for="guidance">Guidance (Flux):</label>
+                <input type="number" id="guidance" class="param-input">
+            </div>
+            <div class="input-group">
+                <label for="steps">Steps:</label>
+                <input type="number" id="steps" class="param-input">
+            </div>
+            <div class="input-group">
+                <label for="sample_method">Sample Method:</label>
+                <select id="sample_method" class="param-input"></select>
+            </div>
+            <div class="input-group">
+                <label for="seed">Seed:</label>
+                <input type="number" id="seed" class="param-input">
+            </div>
+            <div class="input-group">
+                <label for="batch_count">Batch Count:</label>
+                <input type="number" id="batch_count" class="param-input">
+            </div>
+        </div>
+        <button onclick="generateImage()">Generate</button>
+        <a id="downloadLink" style="display: none;" download="generated_image.png">Download Image</a>
+    </div>
+        <div class="right-section">
+            <canvas id="imageCanvas" width="500" height="500"></canvas>
+        </div>
+    </div>
+    <script>
+        // Fetch sample methods from the server and populate the dropdown list
+        async function fetchSampleMethods() {
+            const response = await fetch('/sample_methods');
+            const data = await response.json();
+
+            const select = document.getElementById('sample_method');
+            data.forEach(method => {
+                const option = document.createElement('option');
+                option.value = method;
+                option.textContent = method;
+                select.appendChild(option);
+            });
+        }
+
+        // Call the function to fetch and populate the sample methods list
+        fetchSampleMethods();
+
+        // Fetch parameters from the server and populate the input fields
+        async function fetchParams() {
+            const response = await fetch('/params');
+            const data = await response.json();
+
+            document.getElementById('prompt').value = data.generation_params.prompt;
+            document.getElementById('neg_prompt').value = data.generation_params.negative_prompt;
+            document.getElementById('width').value = data.generation_params.width;
+            document.getElementById('height').value = data.generation_params.height;
+            document.getElementById('cfg_scale').value = data.generation_params.cfg_scale;
+            document.getElementById('guidance').value = data.generation_params.guidance;
+            document.getElementById('steps').value = data.generation_params.sample_steps;
+            document.getElementById('sample_method').value = data.generation_params.sample_method;
+            document.getElementById('seed').value = data.generation_params.seed;
+            document.getElementById('batch_count').value = data.generation_params.batch_count;
+        }
+
+        // Call the function to fetch and populate the input fields
+        fetchParams();
+
+        async function generateImage() {
+            const prompt     = document.getElementById('prompt').value;
+            const neg_prompt = document.getElementById('neg_prompt').value;
+            const width      = document.getElementById('width').value;
+            const height     = document.getElementById('height').value;
+            const cfg_scale  = document.getElementById('cfg_scale').value;
+            const steps      = document.getElementById('steps').value;
+            const guidance   = document.getElementById('guidance').value;
+            const sample_method = document.getElementById('sample_method').value;
+            const seed       = document.getElementById('seed').value;
+            const batch_count = document.getElementById('batch_count').value;
+            const canvas = document.getElementById('imageCanvas');
+            const ctx = canvas.getContext('2d');
+            const downloadLink = document.getElementById('downloadLink');
+
+            const requestBody = {
+                prompt: prompt,
+                negative_prompt: neg_prompt,
+                ...(width && { width: parseInt(width) }),
+                ...(height && { height: parseInt(height) }),
+                ...(cfg_scale && { cfg_scale: parseFloat(cfg_scale) }),
+                ...(steps && { steps: parseInt(steps) }),
+                ...(guidance && { guidance: parseFloat(guidance) }),
+                ...(sample_method && { sample_method: sample_method }),
+                ...(seed && { seed: parseInt(seed) }),
+                ...(batch_count && { batch_count: parseInt(batch_count) })
+            };
+
+            const response = await fetch('/txt2img', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody)
+            });
+
+            const data = await response.json();
+            const taskId = data.task_id;
+
+            let status = '';
+            while (status !== 'Done' && status !== 'Failed') {
+                const statusResponse = await fetch(`/result?task_id=${taskId}`);
+                const statusData = await statusResponse.json();
+                status = statusData.status;
+
+                if (status === 'Done' || status === 'Working' && statusData.data.length > 0 ) {
+                    const imageData = statusData.data[0].data;
+                    const width = statusData.data[0].width;
+                    const height = statusData.data[0].height;
+
+                    const img = new Image();
+                    img.src = `data:image/png;base64,${imageData}`;
+                    img.onload = () => {
+                        canvas.width = width;
+                        canvas.height = height;
+                        ctx.drawImage(img, 0, 0, width, height);
+                        downloadLink.href = img.src;
+                        downloadLink.style.display = 'inline-block';
+                    };
+                } else if (status === 'Failed') {
+                    alert('Image generation failed');
+                }
+
+                await new Promise(resolve => setTimeout(resolve, 250));
+            }
+        }
+        document.querySelectorAll('.prompt-input,.param-input').forEach(input => {
+            input.addEventListener('keydown', function(event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    generateImage();
+                }
+            });
+        });
+    </script>
+</body>
+</html>
+            )xxx";
+            res.set_content(html_content, "text/html");
+        } catch (const std::exception& e) {
+            res.set_content("Error loading page", "text/plain");
         }
     });
 
