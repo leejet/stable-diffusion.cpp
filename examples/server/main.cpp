@@ -837,7 +837,8 @@ std::queue<std::function<void()>> task_queue;
 std::mutex queue_mutex;
 std::condition_variable queue_cond;
 bool stop_worker = false;
-std::atomic<bool> is_task_running(false);
+std::atomic<bool> is_busy(false);
+std::string running_task_id("");
 
 std::unordered_map<std::string, nlohmann::json> task_results;
 std::mutex results_mutex;
@@ -848,12 +849,12 @@ void worker_thread() {
         queue_cond.wait(lock, [] { return !task_queue.empty() || stop_worker; });
 
         if (!task_queue.empty()) {
-            is_task_running = true;
+            is_busy = true;
             auto task       = task_queue.front();
             task_queue.pop();
             lock.unlock();
             task();
-            is_task_running = false;
+            is_busy = false;
         }
     }
 }
@@ -935,6 +936,7 @@ void start_server(SDParams params) {
         task_results[task_id] = pending_task_json;
 
         auto task = [&req, &sd_ctx, &params, &n_prompts, task_id]() {
+            running_task_id = task_id;
             // LOG_DEBUG("raw body is: %s\n", req.body.c_str());
             sd_log(sd_log_level_t::SD_LOG_DEBUG, "raw body is: %s\n", req.body.c_str());
             // parse req.body as json using jsoncpp
