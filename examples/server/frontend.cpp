@@ -10,6 +10,7 @@ const std::string html_content = R"xxx(
         body {
             font-family: Arial, sans-serif;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             height: 100vh;
@@ -254,8 +255,17 @@ const std::string html_content = R"xxx(
             <canvas id="imageCanvas" width="500" height="500"></canvas>
         </div>
     </div>
+    <div class="line">
+        <p>Current task status: <span id="status"> -- </span> | Queue: <span id="queued_tasks">0</span></p>
+    </div>
     )xxx" R"xxx(
     <script>
+        let queued_tasks = 0;
+        async function update_queue() {
+            const display = document.getElementById('queued_tasks');
+            display.innerHTML = queued_tasks;
+        }
+
         const modelIdElement = document.getElementById('model-id');
 
         async function fetchModelId() {
@@ -465,7 +475,7 @@ const std::string html_content = R"xxx(
         }
 )xxx" R"xxx(
 
-        fetchSampleMethods();
+            fetchSampleMethods();
         fetchSchedules();
         fetchPreviewMethods();
         fetchModelsEncodersAE();
@@ -475,6 +485,9 @@ const std::string html_content = R"xxx(
 
 
         async function generateImage() {
+            queued_tasks++;
+            update_queue();
+
             const prompt = document.getElementById('prompt').value;
             const neg_prompt = document.getElementById('neg_prompt').value;
             const width = document.getElementById('width').value;
@@ -575,6 +588,7 @@ const std::string html_content = R"xxx(
                     }, 0);
                 }
                 status = statusData.status;
+                document.getElementById('status').innerHTML = status;
 
                 if (status === 'Done' || (status === 'Working' && statusData.data.length > 0)) {
                     const imageData = statusData.data[0].data;
@@ -596,6 +610,8 @@ const std::string html_content = R"xxx(
 
                 await new Promise(resolve => setTimeout(resolve, 250));
             }
+            queued_tasks--;
+            update_queue();
         }
 
         document.querySelectorAll('.prompt-input,.param-input').forEach(input => {
