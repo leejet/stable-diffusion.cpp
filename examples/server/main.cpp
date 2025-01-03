@@ -1080,7 +1080,7 @@ void start_server(SDParams params) {
             bool updateCTX = false;
             try {
                 std::string json_str = req.body;
-                updateCTX = parseJsonPrompt(json_str, &params);
+                updateCTX            = parseJsonPrompt(json_str, &params);
             } catch (json::parse_error& e) {
                 // assume the request is just a prompt
                 // LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
@@ -1106,14 +1106,16 @@ void start_server(SDParams params) {
 
             if (sd_ctx == NULL) {
                 printf("Loading sd_ctx\n");
-                json task_json      = json::object();
-                task_json["status"] = "Loading";
-                task_json["data"]   = json::array();
-                task_json["step"]   = -1;
-                task_json["eta"]    = "?";
+                {
+                    json task_json      = json::object();
+                    task_json["status"] = "Loading";
+                    task_json["data"]   = json::array();
+                    task_json["step"]   = -1;
+                    task_json["eta"]    = "?";
 
-                std::lock_guard<std::mutex> results_lock(results_mutex);
-                task_results[task_id] = task_json;
+                    std::lock_guard<std::mutex> results_lock(results_mutex);
+                    task_results[task_id] = task_json;
+                }
 
                 sd_ctx = new_sd_ctx(params.ctxParams.model_path.c_str(),
                                     params.ctxParams.clip_l_path.c_str(),
