@@ -888,13 +888,13 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     }
     try {
         bool vae_tiling = payload["vae_tiling"];
-        printf("VAE_tiling : %s", vae_tiling ? "true" : "false");
         if (params->ctxParams.vae_tiling != vae_tiling) {
             params->ctxParams.vae_tiling = vae_tiling;
             updatectx                    = true;
         }
     } catch (...) {
     }
+
     try {
         std::string model = payload["model"];
         if (params->ctxParams.model_path != params->models_dir + model) {
@@ -957,7 +957,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     try {
         std::string schedule = payload["schedule"];
         int schedule_found   = -1;
-        for (int m = 0; m < N_SAMPLE_METHODS; m++) {
+        for (int m = 0; m < N_SCHEDULES; m++) {
             if (!strcmp(schedule.c_str(), schedule_str[m])) {
                 schedule_found = m;
             }
@@ -1009,8 +1009,8 @@ void worker_thread() {
         queue_cond.wait(lock, [] { return !task_queue.empty() || stop_worker; });
 
         if (!task_queue.empty()) {
-            is_busy = true;
-            auto task       = task_queue.front();
+            is_busy   = true;
+            auto task = task_queue.front();
             task_queue.pop();
             lock.unlock();
             task();
@@ -1080,7 +1080,7 @@ void start_server(SDParams params) {
             bool updateCTX = false;
             try {
                 std::string json_str = req.body;
-                updateCTX            = parseJsonPrompt(json_str, &params);
+                updateCTX = parseJsonPrompt(json_str, &params);
             } catch (json::parse_error& e) {
                 // assume the request is just a prompt
                 // LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
@@ -1105,6 +1105,7 @@ void start_server(SDParams params) {
             }
 
             if (sd_ctx == NULL) {
+                printf("Loading sd_ctx\n");
                 json task_json      = json::object();
                 task_json["status"] = "Loading";
                 task_json["data"]   = json::array();

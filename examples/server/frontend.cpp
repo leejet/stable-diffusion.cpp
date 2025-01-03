@@ -328,19 +328,14 @@ const std::string html_content = R"xxx(
             const data = await response.json();
 
             const select = document.getElementById('preview_mode');
-            select.innerHTML = '';
-            data.forEach(preview => {
-                const option = document.createElement('option');
-                option.value = preview;
-                option.textContent = preview;
-                select.appendChild(option);
-            });
-            if (!select.firstChild) {
-                // preview isn't supported
-                const option = document.createElement('option');
-                option.value = "";
-                option.textContent = "unsupported";
-                select.appendChild(option);
+            if (data) {
+                select.innerHTML = '';
+                data.forEach(preview => {
+                    const option = document.createElement('option');
+                    option.value = preview;
+                    option.textContent = preview;
+                    select.appendChild(option);
+                });
             }
         }
 
