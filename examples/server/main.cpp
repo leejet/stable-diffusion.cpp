@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <filesystem>
 #include <iostream>
 #include <random>
 #include <string>
@@ -32,6 +33,8 @@
 #include <mutex>
 #include <queue>
 #include <thread>
+
+#include "frontend.cpp"
 
 const char* rng_type_to_str[] = {
     "std_default",
@@ -138,6 +141,12 @@ struct SDParams {
     std::string output_path        = "./server/output.png";
     std::string input_path         = "./server/input.png";
     std::string control_image_path = "./server/control.png";
+
+    std::string models_dir;
+    std::string diffusion_models_dir;
+    std::string clip_dir;
+    std::string vae_dir;
+    std::string tae_dir;
 
     // external dir
     std::string input_id_images_path;
@@ -611,6 +620,36 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.host = argv[i];
+        } else if (arg == "--models-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.models_dir = argv[i];
+        } else if (arg == "--diffusion-models-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.diffusion_models_dir = argv[i];
+        } else if (arg == "--encoders-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.clip_dir = argv[i];
+        } else if (arg == "--vae-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.vae_dir = argv[i];
+        } else if (arg == "--tae-dir") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.tae_dir = argv[i];
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -723,7 +762,8 @@ static void log_server_request(const httplib::Request& req, const httplib::Respo
     printf("request: %s %s (%s)\n", req.method.c_str(), req.path.c_str(), req.body.c_str());
 }
 
-void parseJsonPrompt(std::string json_str, SDParams* params) {
+bool parseJsonPrompt(std::string json_str, SDParams* params) {
+    bool updatectx = false;
     using namespace nlohmann;
     json payload = json::parse(json_str);
     // if no exception, the request is a json object
@@ -829,6 +869,126 @@ void parseJsonPrompt(std::string json_str, SDParams* params) {
         params->input_id_images_path = input_id_images_path;
     } catch (...) {
     }
+
+    try {
+        bool vae_cpu = payload["vae_on_cpu"];
+        if (params->ctxParams.vae_on_cpu != vae_cpu) {
+            params->ctxParams.vae_on_cpu = vae_cpu;
+            updatectx                    = true;
+        }
+    } catch (...) {
+    }
+    try {
+        bool clip_cpu = payload["clip_on_cpu"];
+        if (params->ctxParams.clip_on_cpu != clip_cpu) {
+            params->ctxParams.clip_on_cpu = clip_cpu;
+            updatectx                     = true;
+        }
+    } catch (...) {
+    }
+    try {
+        bool vae_tiling = payload["vae_tiling"];
+        printf("VAE_tiling : %s", vae_tiling ? "true" : "false");
+        if (params->ctxParams.vae_tiling != vae_tiling) {
+            params->ctxParams.vae_tiling = vae_tiling;
+            updatectx                    = true;
+        }
+    } catch (...) {
+    }
+    try {
+        std::string model = payload["model"];
+        if (params->ctxParams.model_path != params->models_dir + model) {
+            params->ctxParams.model_path           = params->models_dir + model;
+            params->ctxParams.diffusion_model_path = "";
+            updatectx                              = true;
+        }
+    } catch (...) {
+    }
+    try {
+        std::string diffusion_model = payload["diffusion_model"];
+        if (params->ctxParams.diffusion_model_path != params->diffusion_models_dir + diffusion_model) {
+            params->ctxParams.diffusion_model_path = params->diffusion_models_dir + diffusion_model;
+            params->ctxParams.model_path           = "";
+            updatectx                              = true;
+        }
+    } catch (...) {
+    }
+    try {
+        std::string clip_l = payload["clip_l"];
+        if (params->ctxParams.clip_l_path != params->clip_dir + clip_l) {
+            params->ctxParams.clip_l_path = params->clip_dir + clip_l;
+            updatectx                     = true;
+        }
+    } catch (...) {
+    }
+    try {
+        std::string clip_g = payload["clip_g"];
+        if (params->ctxParams.clip_g_path != params->clip_dir + clip_g) {
+            params->ctxParams.clip_g_path = params->clip_dir + clip_g;
+            updatectx                     = true;
+        }
+    } catch (...) {
+    }
+    try {
+        std::string t5xxl = payload["t5xxl"];
+        if (params->ctxParams.t5xxl_path != params->clip_dir + t5xxl) {
+            params->ctxParams.t5xxl_path = params->clip_dir + t5xxl;
+            updatectx                    = true;
+        }
+    } catch (...) {
+    }
+    try {
+        std::string vae = payload["vae"];
+        if (params->ctxParams.vae_path != params->vae_dir + vae) {
+            params->ctxParams.vae_path = params->vae_dir + vae;
+            updatectx                  = true;
+        }
+    } catch (...) {
+    }
+    try {
+        std::string tae = payload["tae"];
+        if (params->ctxParams.taesd_path != params->tae_dir + tae) {
+            params->ctxParams.taesd_path = params->tae_dir + tae;
+            updatectx                    = true;
+        }
+    } catch (...) {
+    }
+
+    try {
+        std::string schedule = payload["schedule"];
+        int schedule_found   = -1;
+        for (int m = 0; m < N_SAMPLE_METHODS; m++) {
+            if (!strcmp(schedule.c_str(), schedule_str[m])) {
+                schedule_found = m;
+            }
+        }
+        if (schedule_found >= 0) {
+            if (params->ctxParams.schedule != (schedule_t)schedule_found) {
+                params->ctxParams.schedule = (schedule_t)schedule_found;
+                updatectx                  = true;
+            }
+        } else {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown schedule: %s\n", schedule.c_str());
+        }
+    } catch (...) {
+    }
+
+    return updatectx;
+}
+
+std::vector<std::string> list_files(const std::string& dir_path) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> files;
+    if (dir_path != "")
+        for (const auto& entry : fs::recursive_directory_iterator(dir_path)) {
+            if (entry.is_regular_file()) {
+                auto relative_path   = fs::relative(entry.path(), dir_path);
+                std::string path_str = relative_path.string();
+                std::replace(path_str.begin(), path_str.end(), '\\', '/');
+                files.push_back(path_str);
+            }
+        }
+    return files;
 }
 
 //--------------------------------------//
@@ -878,33 +1038,7 @@ void start_server(SDParams params) {
         printf("%s", sd_get_system_info());
     }
 
-    sd_ctx_t* sd_ctx = new_sd_ctx(params.ctxParams.model_path.c_str(),
-                                  params.ctxParams.clip_l_path.c_str(),
-                                  params.ctxParams.clip_g_path.c_str(),
-                                  params.ctxParams.t5xxl_path.c_str(),
-                                  params.ctxParams.diffusion_model_path.c_str(),
-                                  params.ctxParams.vae_path.c_str(),
-                                  params.ctxParams.taesd_path.c_str(),
-                                  params.ctxParams.controlnet_path.c_str(),
-                                  params.ctxParams.lora_model_dir.c_str(),
-                                  params.ctxParams.embeddings_path.c_str(),
-                                  params.ctxParams.stacked_id_embeddings_path.c_str(),
-                                  params.ctxParams.vae_decode_only,
-                                  params.ctxParams.vae_tiling,
-                                  false,
-                                  params.ctxParams.n_threads,
-                                  params.ctxParams.wtype,
-                                  params.ctxParams.rng_type,
-                                  params.ctxParams.schedule,
-                                  params.ctxParams.clip_on_cpu,
-                                  params.ctxParams.control_net_cpu,
-                                  params.ctxParams.vae_on_cpu,
-                                  params.ctxParams.diffusion_flash_attn);
-
-    if (sd_ctx == NULL) {
-        printf("new_sd_ctx_t failed\n");
-        return;
-    }
+    sd_ctx_t* sd_ctx = NULL;
 
     int n_prompts = 0;
 
@@ -943,9 +1077,10 @@ void start_server(SDParams params) {
             // LOG_DEBUG("raw body is: %s\n", req.body.c_str());
             sd_log(sd_log_level_t::SD_LOG_DEBUG, "raw body is: %s\n", req.body.c_str());
             // parse req.body as json using jsoncpp
+            bool updateCTX = false;
             try {
                 std::string json_str = req.body;
-                parseJsonPrompt(json_str, &params);
+                updateCTX            = parseJsonPrompt(json_str, &params);
             } catch (json::parse_error& e) {
                 // assume the request is just a prompt
                 // LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
@@ -963,6 +1098,51 @@ void start_server(SDParams params) {
             }
             // LOG_DEBUG("prompt is: %s\n", params.prompt.c_str());
             sd_log(sd_log_level_t::SD_LOG_DEBUG, "prompt is: %s\n", params.lastRequest.prompt.c_str());
+
+            if (updateCTX && sd_ctx != NULL) {
+                free_sd_ctx(sd_ctx);
+                sd_ctx = NULL;
+            }
+
+            if (sd_ctx == NULL) {
+                json task_json      = json::object();
+                task_json["status"] = "Loading";
+                task_json["data"]   = json::array();
+                task_json["step"]   = -1;
+                task_json["eta"]    = "?";
+
+                std::lock_guard<std::mutex> results_lock(results_mutex);
+                task_results[task_id] = task_json;
+
+                sd_ctx = new_sd_ctx(params.ctxParams.model_path.c_str(),
+                                    params.ctxParams.clip_l_path.c_str(),
+                                    params.ctxParams.clip_g_path.c_str(),
+                                    params.ctxParams.t5xxl_path.c_str(),
+                                    params.ctxParams.diffusion_model_path.c_str(),
+                                    params.ctxParams.vae_path.c_str(),
+                                    params.ctxParams.taesd_path.c_str(),
+                                    params.ctxParams.controlnet_path.c_str(),
+                                    params.ctxParams.lora_model_dir.c_str(),
+                                    params.ctxParams.embeddings_path.c_str(),
+                                    params.ctxParams.stacked_id_embeddings_path.c_str(),
+                                    params.ctxParams.vae_decode_only,
+                                    params.ctxParams.vae_tiling,
+                                    false,
+                                    params.ctxParams.n_threads,
+                                    params.ctxParams.wtype,
+                                    params.ctxParams.rng_type,
+                                    params.ctxParams.schedule,
+                                    params.ctxParams.clip_on_cpu,
+                                    params.ctxParams.control_net_cpu,
+                                    params.ctxParams.vae_on_cpu,
+                                    params.ctxParams.diffusion_flash_attn);
+                if (sd_ctx == NULL) {
+                    printf("new_sd_ctx_t failed\n");
+                    std::lock_guard<std::mutex> results_lock(results_mutex);
+                    task_results[task_id]["status"] = "Failed";
+                    return;
+                }
+            }
 
             {
                 json started_task_json      = json::object();
@@ -1060,21 +1240,20 @@ void start_server(SDParams params) {
     svr->Get("/params", [&params](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         json response;
-        json params_json = json::object();
-        params_json["prompt"] = params.lastRequest.prompt;
+        json params_json               = json::object();
+        params_json["prompt"]          = params.lastRequest.prompt;
         params_json["negative_prompt"] = params.lastRequest.negative_prompt;
-        params_json["clip_skip"] = params.lastRequest.clip_skip;
-        params_json["cfg_scale"] = params.lastRequest.cfg_scale;
-        params_json["guidance"] = params.lastRequest.guidance;
-        params_json["width"] = params.lastRequest.width;
-        params_json["height"] = params.lastRequest.height;
-        params_json["sample_method"] = sample_method_str[params.lastRequest.sample_method];
-        params_json["sample_steps"] = params.lastRequest.sample_steps;
-        params_json["seed"] = params.lastRequest.seed;
-        params_json["batch_count"] = params.lastRequest.batch_count;
+        params_json["clip_skip"]       = params.lastRequest.clip_skip;
+        params_json["cfg_scale"]       = params.lastRequest.cfg_scale;
+        params_json["guidance"]        = params.lastRequest.guidance;
+        params_json["width"]           = params.lastRequest.width;
+        params_json["height"]          = params.lastRequest.height;
+        params_json["sample_method"]   = sample_method_str[params.lastRequest.sample_method];
+        params_json["sample_steps"]    = params.lastRequest.sample_steps;
+        params_json["seed"]            = params.lastRequest.seed;
+        params_json["batch_count"]     = params.lastRequest.batch_count;
         params_json["normalize_input"] = params.lastRequest.normalize_input;
         // params_json["input_id_images_path"] = params.input_id_images_path;
-        response["generation_params"] = params_json;
 
         json context_params = json::object();
         // Do not expose paths
@@ -1088,21 +1267,25 @@ void start_server(SDParams params) {
         context_params["lora_model_dir"] = params.ctxParams.lora_model_dir;
         // context_params["embeddings_path"] = params.ctxParams.embeddings_path;
         // context_params["stacked_id_embeddings_path"] = params.ctxParams.stacked_id_embeddings_path;
-        context_params["vae_decode_only"] = params.ctxParams.vae_decode_only;
-        context_params["vae_tiling"] = params.ctxParams.vae_tiling;
-        context_params["n_threads"] = params.ctxParams.n_threads;
-        context_params["wtype"] = params.ctxParams.wtype;
-        context_params["rng_type"] = params.ctxParams.rng_type;
-        context_params["schedule"] = params.ctxParams.schedule;
-        context_params["clip_on_cpu"] = params.ctxParams.clip_on_cpu;
-        context_params["control_net_cpu"] = params.ctxParams.control_net_cpu;
-        context_params["vae_on_cpu"] = params.ctxParams.vae_on_cpu;
+        context_params["vae_decode_only"]      = params.ctxParams.vae_decode_only;
+        context_params["vae_tiling"]           = params.ctxParams.vae_tiling;
+        context_params["n_threads"]            = params.ctxParams.n_threads;
+        context_params["wtype"]                = params.ctxParams.wtype;
+        context_params["rng_type"]             = params.ctxParams.rng_type;
+        context_params["schedule"]             = schedule_str[params.ctxParams.schedule];
+        context_params["clip_on_cpu"]          = params.ctxParams.clip_on_cpu;
+        context_params["control_net_cpu"]      = params.ctxParams.control_net_cpu;
+        context_params["vae_on_cpu"]           = params.ctxParams.vae_on_cpu;
         context_params["diffusion_flash_attn"] = params.ctxParams.diffusion_flash_attn;
-        response["context_params"] = context_params;
 
+        // response["taesd_preview"]       = params.taesd_preview;
+        // params_json["preview_method"]   = previews_str[params.lastRequest.preview_method];
+        // params_json["preview_interval"] = params.lastRequest.preview_interval;
+
+        response["generation_params"] = params_json;
+        response["context_params"]    = context_params;
         res.set_content(response.dump(), "application/json");
     });
-
 
     svr->Get("/result", [](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
@@ -1142,233 +1325,77 @@ void start_server(SDParams params) {
         res.set_content(response.dump(), "application/json");
     });
 
+    svr->Get("/previews", [](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        // unsupported
+        // for (int s = 0; s < N_PREVIEWS; s++) {
+        //     response.push_back(previews_str[s]);
+        // }
+        res.set_content(response.dump(), "application/json");
+    });
+
+    svr->Get("/models", [&params](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        response["models"] = json::array();
+        for (auto file : list_files(params.models_dir)) {
+            response["models"].push_back(file);
+        }
+
+        response["diffusion_models"] = json::array();
+        for (auto file : list_files(params.diffusion_models_dir)) {
+            response["diffusion_models"].push_back(file);
+        }
+
+        response["text_encoders"] = json::array();
+        for (auto file : list_files(params.clip_dir)) {
+            response["text_encoders"].push_back(file);
+        }
+
+        response["vaes"] = json::array();
+        for (auto file : list_files(params.vae_dir)) {
+            response["vaes"].push_back(file);
+        }
+
+        response["taes"] = json::array();
+        for (auto file : list_files(params.tae_dir)) {
+            response["taes"].push_back(file);
+        }
+
+        res.set_content(response.dump(), "application/json");
+    });
+    svr->Get("/model", [&params](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        if (!params.ctxParams.model_path.empty()) {
+            response["model"] = sd_basename(params.ctxParams.model_path);
+        }
+        if (!params.ctxParams.diffusion_model_path.empty()) {
+            response["diffusion_model"] = sd_basename(params.ctxParams.diffusion_model_path);
+        }
+
+        if (!params.ctxParams.clip_l_path.empty()) {
+            response["clip_l"] = sd_basename(params.ctxParams.clip_l_path);
+        }
+        if (!params.ctxParams.clip_g_path.empty()) {
+            response["clip_g"] = sd_basename(params.ctxParams.clip_g_path);
+        }
+        if (!params.ctxParams.t5xxl_path.empty()) {
+            response["t5xxl"] = sd_basename(params.ctxParams.t5xxl_path);
+        }
+
+        if (!params.ctxParams.vae_path.empty()) {
+            response["vae"] = sd_basename(params.ctxParams.vae_path);
+        }
+        if (!params.ctxParams.taesd_path.empty()) {
+            response["tae"] = sd_basename(params.ctxParams.taesd_path);
+        }
+        res.set_content(response.dump(), "application/json");
+    });
 
     svr->Get("/index.html", [](const httplib::Request& req, httplib::Response& res) {
         try {
-            std::string html_content = R"xxx(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SDCPP Server</title>
-<style>
-    body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #f0f0f0;
-        }
-        .container {
-            display: flex;
-        width: 80%;
-        background: white;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-        }
-    .input-group {
-        display: flex;
-        align-items: center;
-        margin-bottom: 10px;
-        }
-    .input-group label {
-        width: 150px;
-        text-align: right;
-        margin-right: 10px;
-        }
-    .prompt-input, .param-input {
-        width: 400px;
-        }
-    canvas {
-        border: 1px solid #ccc;
-    }
-    .left-section {
-        flex: 1;
-        padding-right: 20px;
-    }
-    .right-section {
-        flex: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="left-section">
-        <h1>SDCPP Server</h1>
-        <div id="prompts">
-            <div class="input-group">
-                <label for="prompt">Prompt:</label>
-                <input type="text" id="prompt" class="prompt-input">
-            </div>
-            <div class="input-group">
-                <label for="neg_prompt">Negative Prompt:</label>
-                <input type="text" id="neg_prompt" class="prompt-input">
-            </div>
-        </div>
-        <div id="params">
-            <div class="input-group">
-                <label for="width">Width:</label>
-                <input type="number" id="width" class="param-input">
-            </div>
-            <div class="input-group">
-                <label for="height">Height:</label>
-                <input type="number" id="height" class="param-input">
-            </div>
-            <div class="input-group">
-                <label for="cfg_scale">CFG Scale:</label>
-                <input type="number" id="cfg_scale" class="param-input">
-            </div>
-            <div class="input-group">
-                <label for="guidance">Guidance (Flux):</label>
-                <input type="number" id="guidance" class="param-input">
-            </div>
-            <div class="input-group">
-                <label for="steps">Steps:</label>
-                <input type="number" id="steps" class="param-input">
-            </div>
-            <div class="input-group">
-                <label for="sample_method">Sample Method:</label>
-                <select id="sample_method" class="param-input"></select>
-            </div>
-            <div class="input-group">
-                <label for="seed">Seed:</label>
-                <input type="number" id="seed" class="param-input">
-            </div>
-            <div class="input-group">
-                <label for="batch_count">Batch Count:</label>
-                <input type="number" id="batch_count" class="param-input">
-            </div>
-        </div>
-        <button onclick="generateImage()">Generate</button>
-        <a id="downloadLink" style="display: none;" download="generated_image.png">Download Image</a>
-    </div>
-        <div class="right-section">
-            <canvas id="imageCanvas" width="500" height="500"></canvas>
-        </div>
-    </div>
-    <script>
-        // Fetch sample methods from the server and populate the dropdown list
-        async function fetchSampleMethods() {
-            const response = await fetch('/sample_methods');
-            const data = await response.json();
-
-            const select = document.getElementById('sample_method');
-            data.forEach(method => {
-                const option = document.createElement('option');
-                option.value = method;
-                option.textContent = method;
-                select.appendChild(option);
-            });
-        }
-
-        // Call the function to fetch and populate the sample methods list
-        fetchSampleMethods();
-
-        // Fetch parameters from the server and populate the input fields
-        async function fetchParams() {
-            const response = await fetch('/params');
-            const data = await response.json();
-
-            document.getElementById('prompt').value = data.generation_params.prompt;
-            document.getElementById('neg_prompt').value = data.generation_params.negative_prompt;
-            document.getElementById('width').value = data.generation_params.width;
-            document.getElementById('height').value = data.generation_params.height;
-            document.getElementById('cfg_scale').value = data.generation_params.cfg_scale;
-            document.getElementById('guidance').value = data.generation_params.guidance;
-            document.getElementById('steps').value = data.generation_params.sample_steps;
-            document.getElementById('sample_method').value = data.generation_params.sample_method;
-            document.getElementById('seed').value = data.generation_params.seed;
-            document.getElementById('batch_count').value = data.generation_params.batch_count;
-        }
-
-        // Call the function to fetch and populate the input fields
-        fetchParams();
-
-        async function generateImage() {
-            const prompt     = document.getElementById('prompt').value;
-            const neg_prompt = document.getElementById('neg_prompt').value;
-            const width      = document.getElementById('width').value;
-            const height     = document.getElementById('height').value;
-            const cfg_scale  = document.getElementById('cfg_scale').value;
-            const steps      = document.getElementById('steps').value;
-            const guidance   = document.getElementById('guidance').value;
-            const sample_method = document.getElementById('sample_method').value;
-            const seed       = document.getElementById('seed').value;
-            const batch_count = document.getElementById('batch_count').value;
-            const canvas = document.getElementById('imageCanvas');
-            const ctx = canvas.getContext('2d');
-            const downloadLink = document.getElementById('downloadLink');
-
-            const requestBody = {
-                prompt: prompt,
-                negative_prompt: neg_prompt,
-                ...(width && { width: parseInt(width) }),
-                ...(height && { height: parseInt(height) }),
-                ...(cfg_scale && { cfg_scale: parseFloat(cfg_scale) }),
-                ...(steps && { steps: parseInt(steps) }),
-                ...(guidance && { guidance: parseFloat(guidance) }),
-                ...(sample_method && { sample_method: sample_method }),
-                ...(seed && { seed: parseInt(seed) }),
-                ...(batch_count && { batch_count: parseInt(batch_count) })
-            };
-
-            const response = await fetch('/txt2img', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(requestBody)
-            });
-
-            const data = await response.json();
-            const taskId = data.task_id;
-
-            let status = '';
-            while (status !== 'Done' && status !== 'Failed') {
-                const statusResponse = await fetch(`/result?task_id=${taskId}`);
-                const statusData = await statusResponse.json();
-                status = statusData.status;
-
-                if (status === 'Done' || status === 'Working' && statusData.data.length > 0 ) {
-                    const imageData = statusData.data[0].data;
-                    const width = statusData.data[0].width;
-                    const height = statusData.data[0].height;
-
-                    const img = new Image();
-                    img.src = `data:image/png;base64,${imageData}`;
-                    img.onload = () => {
-                        canvas.width = width;
-                        canvas.height = height;
-                        ctx.drawImage(img, 0, 0, width, height);
-                        downloadLink.href = img.src;
-                        downloadLink.style.display = 'inline-block';
-                    };
-                } else if (status === 'Failed') {
-                    alert('Image generation failed');
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 250));
-            }
-        }
-        document.querySelectorAll('.prompt-input,.param-input').forEach(input => {
-            input.addEventListener('keydown', function(event) {
-                if (event.key === 'Enter') {
-                    event.preventDefault();
-                    generateImage();
-                }
-            });
-        });
-    </script>
-</body>
-</html>
-            )xxx";
             res.set_content(html_content, "text/html");
         } catch (const std::exception& e) {
             res.set_content("Error loading page", "text/plain");
