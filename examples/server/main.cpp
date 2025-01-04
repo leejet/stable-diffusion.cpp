@@ -1084,8 +1084,23 @@ void add_task(std::string task_id, std::function<void()> task) {
     queue_cond.notify_one();
 }
 
+void update_progress_cb(int step, int steps, float time, void* _data) {
+    using json = nlohmann::json;
+    if (running_task_id != "") {
+        std::lock_guard<std::mutex> results_lock(results_mutex);
+        json running_task_json     = task_results[running_task_id];
+        running_task_json["step"]  = step;
+        running_task_json["steps"] = steps;
+        if (running_task_json["status"] == "Working" && step == steps) {
+            running_task_json["status"] = "Decoding";
+        }
+        task_results[running_task_id] = running_task_json;
+    }
+}
+
 void start_server(SDParams params) {
     sd_set_log_callback(sd_log_cb, (void*)&params);
+    sd_set_progress_callback(update_progress_cb, NULL);
 
     server_log_params = (void*)&params;
 
@@ -1122,6 +1137,7 @@ void start_server(SDParams params) {
             pending_task_json["status"] = "Pending";
             pending_task_json["data"]   = json::array();
             pending_task_json["step"]   = -1;
+            pending_task_json["steps"]  = -1;
             pending_task_json["eta"]    = "?";
 
             std::lock_guard<std::mutex> results_lock(results_mutex);
@@ -1167,6 +1183,7 @@ void start_server(SDParams params) {
                     task_json["status"] = "Loading";
                     task_json["data"]   = json::array();
                     task_json["step"]   = -1;
+                    task_json["step"]   = -1;
                     task_json["eta"]    = "?";
 
                     std::lock_guard<std::mutex> results_lock(results_mutex);
@@ -1208,6 +1225,7 @@ void start_server(SDParams params) {
                 started_task_json["status"] = "Working";
                 started_task_json["data"]   = json::array();
                 started_task_json["step"]   = 0;
+                started_task_json["step"]   = params.lastRequest.sample_steps;
                 started_task_json["eta"]    = "?";
 
                 std::lock_guard<std::mutex> results_lock(results_mutex);
