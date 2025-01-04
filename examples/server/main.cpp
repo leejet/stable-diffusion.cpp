@@ -1072,7 +1072,7 @@ void start_server(SDParams params) {
             task_results[task_id] = pending_task_json;
         }
 
-        auto task = [&req, &sd_ctx, &params, &n_prompts, task_id]() {
+        auto task = [req, &sd_ctx, &params, &n_prompts, task_id]() {
             running_task_id = task_id;
             // LOG_DEBUG("raw body is: %s\n", req.body.c_str());
             sd_log(sd_log_level_t::SD_LOG_DEBUG, "raw body is: %s\n", req.body.c_str());
@@ -1097,7 +1097,7 @@ void start_server(SDParams params) {
                 sd_log(sd_log_level_t::SD_LOG_ERROR, "An unexpected error occurred\n");
             }
             // LOG_DEBUG("prompt is: %s\n", params.prompt.c_str());
-            sd_log(sd_log_level_t::SD_LOG_DEBUG, "prompt is: %s\n", params.lastRequest.prompt.c_str());
+            sd_log(sd_log_level_t::SD_LOG_INFO, "prompt is: %s\n", params.lastRequest.prompt.c_str());
 
             if (updateCTX && sd_ctx != NULL) {
                 free_sd_ctx(sd_ctx);
