@@ -98,7 +98,7 @@ const std::string html_content = R"xxx(
         }
     </style>
 </head>
-)xxx" R"xxx(
+<!-- )xxx" R"xxx( -->
 
 <body>
     <div class="container">
@@ -202,13 +202,15 @@ const std::string html_content = R"xxx(
                     <div class="input-group">
                         <label for="model">Model:</label>
                         <select id="model" class="param-input">
-                            <option value="" selected>unset</option>
+                            <option value="" selected>keep current</option>
+                            <option value="none">None</option>
                         </select>
                     </div>
                     <div class="input-group">
                         <label for="diff-model">Diffusion Model:</label>
                         <select id="diff-model" class="param-input">
-                            <option value="" selected>unset</option>
+                            <option value="" selected>keep current</option>
+                            <option value="none">None</option>
                         </select>
                     </div>
                     <div class="line">
@@ -216,19 +218,22 @@ const std::string html_content = R"xxx(
                         <div class="input-group">
                             <label for="clip_l">Clip_L:</label>
                             <select id="clip_l" class="param-input">
-                                <option value="" selected>unset</option>
+                                <option value="" selected>keep current</option>
+                                <option value="none">None</option>
                             </select>
                         </div>
                         <div class="input-group">
                             <label for="clip_g">Clip_G:</label>
                             <select id="clip_g" class="param-input">
-                                <option value="" selected>unset</option>
+                                <option value="" selected>keep current</option>
+                                <option value="none">None</option>
                             </select>
                         </div>
                         <div class="input-group">
                             <label for="t5xxl">T5 XXL:</label>
                             <select id="t5xxl" class="param-input">
-                                <option value="" selected>unset</option>
+                                <option value="" selected>keep current</option>
+                                <option value="none">None</option>
                             </select>
                         </div>
                     </div>
@@ -236,13 +241,15 @@ const std::string html_content = R"xxx(
                         <div class="input-group">
                             <label for="vae">VAE:</label>
                             <select id="vae" class="param-input">
-                                <option value="" selected>unset</option>
+                                <option value="" selected>keep current</option>
+                                <option value="none">None</option>
                             </select>
                         </div>
                         <div class="input-group">
                             <label for="tae">TAE:</label>
                             <select id="tae" class="param-input">
-                                <option value="" selected>unset</option>
+                                <option value="" selected>keep current</option>
+                                <option value="none">None</option>
                             </select>
                         </div>
                     </div>
@@ -258,7 +265,7 @@ const std::string html_content = R"xxx(
     <div class="line">
         <p>Current task status: <span id="status"> -- </span> | Queue: <span id="queued_tasks">0</span></p>
     </div>
-    )xxx" R"xxx(
+    <!-- )xxx" R"xxx( -->
     <script>
         let queued_tasks = 0;
         async function update_queue() {
@@ -362,7 +369,10 @@ const std::string html_content = R"xxx(
                     modelsSelect.appendChild(option);
                 });
             } else {
-                const currentOption = modelsSelect.options[modelsSelect.selectedIndex];
+                modelsSelect.options.length = 1;
+                const currentOption = modelsSelect.options[0];
+                currentOption.select = true;
+                currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
 
@@ -375,7 +385,10 @@ const std::string html_content = R"xxx(
                     diffModelsSelect.appendChild(option);
                 });
             } else {
-                const currentOption = diffModelsSelect.options[diffModelsSelect.selectedIndex];
+                diffModelsSelect.options.length = 1;
+                const currentOption = diffModelsSelect.options[0];
+                currentOption.select = true;
+                currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
 
@@ -388,7 +401,10 @@ const std::string html_content = R"xxx(
                     clipLSelect.appendChild(option);
                 });
             } else {
-                const currentOption = clipLSelect.options[clipLSelect.selectedIndex];
+                clipLSelect.options.length = 1;
+                const currentOption = clipLSelect.options[0];
+                currentOption.select = true;
+                currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
 
@@ -401,7 +417,10 @@ const std::string html_content = R"xxx(
                     clipGSelect.appendChild(option);
                 });
             } else {
-                const currentOption = clipGSelect.options[clipGSelect.selectedIndex];
+                clipGSelect.options.length = 1;
+                const currentOption = clipGSelect.options[0];
+                currentOption.select = true;
+                currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
 
@@ -414,7 +433,10 @@ const std::string html_content = R"xxx(
                     t5xxlSelect.appendChild(option);
                 });
             } else {
-                const currentOption = t5xxlSelect.options[t5xxlSelect.selectedIndex];
+                t5xxlSelect.options.length = 1;
+                const currentOption = t5xxlSelect.options[0];
+                currentOption.select = true;
+                currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
 
@@ -427,7 +449,10 @@ const std::string html_content = R"xxx(
                     vaeSelect.appendChild(option);
                 });
             } else {
-                const currentOption = vaeSelect.options[vaeSelect.selectedIndex];
+                vaeSelect.options.length = 1;
+                const currentOption = vaeSelect.options[0];
+                currentOption.select = true;
+                currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
 
@@ -440,7 +465,10 @@ const std::string html_content = R"xxx(
                     taeSelect.appendChild(option);
                 });
             } else {
-                const currentOption = taeSelect.options[taeSelect.selectedIndex];
+                taeSelect.options.length = 1;
+                const currentOption = taeSelect.options[0];
+                currentOption.select = true;
+                currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
         }
@@ -473,9 +501,9 @@ const std::string html_content = R"xxx(
                 document.getElementById('preview_interval').value = data.generation_params.preview_interval;
             }
         }
-)xxx" R"xxx(
+        //)xxx" R"xxx(
 
-            fetchSampleMethods();
+        fetchSampleMethods();
         fetchSchedules();
         fetchPreviewMethods();
         fetchModelsEncodersAE();
