@@ -52,11 +52,23 @@
 #define __STATIC_INLINE__ static inline
 #endif
 
-__STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void* user_data) {
-    (void)level;
-    (void)user_data;
-    fputs(text, stderr);
-    fflush(stderr);
+__STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void*) {
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG:
+            LOG_DEBUG(text);
+        break;
+        case GGML_LOG_LEVEL_INFO:
+            LOG_INFO(text);
+        break;
+        case GGML_LOG_LEVEL_WARN:
+            LOG_WARN(text);
+        break;
+        case GGML_LOG_LEVEL_ERROR:
+            LOG_ERROR(text);
+        break;
+        default:
+            LOG_DEBUG(text);
+    }
 }
 
 __STATIC_INLINE__ void ggml_tensor_set_f32_randn(struct ggml_tensor* tensor, std::shared_ptr<RNG> rng) {

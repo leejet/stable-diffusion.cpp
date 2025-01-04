@@ -159,13 +159,14 @@ public:
                         bool vae_on_cpu,
                         bool diffusion_flash_attn) {
         use_tiny_autoencoder = taesd_path.size() > 0;
+
+        ggml_log_set(ggml_log_callback_default, nullptr);
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
-        ggml_log_set(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
 #ifdef SD_USE_VULKAN

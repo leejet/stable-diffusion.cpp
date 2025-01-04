@@ -15,13 +15,13 @@ struct UpscalerGGML {
     }
 
     bool load_from_file(const std::string& esrgan_path) {
+        ggml_log_set(ggml_log_callback_default, nullptr);
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
-        ggml_log_set(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
 #ifdef SD_USE_VULKAN
