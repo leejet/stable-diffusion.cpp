@@ -897,59 +897,115 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
 
     try {
         std::string model = payload["model"];
-        if (params->ctxParams.model_path != params->models_dir + model) {
-            params->ctxParams.model_path           = params->models_dir + model;
-            params->ctxParams.diffusion_model_path = "";
-            updatectx                              = true;
+        if (model == "none") {
+            if (params->ctxParams.model_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.model_path = "";
+        } else {
+            std::string new_path = params->models_dir + model;
+            if (params->ctxParams.model_path != new_path) {
+                params->ctxParams.model_path           = new_path;
+                params->ctxParams.diffusion_model_path = "";
+                updatectx                              = true;
+            }
         }
     } catch (...) {
     }
     try {
         std::string diffusion_model = payload["diffusion_model"];
-        if (params->ctxParams.diffusion_model_path != params->diffusion_models_dir + diffusion_model) {
-            params->ctxParams.diffusion_model_path = params->diffusion_models_dir + diffusion_model;
-            params->ctxParams.model_path           = "";
-            updatectx                              = true;
+        if (diffusion_model == "none") {
+            if (params->ctxParams.diffusion_model_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.diffusion_model_path = "";
+        } else {
+            std::string new_path = params->diffusion_models_dir + diffusion_model;
+            if (params->ctxParams.diffusion_model_path != new_path) {
+                params->ctxParams.diffusion_model_path = new_path;
+                params->ctxParams.model_path           = "";
+                updatectx                              = true;
+            }
         }
     } catch (...) {
     }
     try {
         std::string clip_l = payload["clip_l"];
-        if (params->ctxParams.clip_l_path != params->clip_dir + clip_l) {
-            params->ctxParams.clip_l_path = params->clip_dir + clip_l;
-            updatectx                     = true;
+        if (clip_l == "none") {
+            if (params->ctxParams.clip_l_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.clip_l_path = "";
+        } else {
+            std::string new_path = params->clip_dir + clip_l;
+            if (params->ctxParams.clip_l_path != new_path) {
+                params->ctxParams.clip_l_path = new_path;
+                updatectx                     = true;
+            }
         }
     } catch (...) {
     }
     try {
         std::string clip_g = payload["clip_g"];
-        if (params->ctxParams.clip_g_path != params->clip_dir + clip_g) {
-            params->ctxParams.clip_g_path = params->clip_dir + clip_g;
-            updatectx                     = true;
+        if (clip_g == "none") {
+            if (params->ctxParams.clip_g_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.clip_g_path = "";
+        } else {
+            std::string new_path = params->clip_dir + clip_g;
+            if (params->ctxParams.clip_g_path != new_path) {
+                params->ctxParams.clip_g_path = new_path;
+                updatectx                     = true;
+            }
         }
     } catch (...) {
     }
     try {
         std::string t5xxl = payload["t5xxl"];
-        if (params->ctxParams.t5xxl_path != params->clip_dir + t5xxl) {
-            params->ctxParams.t5xxl_path = params->clip_dir + t5xxl;
-            updatectx                    = true;
+        if (t5xxl == "none") {
+            if (params->ctxParams.t5xxl_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.t5xxl_path = "";
+        } else {
+            std::string new_path = params->clip_dir + t5xxl;
+            if (params->ctxParams.t5xxl_path != new_path) {
+                params->ctxParams.t5xxl_path = new_path;
+                updatectx                    = true;
+            }
         }
     } catch (...) {
     }
     try {
         std::string vae = payload["vae"];
-        if (params->ctxParams.vae_path != params->vae_dir + vae) {
-            params->ctxParams.vae_path = params->vae_dir + vae;
-            updatectx                  = true;
+        if (vae == "none") {
+            if (params->ctxParams.vae_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.vae_path = "";
+        } else {
+            std::string new_path = params->vae_dir + vae;
+            if (params->ctxParams.vae_path != new_path) {
+                params->ctxParams.vae_path = new_path;
+                updatectx                  = true;
+            }
         }
     } catch (...) {
     }
     try {
         std::string tae = payload["tae"];
-        if (params->ctxParams.taesd_path != params->tae_dir + tae) {
-            params->ctxParams.taesd_path = params->tae_dir + tae;
-            updatectx                    = true;
+        if (tae == "none") {
+            if (params->ctxParams.taesd_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.taesd_path = "";
+        } else {
+            std::string new_path = params->tae_dir + tae;
+            if (params->ctxParams.taesd_path != new_path) {
+                params->ctxParams.taesd_path = new_path;
+                updatectx                    = true;
+            }
         }
     } catch (...) {
     }
