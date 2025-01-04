@@ -643,7 +643,6 @@ R"xxx(
             const taskId = data.task_id;
             let status = 'Pending';
             const progressBar = document.getElementById("progress");
-            progressBar.max = steps;
             while (status !== 'Done' && status !== 'Failed') {
                 const statusResponse = await fetch(`/result?task_id=${taskId}`);
                 const statusData = await statusResponse.json();
@@ -671,9 +670,10 @@ R"xxx(
                 }
                 status = statusData.status;
                 document.getElementById('status').innerHTML = status;
-                if (status === 'Working') {
-                    progressBar.value = statusData.step;
-                    progressBar.innerHTML = Math.floor(100 * statusData.step / steps) + "%";
+                if (statusData.step >= 0) {
+                    progressBar.value = statusData.step;    
+                    progressBar.max = statusData.steps ?? steps;
+                    progressBar.innerHTML = Math.floor(100 * statusData.step / statusData.steps) + "%";
                     progressBar.style.display = 'inline-block';
                 }
                 if (status === 'Done' || (status === 'Working' && statusData.data.length > 0)) {
