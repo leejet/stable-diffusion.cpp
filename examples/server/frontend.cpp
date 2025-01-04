@@ -1,7 +1,6 @@
 const std::string html_content = R"xxx(
 <!DOCTYPE html>
 <html>
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -16,60 +15,93 @@ const std::string html_content = R"xxx(
             height: 100vh;
             margin: 0;
             background-color: #f0f0f0;
+            color: #333;
         }
-
         .container {
             display: flex;
-            width: 80%;
+            flex-direction: column;
+            align-items: center;
+            width: 90%;
+            max-width: 2000px;
             background: white;
-            padding: 20px;
+            padding-inline: 20px;
             border-radius: 10px;
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            gap: 1rem;
         }
-
-        .input-group {
-            display: flex;
-            align-items: center;
+        .header {
+            text-align: center;
+        }
+        .section {
+            width: 100%;
+        }
+        .section h2 {
             margin-bottom: 10px;
         }
-
-        .input-group label {
-            width: 100px;
-            text-align: right;
-            margin-right: 10px;
-            flex-shrink: 0;
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 10px;
         }
-
+        .input-group label {
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
         .prompt-input,
         .param-input {
             width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            box-sizing: border-box;
         }
-
         .line {
+            display: flex;
+            justify-content: space-between;
             width: 100%;
-            display: inline-flex;
-
-            & .input-group {
-                width: 100%;
+        }
+        .line .input-group {
+            width: 48%;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+        .imageFrame:active {
+            canvas {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: auto;
+                height: auto;
+                min-width: 64px;
+                min-height: 64px;
+                max-width: 100vw;
+                max-height: 100vh;
+                z-index: 2;
+            }
+            &::before {
+                content: " ";
+                position: absolute;
+                pointer-events: none;
+                content: "";
+                z-index: 1;
+                display: block;
+                position: fixed;
+                top: 0;
+                height: 100vh;
+                right: 0;
+                left: 0;
+                background-color: rgba(0, 0, 0, .851);
+                animation: fadeIn .3s;
             }
         }
-
-        canvas {
-            border: 1px solid #ccc;
-        }
-
-        .left-section {
-            flex: 1;
-            padding-right: 20px;
-        }
-
+        .left-section,
         .right-section {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            width: 100%;
         }
-
         .collapsible {
             background-color: #eee;
             color: #444;
@@ -80,15 +112,15 @@ const std::string html_content = R"xxx(
             text-align: left;
             outline: none;
             font-size: 15px;
+            border-radius: 5px;
+            margin-bottom: 10px;
         }
-
         .content {
             padding: 0 18px;
             max-height: 0;
             overflow: hidden;
             transition: max-height 0.2s ease-out;
         }
-
         #model-id {
             display: inline-block;
             background: lightgray;
@@ -96,16 +128,72 @@ const std::string html_content = R"xxx(
             padding: 5px 10px;
             border-radius: 5px;
         }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        progress {
+            width: 100%;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .status {
+            margin-top: 5px;
+            font-size: 18px;
+        }
+        .container {
+            min-height: 512px;
+            height: 75%;
+        }
+        .left-section {
+            overflow-y: auto;
+            height: 100%;
+        }
+        .imageFrame {
+            border: 1px solid #ccc;
+            width: 512px;
+            height: 512px;
+            max-width: 90vw;
+            max-height: 90vw;
+        }
+        .right-section {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        @media (min-width: 768px) {
+            .container {
+                flex-direction: row;
+            }
+            .left-section,
+            .right-section {
+                width: 50%;
+            }
+            .imageFrame {
+                max-width: 45vw;
+                max-height: 45vw;
+            }
+        }
     </style>
 </head>
-<!-- )xxx" R"xxx( -->
-
+)xxx"
+R"xxx(
 <body>
+    <div class="header">
+        <h1>SDCPP Server</h1>
+        <p>Model:<span id="model-id"></span></p>
+    </div>
     <div class="container">
         <div class="left-section">
-            <h1>SDCPP Server</h1>
-            <p>Model:<span id="model-id"></span></p>
-            <div id="prompts">
+            <div class="section">
                 <div class="input-group">
                     <label for="prompt">Prompt:</label>
                     <textarea id="prompt" class="prompt-input"></textarea>
@@ -115,7 +203,9 @@ const std::string html_content = R"xxx(
                     <textarea id="neg_prompt" class="prompt-input"></textarea>
                 </div>
             </div>
-            <div id="params">
+            <button onclick="generateImage()">Generate</button>
+            <div class="section">
+                <h2>Settings</h2>
                 <div class="line">
                     <div class="input-group">
                         <label for="width">Width:</label>
@@ -123,7 +213,7 @@ const std::string html_content = R"xxx(
                     </div>
                     <div class="input-group">
                         <label for="height">Height:</label>
-                        <input type="number" id="height" class="param-input" , value=1>
+                        <input type="number" id="height" class="param-input" value=1>
                     </div>
                 </div>
                 <div class="line">
@@ -197,7 +287,7 @@ const std::string html_content = R"xxx(
                         <input type="checkbox" id="tae_decode" class="param-input">
                     </div>
                 </div>
-                <div id="model-loader" , class="">
+                <div id="model-loader">
                     <h3>Load new model</h3>
                     <div class="input-group">
                         <label for="model">Model:</label>
@@ -214,7 +304,6 @@ const std::string html_content = R"xxx(
                         </select>
                     </div>
                     <div class="line">
-
                         <div class="input-group">
                             <label for="clip_l">Clip_L:</label>
                             <select id="clip_l" class="param-input">
@@ -255,30 +344,30 @@ const std::string html_content = R"xxx(
                     </div>
                 </div>
             </div>
-            <button onclick="generateImage()">Generate</button>
-            <a id="downloadLink" style="display: none;" download="generated_image.png">Download Image</a>
         </div>
         <div class="right-section">
-            <canvas id="imageCanvas" width="500" height="500"></canvas>
+            <div class="imageFrame">
+                <canvas id="imageCanvas" width="512" height="512"></canvas>
+            </div>
+            <a id="downloadLink" style="display: none;" download="generated_image.png">Download Image</a>
+            <progress style="display: none;" id="progress" value="0" max="100"> 0% </progress>
         </div>
     </div>
-    <div class="line">
+    <div class="status">
         <p>Current task status: <span id="status"> -- </span> | Queue: <span id="queued_tasks">0</span></p>
     </div>
-    <!-- )xxx" R"xxx( -->
+    )xxx"
+    R"xxx(
     <script>
         let queued_tasks = 0;
         async function update_queue() {
             const display = document.getElementById('queued_tasks');
             display.innerHTML = queued_tasks;
         }
-
         const modelIdElement = document.getElementById('model-id');
-
         async function fetchModelId() {
             const response = await fetch('/model');
             const data = await response.json();
-
             let modelIdText = '';
             if (data.model) {
                 modelIdText += `${data.model}`;
@@ -308,15 +397,11 @@ const std::string html_content = R"xxx(
                 }
                 modelIdText += ')'
             }
-
             modelIdElement.textContent = modelIdText;
         }
-
-
         async function fetchSampleMethods() {
             const response = await fetch('/sample_methods');
             const data = await response.json();
-
             const select = document.getElementById('sample_method');
             data.forEach(method => {
                 const option = document.createElement('option');
@@ -325,12 +410,9 @@ const std::string html_content = R"xxx(
                 select.appendChild(option);
             });
         }
-
-
         async function fetchSchedules() {
             const response = await fetch('/schedules');
             const data = await response.json();
-
             const select = document.getElementById('schedule_method');
             data.forEach(schedule => {
                 const option = document.createElement('option');
@@ -339,11 +421,9 @@ const std::string html_content = R"xxx(
                 select.appendChild(option);
             });
         }
-
         async function fetchPreviewMethods() {
             const response = await fetch('/previews');
             const data = await response.json();
-
             const select = document.getElementById('preview_mode');
             if (data) {
                 select.innerHTML = '';
@@ -355,11 +435,9 @@ const std::string html_content = R"xxx(
                 });
             }
         }
-
         async function fetchModelsEncodersAE() {
             const response = await fetch('/models');
             const data = await response.json();
-
             const modelsSelect = document.getElementById('model');
             if (data.models.length > 0) {
                 data.models.forEach(model => {
@@ -375,7 +453,6 @@ const std::string html_content = R"xxx(
                 currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
-
             const diffModelsSelect = document.getElementById('diff-model');
             if (data.diffusion_models.length > 0) {
                 data.diffusion_models.forEach(model => {
@@ -391,7 +468,6 @@ const std::string html_content = R"xxx(
                 currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
-
             const clipLSelect = document.getElementById('clip_l');
             if (data.text_encoders.length > 0) {
                 data.text_encoders.forEach(encoder => {
@@ -407,7 +483,6 @@ const std::string html_content = R"xxx(
                 currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
-
             const clipGSelect = document.getElementById('clip_g');
             if (data.text_encoders.length > 0) {
                 data.text_encoders.forEach(encoder => {
@@ -423,7 +498,6 @@ const std::string html_content = R"xxx(
                 currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
-
             const t5xxlSelect = document.getElementById('t5xxl');
             if (data.text_encoders.length > 0) {
                 data.text_encoders.forEach(encoder => {
@@ -439,7 +513,6 @@ const std::string html_content = R"xxx(
                 currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
-
             const vaeSelect = document.getElementById('vae');
             if (data.vaes.length > 0) {
                 data.vaes.forEach(ae => {
@@ -455,7 +528,6 @@ const std::string html_content = R"xxx(
                 currentOption.value = "";
                 currentOption.textContent = "unavailable";
             }
-
             const taeSelect = document.getElementById('tae');
             if (data.taes.length > 0) {
                 data.taes.forEach(ae => {
@@ -472,12 +544,9 @@ const std::string html_content = R"xxx(
                 currentOption.textContent = "unavailable";
             }
         }
-
-
         async function fetchParams() {
             const response = await fetch('/params');
             const data = await response.json();
-
             document.getElementById('prompt').value = data.generation_params.prompt;
             document.getElementById('neg_prompt').value = data.generation_params.negative_prompt;
             document.getElementById('width').value = data.generation_params.width;
@@ -493,7 +562,6 @@ const std::string html_content = R"xxx(
             document.getElementById('clip_on_cpu').checked = data.context_params.clip_on_cpu;
             document.getElementById('vae_tiling').checked = data.context_params.vae_tiling;
             document.getElementById('tae_decode').checked = !(data.taesd_preview);
-
             if (data.generation_params.preview_method) {
                 document.getElementById('preview_mode').value = data.generation_params.preview_method;
             }
@@ -501,21 +569,16 @@ const std::string html_content = R"xxx(
                 document.getElementById('preview_interval').value = data.generation_params.preview_interval;
             }
         }
-        //)xxx" R"xxx(
-
         fetchSampleMethods();
         fetchSchedules();
         fetchPreviewMethods();
         fetchModelsEncodersAE();
-
         fetchModelId();
         fetchParams();
-
-
+        // )xxx" R"xxx(
         async function generateImage() {
             queued_tasks++;
             update_queue();
-
             const prompt = document.getElementById('prompt').value;
             const neg_prompt = document.getElementById('neg_prompt').value;
             const width = document.getElementById('width').value;
@@ -534,21 +597,15 @@ const std::string html_content = R"xxx(
             const t5xxl = document.getElementById('t5xxl').value;
             const vae = document.getElementById('vae').value;
             const tae = document.getElementById('tae').value;
-
             const vae_on_cpu = document.getElementById('vae_on_cpu').checked;
             const clip_on_cpu = document.getElementById('clip_on_cpu').checked;
             const vae_tiling = document.getElementById('vae_tiling').checked;
-
             const tae_decode = document.getElementById('tae_decode').checked;
             const preview_mode = document.getElementById('preview_mode').value;
             const preview_interval = document.getElementById('preview_interval').value;
-
-
-
             const canvas = document.getElementById('imageCanvas');
             const ctx = canvas.getContext('2d');
             const downloadLink = document.getElementById('downloadLink');
-
             const requestBody = {
                 prompt: prompt,
                 negative_prompt: neg_prompt,
@@ -575,7 +632,6 @@ const std::string html_content = R"xxx(
                 ...(preview_mode && { preview_mode: preview_mode }),
                 ...(preview_interval && { preview_interval: preview_interval }),
             };
-
             const response = await fetch('/txt2img', {
                 method: 'POST',
                 headers: {
@@ -583,13 +639,11 @@ const std::string html_content = R"xxx(
                 },
                 body: JSON.stringify(requestBody)
             });
-
             const data = await response.json();
             const taskId = data.task_id;
-
-
-
             let status = 'Pending';
+            const progressBar = document.getElementById("progress");
+            progressBar.max = steps;
             while (status !== 'Done' && status !== 'Failed') {
                 const statusResponse = await fetch(`/result?task_id=${taskId}`);
                 const statusData = await statusResponse.json();
@@ -617,31 +671,48 @@ const std::string html_content = R"xxx(
                 }
                 status = statusData.status;
                 document.getElementById('status').innerHTML = status;
-
+                if (status === 'Working') {
+                    progressBar.value = statusData.step;
+                    progressBar.innerHTML = Math.floor(100 * statusData.step / steps) + "%";
+                    progressBar.style.display = 'inline-block';
+                }
                 if (status === 'Done' || (status === 'Working' && statusData.data.length > 0)) {
                     const imageData = statusData.data[0].data;
                     const width = statusData.data[0].width;
                     const height = statusData.data[0].height;
-
                     const img = new Image();
                     img.src = `data:image/png;base64,${imageData}`;
                     img.onload = () => {
-                        canvas.width = width;
-                        canvas.height = height;
-                        ctx.drawImage(img, 0, 0, width, height);
+                        const imgRatio = img.width / img.height;
+                        canvas.width = Math.max(img.width, img.height);
+                        canvas.height = canvas.width;
+                        let sourceX, sourceY, sourceWidth, sourceHeight;
+                        if (imgRatio > 1) {
+                            sourceX = 0;
+                            sourceY = (img.height - img.width) / 2;
+                            sourceWidth = img.width;
+                            sourceHeight = img.width;
+                        } else {
+                            sourceX = (img.width - img.height) / 2;
+                            sourceY = 0;
+                            sourceWidth = img.height;
+                            sourceHeight = img.height;
+                        }
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
                         downloadLink.href = img.src;
                         downloadLink.style.display = 'inline-block';
                     };
                 } else if (status === 'Failed') {
                     alert('Image generation failed');
                 }
-
                 await new Promise(resolve => setTimeout(resolve, 250));
             }
+            progressBar.value = steps;
+            progressBar.innerHTML = "100%";
             queued_tasks--;
             update_queue();
         }
-
         document.querySelectorAll('.prompt-input,.param-input').forEach(input => {
             input.addEventListener('keydown', function (event) {
                 if (event.key === 'Enter') {
@@ -650,21 +721,22 @@ const std::string html_content = R"xxx(
                 }
             });
         });
-
         var coll = document.getElementsByClassName("collapsible");
         for (let i = 0; i < coll.length; i++) {
             coll[i].addEventListener("click", function () {
                 this.classList.toggle("active");
                 var content = this.nextElementSibling;
+                content.style.transition = "max-height 0.3s ease-out"; // Add a transition effect
                 if (content.style.maxHeight) {
                     content.style.maxHeight = null;
                 } else {
                     content.style.maxHeight = content.scrollHeight + "px";
+                    // Scroll to the top of the content
+                    content.scrollTop = 0;
                 }
             });
         }
     </script>
 </body>
-
 </html>
 )xxx";
