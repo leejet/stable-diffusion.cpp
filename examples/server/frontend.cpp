@@ -157,6 +157,7 @@ const std::string html_content = R"xxx(
             height: 100%;
         }
         .imageFrame {
+            margin-top: auto;
             border: 1px solid #ccc;
             width: 512px;
             height: 512px;
@@ -176,11 +177,29 @@ const std::string html_content = R"xxx(
             .left-section,
             .right-section {
                 width: 50%;
+                height: 100%;
             }
             .imageFrame {
                 max-width: 45vw;
                 max-height: 45vw;
             }
+        }
+        progress {
+            border: none;
+            width: 100%;
+            height: 8px;
+            margin-inline: auto;
+        }
+        progress::-webkit-progress-value {
+            background-color: blue;
+        }
+        .bars {
+            margin-bottom: 10%;
+            height: max-content;
+            display: flex;
+            width: 80%;
+            flex-direction: column;
+            margin-top: auto;
         }
     </style>
 </head>
@@ -350,7 +369,11 @@ R"xxx(
                 <canvas id="imageCanvas" width="512" height="512"></canvas>
             </div>
             <a id="downloadLink" style="display: none;" download="generated_image.png">Download Image</a>
-            <progress style="display: none;" id="progress" value="0" max="100"> 0% </progress>
+            <div class="bars">
+                <progress id="load_progress" value="0" max="100"> 0% </progress>
+                <progress id="work_progress" value="0" max="100"> 0% </progress>
+                <progress id="vae_progress" value="0" max="100"> 0% </progress>
+            </div>
         </div>
     </div>
     <div class="status">
@@ -642,16 +665,12 @@ R"xxx(
             const data = await response.json();
             const taskId = data.task_id;
             let status = 'Pending';
-            const progressBar = document.getElementById("progress");
             while (status !== 'Done' && status !== 'Failed') {
                 const statusResponse = await fetch(`/result?task_id=${taskId}`);
                 const statusData = await statusResponse.json();
                 if (status == 'Pending' && statusData.status != status) {
-                    //Task has started, update
                     setTimeout(() => {
                         fetchModelId();
-                        // Updating params can be annoying, let's just hope they are taken into account
-                        // fetchParams();
                         const modelsSelect = document.getElementById('model');
                         const diffModelsSelect = document.getElementById('diff-model');
                         const clipLSelect = document.getElementById('clip_l');
@@ -666,12 +685,23 @@ R"xxx(
                         t5xxlSelect.selectedIndex = 0;
                         vaeSelect.selectedIndex = 0;
                         taeSelect.selectedIndex = 0;
+                        document.getElementById("load_progress").value = 0;
+                        document.getElementById("work_progress").value = 0;
+                        document.getElementById("vae_progress").value = 0;
                     }, 0);
                 }
                 status = statusData.status;
+                if (status !== "Pending" && status !== "Loading") {
+                    const progressBar = document.getElementById("load_progress");
+                    progressBar.value = 1;
+                    progressBar.max = 1;
+                    progressBar.innerHTML = "100%";
+                    progressBar.style.display = 'inline-block';
+                }
+                const progressBar = status === "Loading" ? document.getElementById("load_progress") : status === "Working" ? document.getElementById("work_progress") : document.getElementById("vae_progress");
                 document.getElementById('status').innerHTML = status;
-                if (statusData.step >= 0) {
-                    progressBar.value = statusData.step;    
+                if (status !== 'Done' && statusData.step >= 0) {
+                    progressBar.value = statusData.step;
                     progressBar.max = statusData.steps ?? steps;
                     progressBar.innerHTML = Math.floor(100 * statusData.step / statusData.steps) + "%";
                     progressBar.style.display = 'inline-block';
@@ -706,10 +736,11 @@ R"xxx(
                 } else if (status === 'Failed') {
                     alert('Image generation failed');
                 }
-                await new Promise(resolve => setTimeout(resolve, 250));
+                await new Promise(resolve => setTimeout(resolve, 100));
             }
-            progressBar.value = steps;
-            progressBar.innerHTML = "100%";
+            document.getElementById("load_progress").value = document.getElementById("load_progress").max;
+            document.getElementById("work_progress").value = document.getElementById("work_progress").max;
+            document.getElementById("vae_progress").value = document.getElementById("vae_progress").max;
             queued_tasks--;
             update_queue();
         }
