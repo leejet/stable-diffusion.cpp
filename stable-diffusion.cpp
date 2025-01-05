@@ -69,6 +69,14 @@ void calculate_alphas_cumprod(float* alphas_cumprod,
     }
 }
 
+void suppress_pp(int step, int steps, float time, void* data) {
+    (void)step;
+    (void)steps;
+    (void)time;
+    (void)data;
+    return;
+}
+
 /*=============================================== StableDiffusionGGML ================================================*/
 
 class StableDiffusionGGML {
@@ -790,6 +798,14 @@ public:
         return {c_crossattn, y, c_concat};
     }
 
+    void silent_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
+        sd_progress_cb_t cb = sd_get_progress_callback();
+        void* cbd           = sd_get_progress_callback_data();
+        sd_set_progress_callback((sd_progress_cb_t)suppress_pp, NULL);
+        sd_tiling(input, output, scale, tile_size, tile_overlap_factor, on_processing);
+        sd_set_progress_callback(cb, cbd);
+    }
+
     void preview_image(ggml_context* work_ctx,
                        int step,
                        struct ggml_tensor* latents,
@@ -851,7 +867,8 @@ public:
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                         first_stage_model->compute(n_threads, in, true, &out);
                     };
-                    sd_tiling(latents, result, 8, 32, 0.5f, on_tiling);
+                    silent_tiling(latents, result, 8, 32, 0.5f, on_tiling);
+
                 } else {
                     first_stage_model->compute(n_threads, latents, true, &result);
                 }
@@ -869,7 +886,7 @@ public:
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                         tae_first_stage->compute(n_threads, in, true, &out);
                     };
-                    sd_tiling(latents, result, 8, 64, 0.5f, on_tiling);
+                    silent_tiling(latents, result, 8, 64, 0.5f, on_tiling);
                 } else {
                     tae_first_stage->compute(n_threads, latents, true, &result);
                 }
@@ -1076,10 +1093,6 @@ public:
                 vec_denoised[i] = latent_result * c_out + vec_input[i] * c_skip;
             }
             int64_t t1 = ggml_time_us();
-            if (step > 0) {
-                pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
-                // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
-            }
             if (noise_mask != nullptr) {
                 for (int64_t x = 0; x < denoised->ne[0]; x++) {
                     for (int64_t y = 0; y < denoised->ne[1]; y++) {
@@ -1091,6 +1104,10 @@ public:
                         }
                     }
                 }
+            }
+            if (step > 0) {
+                pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
+                // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
 
             if (step_callback != nullptr) {
