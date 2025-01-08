@@ -208,6 +208,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
+    printf("  --guidance SCALE                   distilled guidance scale: (default: 3.5)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
     printf("  --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
     printf("  --skip-layer-start START           SLG enabling point: (default: 0.01)\n");
