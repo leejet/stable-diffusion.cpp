@@ -44,6 +44,7 @@ enum sample_method_t {
     IPNDM,
     IPNDM_V,
     LCM,
+    DDIM_TRAILING,
     N_SAMPLE_METHODS
 };
 

@@ -1005,6 +1005,174 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
+        case DDIM_TRAILING:  // Denoising Diffusion Implicit Models
+                             // with the "trailing" timestep spacing
+        {
+            // DDIM itself needs alphas_cumprod (DDPM, Ho et al.,
+            // arXiv:2006.11239 [cs.LG] with k-diffusion's start and
+            // end beta) (which unfortunately k-diffusion's data
+            // structure hides from the denoiser), and the sigmas are
+            // also needed to invert the behavior of CompVisDenoiser
+            // (k-diffusion's LMSDiscreteScheduler)
+            std::vector<double> alphas_cumprod;
+            std::vector<double> compvis_sigmas;
+
+            alphas_cumprod.reserve(TIMESTEPS);
+            compvis_sigmas.reserve(TIMESTEPS);
+            for (int i = 0; i < TIMESTEPS; i++) {
+                alphas_cumprod[i] =
+                    (i == 0 ? 1.0f : alphas_cumprod[i - 1]) *
+                    (1.0f -
+                     std::pow(sqrtf(0.00085f) +
+                              (sqrtf(0.0120f) - sqrtf(0.00085f)) *
+                              ((float)i / (TIMESTEPS - 1)), 2));
+                compvis_sigmas[i] =
+                    std::sqrt((1 - alphas_cumprod[i]) /
+                              alphas_cumprod[i]);
+            }
+            for (int i = 0; i < steps; i++) {
+                // The "trailing" DDIM timestep, see S. Lin et al.,
+                // "Common Diffusion Noise Schedules and Sample Steps
+                // are Flawed", arXiv:2305.08891 [cs], p. 4, Table
+                // 2. Most variables below follow Diffusers naming.
+                int timestep =
+                    roundf(TIMESTEPS -
+                           i * ((float)TIMESTEPS / steps)) - 1;
+                int prev_timestep = timestep - TIMESTEPS / steps;
+                // The sigma here is chosen to cause the
+                // CompVisDenoiser to produce t = timestep
+                float sigma = compvis_sigmas[timestep];
+                if (i == 0) {
+                    // The function add_noise intializes x to
+                    // Diffusers' latents * sigma (as in Diffusers'
+                    // pipeline) or sample * sigma (Diffusers'
+                    // scheduler), where this sigma = init_noise_sigma
+                    // in Diffusers. For DDPM and DDIM however,
+                    // init_noise_sigma = 1. But the k-diffusion
+                    // model() also evaluates F_theta(c_in(sigma) x;
+                    // ...) instead of the bare U-net F_theta, with
+                    // c_in = 1 / sqrt(sigma^2 + 1), as defined in
+                    // T. Karras et al., "Elucidating the Design Space
+                    // of Diffusion-Based Generative Models",
+                    // arXiv:2206.00364 [cs.CV], p. 3, Table 1. Hence
+                    // the first call has to be prescaled as x <- x /
+                    // (c_in * sigma) with the k-diffusion pipeline
+                    // and CompVisDenoiser.
+                    float* vec_x = (float*)x->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] *= std::sqrt(sigma * sigma + 1) /
+                            sigma;
+                    }
+                }
+                else {
+                    // For the subsequent steps after the first one,
+                    // at this point x = latents (pipeline) or x =
+                    // sample (scheduler), and needs to be prescaled
+                    // with x <- latents / c_in to compensate for
+                    // model() applying the scale c_in before the
+                    // U-net F_theta
+                    float* vec_x = (float*)x->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] *= std::sqrt(sigma * sigma + 1);
+                    }
+                }
+                // Note model() is the D(x, sigma) as defined in
+                // T. Karras et al., arXiv:2206.00364, p. 3, Table 1
+                // and p. 8 (7)
+                struct ggml_tensor* noise_pred =
+                    model(x, sigma, i + 1);
+                // Here noise_pred is still the k-diffusion denoiser
+                // output, not the U-net output F_theta(c_in(sigma) x;
+                // ...) in Karras et al. (2022), whereas Diffusers'
+                // noise_pred is F_theta(...). Recover the actual
+                // noise_pred, which is also referred to as the
+                // "Karras ODE derivative" d or d_cur in several
+                // samplers above.
+                {
+                    float* vec_x = (float*)x->data;
+                    float* vec_noise_pred = (float*)noise_pred->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_noise_pred[j] =
+                            (vec_x[j] - vec_noise_pred[j]) *
+                            (1 / sigma);
+                    }
+                }
+                // 2. compute alphas, betas
+                float alpha_prod_t = alphas_cumprod[timestep];
+                // Note final_alpha_cumprod = alphas_cumprod[0]
+                float alpha_prod_t_prev = prev_timestep >= 0 ?
+                    alphas_cumprod[prev_timestep] : alphas_cumprod[0];
+                float beta_prod_t = 1 - alpha_prod_t;
+                // 3. compute predicted original sample from predicted
+                // noise also called "predicted x_0" of formula (12)
+                // from https://arxiv.org/pdf/2010.02502.pdf
+                struct ggml_tensor* pred_original_sample =
+                    ggml_dup_tensor(work_ctx, x);
+                {
+                    float* vec_x = (float*)x->data;
+                    float* vec_noise_pred = (float*)noise_pred->data;
+                    float* vec_pred_original_sample =
+                        (float*)pred_original_sample->data;
+                    // Note the substitution of latents or sample = x
+                    // * c_in = x / sqrt(sigma^2 + 1)
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_pred_original_sample[j] =
+                            (vec_x[j] / std::sqrt(sigma * sigma + 1) -
+                             std::sqrt(beta_prod_t) *
+                             vec_noise_pred[j]) *
+                            (1 / std::sqrt(alpha_prod_t));
+                    }
+                }
+                // Assuming the "epsilon" prediction type, where below
+                // pred_epsilon = noise_pred is inserted, and is not
+                // defined/copied explicitly.
+                //
+                // 5. compute variance: "sigma_t(eta)" -> see formula
+                // (16)
+                //
+                // sigma_t = sqrt((1 - alpha_t-1)/(1 - alpha_t)) *
+                // sqrt(1 - alpha_t/alpha_t-1)
+                float beta_prod_t_prev = 1 - alpha_prod_t_prev;
+                float variance = (beta_prod_t_prev / beta_prod_t) *
+                    (1 - alpha_prod_t / alpha_prod_t_prev);
+                float std_dev_t = 0 * std::sqrt(variance);
+                // 6. compute "direction pointing to x_t" of formula
+                // (12) from https://arxiv.org/pdf/2010.02502.pdf
+                struct ggml_tensor* pred_sample_direction =
+                    ggml_dup_tensor(work_ctx, noise_pred);
+                {
+                    float* vec_noise_pred = (float*)noise_pred->data;
+                    float* vec_pred_sample_direction =
+                        (float*)pred_sample_direction->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_pred_sample_direction[j] =
+                            std::sqrt(1 - alpha_prod_t_prev -
+                                      std::pow(std_dev_t, 2)) *
+                            vec_noise_pred[j];
+                    }
+                }
+                // 7. compute x_t without "random noise" of formula
+                // (12) from https://arxiv.org/pdf/2010.02502.pdf
+                {
+                    float* vec_pred_original_sample =
+                        (float*)pred_original_sample->data;
+                    float* vec_pred_sample_direction =
+                        (float*)pred_sample_direction->data;
+                    float* vec_x = (float*)x->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = std::sqrt(alpha_prod_t_prev) *
+                            vec_pred_original_sample[j] +
+                            vec_pred_sample_direction[j];
+                    }
+                }
+                // See the note above: x = latents or sample here, and
+                // is not scaled by the c_in. For the final output
+                // this is correct, but for subsequent iterations, x
+                // needs to be prescaled again, since k-diffusion's
+                // model() differes from the bare U-net F_theta by the
+                // factor c_in.
+            }
+        } break;
 
         default:
             LOG_ERROR("Attempting to sample with nonexisting sample method %i", method);
