@@ -40,6 +40,7 @@ const char* sample_method_str[] = {
     "ipndm_v",
     "lcm",
     "ddim_trailing",
+    "tcd",
 };
 
 // Names of the sigma schedule overrides, same order as sample_schedule in stable-diffusion.h
@@ -94,6 +95,7 @@ struct SDParams {
     float min_cfg     = 1.0f;
     float cfg_scale   = 7.0f;
     float guidance    = 3.5f;
+    float eta         = 0.f;
     float style_ratio = 20.f;
     int clip_skip     = -1;  // <= 0 represents unspecified
     int width         = 512;
@@ -163,6 +165,7 @@ void print_params(SDParams params) {
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
     printf("    slg_scale:         %.2f\n", params.slg_scale);
     printf("    guidance:          %.2f\n", params.guidance);
+    printf("    eta:               %.2f\n", params.eta);
     printf("    clip_skip:         %d\n", params.clip_skip);
     printf("    width:             %d\n", params.width);
     printf("    height:            %d\n", params.height);
@@ -210,6 +213,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
+    printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
     printf("  --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
     printf("  --skip-layer-start START           SLG enabling point: (default: 0.01)\n");
     printf("  --skip-layer-end END               SLG disabling point: (default: 0.2)\n");
@@ -439,6 +443,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.guidance = std::stof(argv[i]);
+        } else if (arg == "--eta") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.eta = std::stof(argv[i]);
         } else if (arg == "--strength") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -718,6 +728,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
         parameter_string += "Skip layer end: " + std::to_string(params.skip_layer_end) + ", ";
     }
     parameter_string += "Guidance: " + std::to_string(params.guidance) + ", ";
+    parameter_string += "Eta: " + std::to_string(params.eta) + ", ";
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
@@ -938,6 +949,7 @@ int main(int argc, const char* argv[]) {
                           params.clip_skip,
                           params.cfg_scale,
                           params.guidance,
+                          params.eta,
                           params.width,
                           params.height,
                           params.sample_method,
@@ -1005,6 +1017,7 @@ int main(int argc, const char* argv[]) {
                               params.clip_skip,
                               params.cfg_scale,
                               params.guidance,
+                              params.eta,
                               params.width,
                               params.height,
                               params.sample_method,

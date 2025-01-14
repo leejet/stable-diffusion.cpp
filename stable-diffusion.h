@@ -45,6 +45,7 @@ enum sample_method_t {
     IPNDM_V,
     LCM,
     DDIM_TRAILING,
+    TCD,
     N_SAMPLE_METHODS
 };
 
@@ -156,6 +157,7 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            int clip_skip,
                            float cfg_scale,
                            float guidance,
+                           float eta,
                            int width,
                            int height,
                            enum sample_method_t sample_method,
@@ -181,6 +183,7 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            int clip_skip,
                            float cfg_scale,
                            float guidance,
+                           float eta,
                            int width,
                            int height,
                            enum sample_method_t sample_method,
