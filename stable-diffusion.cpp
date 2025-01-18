@@ -606,7 +606,9 @@ public:
         ggml_set_f32(timesteps, 999);
 
         struct ggml_tensor* concat = is_inpaint ? ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 5, 1) : NULL;
-        ggml_set_f32(concat, 0);
+        if (concat != NULL) {
+            ggml_set_f32(concat, 0);
+        }
 
         int64_t t0              = ggml_time_ms();
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
