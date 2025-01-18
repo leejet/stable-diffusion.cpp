@@ -1009,7 +1009,10 @@ static void sample_k_diffusion(sample_method_t method,
         case DDIM_TRAILING:  // Denoising Diffusion Implicit Models
                              // with the "trailing" timestep spacing
         {
-            // DDIM itself needs alphas_cumprod (DDPM, Ho et al.,
+            // See J. Song et al., "Denoising Diffusion Implicit
+            // Models", arXiv:2010.02502 [cs.LG]
+            //
+            // DDIM itself needs alphas_cumprod (DDPM, J. Ho et al.,
             // arXiv:2006.11239 [cs.LG] with k-diffusion's start and
             // end beta) (which unfortunately k-diffusion's data
             // structure hides from the denoiser), and the sigmas are
@@ -1045,9 +1048,8 @@ static void sample_k_diffusion(sample_method_t method,
                 // are Flawed", arXiv:2305.08891 [cs], p. 4, Table
                 // 2. Most variables below follow Diffusers naming
                 //
-                // Diffuser naming vs. J. Song et al., "Denoising
-                // Diffusion Implicit Models", arXiv:2010.02502, p. 5,
-                // (12) and p. 16, (16) (<variable name> -> <name in
+                // Diffuser naming vs. Song et al. (2010), p. 5, (12)
+                // and p. 16, (16) (<variable name> -> <name in
                 // paper>):
                 //
                 // - pred_noise_t -> epsilon_theta^(t)(x_t)
@@ -1100,9 +1102,8 @@ static void sample_k_diffusion(sample_method_t method,
                 }
                 // Note (also noise_pred in Diffuser's pipeline)
                 // model_output = model() is the D(x, sigma) as
-                // defined in T. Karras et al., arXiv:2206.00364,
-                // p. 3, Table 1 and p. 8 (7), compare also p. 38
-                // (226) therein.
+                // defined in Karras et al. (2022), p. 3, Table 1 and
+                // p. 8 (7), compare also p. 38 (226) therein.
                 struct ggml_tensor* model_output =
                     model(x, sigma, i + 1);
                 // Here model_output is still the k-diffusion denoiser
@@ -1202,6 +1203,10 @@ static void sample_k_diffusion(sample_method_t method,
         case TCD:  // Strategic Stochastic Sampling (Algorithm 4) in
                    // Trajectory Consistency Distillation
         {
+            // See J. Zheng et al., "Trajectory Consistency
+            // Distillation: Improved Latent Consistency Distillation
+            // by Semi-Linear Consistency Function with Trajectory
+            // Mapping", arXiv:2402.19159 [cs.CV]
             float beta_start = 0.00085f;
             float beta_end = 0.0120f;
             std::vector<double> alphas_cumprod;
@@ -1238,7 +1243,9 @@ static void sample_k_diffusion(sample_method_t method,
                     (int)floor((i + 1) *
                                ((float)original_steps / steps));
                 // Here timestep_s is tau_n' in Algorithm 4. The _s
-                // notation appears to be that from DPM-Solver, C. Lu,
+                // notation appears to be that from C. Lu,
+                // "DPM-Solver: A Fast ODE Solver for Diffusion
+                // Probabilistic Model Sampling in Around 10 Steps",
                 // arXiv:2206.00927 [cs.LG], but this notation is not
                 // continued in Algorithm 4, where _n' is used.
                 int timestep_s =
@@ -1315,12 +1322,12 @@ static void sample_k_diffusion(sample_method_t method,
                     }
                 }
                 // This consistency function step can be difficult to
-                // decipher from Algorithm 4, as it involves a
-                // difficult notation ("|->"). In Diffusers it is
-                // borrowed verbatim (with the same comments below for
-                // step (4)) from LCMScheduler's noise injection step,
-                // compare in S. Luo et al., arXiv:2310.04378 p. 14,
-                // Algorithm 3.
+                // decipher from Algorithm 4, as it is simply stated
+                // using a consistency function. This step is the
+                // modified DDIM, i.e. p. 8 (32) in Zheng et
+                // al. (2024), with eta set to 0 (see the paragraph
+                // immediately thereafter that states this somewhat
+                // obliquely).
                 {
                     float* vec_pred_original_sample =
                         (float*)pred_original_sample->data;
