@@ -54,7 +54,7 @@ endif ()
 
 if (SD_HIPBLAS)
     message("-- Use HIPBLAS as backend stable-diffusion")
-    set(GGML_HIPBLAS ON)
+    set(GGML_HIP ON)
     add_definitions(-DSD_USE_CUDA)
     if(SD_FAST_SOFTMAX)
         set(GGML_CUDA_FAST_SOFTMAX ON)
