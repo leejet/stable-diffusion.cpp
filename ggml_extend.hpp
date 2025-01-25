@@ -52,6 +52,32 @@
 #define __STATIC_INLINE__ static inline
 #endif
 
+__STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_only, const char* mark);
+
+// n-mode trensor-matrix product
+// example: 2-mode product
+// A: [ne03, k, ne01, ne00]
+// B: k rows, m columns => [k, m]
+// result is [ne03, m, ne01, ne00]
+__STATIC_INLINE__ struct ggml_tensor* ggml_mul_n_mode(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, int mode = 0) {
+    // reshape A
+    // swap 0th and nth axis
+    a = ggml_cont(ctx, ggml_permute(ctx, a, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0));
+    int ne1 = a->ne[1];
+    int ne2 = a->ne[2];
+    int ne3 = a->ne[3];
+    // make 2D
+    a = ggml_cont(ctx, ggml_reshape_2d(ctx, a, a->ne[0], (ne3 * ne2 * ne1)));
+
+    struct ggml_tensor* result = ggml_cont(ctx, ggml_transpose(ctx, ggml_mul_mat(ctx, a, b)));
+
+    // reshape output (same shape as a after permutation except first dim)
+    result = ggml_reshape_4d(ctx, result, result->ne[0], ne1, ne2, ne3);
+    // swap back 0th and nth axis
+    result = ggml_permute(ctx, result, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0);
+    return result;
+}
+
 __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void* user_data) {
     (void)level;
     (void)user_data;
@@ -319,7 +345,7 @@ __STATIC_INLINE__ void sd_apply_mask(struct ggml_tensor* image_data,
         for (int iy = 0; iy < height; iy++) {
             float m = ggml_tensor_get_f32(mask, ix, iy);
             for (int k = 0; k < channels; k++) {
-                float value = ((float)(m < 254.5/255)) * (ggml_tensor_get_f32(image_data, ix, iy, k) - .5) + .5;
+                float value = ((float)(m < 254.5 / 255)) * (ggml_tensor_get_f32(image_data, ix, iy, k) - .5) + .5;
                 ggml_tensor_set_f32(output, value, ix, iy, k);
             }
         }

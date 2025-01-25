@@ -244,12 +244,15 @@ struct LoraModel : public GGMLRunner {
             std::vector<std::string> keys = to_lora_keys(k_tensor, version);
             if (keys.size() == 0)
                 continue;
+
+            ggml_tensor* lora_mid  = NULL;  // tau for tucker decomposition
             ggml_tensor* lora_up   = NULL;
             ggml_tensor* lora_down = NULL;
             for (auto& key : keys) {
                 std::string alpha_name         = "";
                 std::string scale_name         = "";
                 std::string split_q_scale_name = "";
+                std::string lora_mid_name      = "";
                 std::string lora_down_name     = "";
                 std::string lora_up_name       = "";
 
@@ -584,8 +587,10 @@ struct LoraModel : public GGMLRunner {
                     }
 
                     lora_down_name = lora_pre[type] + key + lora_downs[type] + ".weight";
-                    alpha_name     = lora_pre[type] + key + ".alpha";
-                    scale_name     = lora_pre[type] + key + ".scale";
+                    lora_mid_name  = lora_pre[type] + key + ".lora_mid.weight";
+
+                    alpha_name = lora_pre[type] + key + ".alpha";
+                    scale_name = lora_pre[type] + key + ".scale";
 
                     if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
                         lora_up = lora_tensors[lora_up_name];
@@ -594,6 +599,12 @@ struct LoraModel : public GGMLRunner {
                     if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
                         lora_down = lora_tensors[lora_down_name];
                     }
+
+                    if (lora_tensors.find(lora_mid_name) != lora_tensors.end()) {
+                        lora_mid = lora_tensors[lora_mid_name];
+                        applied_lora_tensors.insert(lora_mid_name);
+                    }
+
                     applied_lora_tensors.insert(lora_up_name);
                     applied_lora_tensors.insert(lora_down_name);
                     applied_lora_tensors.insert(alpha_name);
@@ -625,9 +636,20 @@ struct LoraModel : public GGMLRunner {
 
                 // ggml_mul_mat requires tensor b transposed
                 lora_down                  = ggml_cont(compute_ctx, ggml_transpose(compute_ctx, lora_down));
-                struct ggml_tensor* updown = ggml_mul_mat(compute_ctx, lora_up, lora_down);
-                updown                     = ggml_cont(compute_ctx, ggml_transpose(compute_ctx, updown));
-                updown                     = ggml_reshape(compute_ctx, updown, weight);
+                struct ggml_tensor* updown = NULL;
+                if (lora_mid == NULL) {
+                    updown = ggml_mul_mat(compute_ctx, lora_up, lora_down);
+                    updown = ggml_cont(compute_ctx, ggml_transpose(compute_ctx, updown));
+                } else {
+                    // undoing tucker decomposition for conv layers.
+                    // lora_mid  has shape (3,    3,   Rank, Rank)
+                    // lora_down has shape (Rank, In,  1,    1)
+                    // lora_up   has shape (Rank, Out, 1,    1)
+                    // conv layer shape is (3,    3,   Out,  In)
+                    updown = ggml_mul_n_mode(compute_ctx, ggml_mul_n_mode(compute_ctx, lora_mid, lora_down, 3), lora_up, 2);
+                    updown = ggml_cont(compute_ctx, updown);
+                }
+                updown = ggml_reshape(compute_ctx, updown, weight);
                 GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
                 updown = ggml_scale_inplace(compute_ctx, updown, scale_value);
                 ggml_tensor* final_weight;
