@@ -104,6 +104,19 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_merge_lora(ggml_context* ctx, struct 
     return updown;
 }
 
+// Kronecker product
+// [ne03,ne02,ne01,ne00] x [ne13,ne12,ne11,ne10] => [ne03*ne13,ne02*ne12,ne01*ne11,ne00*ne10]
+__STATIC_INLINE__ struct ggml_tensor* ggml_kronecker(ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b) {
+    return ggml_mul(ctx,
+                    ggml_upscale_ext(ctx,
+                                     a,
+                                     a->ne[0] * b->ne[0],
+                                     a->ne[1] * b->ne[1],
+                                     a->ne[2] * b->ne[2],
+                                     a->ne[3] * b->ne[3]),
+                    b);
+}
+
 __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void* user_data) {
     (void)level;
     (void)user_data;
@@ -1039,8 +1052,8 @@ __STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
 }
 
 /* SDXL with LoRA requires more space */
-#define MAX_PARAMS_TENSOR_NUM 16384
-#define MAX_GRAPH_SIZE 16384
+#define MAX_PARAMS_TENSOR_NUM 32768
+#define MAX_GRAPH_SIZE 32768
 
 struct GGMLRunner {
 protected:
