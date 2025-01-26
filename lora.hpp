@@ -342,10 +342,7 @@ struct LoraModel : public GGMLRunner {
                         scale_value = alpha / dim;
                     }
                 } else if (lora_tensors.find(fk + ".lokr_w1") != lora_tensors.end() || lora_tensors.find(fk + ".lokr_w1_a") != lora_tensors.end()) {
-                    // LOG_WARN("LoKr is not supported yet");
-                    // break;
                     std::string alpha_name = fk + ".alpha";
-                    ;
 
                     ggml_tensor* lokr_w1 = NULL;
                     ggml_tensor* lokr_w2 = NULL;
@@ -377,7 +374,7 @@ struct LoraModel : public GGMLRunner {
                             // scale != 1 only when using Low rank form (?)
                             int64_t dim = down->ne[ggml_n_dims(down) - 1];
                             if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
-                                float alpha = ggml_backend_tensor_get_f32(to_f32(compute_ctx, lora_tensors[alpha_name]));
+                                float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
                                 scale_value = alpha / dim;
                             }
                         }
@@ -408,7 +405,7 @@ struct LoraModel : public GGMLRunner {
 
                     updown = ggml_kronecker(compute_ctx, lokr_w1, lokr_w2);
 
-                    // TODO: double check aplhas
+                    // TODO: double check alpha implementation, it seems strange to not use them most of the time
                     applied_lora_tensors.insert(alpha_name);
                 } else {
                     // LoRA mode
