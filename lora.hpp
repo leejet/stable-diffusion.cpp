@@ -197,6 +197,10 @@ struct LoraModel : public GGMLRunner {
                 blk_name.replace(blk_name.find(".joint_blocks"), sizeof(".joint_blocks") - 1, ".transformer_blocks");
             }
 
+            if (blk_name.find("text_encoders.clip_l") != std::string::npos) {
+                blk_name.replace(blk_name.find("text_encoders.clip_l"), sizeof("text_encoders.clip_l") - 1, "cond_stage_model");
+            }
+
             for (const auto& item : alt_names) {
                 size_t match = blk_name.find(item.first);
                 if (match != std::string::npos) {
@@ -217,8 +221,8 @@ struct LoraModel : public GGMLRunner {
                     keys.push_back(split_blk);
                 }
             }
+            keys.push_back(blk_name);
         }
-        keys.push_back(blk_name);
 
         std::vector<std::string> ret;
         for (std::string& key : keys) {
