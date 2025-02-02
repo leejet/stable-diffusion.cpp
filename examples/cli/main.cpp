@@ -1057,16 +1057,41 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    size_t last            = params.output_path.find_last_of(".");
-    std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
+    std::string dummy_name, ext, lc_ext;
+    bool is_jpg;
+    size_t last = params.output_path.find_last_of(".");
+    size_t last_path = std::min(params.output_path.find_last_of("/"),
+                                params.output_path.find_last_of("\\"));
+    if (last != std::string::npos // filename has extension
+    && (last_path == std::string::npos || last > last_path)) {
+        dummy_name = params.output_path.substr(0, last);
+        ext = lc_ext = params.output_path.substr(last);
+        std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
+        is_jpg = lc_ext == ".jpg" || lc_ext == ".jpeg" || lc_ext == ".jpe";
+    } else {
+        dummy_name = params.output_path;
+        ext = lc_ext = "";
+        is_jpg = false;
+    }
+    // appending ".png" to absent or unknown extension
+    if (!is_jpg && lc_ext != ".png") {
+        dummy_name += ext;
+        ext = ".png";
+    }
     for (int i = 0; i < params.batch_count; i++) {
         if (results[i].data == NULL) {
             continue;
         }
-        std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ".png" : dummy_name + ".png";
-        stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                       results[i].data, 0, get_image_params(params, params.seed + i).c_str());
-        printf("save result image to '%s'\n", final_image_path.c_str());
+        std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
+        if(is_jpg) {
+            stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                           results[i].data, 90, get_image_params(params, params.seed + i).c_str());
+            printf("save result JPEG image to '%s'\n", final_image_path.c_str());
+        } else {
+            stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                           results[i].data, 0, get_image_params(params, params.seed + i).c_str());
+            printf("save result PNG image to '%s'\n", final_image_path.c_str());
+        }
         free(results[i].data);
         results[i].data = NULL;
     }
