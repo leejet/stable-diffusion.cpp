@@ -1530,7 +1530,8 @@ static int stbi_write_jpg_core(stbi__write_context *s, int width, int height, in
          stbiw__putc(s, param_length >> 8); // no need to mask, length < 65536
          stbiw__putc(s, param_length & 0xFF);
          s->func(s->context, (void*)"parameters", strlen("parameters") + 1); // std::string is zero-terminated
-         s->func(s->context, (void*)parameters, param_length - 2 - strlen("parameters") - 1);
+         s->func(s->context, (void*)parameters, std::min(param_length, (size_t) 65534) - 2 - strlen("parameters") - 1);
+         if(param_length > 65534) stbiw__putc(s, 0); // always zero-terminate for safety
       }
 
       s->func(s->context, (void*)head1, sizeof(head1));
