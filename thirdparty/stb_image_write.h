@@ -1532,6 +1532,7 @@ static int stbi_write_jpg_core(stbi__write_context *s, int width, int height, in
          s->func(s->context, (void*)"parameters", strlen("parameters") + 1); // std::string is zero-terminated
          s->func(s->context, (void*)parameters, std::min(param_length, (size_t) 65534) - 2 - strlen("parameters") - 1);
          if(param_length > 65534) stbiw__putc(s, 0); // always zero-terminate for safety
+         if(param_length & 1) stbiw__putc(s, 0xFF); // pad to even length
       }
 
       s->func(s->context, (void*)head1, sizeof(head1));
