@@ -615,9 +615,12 @@ struct LoraModel : public GGMLRunner {
                 scale_value *= multiplier;
 
                 // flat lora tensors to multiply it
-                int64_t lora_up_rows   = lora_up->ne[ggml_n_dims(lora_up) - 1];
-                lora_up                = ggml_reshape_2d(compute_ctx, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
-                int64_t lora_down_rows = lora_down->ne[ggml_n_dims(lora_down) - 1];
+                int64_t lora_up_rows  = lora_up->ne[ggml_n_dims(lora_up) - 1];
+                lora_up               = ggml_reshape_2d(compute_ctx, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
+                auto lora_down_n_dims = ggml_n_dims(lora_down);
+                // assume n_dims should always be a multiple of 2 (otherwise rank 1 doesn't work)
+                lora_down_n_dims       = (lora_down_n_dims + lora_down_n_dims % 2);
+                int64_t lora_down_rows = lora_down->ne[lora_down_n_dims - 1];
                 lora_down              = ggml_reshape_2d(compute_ctx, lora_down, ggml_nelements(lora_down) / lora_down_rows, lora_down_rows);
 
                 // ggml_mul_mat requires tensor b transposed
