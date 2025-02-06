@@ -810,7 +810,7 @@ public:
                        int step,
                        struct ggml_tensor* latents,
                        enum SDVersion version,
-                       sd_preview_policy_t preview_mode,
+                       sd_preview_t preview_mode,
                        ggml_tensor* result,
                        std::function<void(int, sd_image_t)> step_callback) {
         const uint32_t channel = 3;
@@ -922,14 +922,11 @@ public:
            const std::vector<float>& sigmas,
            int start_merge_step,
            SDCondition id_cond,
-           std::vector<int> skip_layers                       = {},
-           float slg_scale                                    = 0,
-           float skip_layer_start                             = 0.01,
-           float skip_layer_end                               = 0.2,
-           ggml_tensor* noise_mask                            = nullptr,
-           sd_preview_policy_t preview_mode                   = SD_PREVIEW_NONE,
-           int preview_interval                               = 1,
-           std::function<void(int, sd_image_t)> step_callback = nullptr) {
+           std::vector<int> skip_layers = {},
+           float slg_scale              = 0,
+           float skip_layer_start       = 0.01,
+           float skip_layer_end         = 0.2,
+           ggml_tensor* noise_mask      = nullptr) {
         size_t steps = sigmas.size() - 1;
         // noise = load_tensor_from_file(work_ctx, "./rand0.bin");
         // print_ggml_tensor(noise);
@@ -961,7 +958,8 @@ public:
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
         struct ggml_tensor* preview_tensor = NULL;
-        if (preview_mode != SD_PREVIEW_NONE && preview_mode != SD_PREVIEW_PROJ) {
+        auto sd_preview_mode = sd_get_preview_mode();
+        if (sd_preview_mode != SD_PREVIEW_NONE && sd_preview_mode != SD_PREVIEW_PROJ) {
             preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
                                                 (denoised->ne[0] * 8),
                                                 (denoised->ne[1] * 8),
@@ -1109,10 +1107,11 @@ public:
                 pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
                 // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
-
-            if (step_callback != nullptr) {
-                if (step % preview_interval == 0) {
-                    preview_image(work_ctx, step, denoised, version, preview_mode, preview_tensor, step_callback);
+            auto sd_preview_cb = sd_get_preview_callback();
+            auto sd_preview_mode = sd_get_preview_mode();
+            if (sd_preview_cb != NULL) {
+                if (step % sd_get_preview_interval() == 0) {
+                    preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb);
                 }
             }
             return denoised;
@@ -1338,14 +1337,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float style_ratio,
                            bool normalize_input,
                            std::string input_id_images_path,
-                           std::vector<int> skip_layers                       = {},
-                           float slg_scale                                    = 0,
-                           float skip_layer_start                             = 0.01,
-                           float skip_layer_end                               = 0.2,
-                           ggml_tensor* masked_image                          = NULL,
-                           sd_preview_policy_t preview_mode                   = SD_PREVIEW_NONE,
-                           int preview_interval                               = 1,
-                           std::function<void(int, sd_image_t)> step_callback = nullptr) {
+                           std::vector<int> skip_layers = {},
+                           float slg_scale              = 0,
+                           float skip_layer_start       = 0.01,
+                           float skip_layer_end         = 0.2,
+                           ggml_tensor* masked_image    = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1602,10 +1598,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      slg_scale,
                                                      skip_layer_start,
                                                      skip_layer_end,
-                                                     noise_mask,
-                                                     preview_mode,
-                                                     preview_interval,
-                                                     step_callback);
+                                                     noise_mask);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
@@ -1674,14 +1667,11 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float style_ratio,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
-                    int* skip_layers                 = NULL,
-                    size_t skip_layers_count         = 0,
-                    float slg_scale                  = 0,
-                    float skip_layer_start           = 0.01,
-                    float skip_layer_end             = 0.2,
-                    sd_preview_policy_t preview_mode = SD_PREVIEW_NONE,
-                    int preview_interval             = 1,
-                    step_callback_t step_callback    = NULL) {
+                    int* skip_layers         = NULL,
+                    size_t skip_layers_count = 0,
+                    float slg_scale          = 0,
+                    float skip_layer_start   = 0.01,
+                    float skip_layer_end     = 0.2) {
     std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
@@ -1699,7 +1689,8 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
-    if (preview_mode != SD_PREVIEW_NONE && preview_mode != SD_PREVIEW_PROJ) {
+    auto sd_preview_mode = sd_get_preview_mode();
+    if (sd_preview_mode != SD_PREVIEW_NONE && sd_preview_mode != SD_PREVIEW_PROJ) {
         params.mem_size *= 2;
     }
     params.mem_size += width * height * 3 * sizeof(float);
@@ -1763,10 +1754,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                slg_scale,
                                                skip_layer_start,
                                                skip_layer_end,
-                                               NULL,
-                                               preview_mode,
-                                               preview_interval,
-                                               step_callback);
+                                               NULL);
 
     size_t t1 = ggml_time_ms();
 
@@ -1796,14 +1784,11 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float style_ratio,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
-                    int* skip_layers                 = NULL,
-                    size_t skip_layers_count         = 0,
-                    float slg_scale                  = 0,
-                    float skip_layer_start           = 0.01,
-                    float skip_layer_end             = 0.2,
-                    sd_preview_policy_t preview_mode = SD_PREVIEW_NONE,
-                    int preview_interval             = 1,
-                    step_callback_t step_callback    = NULL) {
+                    int* skip_layers         = NULL,
+                    size_t skip_layers_count = 0,
+                    float slg_scale          = 0,
+                    float skip_layer_start   = 0.01,
+                    float skip_layer_end     = 0.2) {
     std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
     LOG_DEBUG("img2img %dx%d", width, height);
     if (sd_ctx == NULL) {
@@ -1950,10 +1935,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                slg_scale,
                                                skip_layer_start,
                                                skip_layer_end,
-                                               masked_image,
-                                               preview_mode,
-                                               preview_interval,
-                                               step_callback);
+                                               masked_image);
 
     size_t t2 = ggml_time_ms();
 
@@ -2057,9 +2039,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                                                  -1,
                                                  SDCondition(NULL, NULL, NULL),
                                                  {},
-                                                 0, 0, 0, NULL,
-                                                 (sd_preview_policy_t)0, 1,
-                                                 NULL);
+                                                 0, 0, 0, NULL);
 
     int64_t t2 = ggml_time_ms();
     LOG_INFO("sampling completed, taking %.2fs", (t2 - t1) * 1.0f / 1000);

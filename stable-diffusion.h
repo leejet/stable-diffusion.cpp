@@ -109,7 +109,7 @@ enum sd_log_level_t {
     SD_LOG_ERROR
 };
 
-enum sd_preview_policy_t {
+enum sd_preview_t {
     SD_PREVIEW_NONE,
     SD_PREVIEW_PROJ,
     SD_PREVIEW_TAE,
@@ -117,22 +117,23 @@ enum sd_preview_policy_t {
     N_PREVIEWS
 };
 
-typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
-typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
-
-SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
-SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
-SD_API sd_progress_cb_t sd_get_progress_callback();
-SD_API void* sd_get_progress_callback_data();
-SD_API int32_t get_num_physical_cores();
-SD_API const char* sd_get_system_info();
-
 typedef struct {
     uint32_t width;
     uint32_t height;
     uint32_t channel;
     uint8_t* data;
 } sd_image_t;
+
+typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
+typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
+typedef void (*sd_preview_cb_t)(int, sd_image_t);
+
+
+SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
+SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
+SD_API void sd_set_preview_callback(sd_preview_cb_t cb, sd_preview_t mode, int interval);
+SD_API int32_t get_num_physical_cores();
+SD_API const char* sd_get_system_info();
 
 typedef struct sd_ctx_t sd_ctx_t;
 
@@ -162,8 +163,6 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
-typedef void (*step_callback_t)(int, sd_image_t);
-
 SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            const char* prompt,
                            const char* negative_prompt,
@@ -186,10 +185,7 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            size_t skip_layers_count,
                            float slg_scale,
                            float skip_layer_start,
-                           float skip_layer_end,
-                           sd_preview_policy_t preview_mode,
-                           int preview_interval,
-                           step_callback_t step_callback);
+                           float skip_layer_end);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
@@ -216,10 +212,7 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            size_t skip_layers_count,
                            float slg_scale,
                            float skip_layer_start,
-                           float skip_layer_end,
-                           sd_preview_policy_t preview_mode,
-                           int preview_interval,
-                           step_callback_t step_callback);
+                           float skip_layer_end);
 
 SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
