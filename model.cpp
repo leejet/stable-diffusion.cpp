@@ -1844,6 +1844,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
             break;
         }
     }
+    printf("\n");
     return success;
 }
 
