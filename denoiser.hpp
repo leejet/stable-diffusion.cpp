@@ -470,8 +470,8 @@ typedef std::function<ggml_tensor*(ggml_tensor*, float, int)> denoise_cb_t;
 
 static inline void show_step(int i0, int im, int64_t* t0) {
     int64_t t1 = ggml_time_us();
-    pretty_progress(i0 + 1, im, (t1 - (*t0)) / 1000000.f);
-//    LOG_INFO("step %d sampling completed taking %.2fs", i0, (t1 - t0) * 1.0f / 1000000);
+    pretty_progress(i0 + 1, im, (t1 - *t0) / 1000000.f);
+//    LOG_INFO("step %d sampling completed taking %.2fs", i0 + 1, (t1 - *t0) * 1.0f / 1000000);
     *t0 = t1;
 }
 
