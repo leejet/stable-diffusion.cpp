@@ -468,6 +468,13 @@ struct FluxFlowDenoiser : public Denoiser {
 
 typedef std::function<ggml_tensor*(ggml_tensor*, float, int)> denoise_cb_t;
 
+static inline void show_step(int i0, int im, int64_t* t0) {
+    int64_t t1 = ggml_time_us();
+    pretty_progress(i0 + 1, im, (t1 - (*t0)) / 1000000.f);
+//    LOG_INFO("step %d sampling completed taking %.2fs", i0, (t1 - t0) * 1.0f / 1000000);
+    *t0 = t1;
+}
+
 // k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
 static void sample_k_diffusion(sample_method_t method,
                                denoise_cb_t model,
@@ -476,6 +483,8 @@ static void sample_k_diffusion(sample_method_t method,
                                std::vector<float> sigmas,
                                std::shared_ptr<RNG> rng) {
     size_t steps = sigmas.size() - 1;
+    int64_t t0 = ggml_time_us();
+
     // sample_euler_ancestral
     switch (method) {
         case EULER_A: {
@@ -529,6 +538,7 @@ static void sample_k_diffusion(sample_method_t method,
                         }
                     }
                 }
+                show_step(i, steps, &t0);
             }
         } break;
         case EULER:  // Implemented without any sigma churn
@@ -562,6 +572,7 @@ static void sample_k_diffusion(sample_method_t method,
                         vec_x[j] = vec_x[j] + vec_d[j] * dt;
                     }
                 }
+                show_step(i, steps, &t0);
             }
         } break;
         case HEUN: {
@@ -612,6 +623,7 @@ static void sample_k_diffusion(sample_method_t method,
                         vec_x[j] = vec_x[j] + vec_d[j] * dt;
                     }
                 }
+                show_step(i, steps, &t0);
             }
         } break;
         case DPM2: {
@@ -663,6 +675,7 @@ static void sample_k_diffusion(sample_method_t method,
                         vec_x[j] = vec_x[j] + d2 * dt_2;
                     }
                 }
+                show_step(i, steps, &t0);
             }
 
         } break;
@@ -737,6 +750,7 @@ static void sample_k_diffusion(sample_method_t method,
                         }
                     }
                 }
+                show_step(i, steps, &t0);
             }
         } break;
         case DPMPP2M:  // DPM++ (2M) from Karras et al (2022)
@@ -776,6 +790,7 @@ static void sample_k_diffusion(sample_method_t method,
                 for (int j = 0; j < ggml_nelements(x); j++) {
                     vec_old_denoised[j] = vec_denoised[j];
                 }
+                show_step(i, steps, &t0);
             }
         } break;
         case DPMPP2Mv2:  // Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
@@ -819,6 +834,7 @@ static void sample_k_diffusion(sample_method_t method,
                 for (int j = 0; j < ggml_nelements(x); j++) {
                     vec_old_denoised[j] = vec_denoised[j];
                 }
+                show_step(i, steps, &t0);
             }
         } break;
         case IPNDM:  // iPNDM sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
@@ -894,6 +910,7 @@ static void sample_k_diffusion(sample_method_t method,
                 } else {
                     buffer_model.push_back(d_cur);
                 }
+                show_step(i, steps, &t0);
             }
         } break;
         case IPNDM_V:  // iPNDM_v sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
@@ -968,6 +985,7 @@ static void sample_k_diffusion(sample_method_t method,
 
                 // Prepare the next d tensor
                 d_cur = ggml_dup_tensor(work_ctx, x_next);
+                show_step(i, steps, &t0);
             }
         } break;
         case LCM:  // Latent Consistency Models
