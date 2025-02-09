@@ -1021,6 +1021,7 @@ static void sample_k_diffusion(sample_method_t method,
                         }
                     }
                 }
+                show_step(i, steps, &t0);
             }
         } break;
 
