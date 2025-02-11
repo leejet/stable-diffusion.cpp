@@ -847,6 +847,15 @@ public:
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
+        // TODO do not hardcode
+        float apg_eta           = .08f;
+        float apg_momentum      = -.5f;
+        float apg_norm_treshold = 15.0f;
+
+        std::vector<float> apg_momentum_buffer;
+        if (apg_momentum != 0)
+            apg_momentum_buffer.resize((size_t)ggml_nelements(denoised));
+
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
             if (step == 1) {
                 pretty_progress(0, (int)steps, 0);
@@ -951,6 +960,50 @@ public:
             float* vec_input     = (float*)input->data;
             float* positive_data = (float*)out_cond->data;
             int ne_elements      = (int)ggml_nelements(denoised);
+
+            float* deltas = vec_denoised;
+
+            // https://arxiv.org/pdf/2410.02416
+            float apg_scale_factor = 1.;
+            float diff_norm        = 0;
+            float cond_norm_sq     = 0;
+            float dot              = 0;
+            for (int i = 0; i < ne_elements; i++) {
+                float delta = positive_data[i] - negative_data[i];
+                if (apg_momentum != 0) {
+                    delta += apg_momentum * apg_momentum_buffer[i];
+                    apg_momentum_buffer[i] = delta;
+                }
+                if (apg_norm_treshold > 0) {
+                    diff_norm += delta * delta;
+                }
+                if (apg_eta != 1.0f) {
+                    cond_norm_sq += positive_data[i] * positive_data[i];
+                    dot += positive_data[i] * delta;
+                }
+                deltas[i] = delta;
+            }
+            if (apg_norm_treshold > 0) {
+                diff_norm        = std::sqrtf(diff_norm);
+                apg_scale_factor = std::min(1.0f, apg_norm_treshold / diff_norm);
+            }
+            if (apg_eta != 1.0f) {
+                dot *= apg_scale_factor;
+                // pre-normalize (avoids one square root and ne_elements extra divs)
+                dot /= cond_norm_sq;
+            }
+
+            for (int i = 0; i < ne_elements; i++) {
+                deltas[i] *= apg_scale_factor;
+                if (apg_eta != 1.0f) {
+                    float apg_parallel   = dot * positive_data[i];
+                    float apg_orthogonal = deltas[i] - apg_parallel;
+
+                    // tweak deltas
+                    deltas[i] = apg_orthogonal + apg_eta * apg_parallel;
+                }
+            }
+
             for (int i = 0; i < ne_elements; i++) {
                 float latent_result = positive_data[i];
                 if (has_unconditioned) {
@@ -960,7 +1013,9 @@ public:
                         int64_t i3  = i / out_cond->ne[0] * out_cond->ne[1] * out_cond->ne[2];
                         float scale = min_cfg + (cfg_scale - min_cfg) * (i3 * 1.0f / ne3);
                     } else {
-                        latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                        float delta = deltas[i];
+
+                        latent_result = positive_data[i] + (cfg_scale - 1) * delta;
                     }
                 }
                 if (is_skiplayer_step) {
@@ -1004,7 +1059,8 @@ public:
     }
 
     // ldm.models.diffusion.ddpm.LatentDiffusion.get_first_stage_encoding
-    ggml_tensor* get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* moments) {
+    ggml_tensor*
+    get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* moments) {
         // ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample
         ggml_tensor* latent       = ggml_new_tensor_4d(work_ctx, moments->type, moments->ne[0], moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
         struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, latent);
