@@ -102,9 +102,13 @@ struct SDParams {
     int upscale_repeats           = 1;
 
     std::vector<int> skip_layers = {7, 8, 9};
-    float slg_scale              = 0.f;
+    float slg_scale              = 0.0f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+
+    float apg_eta            = 1.0f;
+    float apg_momentum       = 0.0f;
+    float apg_norm_threshold = 0.0f;
 
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
@@ -204,6 +208,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
     printf("  --img-cfg-scale SCALE              image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)\n");
     printf("  --guidance SCALE                   distilled guidance scale for models with guidance input (default: 3.5)\n");
+    printf("  --apg-eta VALUE                    parallel projected guidance scale for APG (default: 1.0, recommended: between 0 and 1)\n");
+    printf("  --apg-momentum VALUE               CFG update direction momentum for APG (default: 0, recommended: around -0.5)\n");
+    printf("  --apg-nt, --apg-rescale VALUE      CFG update direction norm threshold for APG (default: 0 = disabled, recommended: 4-15)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
     printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
@@ -660,6 +667,15 @@ std::string get_image_params(SDParams params, int64_t seed) {
     }
     parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
+    if (params.apg_eta != 1) {
+        parameter_string += "APG eta: " + std::to_string(params.apg_eta) + ", ";
+    }
+    if (params.apg_momentum != 0) {
+        parameter_string += "CFG momentum: " + std::to_string(params.apg_momentum) + ", ";
+    }
+    if (params.apg_norm_threshold != 0) {
+        parameter_string += "CFG normalization threshold: " + std::to_string(params.apg_norm_threshold) + ", ";
+    }
     if (params.slg_scale != 0 && params.skip_layers.size() != 0) {
         parameter_string += "SLG scale: " + std::to_string(params.cfg_scale) + ", ";
         parameter_string += "Skip layers: [";
@@ -967,7 +983,7 @@ int main(int argc, const char* argv[]) {
             params.input_id_images_path.c_str(),
         };
 
-        results              = generate_image(sd_ctx, &img_gen_params);
+        results              = generate_image(sd_ctx, &img_gen_params, {params.apg_eta, params.apg_momentum, params.apg_norm_threshold});
         expected_num_results = params.batch_count;
     } else if (params.mode == VID_GEN) {
         sd_vid_gen_params_t vid_gen_params = {

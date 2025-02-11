@@ -848,6 +848,7 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
+                        sd_apg_params_t apg_params            = {1, 0, 0},
                         ggml_tensor* denoise_mask             = nullptr) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
@@ -908,6 +909,10 @@ public:
             out_img_cond = ggml_dup_tensor(work_ctx, x);
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
+
+        std::vector<float> apg_momentum_buffer;
+        if (apg_params.momentum != 0)
+            apg_momentum_buffer.resize((size_t)ggml_nelements(denoised));
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
             if (step == 1) {
@@ -1034,6 +1039,56 @@ public:
             float* vec_input     = (float*)input->data;
             float* positive_data = (float*)out_cond->data;
             int ne_elements      = (int)ggml_nelements(denoised);
+
+            float* deltas = vec_denoised;
+
+            // https://arxiv.org/pdf/2410.02416
+            float apg_scale_factor = 1.;
+            float diff_norm        = 0;
+            float cond_norm_sq     = 0;
+            float dot              = 0;
+            if (has_unconditioned || has_img_cond) {
+                for (int i = 0; i < ne_elements; i++) {
+                    float delta;
+                    if (has_img_cond) {
+                        if (cfg_scale == 1) {
+                            // Weird guidance (important: use img_cfg_scale instead of cfg_scale in the final formula)
+                            delta = img_cond_data[i] - negative_data[i];
+                        } else if (has_unconditioned) {
+                            // 2-conditioning CFG (img_cfg_scale != cfg_scale != 1)
+                            delta = positive_data[i] + (negative_data[i] * (1 - img_cfg_scale) + img_cond_data[i] * (img_cfg_scale - cfg_scale)) / (cfg_scale - 1);
+                        } else {
+                            // pure img CFG (img_cfg_scale == 1, cfg_scale !=1)
+                            delta = positive_data[i] - img_cond_data[i];
+                        }
+                    } else {
+                        // classic CFG (img_cfg_scale == cfg_scale != 1)
+                        delta = positive_data[i] - negative_data[i];
+                    }
+                    deltas[i] = delta;
+                }
+                if (apg_params.norm_treshold > 0) {
+                    diff_norm        = sqrtf(diff_norm);
+                    apg_scale_factor = std::min(1.0f, apg_params.norm_treshold / diff_norm);
+                }
+                if (apg_params.eta != 1.0f) {
+                    dot *= apg_scale_factor;
+                    // pre-normalize (avoids one square root and ne_elements extra divs)
+                    dot /= cond_norm_sq;
+                }
+
+                for (int i = 0; i < ne_elements; i++) {
+                    deltas[i] *= apg_scale_factor;
+                    if (apg_params.eta != 1.0f) {
+                        float apg_parallel   = dot * positive_data[i];
+                        float apg_orthogonal = deltas[i] - apg_parallel;
+
+                        // tweak deltas
+                        deltas[i] = apg_orthogonal + apg_params.eta * apg_parallel;
+                    }
+                }
+            }
+
             for (int i = 0; i < ne_elements; i++) {
                 float latent_result = positive_data[i];
                 if (has_unconditioned) {
@@ -1043,12 +1098,12 @@ public:
                         int64_t i3  = i / out_cond->ne[0] * out_cond->ne[1] * out_cond->ne[2];
                         float scale = min_cfg + (cfg_scale - min_cfg) * (i3 * 1.0f / ne3);
                     } else {
-                        if (has_img_cond) {
-                            // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
-                            latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
-                        } else {
-                            // img_cfg_scale == cfg_scale
-                            latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                        float delta = deltas[i];
+
+                        if(cfg_scale != 1) {
+                            latent_result = positive_data[i] + (cfg_scale - 1) * delta;
+                        } else if (has_img_cond) {
+                            latent_result = positive_data[i] + (img_cfg_scale - 1) * delta;
                         }
                     }
                 } else if (has_img_cond) {
@@ -1096,7 +1151,8 @@ public:
     }
 
     // ldm.models.diffusion.ddpm.LatentDiffusion.get_first_stage_encoding
-    ggml_tensor* get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* moments) {
+    ggml_tensor*
+    get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* moments) {
         // ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample
         ggml_tensor* latent       = ggml_new_tensor_4d(work_ctx, moments->type, moments->ne[0], moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
         struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, latent);
@@ -1529,6 +1585,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     std::string input_id_images_path,
                                     std::vector<ggml_tensor*> ref_latents,
                                     ggml_tensor* concat_latent = NULL,
+                                    sd_apg_params_t apg_params = {},
                                     ggml_tensor* denoise_mask  = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
@@ -1798,6 +1855,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
+                                                     apg_params,
                                                      denoise_mask);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
@@ -1872,7 +1930,7 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
     return init_latent;
 }
 
-sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
+sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params, sd_apg_params_t apg_params) {
     int width  = sd_img_gen_params->width;
     int height = sd_img_gen_params->height;
     LOG_DEBUG("generate_image %dx%d", width, height);
@@ -2072,6 +2130,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->input_id_images_path,
                                                         ref_latents,
                                                         concat_latent,
+                                                        apg_params,
                                                         denoise_mask);
 
     size_t t2 = ggml_time_ms();
