@@ -126,9 +126,13 @@ struct SDParams {
     int upscale_repeats           = 1;
 
     std::vector<int> skip_layers = {7, 8, 9};
-    float slg_scale              = 0.f;
+    float slg_scale              = 0.0f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+
+    float apg_eta           = 1.0f;
+    float apg_momentum      = 0.0f;
+    float apg_norm_treshold = 0.0f;
 };
 
 void print_params(SDParams params) {
@@ -213,6 +217,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
     printf("  --guidance SCALE                   guidance scale for img2img (default: 3.5)\n");
+    printf("  --apg-eta VALUE                    parallel projected guidance scale for APG (default: 1.0, recommended: between 0 and 1)\n");
+    printf("  --apg-momentum VALUE               CFG update direction momentum for APG (default: 0, recommended: around -0.5)\n");
+    printf("  --apg-nt, --apg-rescale VALUE      CFG update direction norm threshold for APG (default: 0 = disabled, recommended: 4-15)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
     printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
@@ -629,6 +636,24 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "--apg-eta") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.apg_eta = std::stof(argv[i]);
+        } else if (arg == "--apg-momentum") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.apg_momentum = std::stof(argv[i]);
+        } else if (arg == "--apg-nt" || arg == "--apg-rescale") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.apg_norm_treshold = std::stof(argv[i]);
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -968,7 +993,9 @@ int main(int argc, const char* argv[]) {
                                           params.slg_scale,
                                           params.skip_layer_start,
                                           params.skip_layer_end},
-                          sd_apg_params_t{1, 0, 0});
+                          sd_apg_params_t{params.apg_eta,
+                                          params.apg_momentum,
+                                          params.apg_norm_treshold});
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -1038,7 +1065,9 @@ int main(int argc, const char* argv[]) {
                                               params.slg_scale,
                                               params.skip_layer_start,
                                               params.skip_layer_end},
-                              sd_apg_params_t{1, 0, 0});
+                              sd_apg_params_t{params.apg_eta,
+                                              params.apg_momentum,
+                                              params.apg_norm_treshold});
         }
     }
 
