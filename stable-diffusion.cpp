@@ -802,7 +802,7 @@ public:
                         SDCondition id_cond,
                         sd_slg_params_t slg_params = {NULL, 0, 0, 0, 0},
                         sd_apg_params_t apg_params = {1, 0, 0},
-                        ggml_tensor* noise_mask  = nullptr) {
+                        ggml_tensor* noise_mask    = nullptr) {
         std::vector<int> skip_layers(slg_params.skip_layers, slg_params.skip_layers + slg_params.skip_layers_count);
 
         LOG_DEBUG("Sample");
@@ -963,39 +963,41 @@ public:
             float diff_norm        = 0;
             float cond_norm_sq     = 0;
             float dot              = 0;
-            for (int i = 0; i < ne_elements; i++) {
-                float delta = positive_data[i] - negative_data[i];
-                if (apg_params.momentum != 0) {
-                    delta += apg_params.momentum * apg_momentum_buffer[i];
-                    apg_momentum_buffer[i] = delta;
+            if (has_unconditioned) {
+                for (int i = 0; i < ne_elements; i++) {
+                    float delta = positive_data[i] - negative_data[i];
+                    if (apg_params.momentum != 0) {
+                        delta += apg_params.momentum * apg_momentum_buffer[i];
+                        apg_momentum_buffer[i] = delta;
+                    }
+                    if (apg_params.norm_treshold > 0) {
+                        diff_norm += delta * delta;
+                    }
+                    if (apg_params.eta != 1.0f) {
+                        cond_norm_sq += positive_data[i] * positive_data[i];
+                        dot += positive_data[i] * delta;
+                    }
+                    deltas[i] = delta;
                 }
                 if (apg_params.norm_treshold > 0) {
-                    diff_norm += delta * delta;
+                    diff_norm        = std::sqrtf(diff_norm);
+                    apg_scale_factor = std::min(1.0f, apg_params.norm_treshold / diff_norm);
                 }
                 if (apg_params.eta != 1.0f) {
-                    cond_norm_sq += positive_data[i] * positive_data[i];
-                    dot += positive_data[i] * delta;
+                    dot *= apg_scale_factor;
+                    // pre-normalize (avoids one square root and ne_elements extra divs)
+                    dot /= cond_norm_sq;
                 }
-                deltas[i] = delta;
-            }
-            if (apg_params.norm_treshold > 0) {
-                diff_norm        = std::sqrtf(diff_norm);
-                apg_scale_factor = std::min(1.0f, apg_params.norm_treshold / diff_norm);
-            }
-            if (apg_params.eta != 1.0f) {
-                dot *= apg_scale_factor;
-                // pre-normalize (avoids one square root and ne_elements extra divs)
-                dot /= cond_norm_sq;
-            }
 
-            for (int i = 0; i < ne_elements; i++) {
-                deltas[i] *= apg_scale_factor;
-                if (apg_params.eta != 1.0f) {
-                    float apg_parallel   = dot * positive_data[i];
-                    float apg_orthogonal = deltas[i] - apg_parallel;
+                for (int i = 0; i < ne_elements; i++) {
+                    deltas[i] *= apg_scale_factor;
+                    if (apg_params.eta != 1.0f) {
+                        float apg_parallel   = dot * positive_data[i];
+                        float apg_orthogonal = deltas[i] - apg_parallel;
 
-                    // tweak deltas
-                    deltas[i] = apg_orthogonal + apg_params.eta * apg_parallel;
+                        // tweak deltas
+                        deltas[i] = apg_orthogonal + apg_params.eta * apg_parallel;
+                    }
                 }
             }
 
