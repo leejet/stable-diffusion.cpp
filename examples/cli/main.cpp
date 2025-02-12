@@ -130,9 +130,9 @@ struct SDParams {
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
 
-    float apg_eta           = 1.0f;
-    float apg_momentum      = 0.0f;
-    float apg_norm_treshold = 0.0f;
+    float apg_eta            = 1.0f;
+    float apg_momentum       = 0.0f;
+    float apg_norm_threshold = 0.0f;
 };
 
 void print_params(SDParams params) {
@@ -653,7 +653,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.apg_norm_treshold = std::stof(argv[i]);
+            params.apg_norm_threshold = std::stof(argv[i]);
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -744,6 +744,15 @@ std::string get_image_params(SDParams params, int64_t seed) {
     }
     parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
+    if (params.apg_eta != 1) {
+        parameter_string += "APG eta: " + std::to_string(params.apg_eta) + ", ";
+    }
+    if (params.apg_momentum != 0) {
+        parameter_string += "CFG momentum: " + std::to_string(params.apg_momentum) + ", ";
+    }
+    if (params.apg_norm_threshold != 0) {
+        parameter_string += "CFG normalization threshold: " + std::to_string(params.apg_norm_threshold) + ", ";
+    }
     if (params.slg_scale != 0 && params.skip_layers.size() != 0) {
         parameter_string += "SLG scale: " + std::to_string(params.cfg_scale) + ", ";
         parameter_string += "Skip layers: [";
@@ -995,7 +1004,7 @@ int main(int argc, const char* argv[]) {
                                           params.skip_layer_end},
                           sd_apg_params_t{params.apg_eta,
                                           params.apg_momentum,
-                                          params.apg_norm_treshold});
+                                          params.apg_norm_threshold});
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -1067,7 +1076,7 @@ int main(int argc, const char* argv[]) {
                                               params.skip_layer_end},
                               sd_apg_params_t{params.apg_eta,
                                               params.apg_momentum,
-                                              params.apg_norm_treshold});
+                                              params.apg_norm_threshold});
         }
     }
 
