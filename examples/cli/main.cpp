@@ -109,6 +109,7 @@ struct SDParams {
     float apg_eta            = 1.0f;
     float apg_momentum       = 0.0f;
     float apg_norm_threshold = 0.0f;
+    float apg_norm_smoothing = 0.0f;
 
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
@@ -211,6 +212,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --apg-eta VALUE                    parallel projected guidance scale for APG (default: 1.0, recommended: between 0 and 1)\n");
     printf("  --apg-momentum VALUE               CFG update direction momentum for APG (default: 0, recommended: around -0.5)\n");
     printf("  --apg-nt, --apg-rescale VALUE      CFG update direction norm threshold for APG (default: 0 = disabled, recommended: 4-15)\n");
+    printf("  --apg-nt-smoothing VALUE           EXPERIMENTAL! Norm threshold smoothing for APG (default: 0 = disabled)\n");
+    printf("                                     (replaces saturation with a smooth approximation)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
     printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
@@ -675,6 +678,9 @@ std::string get_image_params(SDParams params, int64_t seed) {
     }
     if (params.apg_norm_threshold != 0) {
         parameter_string += "CFG normalization threshold: " + std::to_string(params.apg_norm_threshold) + ", ";
+        if (params.apg_norm_smoothing != 0) {
+            parameter_string += "CFG normalization threshold: " + std::to_string(params.apg_norm_smoothing) + ", ";
+        }
     }
     if (params.slg_scale != 0 && params.skip_layers.size() != 0) {
         parameter_string += "SLG scale: " + std::to_string(params.cfg_scale) + ", ";
