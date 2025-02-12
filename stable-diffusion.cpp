@@ -980,7 +980,7 @@ public:
                     deltas[i] = delta;
                 }
                 if (apg_params.norm_treshold > 0) {
-                    diff_norm        = std::sqrtf(diff_norm);
+                    diff_norm        = sqrtf(diff_norm);
                     apg_scale_factor = std::min(1.0f, apg_params.norm_treshold / diff_norm);
                 }
                 if (apg_params.eta != 1.0f) {
