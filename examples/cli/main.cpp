@@ -963,11 +963,12 @@ int main(int argc, const char* argv[]) {
                           params.style_ratio,
                           params.normalize_input,
                           params.input_id_images_path.c_str(),
-                          params.skip_layers.data(),
-                          params.skip_layers.size(),
-                          params.slg_scale,
-                          params.skip_layer_start,
-                          params.skip_layer_end);
+                          sd_slg_params_t{params.skip_layers.data(),
+                                          params.skip_layers.size(),
+                                          params.slg_scale,
+                                          params.skip_layer_start,
+                                          params.skip_layer_end},
+                          sd_apg_params_t{1, 0, 0});
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -1032,11 +1033,12 @@ int main(int argc, const char* argv[]) {
                               params.style_ratio,
                               params.normalize_input,
                               params.input_id_images_path.c_str(),
-                              params.skip_layers.data(),
-                              params.skip_layers.size(),
-                              params.slg_scale,
-                              params.skip_layer_start,
-                              params.skip_layer_end);
+                              sd_slg_params_t{params.skip_layers.data(),
+                                              params.skip_layers.size(),
+                                              params.slg_scale,
+                                              params.skip_layer_start,
+                                              params.skip_layer_end},
+                              sd_apg_params_t{1, 0, 0});
         }
     }
 
@@ -1075,11 +1077,11 @@ int main(int argc, const char* argv[]) {
 
     std::string dummy_name, ext, lc_ext;
     bool is_jpg;
-    size_t last = params.output_path.find_last_of(".");
+    size_t last      = params.output_path.find_last_of(".");
     size_t last_path = std::min(params.output_path.find_last_of("/"),
                                 params.output_path.find_last_of("\\"));
-    if (last != std::string::npos // filename has extension
-    && (last_path == std::string::npos || last > last_path)) {
+    if (last != std::string::npos  // filename has extension
+        && (last_path == std::string::npos || last > last_path)) {
         dummy_name = params.output_path.substr(0, last);
         ext = lc_ext = params.output_path.substr(last);
         std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
@@ -1087,7 +1089,7 @@ int main(int argc, const char* argv[]) {
     } else {
         dummy_name = params.output_path;
         ext = lc_ext = "";
-        is_jpg = false;
+        is_jpg       = false;
     }
     // appending ".png" to absent or unknown extension
     if (!is_jpg && lc_ext != ".png") {
@@ -1099,7 +1101,7 @@ int main(int argc, const char* argv[]) {
             continue;
         }
         std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
-        if(is_jpg) {
+        if (is_jpg) {
             stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                            results[i].data, 90, get_image_params(params, params.seed + i).c_str());
             printf("save result JPEG image to '%s'\n", final_image_path.c_str());
