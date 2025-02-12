@@ -128,6 +128,7 @@ typedef struct {
     float eta;
     float momentum;
     float norm_treshold;
+    float norm_treshold_smoothing;
 } sd_apg_params_t;
 
 typedef struct {

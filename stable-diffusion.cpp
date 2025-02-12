@@ -801,7 +801,7 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         sd_slg_params_t slg_params = {NULL, 0, 0, 0, 0},
-                        sd_apg_params_t apg_params = {1, 0, 0},
+                        sd_apg_params_t apg_params = {1, 0, 0, 0},
                         ggml_tensor* noise_mask    = nullptr) {
         std::vector<int> skip_layers(slg_params.skip_layers, slg_params.skip_layers + slg_params.skip_layers_count);
 
@@ -980,8 +980,14 @@ public:
                     deltas[i] = delta;
                 }
                 if (apg_params.norm_treshold > 0) {
-                    diff_norm        = sqrtf(diff_norm);
-                    apg_scale_factor = std::min(1.0f, apg_params.norm_treshold / diff_norm);
+                    diff_norm = sqrtf(diff_norm);
+                    if (apg_params.norm_treshold_smoothing <= 0) {
+                        apg_scale_factor = std::min(1.0f, apg_params.norm_treshold / diff_norm);
+                    } else {
+                        // Experimental: smooth saturate
+                        float x          = apg_params.norm_treshold / diff_norm;
+                        apg_scale_factor = x / std::pow(1 + std::pow(x, 1.0 / apg_params.norm_treshold_smoothing), apg_params.norm_treshold_smoothing);
+                    }
                 }
                 if (apg_params.eta != 1.0f) {
                     dot *= apg_scale_factor;
