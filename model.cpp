@@ -15,6 +15,7 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "ggml.h"
+#include "gguf.h"
 
 #include "stable-diffusion.h"
 
