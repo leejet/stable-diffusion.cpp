@@ -382,7 +382,13 @@ void pretty_progress(int step, int steps, float time, float left) {
     printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it" : "\r%s %i/%i - %.2fit/s\033[K",
            progress.c_str(), step, steps,
            time > 1.0f || time == 0 ? time : (1.0f / time));
-    printf(", %.0fm %.2fs left  ", left / 60, fmod(left, 60));
+    if (left >= 60.0f) {
+        printf(", %.0fm %.2fs left         \b\b\b\b\b\b\b\b\b", floor(left / 60), fmod(left, 60));
+    } else if (left > 0) {
+        printf(", %.2fs left               \b\b\b\b\b\b\b\b\b\b\b\b\b\b\b", left);
+    } else {
+        printf("                           \b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b", left);
+    }
     fflush(stdout);  // for linux
     if (step == steps) {
         printf("\n");
