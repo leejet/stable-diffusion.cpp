@@ -387,7 +387,7 @@ void pretty_progress(int step, int steps, float time, float left) {
     } else if (left > 0) {
         printf(", %.2fs left               \b\b\b\b\b\b\b\b\b\b\b\b\b\b\b", left);
     } else {
-        printf("                           \b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b", left);
+        printf("                           \b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b");
     }
     fflush(stdout);  // for linux
     if (step == steps) {
