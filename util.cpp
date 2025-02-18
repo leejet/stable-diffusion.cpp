@@ -383,7 +383,11 @@ void pretty_progress(int step, int steps, float time, float left) {
            progress.c_str(), step, steps,
            time > 1.0f || time == 0 ? time : (1.0f / time));
     if (left >= 60.0f) {
-        printf(", %.0fm %.2fs left         \b\b\b\b\b\b\b\b\b", floor(left / 60), fmod(left, 60));
+        /* same number of spaces and backspaces */
+        printf(", %.0fm %.2fs left         \b\b\b\b\b\b\b\b\b",
+               /* min appears faster than mul+div for me, 19.31s vs 19.34s average */
+               floor(left / 60.0f), std::min(59.99f, fmod(left, 60.0f)));
+               //floor(left / 60.0f), floor(fmod(left, 60.0f) * 100.0f) / 100.0f);
     } else if (left > 0) {
         printf(", %.2fs left               \b\b\b\b\b\b\b\b\b\b\b\b\b\b\b", left);
     } else {
