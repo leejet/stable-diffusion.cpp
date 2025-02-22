@@ -96,6 +96,7 @@ endif()
 if(SD_SYCL)
     message("-- Use SYCL as backend stable-diffusion")
     set(GGML_SYCL ON)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing -fsycl")
     add_definitions(-DSD_USE_SYCL)
     # disable fast-math on host, see:
     # https://www.intel.com/content/www/us/en/docs/cpp-compiler/developer-guide-reference/2021-10/fp-model-fp.html
