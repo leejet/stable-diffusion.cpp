@@ -383,8 +383,10 @@ __STATIC_INLINE__ void sd_apply_mask(struct ggml_tensor* image_data,
     for (int ix = 0; ix < width; ix++) {
         for (int iy = 0; iy < height; iy++) {
             float m = ggml_tensor_get_f32(mask, ix, iy);
+            m       = round(m);  // inpaint models need binary masks
+            ggml_tensor_set_f32(mask, m, ix, iy);
             for (int k = 0; k < channels; k++) {
-                float value = ((float)(m < 254.5 / 255)) * (ggml_tensor_get_f32(image_data, ix, iy, k) - .5) + .5;
+                float value = (1 - m) * (ggml_tensor_get_f32(image_data, ix, iy, k) - .5) + .5;
                 ggml_tensor_set_f32(output, value, ix, iy, k);
             }
         }
