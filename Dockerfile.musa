@@ -1,4 +1,4 @@
-ARG MUSA_VERSION=rc3.1.0
+ARG MUSA_VERSION=rc3.1.1
 
 FROM mthreads/musa:${MUSA_VERSION}-devel-ubuntu22.04 as build
 
