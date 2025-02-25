@@ -1224,6 +1224,7 @@ static void sample_k_diffusion(sample_method_t method,
                 // needs to be prescaled again, since k-diffusion's
                 // model() differes from the bare U-net F_theta by the
                 // factor c_in.
+                show_step(i, steps, &t0);
             }
         } break;
         case TCD:  // Strategic Stochastic Sampling (Algorithm 4) in
@@ -1398,6 +1399,7 @@ static void sample_k_diffusion(sample_method_t method,
                             vec_noise[j];
                     }
                 }
+                show_step(i, steps, &t0);
             }
         } break;
 
