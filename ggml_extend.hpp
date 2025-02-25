@@ -52,6 +52,71 @@
 #define __STATIC_INLINE__ static inline
 #endif
 
+// n-mode trensor-matrix product
+// example: 2-mode product
+// A: [ne03, k, ne01, ne00]
+// B: k rows, m columns => [k, m]
+// result is [ne03, m, ne01, ne00]
+__STATIC_INLINE__ struct ggml_tensor* ggml_mul_n_mode(struct ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b, int mode = 0) {
+    // reshape A
+    // swap 0th and nth axis
+    a       = ggml_cont(ctx, ggml_permute(ctx, a, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0));
+    int ne1 = a->ne[1];
+    int ne2 = a->ne[2];
+    int ne3 = a->ne[3];
+    // make 2D
+    a = ggml_cont(ctx, ggml_reshape_2d(ctx, a, a->ne[0], (ne3 * ne2 * ne1)));
+
+    struct ggml_tensor* result = ggml_cont(ctx, ggml_transpose(ctx, ggml_mul_mat(ctx, a, b)));
+
+    // reshape output (same shape as a after permutation except first dim)
+    result = ggml_reshape_4d(ctx, result, result->ne[0], ne1, ne2, ne3);
+    // swap back 0th and nth axis
+    result = ggml_permute(ctx, result, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0);
+    return result;
+}
+
+__STATIC_INLINE__ struct ggml_tensor* ggml_merge_lora(ggml_context* ctx, struct ggml_tensor* lora_down, struct ggml_tensor* lora_up, struct ggml_tensor* lora_mid = NULL) {
+    struct ggml_tensor* updown;
+    // flat lora tensors to multiply it
+    int64_t lora_up_rows  = lora_up->ne[ggml_n_dims(lora_up) - 1];
+    lora_up               = ggml_reshape_2d(ctx, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
+    auto lora_down_n_dims = ggml_n_dims(lora_down);
+    // assume n_dims should always be a multiple of 2 (otherwise rank 1 doesn't work)
+    lora_down_n_dims       = (lora_down_n_dims + lora_down_n_dims % 2);
+    int64_t lora_down_rows = lora_down->ne[lora_down_n_dims - 1];
+    lora_down              = ggml_reshape_2d(ctx, lora_down, ggml_nelements(lora_down) / lora_down_rows, lora_down_rows);
+
+    // ggml_mul_mat requires tensor b transposed
+    lora_down = ggml_cont(ctx, ggml_transpose(ctx, lora_down));
+    if (lora_mid == NULL) {
+        updown = ggml_mul_mat(ctx, lora_up, lora_down);
+        updown = ggml_cont(ctx, ggml_transpose(ctx, updown));
+    } else {
+        // undoing tucker decomposition for conv layers.
+        // lora_mid  has shape (3,    3,   Rank, Rank)
+        // lora_down has shape (Rank, In,  1,    1)
+        // lora_up   has shape (Rank, Out, 1,    1)
+        // conv layer shape is (3,    3,   Out,  In)
+        updown = ggml_mul_n_mode(ctx, ggml_mul_n_mode(ctx, lora_mid, lora_down, 3), lora_up, 2);
+        updown = ggml_cont(ctx, updown);
+    }
+    return updown;
+}
+
+// Kronecker product
+// [ne03,ne02,ne01,ne00] x [ne13,ne12,ne11,ne10] => [ne03*ne13,ne02*ne12,ne01*ne11,ne00*ne10]
+__STATIC_INLINE__ struct ggml_tensor* ggml_kronecker(ggml_context* ctx, struct ggml_tensor* a, struct ggml_tensor* b) {
+    return ggml_mul(ctx,
+                    ggml_upscale_ext(ctx,
+                                     a,
+                                     a->ne[0] * b->ne[0],
+                                     a->ne[1] * b->ne[1],
+                                     a->ne[2] * b->ne[2],
+                                     a->ne[3] * b->ne[3]),
+                    b);
+}
+
 __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void* user_data) {
     (void)level;
     (void)user_data;
@@ -318,8 +383,10 @@ __STATIC_INLINE__ void sd_apply_mask(struct ggml_tensor* image_data,
     for (int ix = 0; ix < width; ix++) {
         for (int iy = 0; iy < height; iy++) {
             float m = ggml_tensor_get_f32(mask, ix, iy);
+            m       = round(m);  // inpaint models need binary masks
+            ggml_tensor_set_f32(mask, m, ix, iy);
             for (int k = 0; k < channels; k++) {
-                float value = ((float)(m < 254.5/255)) * (ggml_tensor_get_f32(image_data, ix, iy, k) - .5) + .5;
+                float value = (1 - m) * (ggml_tensor_get_f32(image_data, ix, iy, k) - .5) + .5;
                 ggml_tensor_set_f32(output, value, ix, iy, k);
             }
         }
@@ -987,8 +1054,8 @@ __STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
 }
 
 /* SDXL with LoRA requires more space */
-#define MAX_PARAMS_TENSOR_NUM 15360
-#define MAX_GRAPH_SIZE 15360
+#define MAX_PARAMS_TENSOR_NUM 32768
+#define MAX_GRAPH_SIZE 32768
 
 struct GGMLRunner {
 protected:
