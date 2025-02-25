@@ -326,7 +326,7 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 
 - [Jellybox](https://jellybox.com)
 - [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
-- [Stable Diffusion CLI-GUI] (https://github.com/piallai/stable-diffusion.cpp)
+- [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
 
 ## Contributors
 

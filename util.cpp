@@ -113,18 +113,31 @@ std::vector<std::string> get_files_from_dir(const std::string& dir) {
 
     // Find the first file in the directory
     hFind = FindFirstFile(directoryPath, &findFileData);
-
+    bool isAbsolutePath = false;
     // Check if the directory was found
     if (hFind == INVALID_HANDLE_VALUE) {
-        printf("Unable to find directory.\n");
-        return files;
+        printf("Unable to find directory. Try with original path \n");
+
+        char directoryPathAbsolute[MAX_PATH];
+        sprintf(directoryPathAbsolute, "%s*", dir.c_str());
+
+        hFind = FindFirstFile(directoryPathAbsolute, &findFileData);
+        isAbsolutePath = true;
+        if (hFind == INVALID_HANDLE_VALUE) {
+            printf("Absolute path was also wrong.\n");
+            return files;
+        }
     }
 
     // Loop through all files in the directory
     do {
         // Check if the found file is a regular file (not a directory)
         if (!(findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            files.push_back(std::string(currentDirectory) + "\\" + dir + "\\" + std::string(findFileData.cFileName));
+            if (isAbsolutePath) {
+                files.push_back(dir + "\\" + std::string(findFileData.cFileName));
+            } else {
+                files.push_back(std::string(currentDirectory) + "\\" + dir + "\\" + std::string(findFileData.cFileName));
+            }
         }
     } while (FindNextFile(hFind, &findFileData) != 0);
 
