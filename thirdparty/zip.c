@@ -8,10 +8,16 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 #define __STDC_WANT_LIB_EXT1__ 1
+#if !defined(_WIN32)
+#   define _LARGEFILE64_SOURCE 1
+#   define _POSIX_C_SOURCE 200809L
+#   define _XOPEN_SOURCE
+#endif
 
 #include <errno.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <stdio.h>
 
 #if defined(_WIN32) || defined(__WIN32__) || defined(_MSC_VER) ||              \
     defined(__MINGW32__)
