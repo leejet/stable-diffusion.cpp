@@ -931,18 +931,6 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    if (params.mask_path != "") {
-        int c             = 0;
-        mask_image_buffer = stbi_load(params.mask_path.c_str(), &params.width, &params.height, &c, 1);
-    } else {
-        std::vector<uint8_t> arr(params.width * params.height, 255);
-        mask_image_buffer = arr.data();
-    }
-    sd_image_t mask_image = {(uint32_t)params.width,
-                             (uint32_t)params.height,
-                             1,
-                             mask_image_buffer};
-
     sd_image_t* results;
     if (params.mode == TXT2IMG) {
         results = txt2img(sd_ctx,
@@ -1011,6 +999,19 @@ int main(int argc, const char* argv[]) {
             free_sd_ctx(sd_ctx);
             return 0;
         } else {
+            if (params.mask_path != "") {
+                int c             = 0;
+                mask_image_buffer = stbi_load(params.mask_path.c_str(), &params.width, &params.height, &c, 1);
+            } else {
+                std::vector<uint8_t> arr(params.width * params.height, 255);
+                for (uint8_t dummy_arr : arr) if (dummy_arr) break;  // dummy cycle to avoid -O3 optimization
+                mask_image_buffer = arr.data();
+            }
+            sd_image_t mask_image = {(uint32_t)params.width,
+                                     (uint32_t)params.height,
+                                     1,
+                                     mask_image_buffer};
+            LOG_DEBUG("img2img: created mask with 0x%x fill", *mask_image.data);
             results = img2img(sd_ctx,
                               input_image,
                               mask_image,
