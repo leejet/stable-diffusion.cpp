@@ -22,6 +22,8 @@
 #define STB_IMAGE_RESIZE_STATIC
 #include "stb_image_resize.h"
 
+#include "util.h"
+
 const char* rng_type_to_str[] = {
     "std_default",
     "cuda",
@@ -825,7 +827,6 @@ int main(int argc, const char* argv[]) {
     bool vae_decode_only          = true;
     uint8_t* input_image_buffer   = NULL;
     uint8_t* control_image_buffer = NULL;
-    uint8_t* mask_image_buffer    = NULL;
 
     if (params.mode == IMG2IMG || params.mode == IMG2VID) {
         vae_decode_only = false;
@@ -999,15 +1000,18 @@ int main(int argc, const char* argv[]) {
             free_sd_ctx(sd_ctx);
             return 0;
         } else {
+            uint8_t* mask_image_buffer = NULL;
             if (params.mask_path != "") {
                 int c             = 0;
                 mask_image_buffer = stbi_load(params.mask_path.c_str(), &params.width, &params.height, &c, 1);
             } else {
                 std::vector<uint8_t> arr(params.width * params.height, 255);
-                for (uint8_t dummy_arr : arr) if (dummy_arr) break;  // dummy cycle to avoid -O3 optimization
+                // do not remove this LOG_DEBUG line, or -O3 may destroy arr[]
+                // before assigning to mask_image_buffer
+                LOG_DEBUG("img2img: created array with 0x%x fill", arr[0]);
                 mask_image_buffer = arr.data();
             }
-            sd_image_t mask_image = {(uint32_t)params.width,
+            const sd_image_t mask_image = {(uint32_t)params.width,
                                      (uint32_t)params.height,
                                      1,
                                      mask_image_buffer};
