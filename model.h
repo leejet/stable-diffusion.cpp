@@ -14,6 +14,7 @@
 #include "ggml.h"
 #include "json.hpp"
 #include "zip.h"
+#include "gguf.h"
 
 #define SD_MAX_DIMS 5
 
