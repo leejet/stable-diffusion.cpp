@@ -127,6 +127,21 @@ typedef struct {
     uint8_t* data;
 } sd_image_t;
 
+typedef struct {
+    float eta;
+    float momentum;
+    float norm_treshold;
+    float norm_treshold_smoothing;
+} sd_apg_params_t;
+
+typedef struct {
+    int* skip_layers;
+    size_t skip_layers_count;
+    float scale;
+    float skip_layer_start;
+    float skip_layer_end;
+} sd_slg_params_t;
+
 typedef struct sd_ctx_t sd_ctx_t;
 
 SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
@@ -172,11 +187,8 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            float style_strength,
                            bool normalize_input,
                            const char* input_id_images_path,
-                           int* skip_layers,
-                           size_t skip_layers_count,
-                           float slg_scale,
-                           float skip_layer_start,
-                           float skip_layer_end);
+                           sd_slg_params_t slg_params,
+                           sd_apg_params_t apg_params);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
@@ -199,11 +211,8 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            float style_strength,
                            bool normalize_input,
                            const char* input_id_images_path,
-                           int* skip_layers,
-                           size_t skip_layers_count,
-                           float slg_scale,
-                           float skip_layer_start,
-                           float skip_layer_end);
+                           sd_slg_params_t slg_params,
+                           sd_apg_params_t apg_params);
 
 SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,

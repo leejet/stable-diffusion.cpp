@@ -126,9 +126,14 @@ struct SDParams {
     int upscale_repeats           = 1;
 
     std::vector<int> skip_layers = {7, 8, 9};
-    float slg_scale              = 0.;
-    float skip_layer_start       = 0.01;
-    float skip_layer_end         = 0.2;
+    float slg_scale              = 0.0f;
+    float skip_layer_start       = 0.01f;
+    float skip_layer_end         = 0.2f;
+
+    float apg_eta            = 1.0f;
+    float apg_momentum       = 0.0f;
+    float apg_norm_threshold = 0.0f;
+    float apg_norm_smoothing = 0.0f;
 };
 
 void print_params(SDParams params) {
@@ -213,6 +218,11 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
     printf("  --guidance SCALE                   guidance scale for img2img (default: 3.5)\n");
+    printf("  --apg-eta VALUE                    parallel projected guidance scale for APG (default: 1.0, recommended: between 0 and 1)\n");
+    printf("  --apg-momentum VALUE               CFG update direction momentum for APG (default: 0, recommended: around -0.5)\n");
+    printf("  --apg-nt, --apg-rescale VALUE      CFG update direction norm threshold for APG (default: 0 = disabled, recommended: 4-15)\n");
+    printf("  --apg-nt-smoothing VALUE           EXPERIMENTAL! Norm threshold smoothing for APG (default: 0 = disabled)\n");
+    printf("                                     (replaces saturation with a smooth approximation)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
     printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
@@ -629,6 +639,30 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "--apg-eta") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.apg_eta = std::stof(argv[i]);
+        } else if (arg == "--apg-momentum") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.apg_momentum = std::stof(argv[i]);
+        } else if (arg == "--apg-nt" || arg == "--apg-rescale") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.apg_norm_threshold = std::stof(argv[i]);
+        } else if (arg == "--apg-nt-smoothing") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.apg_norm_smoothing = std::stof(argv[i]);
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -719,6 +753,18 @@ std::string get_image_params(SDParams params, int64_t seed) {
     }
     parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
     parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
+    if (params.apg_eta != 1) {
+        parameter_string += "APG eta: " + std::to_string(params.apg_eta) + ", ";
+    }
+    if (params.apg_momentum != 0) {
+        parameter_string += "CFG momentum: " + std::to_string(params.apg_momentum) + ", ";
+    }
+    if (params.apg_norm_threshold != 0) {
+        parameter_string += "CFG normalization threshold: " + std::to_string(params.apg_norm_threshold) + ", ";
+        if (params.apg_norm_smoothing != 0) {
+            parameter_string += "CFG normalization threshold: " + std::to_string(params.apg_norm_smoothing) + ", ";
+        }
+    }
     if (params.slg_scale != 0 && params.skip_layers.size() != 0) {
         parameter_string += "SLG scale: " + std::to_string(params.cfg_scale) + ", ";
         parameter_string += "Skip layers: [";
@@ -963,11 +1009,15 @@ int main(int argc, const char* argv[]) {
                           params.style_ratio,
                           params.normalize_input,
                           params.input_id_images_path.c_str(),
-                          params.skip_layers.data(),
-                          params.skip_layers.size(),
-                          params.slg_scale,
-                          params.skip_layer_start,
-                          params.skip_layer_end);
+                          sd_slg_params_t{params.skip_layers.data(),
+                                          params.skip_layers.size(),
+                                          params.slg_scale,
+                                          params.skip_layer_start,
+                                          params.skip_layer_end},
+                          sd_apg_params_t{params.apg_eta,
+                                          params.apg_momentum,
+                                          params.apg_norm_threshold,
+                                          params.apg_norm_smoothing});
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -1032,11 +1082,15 @@ int main(int argc, const char* argv[]) {
                               params.style_ratio,
                               params.normalize_input,
                               params.input_id_images_path.c_str(),
-                              params.skip_layers.data(),
-                              params.skip_layers.size(),
-                              params.slg_scale,
-                              params.skip_layer_start,
-                              params.skip_layer_end);
+                              sd_slg_params_t{params.skip_layers.data(),
+                                              params.skip_layers.size(),
+                                              params.slg_scale,
+                                              params.skip_layer_start,
+                                              params.skip_layer_end},
+                              sd_apg_params_t{params.apg_eta,
+                                              params.apg_momentum,
+                                              params.apg_norm_threshold,
+                                              params.apg_norm_smoothing});
         }
     }
 
@@ -1075,11 +1129,11 @@ int main(int argc, const char* argv[]) {
 
     std::string dummy_name, ext, lc_ext;
     bool is_jpg;
-    size_t last = params.output_path.find_last_of(".");
+    size_t last      = params.output_path.find_last_of(".");
     size_t last_path = std::min(params.output_path.find_last_of("/"),
                                 params.output_path.find_last_of("\\"));
-    if (last != std::string::npos // filename has extension
-    && (last_path == std::string::npos || last > last_path)) {
+    if (last != std::string::npos  // filename has extension
+        && (last_path == std::string::npos || last > last_path)) {
         dummy_name = params.output_path.substr(0, last);
         ext = lc_ext = params.output_path.substr(last);
         std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
@@ -1087,7 +1141,7 @@ int main(int argc, const char* argv[]) {
     } else {
         dummy_name = params.output_path;
         ext = lc_ext = "";
-        is_jpg = false;
+        is_jpg       = false;
     }
     // appending ".png" to absent or unknown extension
     if (!is_jpg && lc_ext != ".png") {
@@ -1099,7 +1153,7 @@ int main(int argc, const char* argv[]) {
             continue;
         }
         std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
-        if(is_jpg) {
+        if (is_jpg) {
             stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                            results[i].data, 90, get_image_params(params, params.seed + i).c_str());
             printf("save result JPEG image to '%s'\n", final_image_path.c_str());
