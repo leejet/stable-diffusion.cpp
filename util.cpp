@@ -247,6 +247,10 @@ int32_t get_num_physical_cores() {
 static sd_progress_cb_t sd_progress_cb = NULL;
 void* sd_progress_cb_data              = NULL;
 
+static sd_preview_cb_t sd_preview_cb = NULL;
+sd_preview_t sd_preview_mode         = SD_PREVIEW_NONE;
+int sd_preview_interval              = 1;
+
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
     return converter.from_bytes(utf8_str);
@@ -419,6 +423,29 @@ void sd_set_log_callback(sd_log_cb_t cb, void* data) {
 void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
+}
+void sd_set_preview_callback(sd_preview_cb_t cb, sd_preview_t mode = SD_PREVIEW_PROJ, int interval = 1) {
+    sd_preview_cb       = cb;
+    sd_preview_mode     = mode;
+    sd_preview_interval = interval;
+}
+
+sd_preview_cb_t sd_get_preview_callback() {
+    return sd_preview_cb;
+}
+
+sd_preview_t sd_get_preview_mode() {
+    return sd_preview_mode;
+}
+int sd_get_preview_interval() {
+    return sd_preview_interval;
+}
+
+sd_progress_cb_t sd_get_progress_callback() {
+    return sd_progress_cb;
+}
+void* sd_get_progress_callback_data() {
+    return sd_progress_cb_data;
 }
 const char* sd_get_system_info() {
     static char buffer[1024];

@@ -112,13 +112,13 @@ enum sd_log_level_t {
     SD_LOG_ERROR
 };
 
-typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
-typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
-
-SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
-SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
-SD_API int32_t get_num_physical_cores();
-SD_API const char* sd_get_system_info();
+enum sd_preview_t {
+    SD_PREVIEW_NONE,
+    SD_PREVIEW_PROJ,
+    SD_PREVIEW_TAE,
+    SD_PREVIEW_VAE,
+    N_PREVIEWS
+};
 
 typedef struct {
     uint32_t width;
@@ -126,6 +126,17 @@ typedef struct {
     uint32_t channel;
     uint8_t* data;
 } sd_image_t;
+
+typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
+typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
+typedef void (*sd_preview_cb_t)(int, sd_image_t);
+
+
+SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
+SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
+SD_API void sd_set_preview_callback(sd_preview_cb_t cb, sd_preview_t mode, int interval);
+SD_API int32_t get_num_physical_cores();
+SD_API const char* sd_get_system_info();
 
 typedef struct sd_ctx_t sd_ctx_t;
 
@@ -150,7 +161,8 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             bool keep_clip_on_cpu,
                             bool keep_control_net_cpu,
                             bool keep_vae_on_cpu,
-                            bool diffusion_flash_attn);
+                            bool diffusion_flash_attn,
+                            bool tae_preview_only);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
