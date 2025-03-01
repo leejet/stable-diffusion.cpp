@@ -931,12 +931,12 @@ int main(int argc, const char* argv[]) {
         }
     }
 
+    std::vector<uint8_t> default_mask_image_vec(params.width * params.height, 255);
     if (params.mask_path != "") {
         int c             = 0;
         mask_image_buffer = stbi_load(params.mask_path.c_str(), &params.width, &params.height, &c, 1);
     } else {
-        std::vector<uint8_t> arr(params.width * params.height, 255);
-        mask_image_buffer = arr.data();
+        mask_image_buffer = default_mask_image_vec.data();
     }
     sd_image_t mask_image = {(uint32_t)params.width,
                              (uint32_t)params.height,
