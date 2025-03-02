@@ -1806,7 +1806,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
 
     size_t t2 = ggml_time_ms();
 
-    LOG_INFO("img2img completed in %.2fs", (t1 - t0) * 1.0f / 1000);
+    LOG_INFO("img2img completed in %.2fs", (t2 - t0) * 1.0f / 1000);
 
     return result_images;
 }
