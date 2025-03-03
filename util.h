@@ -47,6 +47,9 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size);
 std::string path_join(const std::string& p1, const std::string& p2);
 std::vector<std::string> splitString(const std::string& str, char delimiter);
 void pretty_progress(int step, int steps, float time);
+#ifdef SD_SHOW_REMAINING_TIME
+void pretty_progress(int step, int steps, float time, float left);
+#endif  // SD_SHOW_REMAINING_TIME
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 
