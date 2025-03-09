@@ -825,7 +825,6 @@ int main(int argc, const char* argv[]) {
     bool vae_decode_only          = true;
     uint8_t* input_image_buffer   = NULL;
     uint8_t* control_image_buffer = NULL;
-    uint8_t* mask_image_buffer    = NULL;
 
     if (params.mode == IMG2IMG || params.mode == IMG2VID) {
         vae_decode_only = false;
@@ -931,18 +930,6 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    std::vector<uint8_t> default_mask_image_vec(params.width * params.height, 255);
-    if (params.mask_path != "") {
-        int c             = 0;
-        mask_image_buffer = stbi_load(params.mask_path.c_str(), &params.width, &params.height, &c, 1);
-    } else {
-        mask_image_buffer = default_mask_image_vec.data();
-    }
-    sd_image_t mask_image = {(uint32_t)params.width,
-                             (uint32_t)params.height,
-                             1,
-                             mask_image_buffer};
-
     sd_image_t* results;
     if (params.mode == TXT2IMG) {
         results = txt2img(sd_ctx,
@@ -1011,6 +998,18 @@ int main(int argc, const char* argv[]) {
             free_sd_ctx(sd_ctx);
             return 0;
         } else {
+            uint8_t* mask_image_buffer;
+            std::vector<uint8_t> default_mask_image_vec(params.width * params.height, 255);
+            if (params.mask_path != "") {
+                int c             = 0;
+                mask_image_buffer = stbi_load(params.mask_path.c_str(), &params.width, &params.height, &c, 1);
+            } else {
+                mask_image_buffer = default_mask_image_vec.data();
+            }
+            const sd_image_t mask_image = {(uint32_t)params.width,
+                                           (uint32_t)params.height,
+                                           1,
+                                           mask_image_buffer};
             results = img2img(sd_ctx,
                               input_image,
                               mask_image,
