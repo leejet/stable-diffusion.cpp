@@ -126,9 +126,9 @@ struct SDParams {
     int upscale_repeats           = 1;
 
     std::vector<int> skip_layers = {7, 8, 9};
-    float slg_scale              = 0.;
-    float skip_layer_start       = 0.01;
-    float skip_layer_end         = 0.2;
+    float slg_scale              = 0.f;
+    float skip_layer_start       = 0.01f;
+    float skip_layer_end         = 0.2f;
 };
 
 void print_params(SDParams params) {
