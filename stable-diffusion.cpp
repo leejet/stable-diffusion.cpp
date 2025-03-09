@@ -274,10 +274,10 @@ public:
             model_loader.set_wtype_override(GGML_TYPE_F32, "vae.");
         }
 
-        LOG_INFO("Weight type:                 %s", model_wtype != SD_TYPE_COUNT ? ggml_type_name(model_wtype) : "??");
-        LOG_INFO("Conditioner weight type:     %s", conditioner_wtype != SD_TYPE_COUNT ? ggml_type_name(conditioner_wtype) : "??");
-        LOG_INFO("Diffusion model weight type: %s", diffusion_model_wtype != SD_TYPE_COUNT ? ggml_type_name(diffusion_model_wtype) : "??");
-        LOG_INFO("VAE weight type:             %s", vae_wtype != SD_TYPE_COUNT ? ggml_type_name(vae_wtype) : "??");
+        LOG_INFO("Weight type:                 %s", model_wtype           != (ggml_type) SD_TYPE_COUNT ? ggml_type_name(model_wtype)           : "??");
+        LOG_INFO("Conditioner weight type:     %s", conditioner_wtype     != (ggml_type) SD_TYPE_COUNT ? ggml_type_name(conditioner_wtype)     : "??");
+        LOG_INFO("Diffusion model weight type: %s", diffusion_model_wtype != (ggml_type) SD_TYPE_COUNT ? ggml_type_name(diffusion_model_wtype) : "??");
+        LOG_INFO("VAE weight type:             %s", vae_wtype             != (ggml_type) SD_TYPE_COUNT ? ggml_type_name(vae_wtype)             : "??");
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 
