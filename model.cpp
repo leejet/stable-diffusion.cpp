@@ -1929,9 +1929,6 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
         if (pair.first.find("cond_stage_model.transformer.text_model.encoder.layers.23") != std::string::npos) {
             continue;
         }
-        if (pair.first.find("alphas_cumprod") != std::string::npos) {
-            continue;
-        }
 
         if (pair.first.find("alphas_cumprod") != std::string::npos) {
             continue;
