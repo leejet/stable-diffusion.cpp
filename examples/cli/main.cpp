@@ -105,6 +105,7 @@ struct SDParams {
     float slg_scale              = 0.0f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+    bool slg_uncond              = false;
 
     float apg_eta            = 1.0f;
     float apg_momentum       = 0.0f;
@@ -216,11 +217,14 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     (replaces saturation with a smooth approximation)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
-    printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
+    printf("  --slg-uncond                       Use CFG's forward pass for SLG instead of a separate pass, only for DiT models\n");
+    printf("                                     To use this, it's recommended to keep slg-scale to 0, both for performance and quality reasons\n");
+    printf("                                     This should be slightly faster than normal cfg when cfg_scale != 1.\n");
     printf("  --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
     printf("  --skip-layer-start START           SLG enabling point: (default: 0.01)\n");
     printf("  --skip-layer-end END               SLG disabling point: (default: 0.2)\n");
     printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
+    printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
     printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)\n");
     printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
@@ -683,6 +687,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
         }
     }
     if (params.slg_scale != 0 && params.skip_layers.size() != 0) {
+        parameter_string += "Unconditional SLG: " + std::string(params.slg_uncond ? "True" : "False") + ", ";
         parameter_string += "SLG scale: " + std::to_string(params.cfg_scale) + ", ";
         parameter_string += "Skip layers: [";
         for (const auto& layer : params.skip_layers) {

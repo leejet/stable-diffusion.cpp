@@ -886,7 +886,7 @@ public:
 
         bool has_unconditioned = img_cfg_scale != 1.0 && uncond.c_crossattn != NULL;
         bool has_img_cond      = cfg_scale != img_cfg_scale && img_cond.c_crossattn != NULL;
-        bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
+        bool has_skiplayer     = (slg_scale != 0.0 || guidance.slg.uncond) && skip_layers.size() > 0;
 
         // denoise wrapper
         struct ggml_tensor* out_cond     = ggml_dup_tensor(work_ctx, x);
@@ -899,7 +899,9 @@ public:
         }
         if (has_skiplayer) {
             if (sd_version_is_dit(version)) {
-                out_skip = ggml_dup_tensor(work_ctx, x);
+                if (slg_scale != 0.0) {
+                    out_skip = ggml_dup_tensor(work_ctx, x);
+                }
             } else {
                 has_skiplayer = false;
                 LOG_WARN("SLG is incompatible with %s models", model_version_to_str[version]);
@@ -973,6 +975,8 @@ public:
                                          control_strength,
                                          &out_cond);
             }
+            int step_count         = sigmas.size();
+            bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
 
             float* negative_data = NULL;
             if (has_unconditioned) {
@@ -981,18 +985,36 @@ public:
                     control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector);
                     controls = control_net->controls;
                 }
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         uncond.c_crossattn,
-                                         uncond.c_concat,
-                                         uncond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_uncond);
+                if (is_skiplayer_step && guidance.slg.uncond) {
+                    LOG_DEBUG("Skipping layers at uncond step %d\n", step);
+                    diffusion_model->compute(n_threads,
+                                             noised_input,
+                                             timesteps,
+                                             uncond.c_crossattn,
+                                             uncond.c_concat,
+                                             uncond.c_vector,
+                                             guidance_tensor,
+                                             ref_latents,
+                                             -1,
+                                             controls,
+                                             control_strength,
+                                             &out_uncond,
+                                             NULL,
+                                             skip_layers);
+                } else {
+                    diffusion_model->compute(n_threads,
+                                             noised_input,
+                                             timesteps,
+                                             uncond.c_crossattn,
+                                             uncond.c_concat,
+                                             uncond.c_vector,
+                                             guidance_tensor,
+                                             ref_latents,
+                                             -1,
+                                             controls,
+                                             control_strength,
+                                             &out_uncond);
+                }
                 negative_data = (float*)out_uncond->data;
             }
 
@@ -1013,10 +1035,8 @@ public:
                 img_cond_data = (float*)out_img_cond->data;
             }
 
-            int step_count         = sigmas.size();
-            bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
             float* skip_layer_data = NULL;
-            if (is_skiplayer_step) {
+            if (is_skiplayer_step && slg_scale != 0.0) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
                 // skip layer (same as conditionned)
                 diffusion_model->compute(n_threads,
@@ -1106,7 +1126,7 @@ public:
                     } else {
                         float delta = deltas[i];
 
-                        if(cfg_scale != 1) {
+                        if (cfg_scale != 1) {
                             latent_result = positive_data[i] + (cfg_scale - 1) * delta;
                         } else if (has_img_cond) {
                             latent_result = positive_data[i] + (img_cfg_scale - 1) * delta;
@@ -1116,7 +1136,7 @@ public:
                     // img_cfg_scale == 1
                     latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
                 }
-                if (is_skiplayer_step) {
+                if (is_skiplayer_step && slg_scale != 0.0) {
                     latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
                 }
                 // v = latent_result, eps = latent_result
