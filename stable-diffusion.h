@@ -140,6 +140,7 @@ typedef struct {
     float scale;
     float skip_layer_start;
     float skip_layer_end;
+    bool slg_uncond;
 } sd_slg_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
