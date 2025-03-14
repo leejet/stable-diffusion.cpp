@@ -172,7 +172,17 @@ public:
 #endif
 #ifdef SD_USE_VULKAN
         LOG_DEBUG("Using Vulkan backend");
-        for (int device = 0; device < ggml_backend_vk_get_device_count(); ++device) {
+        size_t device          = 0;
+        const int device_count = ggml_backend_vk_get_device_count();
+        if (device_count) {
+            const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
+            if (SD_VK_DEVICE != nullptr) {
+                device = (size_t)std::stoull(SD_VK_DEVICE);
+                if (device >= device_count) {
+                    LOG_WARN("Cannot find targeted vulkan device (%lld), falling back to device 0...", device);
+                    device = 0;
+                }
+            }
             backend = ggml_backend_vk_init(device);
         }
         if (!backend) {
