@@ -6,9 +6,9 @@
 #include <string>
 #include <vector>
 
-// #include "preprocessing.hpp"
 #include "flux.hpp"
 #include "stable-diffusion.h"
+#include "preprocessing.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
