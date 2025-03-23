@@ -800,7 +800,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if (params.mode == CONVERT) {
-        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype);
+        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype,NULL);
         if (!success) {
             fprintf(stderr,
                     "convert '%s'/'%s' to '%s' failed\n",
