@@ -75,6 +75,60 @@ std::string format(const char* fmt, ...) {
 #ifdef _WIN32  // code for windows
 #include <windows.h>
 
+std::string get_filepath_from_dir_recursive(
+    const std::string& dir_path,
+    const std::string& file_name,
+    const std::vector<std::string>* extensions = nullptr) {
+
+    if (extensions) {
+        // Search with provided extensions
+        for (const auto& ext : *extensions) {
+            std::string file_path = path_join(dir_path, file_name + ext);
+            if (file_exists(file_path)) {
+                return file_path;
+            }
+        }
+    } else {
+        // Search for exact filename without extensions
+        std::string file_path = path_join(dir_path, file_name);
+        if (file_exists(file_path)) {
+            return file_path;
+        }
+    }
+
+    // Check subdirectories
+    WIN32_FIND_DATA findData;
+    HANDLE hFind;
+    std::string search_path = path_join(dir_path, "*");
+
+    hFind = FindFirstFile(search_path.c_str(), &findData);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                strcmp(findData.cFileName, ".") != 0 &&
+                strcmp(findData.cFileName, "..") != 0) {
+
+                std::string subdir = path_join(dir_path, findData.cFileName);
+                std::string result = get_filepath_from_dir_recursive(subdir, file_name, extensions);
+
+                if (!result.empty()) {
+                    FindClose(hFind);
+                    return result;
+                }
+                }
+        } while (FindNextFile(hFind, &findData));
+
+        FindClose(hFind);
+    }
+
+    return "";
+}
+
+std::string get_filepath_from_dir(const std::string& dir, const std::string& filename, const std::vector<std::string>* extensions = nullptr) {
+    return get_filepath_from_dir_recursive(dir, filename, extensions);
+}
+
+
 bool file_exists(const std::string& filename) {
     DWORD attributes = GetFileAttributesA(filename.c_str());
     return (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY));
@@ -152,6 +206,65 @@ std::vector<std::string> get_files_from_dir(const std::string& dir) {
 #else  // Unix
 #include <dirent.h>
 #include <sys/stat.h>
+
+std::string get_filepath_from_dir_recursive(
+    const std::string& dir_path,
+    const std::string& file_name,
+    const std::vector<std::string>* extensions = nullptr) {
+
+    DIR* dir = opendir(dir_path.c_str());
+    if (dir == nullptr) {
+        return "";
+    }
+
+    std::string result = "";
+
+    if (extensions) {
+        for (const auto& ext : *extensions) {
+            std::string file_path = path_join(dir_path, file_name + ext);
+            if (file_exists(file_path)) {
+                closedir(dir);
+                return file_path;
+            }
+        }
+    } else {
+        std::string file_path = path_join(dir_path, file_name);
+        if (file_exists(file_path)) {
+            closedir(dir);
+            return file_path;
+        }
+    }
+
+    // Check all subdirectories
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        if (entry->d_type == DT_DIR &&
+            strcmp(entry->d_name, ".") != 0 &&
+            strcmp(entry->d_name, "..") != 0) {
+
+            std::string subdir = path_join(dir_path, entry->d_name);
+
+            result = get_filepath_from_dir_recursive(subdir, file_name, extensions);
+
+                if (!result.empty()) {
+                    closedir(dir);
+                    return result;
+                }
+            }
+    }
+
+    closedir(dir);
+    return "";
+}
+
+std::string get_filepath_from_dir(
+    const std::string& dir_path,
+    const std::string& file_name,
+    const std::vector<std::string>* extensions = nullptr) {
+
+    return get_filepath_from_dir_recursive(dir_path, file_name, extensions);
+}
+
 
 bool file_exists(const std::string& filename) {
     struct stat buffer;

@@ -640,17 +640,25 @@ public:
 
     void apply_lora(const std::string& lora_name, float multiplier) {
         int64_t t0                 = ggml_time_ms();
-        std::string st_file_path   = path_join(lora_model_dir, lora_name + ".safetensors");
-        std::string ckpt_file_path = path_join(lora_model_dir, lora_name + ".ckpt");
+        std::vector<std::string> extensions = {".safetensors", ".ckpt"};
+        std::string st_file_path   = path_join(lora_model_dir, lora_name + extensions[0]);
+        std::string ckpt_file_path = path_join(lora_model_dir, lora_name + extensions[1]);
         std::string file_path;
         if (file_exists(st_file_path)) {
             file_path = st_file_path;
         } else if (file_exists(ckpt_file_path)) {
             file_path = ckpt_file_path;
         } else {
-            LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
-            return;
+            file_path = get_filepath_from_dir(lora_model_dir, lora_name, &extensions);
+
+            if (file_path.empty()) {
+                LOG_WARN("can not find %s or %s for lora %s in main directory or subdirectories",
+                        st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
+                return;
+            }
+            LOG_INFO("found lora %s in subdirectory: %s", lora_name.c_str(), file_path.c_str());
         }
+
         LoraModel lora(backend, file_path);
         if (!lora.load_from_file()) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
