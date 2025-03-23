@@ -8,6 +8,7 @@
 #include <fstream>
 #include <mutex>
 #include <unordered_map>
+#include <string>
 
 /*Stolen from llama.cpp (credits: Kawrakow)*/
 
@@ -119,10 +120,10 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
             e.values.resize(src1->ne[0] * n_as, 0);
             e.counts.resize(src1->ne[0] * n_as, 0);
         } else if (e.values.size() != (size_t)src1->ne[0] * n_as) {
-            LOG_ERROR("inconsistent size for %s (%d vs %d)\n", wname.c_str(), (int)e.values.size(), (int)src1->ne[0] * n_as);
+            printf("ERROR: inconsistent size for %s (%d vs %d)\n", wname.c_str(), (int)e.values.size(), (int)src1->ne[0] * n_as);
             exit(1);  // GGML_ABORT("fatal error");
         }
-        LOG_DEBUG("%s[%d]: %32s, %s, %5d x %5d, %d\n", m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[2], (int)src1->type);
+        // LOG_DEBUG("%s[%d]: %32s, %s, %5d x %5d, %d\n", m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[2], (int)src1->type);
         // loop over all possible experts, regardless if they are used or not in the batch
         for (int ex = 0; ex < n_as; ++ex) {
             size_t e_start = ex * src1->ne[0];
@@ -144,8 +145,8 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
                         e.values[e_start + j] += x[j] * x[j];
                         e.counts[e_start + j]++;
                         if (!std::isfinite(e.values[e_start + j])) {
-                            LOG_INFO("\n");
-                            LOG_ERROR("%f detected in %s\n", e.values[e_start + j], wname.c_str());
+                            printf("\n");
+                            printf("%ERROR: f detected in %s\n", e.values[e_start + j], wname.c_str());
                             exit(1);
                         }
                     }
@@ -158,7 +159,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
             e.values.resize(src1->ne[0], 0);
             e.counts.resize(src1->ne[0], 0);
         } else if (e.values.size() != (size_t)src1->ne[0]) {
-            LOG_ERROR("inconsistent size for %s (%d vs %d)\n", wname.c_str(), (int)e.values.size(), (int)src1->ne[0]);
+            printf("inconsistent size for %s (%d vs %d)\n", wname.c_str(), (int)e.values.size(), (int)src1->ne[0]);
             exit(1);  // GGML_ABORT("fatal error");
         }
 
@@ -170,7 +171,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
                 e.values[j] += x[j] * x[j];
                 e.counts[j]++;
                 if (!std::isfinite(e.values[j])) {
-                    LOG_ERROR("%f detected in %s\n", e.values[j], wname.c_str());
+                    printf("%f detected in %s\n", e.values[j], wname.c_str());
                     exit(1);
                 }
             }
@@ -181,7 +182,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
 }
 
 void IMatrixCollector::save_imatrix(std::string fname,int ncall) const {
-    LOG_INFO("SAVING_IMATRIX...");
+    printf("SAVING_IMATRIX...\n");
 
     if (ncall > 0) {
         fname += ".at_";
@@ -209,17 +210,17 @@ void IMatrixCollector::save_imatrix(std::string fname,int ncall) const {
         }
 
         if (n_zeros != 0 && is_first) {
-            LOG_INFO("\n");
+            printf("\n");
             is_first = false;
         }
 
         if (n_zeros == n_all) {
-            LOG_WARN("entry '%40s' has no data - skipping\n", kv.first.c_str());
+            printf("WARNING: entry '%40s' has no data - skipping\n", kv.first.c_str());
             continue;
         }
 
         if (n_zeros > 0) {
-            LOG_WARN("entry '%40s' has partial data (%.2f%%) - skipping\n", kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
+            printf("WARNING: entry '%40s' has partial data (%.2f%%) - skipping\n", kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
             continue;
         }
 
@@ -228,7 +229,7 @@ void IMatrixCollector::save_imatrix(std::string fname,int ncall) const {
     }
 
     if (to_store.size() < m_stats.size()) {
-        LOG_WARN("storing only %zu out of %zu entries\n", to_store.size(), m_stats.size());
+        printf("WARNING: storing only %zu out of %zu entries\n", to_store.size(), m_stats.size());
     }
 
     std::ofstream out(fname, std::ios::binary);
@@ -253,20 +254,20 @@ void IMatrixCollector::save_imatrix(std::string fname,int ncall) const {
     // Write the number of call the matrix was computed with
     out.write((const char*)&m_last_call, sizeof(m_last_call));
 
-    LOG_DEBUG("\n");
-    LOG_DEBUG("stored collected data after %d chunks in %s\n", m_last_call, fname.c_str());
+    // LOG_DEBUG("\n");
+    // LOG_DEBUG("stored collected data after %d chunks in %s\n", m_last_call, fname.c_str());
 }
 
 bool IMatrixCollector::load_imatrix(const char* fname) {
     std::ifstream in(fname, std::ios::binary);
     if (!in) {
-        LOG_ERROR("failed to open %s\n", fname);
+        printf("ERROR: failed to open %s\n", fname);
         return false;
     }
     int n_entries;
     in.read((char*)&n_entries, sizeof(n_entries));
     if (in.fail() || n_entries < 1) {
-        LOG_ERROR("no data in file %s\n", fname);
+        printf("ERROR: no data in file %s\n", fname);
         return false;
     }
     for (int i = 0; i < n_entries; ++i) {
@@ -275,7 +276,7 @@ bool IMatrixCollector::load_imatrix(const char* fname) {
         std::vector<char> name_as_vec(len + 1);
         in.read((char*)name_as_vec.data(), len);
         if (in.fail()) {
-            LOG_ERROR("failed reading name for entry %d from %s\n", i + 1, fname);
+            printf("ERROR: failed reading name for entry %d from %s\n", i + 1, fname);
             return false;
         }
         name_as_vec[len] = 0;
@@ -286,7 +287,7 @@ bool IMatrixCollector::load_imatrix(const char* fname) {
         int nval;
         in.read((char*)&nval, sizeof(nval));
         if (in.fail() || nval < 1) {
-            LOG_ERROR("failed reading number of values for entry %d\n", i);
+            printf("ERROR: failed reading number of values for entry %d\n", i);
             m_stats = {};
             return false;
         }
@@ -299,7 +300,7 @@ bool IMatrixCollector::load_imatrix(const char* fname) {
         std::vector<float> tmp(nval);
         in.read((char*)tmp.data(), nval * sizeof(float));
         if (in.fail()) {
-            LOG_ERROR("failed reading data for entry %d\n", i);
+            printf("ERROR: failed reading data for entry %d\n", i);
             m_stats = {};
             return false;
         }
