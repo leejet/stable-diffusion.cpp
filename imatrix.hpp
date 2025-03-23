@@ -1,3 +1,6 @@
+#ifndef IMATRIX_HPP
+#define IMATRIX_HPP
+
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "util.h"
@@ -8,6 +11,7 @@
 
 /*Stolen from llama.cpp (credits: Kawrakow)*/
 
+
 struct Stats {
     std::vector<float> values{};
     std::vector<int> counts{};
@@ -17,20 +21,26 @@ struct Stats {
 class IMatrixCollector {
 public:
     IMatrixCollector() = default;
-    void set_params(SDParams params) { m_params = std::move(params); }
     bool collect_imatrix(struct ggml_tensor* t, bool ask, void* user_data);
-    void save_imatrix(int ncall = -1) const;
+    void save_imatrix(std::string fname, int ncall = -1) const;
     bool load_imatrix(const char* fname);
-
+    std::vector<float> get_values(const std::string& key) const {
+        auto it = m_stats.find(key);
+        if (it != m_stats.end()) {
+            return it->second.values;
+        } else {
+            return {};
+        }
+    }
 private:
     std::unordered_map<std::string, Stats> m_stats = {};
-    SDParams m_params;
     std::mutex m_mutex;
     int m_last_call = 0;
     std::vector<float> m_src1_data;
     std::vector<char> m_ids;  // the expert ids from ggml_mul_mat_id
 };
 
+#ifdef IMATRIX_IMPL
 // remove any prefix and suffixes from the name
 // CUDA0#blk.0.attn_k.weight#0 => blk.0.attn_k.weight
 static std::string filter_tensor_name(const char* name) {
@@ -141,15 +151,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
                     }
                 }
             }
-            // if (e.ncall > m_last_call) {
-            //     m_last_call = e.ncall;
-            //     if (m_last_call % m_params.n_out_freq == 0) {
-            //         save_imatrix();
-            //     }
-            //     if (m_params.n_save_freq > 0 && m_last_call % m_params.n_save_freq == 0) {
-            //         save_imatrix(m_last_call);
-            //     }
-            // }
         }
     } else {
         auto& e = m_stats[wname];
@@ -174,24 +175,13 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
                 }
             }
         }
-
-        // if (e.ncall > m_last_call) {
-        //     m_last_call = e.ncall;
-        //     if (m_last_call % m_params.n_out_freq == 0 && m_last_call > 0) {
-        //         save_imatrix();
-        //     }
-        //     if (m_params.n_save_freq > 0 && m_last_call % m_params.n_save_freq == 0 && m_last_call > 0) {
-        //         save_imatrix(m_last_call);
-        //     }
-        // }
     }
     return true;
 
 }
 
-void IMatrixCollector::save_imatrix(int ncall) const {
+void IMatrixCollector::save_imatrix(std::string fname,int ncall) const {
     LOG_INFO("SAVING_IMATRIX...");
-    auto fname = m_params.out_file;
 
     if (ncall > 0) {
         fname += ".at_";
@@ -323,3 +313,6 @@ bool IMatrixCollector::load_imatrix(const char* fname) {
     }
     return true;
 }
+
+#endif
+#endif
