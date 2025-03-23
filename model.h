@@ -227,12 +227,12 @@ public:
     ggml_type get_diffusion_model_wtype();
     ggml_type get_vae_wtype();
     void set_wtype_override(ggml_type wtype, std::string prefix = "");
-    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend, std::unordered_map<std::string, std::vector<float>> imatrix_data = {});
+    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       ggml_backend_t backend,
                       std::set<std::string> ignore_tensors = {});
 
-    bool save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules, std::unordered_map<std::string, std::vector<float>>);
+    bool save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules);
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
     ~ModelLoader() = default;

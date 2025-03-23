@@ -247,7 +247,7 @@ SD_API bool convert(const char* input_path,
                     const char* vae_path,
                     const char* output_path,
                     enum sd_type_t output_type,
-                    const char* tensor_type_rules, const char* imatrix_path);
+                    const char* tensor_type_rules);
 
 SD_API uint8_t* preprocess_canny(uint8_t* img,
                                  int width,

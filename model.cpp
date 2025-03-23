@@ -16,6 +16,7 @@
 #include "ggml-cpu.h"
 #include "ggml.h"
 
+#include "imatrix.hpp"
 #include "stable-diffusion.h"
 
 #ifdef SD_USE_METAL
@@ -31,6 +32,8 @@
 #endif
 
 #define ST_HEADER_SIZE_LEN 8
+
+static IMatrixCollector* imatrix_collector = NULL;
 
 uint64_t read_u64(uint8_t* buffer) {
     // little endian
@@ -1855,7 +1858,7 @@ std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& v
     return res;
 }
 
-bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend,std::unordered_map<std::string, std::vector<float>> imatrix_data) {
+bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend) {
     std::vector<TensorStorage> processed_tensor_storages;
     for (auto& tensor_storage : tensor_storages) {
         // LOG_DEBUG("%s", name.c_str());
@@ -1981,10 +1984,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 
                     auto processed_name = convert_tensor_name(tensor_storage.name);
                     // LOG_DEBUG("%s",processed_name.c_str());
-                    std::vector<float> imatrix = imatrix_data[processed_name];
+                    std::vector<float> imatrix = imatrix_collector ? imatrix_collector->get_values(processed_name) : std::vector<float>{};
 
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
-                                   dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0],imatrix);
+                                   dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0], imatrix);
                 }
             } else {
                 read_buffer.resize(tensor_storage.nbytes());
@@ -2008,7 +2011,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     // convert first, then copy to device memory
                     auto processed_name = convert_tensor_name(tensor_storage.name);
                     // LOG_DEBUG("%s",processed_name.c_str());
-                    std::vector<float> imatrix = imatrix_data[processed_name];
+                    std::vector<float> imatrix = imatrix_collector ? imatrix_collector->get_values(processed_name) : std::vector<float>{};
 
                     convert_buffer.resize(ggml_nbytes(dst_tensor));
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type,
@@ -2080,7 +2083,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb, backend, {});
+    bool success = load_tensors(on_new_tensor_cb, backend);
     if (!success) {
         LOG_ERROR("load tensors from file failed");
         return false;
@@ -2175,7 +2178,7 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
     return false;
 }
 
-bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules_str, std::unordered_map<std::string, std::vector<float>> imatrix_data) {
+bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules_str) {
     auto backend    = ggml_backend_cpu_init();
     size_t mem_size = 1 * 1024 * 1024;  // for padding
     mem_size += tensor_storages.size() * ggml_tensor_overhead();
@@ -2224,7 +2227,7 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb, backend, imatrix_data);
+    bool success = load_tensors(on_new_tensor_cb, backend);
     ggml_backend_free(backend);
     LOG_INFO("load tensors done");
     LOG_INFO("trying to save tensors to %s", file_path.c_str());
@@ -2260,54 +2263,11 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
     return mem_size;
 }
 
-static void load_imatrix(const std::string& imatrix_file, std::unordered_map<std::string, std::vector<float>>& imatrix_data) {
-    std::ifstream in(imatrix_file.c_str(), std::ios::binary);
-    if (!in) {
-        LOG_ERROR("%s: failed to open %s\n", imatrix_file.c_str());
-        exit(1);
-    }
-    int n_entries;
-    in.read((char*)&n_entries, sizeof(n_entries));
-    if (in.fail() || n_entries < 1) {
-        LOG_ERROR("%s: no data in file %s\n", imatrix_file.c_str());
-        exit(1);
-    }
-    for (int i = 0; i < n_entries; ++i) {
-        int len;
-        in.read((char*)&len, sizeof(len));
-        std::vector<char> name_as_vec(len + 1);
-        in.read((char*)name_as_vec.data(), len);
-        if (in.fail()) {
-            LOG_ERROR("%s: failed reading name for entry %d from %s\n", i + 1, imatrix_file.c_str());
-            exit(1);
-        }
-        name_as_vec[len] = 0;
-        std::string name{name_as_vec.data()};
-        auto& e = imatrix_data[name];
-        int ncall;
-        in.read((char*)&ncall, sizeof(ncall));
-        int nval;
-        in.read((char*)&nval, sizeof(nval));
-        if (in.fail() || nval < 1) {
-            LOG_ERROR("%s: failed reading number of values for entry %d\n", i);
-            imatrix_data = {};
-            exit(1);
-        }
-        e.resize(nval);
-        in.read((char*)e.data(), nval * sizeof(float));
-        if (in.fail()) {
-            LOG_ERROR("%s: failed reading data for entry %d\n", i);
-            imatrix_data = {};
-            exit(1);
-        }
-        if (ncall > 0) {
-            for (auto& v : e)
-                v /= ncall;
-        }
-    }
+void setConvertImatrixCollector(void* collector) {
+    imatrix_collector = ((IMatrixCollector*)collector);
 }
 
-bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type, const char* tensor_type_rules, const char* imatrix_path = NULL) {
+bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type, const char* tensor_type_rules) {
     ModelLoader model_loader;
 
     if (!model_loader.init_from_file(input_path)) {
@@ -2322,16 +2282,6 @@ bool convert(const char* input_path, const char* vae_path, const char* output_pa
         }
     }
 
-    std::unordered_map<std::string, std::vector<float>> imatrix_data = {};
-
-    if(imatrix_path){
-        load_imatrix(imatrix_path, imatrix_data);
-    }
-
-    // for (const auto& pair : imatrix_data) {
-    //     LOG_DEBUG("imatrix key : %s", pair.first.c_str());
-    // }
-
-    bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, tensor_type_rules, imatrix_data);
+    bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, tensor_type_rules);
     return success;
 }
