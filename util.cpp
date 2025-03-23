@@ -247,6 +247,9 @@ int32_t get_num_physical_cores() {
 static sd_progress_cb_t sd_progress_cb = NULL;
 void* sd_progress_cb_data              = NULL;
 
+static ggml_graph_eval_callback callback_eval = NULL;
+void * callback_eval_user_data = NULL;
+
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
     return converter.from_bytes(utf8_str);
@@ -420,6 +423,20 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
 }
+
+void sd_set_backend_eval_callback(ggml_graph_eval_callback cb, void * data){
+    callback_eval = cb;
+    callback_eval_user_data = data;
+}
+
+ggml_graph_eval_callback get_callback_eval(){
+    return callback_eval;
+}
+
+void* get_callback_eval_user_data() {
+    return callback_eval_user_data;
+}
+
 const char* sd_get_system_info() {
     static char buffer[1024];
     std::stringstream ss;

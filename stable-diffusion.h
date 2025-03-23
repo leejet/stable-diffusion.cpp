@@ -205,9 +205,11 @@ typedef struct sd_ctx_t sd_ctx_t;
 
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
 typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
+typedef bool (*sd_graph_eval_callback_t)(struct ggml_tensor * t, bool ask, void * user_data);
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
+SD_API void sd_set_backend_eval_callback(sd_graph_eval_callback_t cb, void * data);
 SD_API int32_t get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 
@@ -245,7 +247,7 @@ SD_API bool convert(const char* input_path,
                     const char* vae_path,
                     const char* output_path,
                     enum sd_type_t output_type,
-                    const char* tensor_type_rules);
+                    const char* tensor_type_rules, const char* imatrix_path);
 
 SD_API uint8_t* preprocess_canny(uint8_t* img,
                                  int width,
