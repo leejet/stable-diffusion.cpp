@@ -76,7 +76,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
             return false;
         // why are small batches ignored (<16 tokens)?
         // if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
-        if (!(wname.substr(0, 6) == "model." || wname.substr(0, 17) == "cond_stage_model."))
+        if (!(wname.substr(0, 6) == "model." || wname.substr(0, 17) == "cond_stage_model." || wname.substr(0,14) == "text_encoders."))
             return false;
         return true;
     }
