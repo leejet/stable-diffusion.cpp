@@ -2267,12 +2267,41 @@ void setConvertImatrixCollector(void* collector) {
     imatrix_collector = ((IMatrixCollector*)collector);
 }
 
-bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type, const char* tensor_type_rules) {
+bool convert(const char* model_path, const char* clip_l_path, const char* clip_g_path, const char* t5xxl_path, const char* diffusion_model_path, const char* vae_path, const char* output_path, sd_type_t output_type, const char* tensor_type_rules) {
     ModelLoader model_loader;
 
-    if (!model_loader.init_from_file(input_path)) {
-        LOG_ERROR("init model loader from file failed: '%s'", input_path);
-        return false;
+    if (model_path != NULL && strlen(model_path) > 0) {
+        if (!model_loader.init_from_file(model_path)) {
+            LOG_ERROR("init model loader from file failed: '%s'", model_path);
+            return false;
+        }
+    }
+
+    if (clip_l_path != NULL && strlen(clip_l_path) > 0) {
+        if (!model_loader.init_from_file(clip_l_path, "text_encoders.clip_l.transformer.")) {
+            LOG_ERROR("init model loader from file failed: '%s'", clip_l_path);
+            return false;
+        }
+    }
+
+    if (clip_g_path != NULL && strlen(clip_g_path) > 0) {
+        if (!model_loader.init_from_file(clip_g_path, "text_encoders.clip_g.transformer.")) {
+            LOG_ERROR("init model loader from file failed: '%s'", clip_g_path);
+            return false;
+        }
+    }
+    if (t5xxl_path != NULL && strlen(t5xxl_path) > 0) {
+        if (!model_loader.init_from_file(t5xxl_path, "text_encoders.t5xxl.transformer.")) {
+            LOG_ERROR("init model loader from file failed: '%s'", t5xxl_path);
+            return false;
+        }
+    }
+
+    if (diffusion_model_path != NULL && strlen(diffusion_model_path) > 0) {
+        if (!model_loader.init_from_file(diffusion_model_path, "model.diffusion_model.")) {
+            LOG_ERROR("init model loader from file failed: '%s'", diffusion_model_path);
+            return false;
+        }
     }
 
     if (vae_path != NULL && strlen(vae_path) > 0) {

@@ -243,7 +243,7 @@ SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor);
 
-SD_API bool convert(const char* input_path,
+SD_API bool convert(const char* model_path, const char* clip_l_path, const char* clip_g_path, const char* t5xxl_path, const char* diffusion_model_path,
                     const char* vae_path,
                     const char* output_path,
                     enum sd_type_t output_type,
