@@ -663,6 +663,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         }
     }
 
+    if (params.imatrix_out.size() > 0 && file_exists(params.imatrix_out)) {
+        // imatrix file already exists
+        if (std::find(params.imatrix_in.begin(), params.imatrix_in.end(), params.imatrix_out) == params.imatrix_in.end()) {
+            printf("\n IMPORTANT: imatrix file %s already exists, but wasn't found in the imatrix inputs.\n", params.imatrix_out.c_str());
+            printf("%s will get overwritten!\n", params.imatrix_out.c_str());
+        }
+    }
+
     if (invalid_arg) {
         fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
         print_usage(argc, argv);
