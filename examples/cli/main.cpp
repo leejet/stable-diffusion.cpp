@@ -262,6 +262,7 @@ void print_usage(int argc, const char* argv[]) {
 void parse_args(int argc, const char** argv, SDParams& params) {
     bool invalid_arg = false;
     std::string arg;
+    std::string type = "";
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
 
@@ -367,32 +368,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            std::string type        = argv[i];
-            bool found              = false;
-            std::string valid_types = "";
-            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
-                auto trait = ggml_get_type_traits((ggml_type)i);
-                std::string name(trait->type_name);
-                if (name == "f32" || trait->to_float && trait->type_size) {
-                    if (i)
-                        valid_types += ", ";
-                    valid_types += name;
-                    if (type == name) {
-                        if (ggml_quantize_requires_imatrix((ggml_type)i)) {
-                            printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
-                        }
-                        params.wtype = (enum sd_type_t)i;
-                        found        = true;
-                        break;
-                    }
-                }
-            }
-            if (!found) {
-                fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
-                        type.c_str(),
-                        valid_types.c_str());
-                exit(1);
-            }
+            type = argv[i];
         } else if (arg == "--lora-model-dir") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -659,6 +635,34 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             exit(1);
         }
     }
+    if (type != "") {
+        bool found              = false;
+        std::string valid_types = "";
+        for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+            auto trait = ggml_get_type_traits((ggml_type)i);
+            std::string name(trait->type_name);
+            if (name == "f32" || trait->to_float && trait->type_size) {
+                if (i)
+                    valid_types += ", ";
+                valid_types += name;
+                if (type == name) {
+                    if (ggml_quantize_requires_imatrix((ggml_type)i) && params.imatrix_in.size() == 0) {
+                        printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
+                    }
+                    params.wtype = (enum sd_type_t)i;
+                    found        = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
+                    type.c_str(),
+                    valid_types.c_str());
+            exit(1);
+        }
+    }
+
     if (invalid_arg) {
         fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
         print_usage(argc, argv);
