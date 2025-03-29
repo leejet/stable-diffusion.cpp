@@ -6,10 +6,7 @@
 #include "ggml.h"
 #include "util.h"
 
-#include <fstream>
-#include <mutex>
-#include <unordered_map>
-#include <string>
+#include <cmath>
 
 // remove any prefix and suffixes from the name
 // CUDA0#blk.0.attn_k.weight#0 => blk.0.attn_k.weight
