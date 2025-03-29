@@ -33,7 +33,7 @@
 
 #define ST_HEADER_SIZE_LEN 8
 
-static IMatrixCollector* imatrix_collector = NULL;
+static IMatrixCollector imatrix_collector;
 
 uint64_t read_u64(uint8_t* buffer) {
     // little endian
@@ -1984,7 +1984,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 
                     auto processed_name = convert_tensor_name(tensor_storage.name);
                     // LOG_DEBUG("%s",processed_name.c_str());
-                    std::vector<float> imatrix = imatrix_collector ? imatrix_collector->get_values(processed_name) : std::vector<float>{};
+                    std::vector<float> imatrix = imatrix_collector.get_values(processed_name);
 
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
                                    dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0], imatrix);
@@ -2011,7 +2011,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     // convert first, then copy to device memory
                     auto processed_name = convert_tensor_name(tensor_storage.name);
                     // LOG_DEBUG("%s",processed_name.c_str());
-                    std::vector<float> imatrix = imatrix_collector ? imatrix_collector->get_values(processed_name) : std::vector<float>{};
+                    std::vector<float> imatrix = imatrix_collector.get_values(processed_name);
 
                     convert_buffer.resize(ggml_nbytes(dst_tensor));
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type,
@@ -2263,10 +2263,6 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
     return mem_size;
 }
 
-void setConvertImatrixCollector(void* collector) {
-    imatrix_collector = ((IMatrixCollector*)collector);
-}
-
 bool convert(const char* model_path, const char* clip_l_path, const char* clip_g_path, const char* t5xxl_path, const char* diffusion_model_path, const char* vae_path, const char* output_path, sd_type_t output_type, const char* tensor_type_rules) {
     ModelLoader model_loader;
 
@@ -2313,4 +2309,20 @@ bool convert(const char* model_path, const char* clip_l_path, const char* clip_g
 
     bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, tensor_type_rules);
     return success;
+}
+
+bool loadImatrix(const char* imatrix_path) {
+    return imatrix_collector.load_imatrix(imatrix_path);
+}
+void saveImatrix(const char* imatrix_path) {
+    imatrix_collector.save_imatrix(imatrix_path);
+}
+static bool collect_imatrix(struct ggml_tensor* t, bool ask, void* user_data) {
+    return imatrix_collector.collect_imatrix(t, ask, user_data);
+}
+void enableImatrixCollection() {
+    sd_set_backend_eval_callback((sd_graph_eval_callback_t)collect_imatrix, NULL);
+}
+void disableImatrixCollection() {
+    sd_set_backend_eval_callback(NULL, NULL);
 }

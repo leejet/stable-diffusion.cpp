@@ -243,7 +243,6 @@ SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor);
 
-SD_API void setConvertImatrixCollector(void * collector);
 SD_API bool convert(const char* model_path, const char* clip_l_path, const char* clip_g_path, const char* t5xxl_path, const char* diffusion_model_path,
                     const char* vae_path,
                     const char* output_path,
@@ -258,6 +257,11 @@ SD_API uint8_t* preprocess_canny(uint8_t* img,
                                  float weak,
                                  float strong,
                                  bool inverse);
+
+SD_API bool loadImatrix(const char * imatrix_path);
+SD_API void saveImatrix(const char * imatrix_path);
+SD_API void enableImatrixCollection();
+SD_API void disableImatrixCollection();
 
 #ifdef __cplusplus
 }
