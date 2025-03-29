@@ -22,10 +22,6 @@
 #define STB_IMAGE_RESIZE_STATIC
 #include "stb_image_resize.h"
 
-#define IMATRIX_IMPL
-#include "imatrix.hpp"
-static IMatrixCollector g_collector;
-
 const char* rng_type_to_str[] = {
     "std_default",
     "cuda",
@@ -663,7 +659,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         }
     }
 
-    if (params.imatrix_out.size() > 0 && file_exists(params.imatrix_out)) {
+    if (params.imatrix_out.size() > 0 && std::ifstream(params.imatrix_out).good()) {
         // imatrix file already exists
         if (std::find(params.imatrix_in.begin(), params.imatrix_in.end(), params.imatrix_out) == params.imatrix_in.end()) {
             printf("\n IMPORTANT: imatrix file %s already exists, but wasn't found in the imatrix inputs.\n", params.imatrix_out.c_str());
@@ -823,10 +819,6 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     fflush(out_stream);
 }
 
-static bool collect_imatrix(struct ggml_tensor* t, bool ask, void* user_data) {
-    return g_collector.collect_imatrix(t, ask, user_data);
-}
-
 int main(int argc, const char* argv[]) {
     SDParams params;
 
@@ -840,13 +832,12 @@ int main(int argc, const char* argv[]) {
     }
 
     if (params.imatrix_out != "") {
-        sd_set_backend_eval_callback((sd_graph_eval_callback_t)collect_imatrix, &params);
+        enableImatrixCollection();
     }
     if (params.imatrix_out != "" || params.mode == CONVERT || params.wtype != SD_TYPE_COUNT) {
-        setConvertImatrixCollector((void*)&g_collector);
         for (const auto& in_file : params.imatrix_in) {
             printf("loading imatrix from '%s'\n", in_file.c_str());
-            if (!g_collector.load_imatrix(in_file.c_str())) {
+            if (!loadImatrix(in_file.c_str())) {
                 printf("Failed to load %s\n", in_file.c_str());
             }
         }
@@ -1165,7 +1156,7 @@ int main(int argc, const char* argv[]) {
         results[i].data = NULL;
     }
     if (params.imatrix_out != "") {
-        g_collector.save_imatrix(params.imatrix_out);
+        saveImatrix(params.imatrix_out.c_str());
     }
     free(results);
     free_sd_ctx(sd_ctx);
