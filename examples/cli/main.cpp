@@ -376,6 +376,16 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
     return true;
 }
 
+int file_exists(const char *path) {
+    FILE *file;
+    if ((file = fopen(path, "r"))) {
+        fclose(file);
+        return 1;
+    }
+    return 0;
+}
+
+
 void parse_args(int argc, const char** argv, SDParams& params) {
     ArgOptions options;
     options.string_options = {
@@ -662,6 +672,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     if (!isfinite(params.img_cfg_scale)) {
         params.img_cfg_scale = params.cfg_scale;
+    }
+
+    if (params.imatrix_out.size() > 0 && file_exists(params.imatrix_out.c_str())) {
+        // imatrix file already exists
+        if (std::find(params.imatrix_in.begin(), params.imatrix_in.end(), params.imatrix_out) == params.imatrix_in.end()) {
+            printf("\n IMPORTANT: imatrix file %s already exists, but wasn't found in the imatrix inputs.\n", params.imatrix_out.c_str());
+            printf("%s will get overwritten!\n", params.imatrix_out.c_str());
+        }
     }
 }
 
