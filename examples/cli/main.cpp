@@ -210,8 +210,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
     printf("                                     If not specified, the default is the type of the weight file\n");
-    printf("  --imat-out [PATH]                  If set, compute the imatrix for this run and save it to the provided path");
-    printf("  --imat-in [PATH]                   Use imatrix for quantization.");
+    printf("  --imat-out [PATH]                  If set, compute the imatrix for this run and save it to the provided path\n");
+    printf("  --imat-in [PATH]                   Use imatrix for quantization.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
