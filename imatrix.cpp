@@ -271,7 +271,7 @@ bool IMatrixCollector::load_imatrix(const char* fname) {
             return false;
         }
 
-        // Recreate the state as expected by save_imatrix(), and corerct for weighted sum.
+        // Recreate the state as expected by save_imatrix(), and correct for weighted sum.
         for (int i = 0; i < nval; i++) {
             e.values[i] += tmp[i];
             e.counts[i] += ncall;
