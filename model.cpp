@@ -1874,7 +1874,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     convert_buffer.resize(ggml_nbytes(dst_tensor));
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type,
                                    (void*)convert_buffer.data(), dst_tensor->type,
-                                   (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
+                                   (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0], imatrix);
                     ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
                 }
             }
