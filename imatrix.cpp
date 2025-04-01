@@ -42,7 +42,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
             return false;
         // why are small batches ignored (<16 tokens)?
         // if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
-        if (!(wname.substr(0, 6) == "model." || wname.substr(0, 17) == "cond_stage_model." || wname.substr(0,14) == "text_encoders."))
+        if (!(wname.substr(0, 6) == "model." || wname.substr(0, 17) == "cond_stage_model." || wname.substr(0, 14) == "text_encoders."))
             return false;
         return true;
     }
@@ -51,7 +51,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
     std::lock_guard<std::mutex> lock(m_mutex);
 
     // copy the data from the GPU memory if needed
-    const bool is_host = ggml_backend_buffer_is_host(src1->buffer);
+    const bool is_host = src1->buffer == NULL || ggml_backend_buffer_is_host(src1->buffer);
 
     if (!is_host) {
         m_src1_data.resize(ggml_nelements(src1));
@@ -144,10 +144,9 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
         }
     }
     return true;
-
 }
 
-void IMatrixCollector::save_imatrix(std::string fname,int ncall) const {
+void IMatrixCollector::save_imatrix(std::string fname, int ncall) const {
     LOG_INFO("SAVING_IMATRIX to %s\n", fname.c_str());
 
     if (ncall > 0) {
