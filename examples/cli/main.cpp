@@ -129,6 +129,12 @@ struct SDParams {
     float slg_scale              = 0.f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+
+    /* Imatrix params */
+
+    std::string imatrix_out = "";
+
+    std::vector<std::string> imatrix_in = {};
 };
 
 void print_params(SDParams params) {
@@ -204,6 +210,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
     printf("                                     If not specified, the default is the type of the weight file\n");
+    printf("  --imat-out [PATH]                  If set, compute the imatrix for this run and save it to the provided path\n");
+    printf("  --imat-in [PATH]                   Use imatrix for quantization.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
@@ -250,6 +258,7 @@ void print_usage(int argc, const char* argv[]) {
 void parse_args(int argc, const char** argv, SDParams& params) {
     bool invalid_arg = false;
     std::string arg;
+    std::string type = "";
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
 
@@ -355,32 +364,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            std::string type        = argv[i];
-            bool found              = false;
-            std::string valid_types = "";
-            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
-                auto trait = ggml_get_type_traits((ggml_type)i);
-                std::string name(trait->type_name);
-                if (name == "f32" || trait->to_float && trait->type_size) {
-                    if (i)
-                        valid_types += ", ";
-                    valid_types += name;
-                    if (type == name) {
-                        if (ggml_quantize_requires_imatrix((ggml_type)i)) {
-                            printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
-                        }
-                        params.wtype = (enum sd_type_t)i;
-                        found        = true;
-                        break;
-                    }
-                }
-            }
-            if (!found) {
-                fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
-                        type.c_str(),
-                        valid_types.c_str());
-                exit(1);
-            }
+            type = argv[i];
         } else if (arg == "--lora-model-dir") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -629,12 +613,60 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "--imat-out") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.imatrix_out = argv[i];
+        } else if (arg == "--imat-in") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.imatrix_in.push_back(std::string(argv[i]));
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
             exit(1);
         }
     }
+    if (type != "") {
+        bool found              = false;
+        std::string valid_types = "";
+        for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+            auto trait = ggml_get_type_traits((ggml_type)i);
+            std::string name(trait->type_name);
+            if (name == "f32" || trait->to_float && trait->type_size) {
+                if (i)
+                    valid_types += ", ";
+                valid_types += name;
+                if (type == name) {
+                    if (ggml_quantize_requires_imatrix((ggml_type)i) && params.imatrix_in.size() == 0) {
+                        printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
+                    }
+                    params.wtype = (enum sd_type_t)i;
+                    found        = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
+                    type.c_str(),
+                    valid_types.c_str());
+            exit(1);
+        }
+    }
+
+    if (params.imatrix_out.size() > 0 && std::ifstream(params.imatrix_out).good()) {
+        // imatrix file already exists
+        if (std::find(params.imatrix_in.begin(), params.imatrix_in.end(), params.imatrix_out) == params.imatrix_in.end()) {
+            printf("\n IMPORTANT: imatrix file %s already exists, but wasn't found in the imatrix inputs.\n", params.imatrix_out.c_str());
+            printf("%s will get overwritten!\n", params.imatrix_out.c_str());
+        }
+    }
+
     if (invalid_arg) {
         fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
         print_usage(argc, argv);
@@ -799,8 +831,20 @@ int main(int argc, const char* argv[]) {
         printf("%s", sd_get_system_info());
     }
 
+    if (params.imatrix_out != "") {
+        enableImatrixCollection();
+    }
+    if (params.imatrix_out != "" || params.mode == CONVERT || params.wtype != SD_TYPE_COUNT) {
+        for (const auto& in_file : params.imatrix_in) {
+            printf("loading imatrix from '%s'\n", in_file.c_str());
+            if (!loadImatrix(in_file.c_str())) {
+                printf("Failed to load %s\n", in_file.c_str());
+            }
+        }
+    }
+
     if (params.mode == CONVERT) {
-        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype);
+        bool success = convert(params.model_path.c_str(), params.clip_l_path.c_str(), params.clip_g_path.c_str(), params.t5xxl_path.c_str(), params.diffusion_model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype);
         if (!success) {
             fprintf(stderr,
                     "convert '%s'/'%s' to '%s' failed\n",
@@ -1075,11 +1119,11 @@ int main(int argc, const char* argv[]) {
 
     std::string dummy_name, ext, lc_ext;
     bool is_jpg;
-    size_t last = params.output_path.find_last_of(".");
+    size_t last      = params.output_path.find_last_of(".");
     size_t last_path = std::min(params.output_path.find_last_of("/"),
                                 params.output_path.find_last_of("\\"));
-    if (last != std::string::npos // filename has extension
-    && (last_path == std::string::npos || last > last_path)) {
+    if (last != std::string::npos  // filename has extension
+        && (last_path == std::string::npos || last > last_path)) {
         dummy_name = params.output_path.substr(0, last);
         ext = lc_ext = params.output_path.substr(last);
         std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
@@ -1087,7 +1131,7 @@ int main(int argc, const char* argv[]) {
     } else {
         dummy_name = params.output_path;
         ext = lc_ext = "";
-        is_jpg = false;
+        is_jpg       = false;
     }
     // appending ".png" to absent or unknown extension
     if (!is_jpg && lc_ext != ".png") {
@@ -1099,7 +1143,7 @@ int main(int argc, const char* argv[]) {
             continue;
         }
         std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
-        if(is_jpg) {
+        if (is_jpg) {
             stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                            results[i].data, 90, get_image_params(params, params.seed + i).c_str());
             printf("save result JPEG image to '%s'\n", final_image_path.c_str());
@@ -1110,6 +1154,9 @@ int main(int argc, const char* argv[]) {
         }
         free(results[i].data);
         results[i].data = NULL;
+    }
+    if (params.imatrix_out != "") {
+        saveImatrix(params.imatrix_out.c_str());
     }
     free(results);
     free_sd_ctx(sd_ctx);
