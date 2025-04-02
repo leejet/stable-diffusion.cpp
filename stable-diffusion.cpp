@@ -326,8 +326,12 @@ public:
             clip_backend   = backend;
             bool use_t5xxl = false;
             if (sd_version_is_dit(version)) {
-                // TODO: check if t5 is actually loaded?
-                use_t5xxl = true;
+                for (auto pair : model_loader.tensor_storages_types) {
+                    if (pair.first.find("text_encoders.t5xxl") != std::string::npos) {
+                        use_t5xxl = true;
+                        break;
+                    }
+                }
             }
             if (!clip_on_cpu && !ggml_backend_is_cpu(backend) && use_t5xxl) {
                 LOG_WARN(
