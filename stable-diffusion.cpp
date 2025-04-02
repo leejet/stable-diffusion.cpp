@@ -326,6 +326,7 @@ public:
             clip_backend   = backend;
             bool use_t5xxl = false;
             if (sd_version_is_dit(version)) {
+                // TODO: check if t5 is actually loaded?
                 use_t5xxl = true;
             }
             if (!clip_on_cpu && !ggml_backend_is_cpu(backend) && use_t5xxl) {
