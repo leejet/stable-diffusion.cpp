@@ -1105,12 +1105,10 @@ protected:
         }
     }
 
-    bool alloc_compute_buffer(get_graph_cb_t get_graph) {
+    bool alloc_compute_buffer(struct ggml_cgraph* gf) {
         if (compute_allocr != NULL) {
             return true;
         }
-        reset_compute_ctx();
-        struct ggml_cgraph* gf = get_graph();
         backend_tensor_data_map.clear();
         compute_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
 
@@ -1232,9 +1230,9 @@ public:
                  bool free_compute_buffer_immediately = true,
                  struct ggml_tensor** output          = NULL,
                  struct ggml_context* output_ctx      = NULL) {
-        alloc_compute_buffer(get_graph);
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_graph();
+        alloc_compute_buffer(gf);
         GGML_ASSERT(ggml_gallocr_alloc_graph(compute_allocr, gf));
         cpy_data_to_backend_tensor();
         if (ggml_backend_is_cpu(backend)) {
