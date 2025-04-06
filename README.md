@@ -319,7 +319,7 @@ These projects wrap `stable-diffusion.cpp` for easier use in other languages/fra
 * C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
 * Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
 * Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)
-* Flutter/Dart: [newfla/diffusion-rs](https://github.com/rmatif/Local-Diffusion)
+* Flutter/Dart: [rmatif/Local-Diffusion](https://github.com/rmatif/Local-Diffusion)
 
 ## UIs
 
