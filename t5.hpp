@@ -648,6 +648,25 @@ public:
     }
 };
 
+struct T5Projection : public UnaryBlock {
+public:
+    T5Projection(int64_t model_dim, int64_t projection_dim) {
+        blocks["0"] = std::shared_ptr<GGMLBlock>(new Linear(model_dim, projection_dim, false));
+        blocks["3"] = std::shared_ptr<GGMLBlock>(new Linear(projection_dim, projection_dim, false));
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        // x: [N, n_token, model_dim]
+        auto wi = std::dynamic_pointer_cast<Linear>(blocks["0"]);
+        auto wo = std::dynamic_pointer_cast<Linear>(blocks["3"]);
+
+        x = wi->forward(ctx, x);
+        x = ggml_relu_inplace(ctx, x);
+        x = wo->forward(ctx, x);
+        return x;
+    }
+};
+
 struct T5Stack : public GGMLBlock {
     int64_t num_layers;
 
@@ -682,6 +701,7 @@ public:
         auto final_layer_norm = std::dynamic_pointer_cast<T5LayerNorm>(blocks["final_layer_norm"]);
 
         x = final_layer_norm->forward(ctx, x);
+        
         return x;
     }
 };
@@ -692,9 +712,11 @@ public:
        int64_t model_dim,
        int64_t ff_dim,
        int64_t num_heads,
-       int64_t vocab_size) {
+       int64_t vocab_size,
+       int64_t projection_dim) {
         blocks["encoder"] = std::shared_ptr<GGMLBlock>(new T5Stack(num_layers, model_dim, model_dim, ff_dim, num_heads));
         blocks["shared"]  = std::shared_ptr<GGMLBlock>(new Embedding(vocab_size, model_dim));
+        blocks["final_projection"] = std::shared_ptr<GGMLBlock>(new T5Projection(model_dim, projection_dim));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
@@ -709,6 +731,9 @@ public:
 
         auto x = shared->forward(ctx, input_ids);
         x      = encoder->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
+
+        auto final_projection = std::dynamic_pointer_cast<T5Projection>(blocks["final_projection"]);
+        x = final_projection->forward(ctx, x);
         return x;
     }
 };
@@ -720,12 +745,13 @@ struct T5Runner : public GGMLRunner {
     T5Runner(ggml_backend_t backend,
              std::map<std::string, enum ggml_type>& tensor_types,
              const std::string prefix,
-             int64_t num_layers = 24,
-             int64_t model_dim  = 4096,
-             int64_t ff_dim     = 10240,
-             int64_t num_heads  = 64,
-             int64_t vocab_size = 32128)
-        : GGMLRunner(backend), model(num_layers, model_dim, ff_dim, num_heads, vocab_size) {
+             int64_t num_layers = 12,
+             int64_t model_dim  = 768,
+             int64_t ff_dim     = 2048,
+             int64_t num_heads  = 12,
+             int64_t vocab_size = 32128,
+             int64_t projection_dim = 4096)
+        : GGMLRunner(backend), model(num_layers, model_dim, ff_dim, num_heads, vocab_size, projection_dim) {
         model.init(params_ctx, tensor_types, prefix);
     }
 
@@ -861,12 +887,13 @@ struct T5Embedder {
     T5Embedder(ggml_backend_t backend,
                std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
                const std::string prefix                            = "",
-               int64_t num_layers                                  = 24,
-               int64_t model_dim                                   = 4096,
-               int64_t ff_dim                                      = 10240,
-               int64_t num_heads                                   = 64,
-               int64_t vocab_size                                  = 32128)
-        : model(backend, tensor_types, prefix, num_layers, model_dim, ff_dim, num_heads, vocab_size) {
+               int64_t num_layers                                  = 12,
+               int64_t model_dim                                   = 768,
+               int64_t ff_dim                                      = 2048,
+               int64_t num_heads                                   = 12,
+               int64_t vocab_size                                  = 32128,
+               int64_t projection_dim                              = 4096)
+        : model(backend, tensor_types, prefix, num_layers, model_dim, ff_dim, num_heads, vocab_size, projection_dim) {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
