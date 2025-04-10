@@ -861,7 +861,7 @@ namespace Flux {
                 vec = ggml_concat(ctx, timestep_guidance, modulation_index, 0);  // [N, 344, 64]
                 // Permute for consistency with non-distilled modulation implementation
                 vec = ggml_cont(ctx, ggml_permute(ctx, vec, 0, 2, 1, 3));  // [344, N, 64]
-                vec = approx->forward(ctx, vec);                                 // [344, N, hidden_size]
+                vec = approx->forward(ctx, vec);                           // [344, N, hidden_size]
 
             } else {
                 auto time_in   = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);
