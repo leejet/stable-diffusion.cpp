@@ -798,6 +798,7 @@ public:
                         float eta,
                         sample_method_t method,
                         const std::vector<float>& sigmas,
+                        int initial_step,
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<int> skip_layers = {},
@@ -991,7 +992,7 @@ public:
             return denoised;
         };
 
-        sample_k_diffusion(method, denoise, work_ctx, x, sigmas, rng, eta);
+        sample_k_diffusion(method, denoise, work_ctx, x, sigmas, initial_step, rng, eta);
 
         x = denoiser->inverse_noise_scaling(sigmas[sigmas.size() - 1], x);
 
@@ -1202,6 +1203,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            int height,
                            enum sample_method_t sample_method,
                            const std::vector<float>& sigmas,
+                           int initial_step,
                            int64_t seed,
                            int batch_count,
                            const sd_image_t* control_cond,
@@ -1464,6 +1466,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      eta,
                                                      sample_method,
                                                      sigmas,
+                                                     initial_step,
                                                      start_merge_step,
                                                      id_cond,
                                                      skip_layers,
@@ -1611,6 +1614,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                height,
                                                sample_method,
                                                sigmas,
+                                               0,
                                                seed,
                                                batch_count,
                                                control_cond,
@@ -1775,8 +1779,9 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     if (t_enc == sample_steps)
         t_enc--;
     LOG_INFO("target t_enc is %zu steps", t_enc);
+    int initial_step = sample_steps - t_enc - 1;
     std::vector<float> sigma_sched;
-    sigma_sched.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
+    sigma_sched.assign(sigmas.begin() + initial_step, sigmas.end());
 
     sd_image_t* result_images = generate_image(sd_ctx,
                                                work_ctx,
@@ -1791,6 +1796,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                height,
                                                sample_method,
                                                sigma_sched,
+                                               initial_step,
                                                seed,
                                                batch_count,
                                                control_cond,
@@ -1903,6 +1909,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                                                  0.f,
                                                  sample_method,
                                                  sigmas,
+                                                 0,
                                                  -1,
                                                  SDCondition(NULL, NULL, NULL));
 

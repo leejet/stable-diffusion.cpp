@@ -474,6 +474,7 @@ static void sample_k_diffusion(sample_method_t method,
                                ggml_context* work_ctx,
                                ggml_tensor* x,
                                std::vector<float> sigmas,
+                               int initial_step,
                                std::shared_ptr<RNG> rng,
                                float eta) {
     size_t steps = sigmas.size() - 1;
@@ -1060,10 +1061,14 @@ static void sample_k_diffusion(sample_method_t method,
                 //   x_t"
                 // - pred_prev_sample -> "x_t-1"
                 int timestep =
-                    roundf(TIMESTEPS -
-                           i * ((float)TIMESTEPS / steps)) - 1;
+                    TIMESTEPS - 1 -
+                    (int)roundf((initial_step + i) *
+                                (TIMESTEPS / float(initial_step + steps)));
                 // 1. get previous step value (=t-1)
-                int prev_timestep = timestep - TIMESTEPS / steps;
+                int prev_timestep =
+                    TIMESTEPS - 1 -
+                    (int)roundf((initial_step + i + 1) *
+                                (TIMESTEPS / float(initial_step + steps)));
                 // The sigma here is chosen to cause the
                 // CompVisDenoiser to produce t = timestep
                 float sigma = compvis_sigmas[timestep];
@@ -1236,12 +1241,13 @@ static void sample_k_diffusion(sample_method_t method,
                 // Analytic form for TCD timesteps
                 int timestep = TIMESTEPS - 1 -
                     (TIMESTEPS / original_steps) *
-                    (int)floor(i * ((float)original_steps / steps));
+                    (int)floor((initial_step + i) *
+                               ((float)original_steps / (initial_step + steps)));
                 // 1. get previous step value
                 int prev_timestep = i >= steps - 1 ? 0 :
                     TIMESTEPS - 1 - (TIMESTEPS / original_steps) *
-                    (int)floor((i + 1) *
-                               ((float)original_steps / steps));
+                    (int)floor((initial_step + i + 1) *
+                               ((float)original_steps / (initial_step + steps)));
                 // Here timestep_s is tau_n' in Algorithm 4. The _s
                 // notation appears to be that from C. Lu,
                 // "DPM-Solver: A Fast ODE Solver for Diffusion
