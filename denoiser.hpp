@@ -669,7 +669,7 @@ static void sample_k_diffusion(sample_method_t method,
         } break;
         case DPMPP2S_A: {
             struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
+//            struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
@@ -684,6 +684,8 @@ static void sample_k_diffusion(sample_method_t method,
                 auto sigma_fn    = [](float t) -> float { return exp(-t); };
 
                 if (sigma_down == 0) {
+                    x = ggml_dup_tensor(work_ctx, denoised);
+/*
                     // Euler step
                     float* vec_d        = (float*)d->data;
                     float* vec_x        = (float*)x->data;
@@ -701,6 +703,7 @@ static void sample_k_diffusion(sample_method_t method,
                     for (int j = 0; j < ggml_nelements(d); j++) {
                         vec_x[j] = vec_x[j] + vec_d[j] * dt;
                     }
+//*/
                 } else {
                     // DPM-Solver++(2S)
                     float t      = t_fn(sigmas[i]);
@@ -708,7 +711,7 @@ static void sample_k_diffusion(sample_method_t method,
                     float h      = t_next - t;
                     float s      = t + 0.5f * h;
 
-                    float* vec_d        = (float*)d->data;
+//                    float* vec_d        = (float*)d->data;
                     float* vec_x        = (float*)x->data;
                     float* vec_x2       = (float*)x2->data;
                     float* vec_denoised = (float*)denoised->data;
