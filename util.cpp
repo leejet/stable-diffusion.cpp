@@ -59,7 +59,7 @@ void replace_all_chars(std::string& str, char target, char replacement) {
     }
 }
 
-std::string format(const char* fmt, ...) {
+std::string sd_format(const char* fmt, ...) {
     va_list ap;
     va_list ap2;
     va_start(ap, fmt);
