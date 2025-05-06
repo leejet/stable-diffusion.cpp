@@ -357,7 +357,7 @@ public:
 
         BuildTrie(&pieces);
     }
-    ~T5UniGramTokenizer(){};
+    ~T5UniGramTokenizer() {};
 
     std::string Normalize(const std::string& input) const {
         // Ref: https://github.com/huggingface/tokenizers/blob/1ff56c0c70b045f0cd82da1af9ac08cd4c7a6f9f/bindings/python/py_src/tokenizers/implementations/sentencepiece_unigram.py#L29
@@ -701,22 +701,27 @@ public:
         auto final_layer_norm = std::dynamic_pointer_cast<T5LayerNorm>(blocks["final_layer_norm"]);
 
         x = final_layer_norm->forward(ctx, x);
-        
+
         return x;
     }
 };
 
 struct T5 : public GGMLBlock {
+    bool final_proj = false;
+
 public:
+    T5() {}
     T5(int64_t num_layers,
        int64_t model_dim,
        int64_t ff_dim,
        int64_t num_heads,
        int64_t vocab_size,
-       int64_t projection_dim) {
+       int64_t projection_dim) : final_proj(projection_dim > 0) {
         blocks["encoder"] = std::shared_ptr<GGMLBlock>(new T5Stack(num_layers, model_dim, model_dim, ff_dim, num_heads));
         blocks["shared"]  = std::shared_ptr<GGMLBlock>(new Embedding(vocab_size, model_dim));
-        blocks["final_projection"] = std::shared_ptr<GGMLBlock>(new T5Projection(model_dim, projection_dim));
+        if (final_proj) {
+            blocks["final_projection"] = std::shared_ptr<GGMLBlock>(new T5Projection(model_dim, projection_dim));
+        }
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
@@ -731,9 +736,10 @@ public:
 
         auto x = shared->forward(ctx, input_ids);
         x      = encoder->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
-
-        auto final_projection = std::dynamic_pointer_cast<T5Projection>(blocks["final_projection"]);
-        x = final_projection->forward(ctx, x);
+        if (final_proj) {
+            auto final_projection = std::dynamic_pointer_cast<T5Projection>(blocks["final_projection"]);
+            x                     = final_projection->forward(ctx, x);
+        }
         return x;
     }
 };
@@ -745,13 +751,23 @@ struct T5Runner : public GGMLRunner {
     T5Runner(ggml_backend_t backend,
              std::map<std::string, enum ggml_type>& tensor_types,
              const std::string prefix,
-             int64_t num_layers = 12,
-             int64_t model_dim  = 768,
-             int64_t ff_dim     = 2048,
-             int64_t num_heads  = 12,
-             int64_t vocab_size = 32128,
-             int64_t projection_dim = 4096)
-        : GGMLRunner(backend), model(num_layers, model_dim, ff_dim, num_heads, vocab_size, projection_dim) {
+             int64_t num_layers     = 24,
+             int64_t model_dim      = 4096,
+             int64_t ff_dim         = 10240,
+             int64_t num_heads      = 64,
+             int64_t vocab_size     = 32128,
+             int64_t projection_dim = -1)
+        : GGMLRunner(backend) {
+        if (tensor_types.find(prefix + ".final_projection.0.weight") != tensor_types.end()) {
+            num_layers     = 12;
+            model_dim      = 768;
+            ff_dim         = 2048;
+            num_heads      = 12;
+            vocab_size     = 32128;
+            projection_dim = 4096;
+        }
+
+        model = T5(num_layers, model_dim, ff_dim, num_heads, vocab_size, projection_dim);
         model.init(params_ctx, tensor_types, prefix);
     }
 
