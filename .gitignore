@@ -8,6 +8,7 @@ test/
 *.bin
 *.exe
 *.gguf
+*.pdf
 output*.png
 models*
 *.log

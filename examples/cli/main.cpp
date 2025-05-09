@@ -51,6 +51,8 @@ const char* schedule_str[] = {
     "exponential",
     "ays",
     "gits",
+    "sgm_uniform",
+    "simple",
 };
 
 const char* modes_str[] = {
@@ -129,6 +131,7 @@ struct SDParams {
     float slg_scale              = 0.f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+    int shifted_timestep         = -1;
 };
 
 void print_params(SDParams params) {
@@ -178,6 +181,7 @@ void print_params(SDParams params) {
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
+    printf("    timestep_shift:    %d\n", params.shifted_timestep);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -232,7 +236,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
+    printf("  --schedule {discrete, karras, exponential, ays, gits, sgm_uniform, simple} Denoiser sigma schedule (default: discrete)\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
@@ -244,6 +248,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            Colors the logging tags according to level\n");
+    printf("  --timestep-shift N                 shift timestep for NitroFusion models, default: -1 off, recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -534,14 +539,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             }
             const char* schedule_selected = argv[i];
             int schedule_found            = -1;
-            for (int d = 0; d < N_SCHEDULES; d++) {
+            for (int d = 0; d < N_SCHEDULES; d++) { 
                 if (!strcmp(schedule_selected, schedule_str[d])) {
                     schedule_found = d;
                 }
             }
             if (schedule_found == -1) {
-                invalid_arg = true;
-                break;
+                fprintf(stderr, "error: invalid schedule %s, must be one of [discrete, karras, exponential, ays, gits, sgm_uniform, simple]\n", schedule_selected);
+                exit(1); 
             }
             params.schedule = (schedule_t)schedule_found;
         } else if (arg == "-s" || arg == "--seed") {
@@ -629,6 +634,16 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "--timestep-shift") { 
+             if (++i >= argc) {
+                 invalid_arg = true;
+                 break;
+             }
+             params.shifted_timestep = std::stoi(argv[i]);
+             if (params.shifted_timestep != -1 && (params.shifted_timestep < 1 || params.shifted_timestep > 1000)) {
+                  fprintf(stderr, "error: timestep-shift must be between 1 and 1000, or -1 to disable\n");
+                  exit(1);
+             }
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -967,10 +982,11 @@ int main(int argc, const char* argv[]) {
                           params.skip_layers.size(),
                           params.slg_scale,
                           params.skip_layer_start,
-                          params.skip_layer_end);
-    } else {
-        sd_image_t input_image = {(uint32_t)params.width,
-                                  (uint32_t)params.height,
+                          params.skip_layer_end,
+                          params.shifted_timestep); 
+   } else {
+       sd_image_t input_image = {(uint32_t)params.width,
+                                 (uint32_t)params.height,
                                   3,
                                   input_image_buffer};
 
@@ -1036,9 +1052,10 @@ int main(int argc, const char* argv[]) {
                               params.skip_layers.size(),
                               params.slg_scale,
                               params.skip_layer_start,
-                              params.skip_layer_end);
-        }
-    }
+                              params.skip_layer_end,
+                              params.shifted_timestep);
+       }
+   }
 
     if (results == NULL) {
         printf("generate failed\n");

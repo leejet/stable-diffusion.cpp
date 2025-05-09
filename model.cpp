@@ -185,7 +185,7 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
         new_name = new_name.substr(strlen("conditioner.embedders.0."));
     } else if (starts_with(new_name, "conditioner.embedders.1.")) {
         prefix   = "cond_stage_model.1.";
-        new_name = new_name.substr(strlen("conditioner.embedders.0."));
+        new_name = new_name.substr(strlen("conditioner.embedders.1."));
     } else if (starts_with(new_name, "cond_stage_model.")) {
         prefix   = "cond_stage_model.";
         new_name = new_name.substr(strlen("cond_stage_model."));
@@ -201,7 +201,9 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
         return new_name;
     }
 
-    if (open_clip_to_hf_clip_model.find(new_name) != open_clip_to_hf_clip_model.end()) {
+    if (new_name == "model.text_projection.weight" || new_name == "model.text_projection") {
+        new_name = "transformer.text_model.text_projection";
+    } else if (open_clip_to_hf_clip_model.count(new_name)) { 
         new_name = open_clip_to_hf_clip_model[new_name];
     }
 
