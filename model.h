@@ -12,9 +12,9 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "gguf.h"
 #include "json.hpp"
 #include "zip.h"
-#include "gguf.h"
 
 #define SD_MAX_DIMS 5
 
@@ -80,6 +80,10 @@ static inline bool sd_version_is_dit(SDVersion version) {
         return true;
     }
     return false;
+}
+
+static bool sd_version_use_concat(SDVersion version) {
+    return version == VERSION_INSTRUCT_PIX2PIX || sd_version_is_inpaint(version);
 }
 
 enum PMVersion {
