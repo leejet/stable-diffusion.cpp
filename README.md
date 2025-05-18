@@ -224,7 +224,8 @@ cmake .. -G Ninja \
 
 ninja
 ```
-*(Note: Don't forget to include `LD_LIBRARY_PATH=/vendor/lib64` in your command line)*
+*(Note: Don't forget to include `LD_LIBRARY_PATH=/vendor/lib64` in your command line before running the binary)*
+
 ##### Using SYCL
 
 Using SYCL makes the computation run on the Intel GPU. Please make sure you have installed the related driver and [Intel® oneAPI Base toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) before start. More details and steps can refer to [llama.cpp SYCL backend](https://github.com/ggerganov/llama.cpp/blob/master/docs/backend/SYCL.md#linux).
