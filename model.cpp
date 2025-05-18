@@ -26,6 +26,10 @@
 #include "ggml-vulkan.h"
 #endif
 
+#ifdef SD_USE_OPENCL
+#include "ggml-opencl.h"
+#endif
+
 #define ST_HEADER_SIZE_LEN 8
 
 uint64_t read_u64(uint8_t* buffer) {

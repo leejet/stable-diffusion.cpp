@@ -39,6 +39,10 @@
 #include "ggml-vulkan.h"
 #endif
 
+#ifdef SD_USE_OPENCL
+#include "ggml-opencl.h"
+#endif
+
 #ifdef SD_USE_SYCL
 #include "ggml-sycl.h"
 #endif

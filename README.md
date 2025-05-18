@@ -21,7 +21,7 @@ Inference of Stable Diffusion and Flux in pure C/C++
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA, Metal, Vulkan and SYCL backend for GPU acceleration.
+- Full CUDA, Metal, Vulkan, OpenCL and SYCL backend for GPU acceleration.
 - Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
 - Flash Attention for memory usage optimization
@@ -158,7 +158,80 @@ Install Vulkan SDK from https://www.lunarg.com/vulkan-sdk/.
 cmake .. -DSD_VULKAN=ON
 cmake --build . --config Release
 ```
+##### Using Vulkan
 
+Install Vulkan SDK from https://www.lunarg.com/vulkan-sdk/.
+
+```
+cmake .. -DSD_VULKAN=ON
+cmake --build . --config Release
+```
+
+### Using OpenCL (for Adreno GPU)
+
+Currently, it supports only Adreno GPUs and is primarily optimized for Q4_0 type
+
+To build for Windows ARM please refers to [Windows 11 Arm64
+](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/OPENCL.md#windows-11-arm64)
+
+**Building for Android:**
+
+  **Android NDK:**
+       Download and install the Android NDK from the [official Android developer site](https://developer.android.com/ndk/downloads).
+
+**Setup OpenCL Dependencies for NDK:**
+
+You need to provide OpenCL headers and the ICD loader library to your NDK sysroot.
+
+*   **OpenCL Headers:**
+    ```bash
+    # In a temporary working directory
+    git clone https://github.com/KhronosGroup/OpenCL-Headers
+    cd OpenCL-Headers
+    # Replace <YOUR_NDK_PATH> with your actual NDK installation path
+    # e.g., cp -r CL /path/to/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+    sudo cp -r CL <YOUR_NDK_PATH>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+    cd ..
+    ```
+
+*   **OpenCL ICD Loader:**
+    ```bash
+    # In the same temporary working directory
+    git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader
+    cd OpenCL-ICD-Loader
+    mkdir build_ndk && cd build_ndk
+
+    # Replace <YOUR_NDK_PATH> in the CMAKE_TOOLCHAIN_FILE and OPENCL_ICD_LOADER_HEADERS_DIR
+    cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_TOOLCHAIN_FILE=<YOUR_NDK_PATH>/build/cmake/android.toolchain.cmake \
+      -DOPENCL_ICD_LOADER_HEADERS_DIR=<YOUR_NDK_PATH>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include \
+      -DANDROID_ABI=arm64-v8a \
+      -DANDROID_PLATFORM=24 \
+      -DANDROID_STL=c++_shared
+
+    ninja
+    # Replace <YOUR_NDK_PATH>
+    # e.g., cp libOpenCL.so /path/to/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
+    sudo cp libOpenCL.so <YOUR_NDK_PATH>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
+    cd ../..
+    ```
+
+**Build `stable-diffusion.cpp` for Android with OpenCL:**
+
+```bash
+mkdir build-android && cd build-android
+
+# Replace <YOUR_NDK_PATH> with your actual NDK installation path
+# e.g., -DCMAKE_TOOLCHAIN_FILE=/path/to/android-ndk-r26c/build/cmake/android.toolchain.cmake
+cmake .. -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=<YOUR_NDK_PATH>/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-28 \
+  -DGGML_OPENMP=OFF \
+  -DSD_OPENCL=ON
+
+ninja
+```
 ##### Using SYCL
 
 Using SYCL makes the computation run on the Intel GPU. Please make sure you have installed the related driver and [Intel® oneAPI Base toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) before start. More details and steps can refer to [llama.cpp SYCL backend](https://github.com/ggerganov/llama.cpp/blob/master/docs/backend/SYCL.md#linux).
