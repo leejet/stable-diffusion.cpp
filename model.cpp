@@ -1477,6 +1477,15 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
     return true;
 }
 
+bool ModelLoader::model_is_unet() {
+    for (auto& tensor_storage : tensor_storages) {
+        if (tensor_storage.name.find("model.diffusion_model.input_blocks.") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 SDVersion ModelLoader::get_sd_version() {
     TensorStorage token_embedding_weight, input_block_weight;
     bool input_block_checked = false;

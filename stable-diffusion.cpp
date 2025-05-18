@@ -200,16 +200,25 @@ public:
             }
         }
 
+        if (diffusion_model_path.size() > 0) {
+            LOG_INFO("loading diffusion model from '%s'", diffusion_model_path.c_str());
+            if (!model_loader.init_from_file(diffusion_model_path, "model.diffusion_model.")) {
+                LOG_WARN("loading diffusion model from '%s' failed", diffusion_model_path.c_str());
+            }
+        }
+
+        bool is_unet = model_loader.model_is_unet();
+
         if (clip_l_path.size() > 0) {
             LOG_INFO("loading clip_l from '%s'", clip_l_path.c_str());
-            if (!model_loader.init_from_file(clip_l_path, "text_encoders.clip_l.transformer.")) {
+            if (!model_loader.init_from_file(clip_l_path, is_unet ? "cond_stage_model.transformer." : "text_encoders.clip_l.transformer.")) {
                 LOG_WARN("loading clip_l from '%s' failed", clip_l_path.c_str());
             }
         }
 
         if (clip_g_path.size() > 0) {
             LOG_INFO("loading clip_g from '%s'", clip_g_path.c_str());
-            if (!model_loader.init_from_file(clip_g_path, "text_encoders.clip_g.transformer.")) {
+            if (!model_loader.init_from_file(clip_g_path, is_unet ? "cond_stage_model.1.transformer." : "text_encoders.clip_g.transformer.")) {
                 LOG_WARN("loading clip_g from '%s' failed", clip_g_path.c_str());
             }
         }
@@ -218,13 +227,6 @@ public:
             LOG_INFO("loading t5xxl from '%s'", t5xxl_path.c_str());
             if (!model_loader.init_from_file(t5xxl_path, "text_encoders.t5xxl.transformer.")) {
                 LOG_WARN("loading t5xxl from '%s' failed", t5xxl_path.c_str());
-            }
-        }
-
-        if (diffusion_model_path.size() > 0) {
-            LOG_INFO("loading diffusion model from '%s'", diffusion_model_path.c_str());
-            if (!model_loader.init_from_file(diffusion_model_path, "model.diffusion_model.")) {
-                LOG_WARN("loading diffusion model from '%s' failed", diffusion_model_path.c_str());
             }
         }
 
