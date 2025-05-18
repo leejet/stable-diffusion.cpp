@@ -167,23 +167,23 @@ cmake .. -DSD_VULKAN=ON
 cmake --build . --config Release
 ```
 
-### Using OpenCL (for Adreno GPU)
+##### Using OpenCL (for Adreno GPU)
 
 Currently, it supports only Adreno GPUs and is primarily optimized for Q4_0 type
 
 To build for Windows ARM please refers to [Windows 11 Arm64
 ](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/OPENCL.md#windows-11-arm64)
 
-**Building for Android:**
+Building for Android:
 
-  **Android NDK:**
+  Android NDK:
        Download and install the Android NDK from the [official Android developer site](https://developer.android.com/ndk/downloads).
 
-**Setup OpenCL Dependencies for NDK:**
+Setup OpenCL Dependencies for NDK:
 
 You need to provide OpenCL headers and the ICD loader library to your NDK sysroot.
 
-*   **OpenCL Headers:**
+*   OpenCL Headers:
     ```bash
     # In a temporary working directory
     git clone https://github.com/KhronosGroup/OpenCL-Headers
@@ -194,7 +194,7 @@ You need to provide OpenCL headers and the ICD loader library to your NDK sysroo
     cd ..
     ```
 
-*   **OpenCL ICD Loader:**
+*   OpenCL ICD Loader:
     ```bash
     # In the same temporary working directory
     git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader
@@ -216,7 +216,7 @@ You need to provide OpenCL headers and the ICD loader library to your NDK sysroo
     cd ../..
     ```
 
-**Build `stable-diffusion.cpp` for Android with OpenCL:**
+Build `stable-diffusion.cpp` for Android with OpenCL:
 
 ```bash
 mkdir build-android && cd build-android
@@ -232,6 +232,7 @@ cmake .. -G Ninja \
 
 ninja
 ```
+*(Note: Don't forget to include `LD_LIBRARY_PATH=/vendor/lib64` in your command line)*
 ##### Using SYCL
 
 Using SYCL makes the computation run on the Intel GPU. Please make sure you have installed the related driver and [Intel® oneAPI Base toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) before start. More details and steps can refer to [llama.cpp SYCL backend](https://github.com/ggerganov/llama.cpp/blob/master/docs/backend/SYCL.md#linux).
