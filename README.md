@@ -158,14 +158,6 @@ Install Vulkan SDK from https://www.lunarg.com/vulkan-sdk/.
 cmake .. -DSD_VULKAN=ON
 cmake --build . --config Release
 ```
-##### Using Vulkan
-
-Install Vulkan SDK from https://www.lunarg.com/vulkan-sdk/.
-
-```
-cmake .. -DSD_VULKAN=ON
-cmake --build . --config Release
-```
 
 ##### Using OpenCL (for Adreno GPU)
 
