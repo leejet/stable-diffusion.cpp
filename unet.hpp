@@ -207,7 +207,7 @@ public:
         }
         if (sd_version_is_inpaint(version)) {
             in_channels = 9;
-        } else if (version == VERSION_SD1_PIX2PIX) {
+        } else if (sd_version_is_edit(version)) {
             in_channels = 8;
         }
 
