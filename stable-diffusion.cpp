@@ -560,7 +560,7 @@ public:
             LOG_INFO("running in v-prediction mode");
             denoiser = std::make_shared<CompVisVDenoiser>();
         } else if (is_using_edm_parameterization) {
-            LOG_INFO("running in edm mode");
+            LOG_INFO("running in v-prediction EDM mode");
             denoiser = std::make_shared<CompVisEDMVDenoiser>();
         } else {
             LOG_INFO("running in eps-prediction mode");
