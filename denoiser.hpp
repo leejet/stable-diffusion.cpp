@@ -168,24 +168,21 @@ struct AYSSchedule : SigmaSchedule {
         std::vector<float> inputs;
         std::vector<float> results(n + 1);
 
-        switch (version) {
-            case VERSION_SD2: /* fallthrough */
-                LOG_WARN("AYS not designed for SD2.X models");
-            case VERSION_SD1:
-                LOG_INFO("AYS using SD1.5 noise levels");
-                inputs = noise_levels[0];
-                break;
-            case VERSION_SDXL:
-                LOG_INFO("AYS using SDXL noise levels");
-                inputs = noise_levels[1];
-                break;
-            case VERSION_SVD:
-                LOG_INFO("AYS using SVD noise levels");
-                inputs = noise_levels[2];
-                break;
-            default:
-                LOG_ERROR("Version not compatable with AYS scheduler");
-                return results;
+        if (sd_version_is_sd2((SDVersion)version)) {
+            LOG_WARN("AYS not designed for SD2.X models");
+        } /* fallthrough */
+        else if (sd_version_is_sd1((SDVersion)version)) {
+            LOG_INFO("AYS using SD1.5 noise levels");
+            inputs = noise_levels[0];
+        } else if (sd_version_is_sdxl((SDVersion)version)) {
+            LOG_INFO("AYS using SDXL noise levels");
+            inputs = noise_levels[1];
+        } else if (version == VERSION_SVD) {
+            LOG_INFO("AYS using SVD noise levels");
+            inputs = noise_levels[2];
+        } else {
+            LOG_ERROR("Version not compatable with AYS scheduler");
+            return results;
         }
 
         /* Stretches those pre-calculated reference levels out to the desired
@@ -349,9 +346,9 @@ struct CompVisVDenoiser : public CompVisDenoiser {
 struct CompVisEDMVDenoiser : public CompVisVDenoiser {
     float min_sigma                         = 0.002;
     float max_sigma                         = 120.0;
-    std::shared_ptr<SigmaSchedule> schedule = std::make_shared<ExponentialSchedule>();
-
-    CompVisEDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0) : min_sigma(min_sigma), max_sigma(max_sigma){
+    
+    CompVisEDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0) : min_sigma(min_sigma), max_sigma(max_sigma) {
+        schedule = std::make_shared<ExponentialSchedule>();
     }
 
     float t_to_sigma(float t) {
@@ -368,11 +365,6 @@ struct CompVisEDMVDenoiser : public CompVisVDenoiser {
 
     float sigma_max() {
         return max_sigma;
-    }
-
-    std::vector<float> get_sigmas(uint32_t n) {
-        auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
-        return schedule->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
     }
 };
 
