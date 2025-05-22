@@ -352,7 +352,7 @@ struct EDMVDenoiser : public CompVisVDenoiser {
     }
 
     float t_to_sigma(float t) {
-        return std::exp(t * 4);
+        return std::exp(t * 4/(float)TIMESTEPS);
     }
 
     float sigma_to_t(float s) {
