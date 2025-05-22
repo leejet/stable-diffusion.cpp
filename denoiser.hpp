@@ -343,11 +343,11 @@ struct CompVisVDenoiser : public CompVisDenoiser {
     }
 };
 
-struct CompVisEDMVDenoiser : public CompVisVDenoiser {
-    float min_sigma                         = 0.002;
-    float max_sigma                         = 120.0;
-    
-    CompVisEDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0) : min_sigma(min_sigma), max_sigma(max_sigma) {
+struct EDMVDenoiser : public CompVisVDenoiser {
+    float min_sigma = 0.002;
+    float max_sigma = 120.0;
+
+    EDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0) : min_sigma(min_sigma), max_sigma(max_sigma) {
         schedule = std::make_shared<ExponentialSchedule>();
     }
 
