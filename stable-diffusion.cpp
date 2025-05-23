@@ -104,6 +104,9 @@ public:
     bool vae_tiling           = false;
     bool stacked_id           = false;
 
+    bool is_using_v_parameterization     = false;
+    bool is_using_edm_v_parameterization = false;
+
     std::map<std::string, struct ggml_tensor*> tensors;
 
     std::string lora_model_dir;
@@ -522,8 +525,6 @@ public:
         LOG_INFO("loading model from '%s' completed, taking %.2fs", model_path.c_str(), (t1 - t0) * 1.0f / 1000);
 
         // check is_using_v_parameterization_for_sd2
-        bool is_using_v_parameterization   = false;
-        bool is_using_edm_parameterization = false;
 
         if (sd_version_is_sd2(version)) {
             if (is_using_v_parameterization_for_sd2(ctx, sd_version_is_inpaint(version))) {
@@ -533,7 +534,7 @@ public:
             if (model_loader.tensor_storages_types.find("edm_vpred.sigma_max") != model_loader.tensor_storages_types.end()) {
                 // CosXL models
                 // TODO: get sigma_min and sigma_max values from file
-                is_using_edm_parameterization = true;
+                is_using_edm_v_parameterization = true;
             }
             if (model_loader.tensor_storages_types.find("v_pred") != model_loader.tensor_storages_types.end()) {
                 is_using_v_parameterization = true;
@@ -559,7 +560,7 @@ public:
         } else if (is_using_v_parameterization) {
             LOG_INFO("running in v-prediction mode");
             denoiser = std::make_shared<CompVisVDenoiser>();
-        } else if (is_using_edm_parameterization) {
+        } else if (is_using_edm_v_parameterization) {
             LOG_INFO("running in v-prediction EDM mode");
             denoiser = std::make_shared<EDMVDenoiser>();
         } else {
