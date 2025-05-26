@@ -845,6 +845,14 @@ namespace Flux {
                 control = patchify(ctx, control, patch_size);
 
                 img = ggml_concat(ctx, img, ggml_concat(ctx, ggml_concat(ctx, masked, mask, 0), control, 0), 0);
+            } else if (version == VERSION_FLUX_CONTROLS) {
+                GGML_ASSERT(c_concat != NULL);
+
+                ggml_tensor* control = ggml_pad(ctx, c_concat, pad_w, pad_h, 0, 0);
+
+                control = patchify(ctx, control, patch_size);
+
+                img = ggml_concat(ctx, img, control, 0);
             }
 
             auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe, skip_layers);  // [N, h*w, C * patch_size * patch_size]
@@ -877,6 +885,8 @@ namespace Flux {
             flux_params.depth_single_blocks = 0;
             if (version == VERSION_FLUX_FILL) {
                 flux_params.in_channels = 384;
+            } else if (version == VERSION_FLUX_CONTROLS) {
+                flux_params.in_channels = 128;
             } else if (version == VERSION_FLEX_2) {
                 flux_params.in_channels = 196;
             }
