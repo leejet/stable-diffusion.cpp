@@ -36,7 +36,10 @@ const char* model_version_to_str[] = {
     "SVD",
     "SD3.x",
     "Flux",
-    "Flux Fill"};
+    "Flux Fill",
+    "Flux Control",
+    "Flex.2",
+};
 
 const char* sampling_methods_str[] = {
     "Euler A",
