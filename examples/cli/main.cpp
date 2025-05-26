@@ -933,7 +933,7 @@ int main(int argc, const char* argv[]) {
     }
 
     sd_image_t* control_image = NULL;
-    if (params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
+    if (params.control_image_path.size() > 0) {
         int c                = 0;
         control_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
         if (control_image_buffer == NULL) {

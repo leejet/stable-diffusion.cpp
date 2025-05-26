@@ -793,7 +793,8 @@ namespace Flux {
                                     struct ggml_tensor* y,
                                     struct ggml_tensor* guidance,
                                     struct ggml_tensor* pe,
-                                    std::vector<int> skip_layers = std::vector<int>()) {
+                                    std::vector<int> skip_layers = std::vector<int>(),
+                                    SDVersion version            = VERSION_FLUX) {
             // Forward pass of DiT.
             // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
             // timestep: (N,) tensor of diffusion timesteps
@@ -817,7 +818,8 @@ namespace Flux {
             // img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch_size, pw=patch_size)
             auto img = patchify(ctx, x, patch_size);  // [N, h*w, C * patch_size * patch_size]
 
-            if (c_concat != NULL) {
+            if (version == VERSION_FLUX_FILL) {
+                GGML_ASSERT(c_concat != NULL);
                 ggml_tensor* masked = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], 0);
                 ggml_tensor* mask   = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 8 * 8, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
 
@@ -828,6 +830,21 @@ namespace Flux {
                 mask   = patchify(ctx, mask, patch_size);
 
                 img = ggml_concat(ctx, img, ggml_concat(ctx, masked, mask, 0), 0);
+            } else if (version == VERSION_FLEX_2) {
+                GGML_ASSERT(c_concat != NULL);
+                ggml_tensor* masked  = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], 0);
+                ggml_tensor* mask    = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 1, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
+                ggml_tensor* control = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * (C + 1));
+
+                masked  = ggml_pad(ctx, masked, pad_w, pad_h, 0, 0);
+                mask    = ggml_pad(ctx, mask, pad_w, pad_h, 0, 0);
+                control = ggml_pad(ctx, control, pad_w, pad_h, 0, 0);
+
+                masked  = patchify(ctx, masked, patch_size);
+                mask    = patchify(ctx, mask, patch_size);
+                control = patchify(ctx, control, patch_size);
+
+                img = ggml_concat(ctx, img, ggml_concat(ctx, ggml_concat(ctx, masked, mask, 0), control, 0), 0);
             }
 
             auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe, skip_layers);  // [N, h*w, C * patch_size * patch_size]
@@ -846,19 +863,22 @@ namespace Flux {
         FluxParams flux_params;
         Flux flux;
         std::vector<float> pe_vec;  // for cache
+        SDVersion version;
 
         FluxRunner(ggml_backend_t backend,
                    std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
                    const std::string prefix                            = "",
                    SDVersion version                                   = VERSION_FLUX,
                    bool flash_attn                                     = false)
-            : GGMLRunner(backend) {
+            : GGMLRunner(backend), version(version) {
             flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
             flux_params.depth_single_blocks = 0;
             if (version == VERSION_FLUX_FILL) {
                 flux_params.in_channels = 384;
+            } else if (version == VERSION_FLEX_2) {
+                flux_params.in_channels = 196;
             }
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
@@ -941,7 +961,8 @@ namespace Flux {
                                                    y,
                                                    guidance,
                                                    pe,
-                                                   skip_layers);
+                                                   skip_layers,
+                                                   version);
 
             ggml_build_forward_expand(gf, out);
 
