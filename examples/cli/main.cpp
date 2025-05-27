@@ -5,7 +5,8 @@
 #include <random>
 #include <string>
 #include <vector>
-
+#include <sstream>
+#include <iomanip>
 // #include "preprocessing.hpp"
 #include "flux.hpp"
 #include "stable-diffusion.h"
@@ -129,6 +130,7 @@ struct SDParams {
     float slg_scale              = 0.f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+    std::vector<float> custom_sigmas;
 };
 
 void print_params(SDParams params) {
@@ -175,6 +177,13 @@ void print_params(SDParams params) {
     printf("    strength(img2img): %.2f\n", params.strength);
     printf("    rng:               %s\n", rng_type_to_str[params.rng_type]);
     printf("    seed:              %ld\n", params.seed);
+    if (!params.custom_sigmas.empty()) {
+        printf("    custom_sigmas:     [");
+        for (size_t i = 0; i < params.custom_sigmas.size(); ++i) {
+            printf("%.4f%s", params.custom_sigmas[i], i == params.custom_sigmas.size() - 1 ? "" : ", ");
+        }
+        printf("]\n");
+    }
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
@@ -231,8 +240,12 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
+    printf("  --sigmas SIGMAS                    Custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\").\n");
+    printf("                                     Overrides --schedule. Number of provided sigmas can be less than steps;\n");
+    printf("                                     it will be padded with zeros. The last sigma is always forced to 0.\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
+    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete).\n");
+    printf("                                     Ignored if --sigmas is used.\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
@@ -629,6 +642,44 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "--sigmas") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            std::string sigmas_str = argv[i];
+            if (!sigmas_str.empty() && sigmas_str.front() == '[') {
+                sigmas_str.erase(0, 1);
+            }
+            if (!sigmas_str.empty() && sigmas_str.back() == ']') {
+                sigmas_str.pop_back();
+            }
+
+            std::stringstream ss(sigmas_str);
+            std::string item;
+            while(std::getline(ss, item, ',')) {
+                item.erase(0, item.find_first_not_of(" \t\n\r\f\v"));
+                item.erase(item.find_last_not_of(" \t\n\r\f\v") + 1);
+                if (!item.empty()) {
+                    try {
+                        params.custom_sigmas.push_back(std::stof(item));
+                    } catch (const std::invalid_argument& e) {
+                        fprintf(stderr, "error: invalid float value '%s' in --sigmas\n", item.c_str());
+                        invalid_arg = true;
+                        break;
+                    } catch (const std::out_of_range& e) {
+                        fprintf(stderr, "error: float value '%s' out of range in --sigmas\n", item.c_str());
+                        invalid_arg = true;
+                        break;
+                    }
+                }
+            }
+            if (invalid_arg) break;
+            if (params.custom_sigmas.empty() && !sigmas_str.empty()) {
+                 fprintf(stderr, "error: could not parse any sigma values from '%s'\n", argv[i]);
+                 invalid_arg = true;
+                 break;
+            }
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -736,8 +787,16 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(rng_type_to_str[params.rng_type]) + ", ";
     parameter_string += "Sampler: " + std::string(sample_method_str[params.sample_method]);
-    if (params.schedule == KARRAS) {
-        parameter_string += " karras";
+    if (!params.custom_sigmas.empty()) {
+        parameter_string += ", Custom Sigmas: [";
+        for (size_t i = 0; i < params.custom_sigmas.size(); ++i) {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(4) << params.custom_sigmas[i];
+            parameter_string += oss.str() + (i == params.custom_sigmas.size() - 1 ? "" : ", ");
+        }
+        parameter_string += "]";
+    } else if (params.schedule != DEFAULT) { // Only show schedule if not using custom sigmas
+        parameter_string += " " + std::string(schedule_str[params.schedule]);
     }
     parameter_string += ", ";
     parameter_string += "Version: stable-diffusion.cpp";
@@ -963,6 +1022,8 @@ int main(int argc, const char* argv[]) {
                           params.style_ratio,
                           params.normalize_input,
                           params.input_id_images_path.c_str(),
+                          params.custom_sigmas.empty() ? nullptr : params.custom_sigmas.data(),
+                          (int)params.custom_sigmas.size(),
                           params.skip_layers.data(),
                           params.skip_layers.size(),
                           params.slg_scale,
@@ -988,7 +1049,9 @@ int main(int argc, const char* argv[]) {
                               params.sample_method,
                               params.sample_steps,
                               params.strength,
-                              params.seed);
+                              params.seed,
+                              params.custom_sigmas.empty() ? nullptr : params.custom_sigmas.data(),
+                              (int)params.custom_sigmas.size());
             if (results == NULL) {
                 printf("generate failed\n");
                 free_sd_ctx(sd_ctx);
@@ -1032,6 +1095,8 @@ int main(int argc, const char* argv[]) {
                               params.style_ratio,
                               params.normalize_input,
                               params.input_id_images_path.c_str(),
+                              params.custom_sigmas.empty() ? nullptr : params.custom_sigmas.data(),
+                              (int)params.custom_sigmas.size(),
                               params.skip_layers.data(),
                               params.skip_layers.size(),
                               params.slg_scale,

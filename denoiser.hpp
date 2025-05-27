@@ -485,6 +485,10 @@ static void sample_k_diffusion(sample_method_t method,
 
             for (int i = 0; i < steps; i++) {
                 float sigma = sigmas[i];
+                float sigma_next = sigmas[i+1]; // For logging
+
+                // Log the sigma values for the current step
+                LOG_INFO("Step %d/%zu: sigma_current = %.4f, sigma_next = %.4f", i + 1, steps, sigma, sigma_next);
 
                 // denoise
                 ggml_tensor* denoised = model(x, sigma, i + 1);

@@ -1189,6 +1189,45 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
     free(sd_ctx);
 }
 
+static std::vector<float> prepare_sigmas(
+    sd_ctx_t* sd_ctx,
+    int sample_steps,
+    const float* custom_sigmas_arr,
+    int custom_sigmas_count,
+    const char* mode_name // "txt2img", "img2img", "img2vid" for logging
+) {
+    std::vector<float> sigmas_for_generation;
+    if (custom_sigmas_count > 0 && custom_sigmas_arr != nullptr) {
+        LOG_INFO("Using custom sigmas provided by user for %s.", mode_name);
+        sigmas_for_generation.assign(custom_sigmas_arr, custom_sigmas_arr + custom_sigmas_count);
+        size_t target_len = static_cast<size_t>(sample_steps) + 1;
+        if (sigmas_for_generation.size() < target_len) {
+            LOG_DEBUG("Custom sigmas count (%zu) is less than target steps + 1 (%zu). Padding with 0.0f.", sigmas_for_generation.size(), target_len);
+            sigmas_for_generation.resize(target_len, 0.0f);
+        } else if (sigmas_for_generation.size() > target_len) {
+            LOG_DEBUG("Custom sigmas count (%zu) is greater than target steps + 1 (%zu). Truncating.", sigmas_for_generation.size(), target_len);
+            sigmas_for_generation.resize(target_len);
+        }
+        if (!sigmas_for_generation.empty()) {
+            if (sigmas_for_generation.back() != 0.0f) {
+                LOG_DEBUG("Last custom sigma was not 0.0f. Forcing it to 0.0f.");
+                sigmas_for_generation.back() = 0.0f; 
+            }
+        } else if (target_len > 0) { // custom_sigmas_arr was not null but resulted in empty vector after assign (e.g. count was 0 but arr not null)
+             LOG_WARN("Custom sigmas array was provided but resulted in an empty list for %s. Falling back to scheduler.", mode_name);
+             sigmas_for_generation = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
+        }
+        
+        if (sd_ctx->sd->denoiser->schedule->version == DEFAULT && custom_sigmas_count > 0) {
+            LOG_INFO("Custom sigmas are used for %s, --schedule option is ignored.", mode_name);
+        }
+    } else {
+        LOG_INFO("Using scheduler-defined sigmas for %s.", mode_name);
+        sigmas_for_generation = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
+    }
+    return sigmas_for_generation;
+}
+
 sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            struct ggml_context* work_ctx,
                            ggml_tensor* init_latent,
@@ -1213,6 +1252,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float slg_scale              = 0,
                            float skip_layer_start       = 0.01,
                            float skip_layer_end         = 0.2,
+                           const std::vector<float>& sigmas_override = {}, 
                            ggml_tensor* masked_image    = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
@@ -1227,7 +1267,12 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     // }
     // std::cout << std::endl;
 
-    int sample_steps = sigmas.size() - 1;
+    const std::vector<float>& sigmas_to_use = sigmas_override;
+    int sample_steps = sigmas_to_use.size() > 1 ? sigmas_to_use.size() - 1 : 0;
+    if (sample_steps == 0 && !sigmas_to_use.empty()) { // e.g. if sigmas_override has only one element
+        LOG_WARN("Received sigmas_override with %zu elements, implying 0 steps. This might not be intended.", sigmas_to_use.size());
+    }
+
 
     // Apply lora
     auto result_pair                                = extract_and_remove_lora(prompt);
@@ -1463,7 +1508,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      guidance,
                                                      eta,
                                                      sample_method,
-                                                     sigmas,
+                                                     sigmas_to_use,
                                                      start_merge_step,
                                                      id_cond,
                                                      skip_layers,
@@ -1539,6 +1584,8 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float style_ratio,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
+                    const float* custom_sigmas,
+                    int custom_sigmas_count,
                     int* skip_layers         = NULL,
                     size_t skip_layers_count = 0,
                     float slg_scale          = 0,
@@ -1575,7 +1622,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
 
     size_t t0 = ggml_time_ms();
 
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
+    std::vector<float> sigmas_for_generation = prepare_sigmas(sd_ctx, sample_steps, custom_sigmas, custom_sigmas_count, "txt2img");
 
     int C = 4;
     if (sd_version_is_sd3(sd_ctx->sd->version)) {
@@ -1610,7 +1657,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                width,
                                                height,
                                                sample_method,
-                                               sigmas,
+                                               sigmas_for_generation,
                                                seed,
                                                batch_count,
                                                control_cond,
@@ -1621,7 +1668,9 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                skip_layers_vec,
                                                slg_scale,
                                                skip_layer_start,
-                                               skip_layer_end);
+                                               skip_layer_end,
+                                               sigmas_for_generation,
+                                               nullptr /* masked_image for txt2img is null */);
 
     size_t t1 = ggml_time_ms();
 
@@ -1651,6 +1700,8 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float style_ratio,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
+                    const float* custom_sigmas,
+                    int custom_sigmas_count,
                     int* skip_layers         = NULL,
                     size_t skip_layers_count = 0,
                     float slg_scale          = 0,
@@ -1769,14 +1820,39 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     print_ggml_tensor(init_latent, true);
     size_t t1 = ggml_time_ms();
     LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+    
+    std::vector<float> base_sigmas = prepare_sigmas(sd_ctx, sample_steps, custom_sigmas, custom_sigmas_count, "img2img (base)");
 
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
     size_t t_enc              = static_cast<size_t>(sample_steps * strength);
-    if (t_enc == sample_steps)
-        t_enc--;
-    LOG_INFO("target t_enc is %zu steps", t_enc);
-    std::vector<float> sigma_sched;
-    sigma_sched.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
+    if (t_enc >= static_cast<size_t>(sample_steps) && sample_steps > 0) { // Ensure t_enc is less than sample_steps
+        t_enc = sample_steps - 1;
+    } else if (sample_steps == 0 && t_enc > 0) { // Handle case with 0 sample_steps but non-zero strength
+        t_enc = 0;
+    }
+
+    LOG_INFO("target t_enc is %zu steps for img2img strength adjustment", t_enc);
+    std::vector<float> sigmas_for_generation; 
+    size_t start_idx = static_cast<size_t>(sample_steps) - t_enc;
+
+    if (start_idx < base_sigmas.size()) {
+        sigmas_for_generation.assign(base_sigmas.begin() + start_idx, base_sigmas.end());
+    } else if (!base_sigmas.empty()) {
+        LOG_WARN("Could not properly slice sigmas for img2img strength. Using last available sigma or full list.");
+        if (base_sigmas.size() > 1) {
+             sigmas_for_generation.assign(base_sigmas.end() - std::min(base_sigmas.size(), (size_t)2), base_sigmas.end());
+        } else {
+            sigmas_for_generation = base_sigmas;
+        }
+    } else {
+        LOG_ERROR("Base sigmas list is empty for img2img. Cannot proceed.");
+        return NULL;
+    }
+
+    if (sigmas_for_generation.empty() && !base_sigmas.empty()){
+        LOG_WARN("Resulting sigma schedule for img2img is empty, falling back to full base_sigmas.");
+        sigmas_for_generation = base_sigmas;
+    }
+
 
     sd_image_t* result_images = generate_image(sd_ctx,
                                                work_ctx,
@@ -1790,7 +1866,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                width,
                                                height,
                                                sample_method,
-                                               sigma_sched,
+                                               sigmas_for_generation,
                                                seed,
                                                batch_count,
                                                control_cond,
@@ -1802,6 +1878,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                slg_scale,
                                                skip_layer_start,
                                                skip_layer_end,
+                                               sigmas_for_generation,
                                                masked_image);
 
     size_t t2 = ggml_time_ms();
@@ -1824,14 +1901,16 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            enum sample_method_t sample_method,
                            int sample_steps,
                            float strength,
-                           int64_t seed) {
+                           int64_t seed,
+                           const float* custom_sigmas,
+                           int custom_sigmas_count) {
     if (sd_ctx == NULL) {
         return NULL;
     }
 
     LOG_INFO("img2vid %dx%d", width, height);
 
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
+    std::vector<float> sigmas_for_generation = prepare_sigmas(sd_ctx, sample_steps, custom_sigmas, custom_sigmas_count, "img2vid");
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(10 * 1024) * 1024;  // 10 MB
@@ -1902,7 +1981,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                                                  0.f,
                                                  0.f,
                                                  sample_method,
-                                                 sigmas,
+                                                 sigmas_for_generation,
                                                  -1,
                                                  SDCondition(NULL, NULL, NULL));
 
