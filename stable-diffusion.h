@@ -172,6 +172,8 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            float style_strength,
                            bool normalize_input,
                            const char* input_id_images_path,
+                           const float* custom_sigmas,
+                           int custom_sigmas_count,
                            int* skip_layers,
                            size_t skip_layers_count,
                            float slg_scale,
@@ -199,6 +201,8 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            float style_strength,
                            bool normalize_input,
                            const char* input_id_images_path,
+                           const float* custom_sigmas,
+                           int custom_sigmas_count,
                            int* skip_layers,
                            size_t skip_layers_count,
                            float slg_scale,
@@ -218,7 +222,9 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            enum sample_method_t sample_method,
                            int sample_steps,
                            float strength,
-                           int64_t seed);
+                           int64_t seed,
+                           const float* custom_sigmas,
+                           int custom_sigmas_count);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
