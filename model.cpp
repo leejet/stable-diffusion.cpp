@@ -1539,17 +1539,26 @@ SDVersion ModelLoader::get_sd_version() {
         }
     }
     bool is_inpaint = input_block_weight.ne[2] == 9;
+    bool is_ip2p    = input_block_weight.ne[2] == 8;
     if (is_xl) {
         if (is_inpaint) {
             return VERSION_SDXL_INPAINT;
+        }
+        if (is_ip2p) {
+            return VERSION_SDXL_PIX2PIX;
         }
         return VERSION_SDXL;
     }
 
     if (is_flux) {
-        is_inpaint = input_block_weight.ne[0] == 384;
-        if (is_inpaint) {
+        if (input_block_weight.ne[0] == 384) {
             return VERSION_FLUX_FILL;
+        }
+        if (input_block_weight.ne[0] == 128) {
+            return VERSION_FLUX_CONTROLS;
+        }
+        if(input_block_weight.ne[0] == 196){
+            return VERSION_FLEX_2;
         }
         return VERSION_FLUX;
     }
@@ -1557,6 +1566,9 @@ SDVersion ModelLoader::get_sd_version() {
     if (token_embedding_weight.ne[0] == 768) {
         if (is_inpaint) {
             return VERSION_SD1_INPAINT;
+        }
+        if (is_ip2p) {
+            return VERSION_SD1_PIX2PIX;
         }
         return VERSION_SD1;
     } else if (token_embedding_weight.ne[0] == 1024) {

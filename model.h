@@ -12,28 +12,32 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "gguf.h"
 #include "json.hpp"
 #include "zip.h"
-#include "gguf.h"
 
 #define SD_MAX_DIMS 5
 
 enum SDVersion {
     VERSION_SD1,
     VERSION_SD1_INPAINT,
+    VERSION_SD1_PIX2PIX,
     VERSION_SD2,
     VERSION_SD2_INPAINT,
     VERSION_SDXL,
     VERSION_SDXL_INPAINT,
+    VERSION_SDXL_PIX2PIX,
     VERSION_SVD,
     VERSION_SD3,
     VERSION_FLUX,
     VERSION_FLUX_FILL,
+    VERSION_FLUX_CONTROLS,
+    VERSION_FLEX_2,
     VERSION_COUNT,
 };
 
 static inline bool sd_version_is_flux(SDVersion version) {
-    if (version == VERSION_FLUX || version == VERSION_FLUX_FILL) {
+    if (version == VERSION_FLUX || version == VERSION_FLUX_FILL || version == VERSION_FLUX_CONTROLS || version == VERSION_FLEX_2 ) {
         return true;
     }
     return false;
@@ -47,7 +51,7 @@ static inline bool sd_version_is_sd3(SDVersion version) {
 }
 
 static inline bool sd_version_is_sd1(SDVersion version) {
-    if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT) {
+    if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT || version == VERSION_SD1_PIX2PIX) {
         return true;
     }
     return false;
@@ -61,24 +65,37 @@ static inline bool sd_version_is_sd2(SDVersion version) {
 }
 
 static inline bool sd_version_is_sdxl(SDVersion version) {
-    if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT) {
+    if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT || version == VERSION_SDXL_PIX2PIX) {
         return true;
     }
     return false;
 }
 
-static inline bool sd_version_is_inpaint(SDVersion version) {
-    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT || version == VERSION_SDXL_INPAINT || version == VERSION_FLUX_FILL) {
-        return true;
-    }
-    return false;
-}
 
 static inline bool sd_version_is_dit(SDVersion version) {
     if (sd_version_is_flux(version) || sd_version_is_sd3(version)) {
         return true;
     }
     return false;
+}
+
+static inline bool sd_version_is_inpaint(SDVersion version) {
+    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT || version == VERSION_SDXL_INPAINT || version == VERSION_FLUX_FILL || version == VERSION_FLEX_2) {
+        return true;
+    }
+    return false;
+}
+
+static inline bool sd_version_is_edit(SDVersion version) {
+    return version == VERSION_SD1_PIX2PIX || version == VERSION_SDXL_PIX2PIX;
+}
+
+static inline bool sd_version_is_control(SDVersion version) {
+    return version == VERSION_FLUX_CONTROLS || version == VERSION_FLEX_2;
+}
+
+static bool sd_version_use_concat(SDVersion version) {
+    return sd_version_is_edit(version) || sd_version_is_inpaint(version)|| sd_version_is_control(version);
 }
 
 enum PMVersion {

@@ -92,15 +92,16 @@ struct SDParams {
 
     std::string prompt;
     std::string negative_prompt;
-    float min_cfg     = 1.0f;
-    float cfg_scale   = 7.0f;
-    float guidance    = 3.5f;
-    float eta         = 0.f;
-    float style_ratio = 20.f;
-    int clip_skip     = -1;  // <= 0 represents unspecified
-    int width         = 512;
-    int height        = 512;
-    int batch_count   = 1;
+    float min_cfg       = 1.0f;
+    float cfg_scale     = 7.0f;
+    float img_cfg_scale = INFINITY;
+    float guidance      = 3.5f;
+    float eta           = 0.f;
+    float style_ratio   = 20.f;
+    int clip_skip       = -1;  // <= 0 represents unspecified
+    int width           = 512;
+    int height          = 512;
+    int batch_count     = 1;
 
     int video_frames         = 6;
     int motion_bucket_id     = 127;
@@ -163,6 +164,7 @@ void print_params(SDParams params) {
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
     printf("    min_cfg:           %.2f\n", params.min_cfg);
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
+    printf("    img_cfg_scale:     %.2f\n", params.img_cfg_scale);
     printf("    slg_scale:         %.2f\n", params.slg_scale);
     printf("    guidance:          %.2f\n", params.guidance);
     printf("    eta:               %.2f\n", params.eta);
@@ -212,7 +214,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
     printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
-    printf("  --guidance SCALE                   guidance scale for img2img (default: 3.5)\n");
+    printf("  --img-cfg-scale SCALE              image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)\n");
+    printf("  --guidance SCALE                   distilled guidance scale for models with guidance input (default: 3.5)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
     printf("  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)\n");
@@ -439,6 +442,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.cfg_scale = std::stof(argv[i]);
+        } else if (arg == "--img-cfg-scale") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.img_cfg_scale = std::stof(argv[i]);
         } else if (arg == "--guidance") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -698,6 +707,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.output_path = "output.gguf";
         }
     }
+
+    if (!isfinite(params.img_cfg_scale)) {
+        params.img_cfg_scale = params.cfg_scale;
+    }
 }
 
 static std::string sd_basename(const std::string& path) {
@@ -791,6 +804,18 @@ int main(int argc, const char* argv[]) {
     SDParams params;
 
     parse_args(argc, argv, params);
+
+    sd_guidance_params_t guidance_params = {params.cfg_scale,
+                                            params.img_cfg_scale,
+                                            params.min_cfg,
+                                            params.guidance,
+                                            {
+                                                params.skip_layers.data(),
+                                                params.skip_layers.size(),
+                                                params.skip_layer_start,
+                                                params.skip_layer_end,
+                                                params.slg_scale,
+                                            }};
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
 
@@ -908,7 +933,7 @@ int main(int argc, const char* argv[]) {
     }
 
     sd_image_t* control_image = NULL;
-    if (params.controlnet_path.size() > 0 && params.control_image_path.size() > 0) {
+    if (params.control_image_path.size() > 0) {
         int c                = 0;
         control_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
         if (control_image_buffer == NULL) {
@@ -949,8 +974,7 @@ int main(int argc, const char* argv[]) {
                           params.prompt.c_str(),
                           params.negative_prompt.c_str(),
                           params.clip_skip,
-                          params.cfg_scale,
-                          params.guidance,
+                          guidance_params,
                           params.eta,
                           params.width,
                           params.height,
@@ -962,12 +986,7 @@ int main(int argc, const char* argv[]) {
                           params.control_strength,
                           params.style_ratio,
                           params.normalize_input,
-                          params.input_id_images_path.c_str(),
-                          params.skip_layers.data(),
-                          params.skip_layers.size(),
-                          params.slg_scale,
-                          params.skip_layer_start,
-                          params.skip_layer_end);
+                          params.input_id_images_path.c_str());
     } else {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
@@ -983,8 +1002,7 @@ int main(int argc, const char* argv[]) {
                               params.motion_bucket_id,
                               params.fps,
                               params.augmentation_level,
-                              params.min_cfg,
-                              params.cfg_scale,
+                              guidance_params,
                               params.sample_method,
                               params.sample_steps,
                               params.strength,
@@ -1017,8 +1035,7 @@ int main(int argc, const char* argv[]) {
                               params.prompt.c_str(),
                               params.negative_prompt.c_str(),
                               params.clip_skip,
-                              params.cfg_scale,
-                              params.guidance,
+                              guidance_params,
                               params.eta,
                               params.width,
                               params.height,
@@ -1031,12 +1048,7 @@ int main(int argc, const char* argv[]) {
                               params.control_strength,
                               params.style_ratio,
                               params.normalize_input,
-                              params.input_id_images_path.c_str(),
-                              params.skip_layers.data(),
-                              params.skip_layers.size(),
-                              params.slg_scale,
-                              params.skip_layer_start,
-                              params.skip_layer_end);
+                              params.input_id_images_path.c_str());
         }
     }
 
@@ -1075,11 +1087,11 @@ int main(int argc, const char* argv[]) {
 
     std::string dummy_name, ext, lc_ext;
     bool is_jpg;
-    size_t last = params.output_path.find_last_of(".");
+    size_t last      = params.output_path.find_last_of(".");
     size_t last_path = std::min(params.output_path.find_last_of("/"),
                                 params.output_path.find_last_of("\\"));
-    if (last != std::string::npos // filename has extension
-    && (last_path == std::string::npos || last > last_path)) {
+    if (last != std::string::npos  // filename has extension
+        && (last_path == std::string::npos || last > last_path)) {
         dummy_name = params.output_path.substr(0, last);
         ext = lc_ext = params.output_path.substr(last);
         std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
@@ -1087,7 +1099,7 @@ int main(int argc, const char* argv[]) {
     } else {
         dummy_name = params.output_path;
         ext = lc_ext = "";
-        is_jpg = false;
+        is_jpg       = false;
     }
     // appending ".png" to absent or unknown extension
     if (!is_jpg && lc_ext != ".png") {
@@ -1099,7 +1111,7 @@ int main(int argc, const char* argv[]) {
             continue;
         }
         std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
-        if(is_jpg) {
+        if (is_jpg) {
             stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                            results[i].data, 90, get_image_params(params, params.seed + i).c_str());
             printf("save result JPEG image to '%s'\n", final_image_path.c_str());
