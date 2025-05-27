@@ -253,6 +253,7 @@ arguments:
   --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}
                                      sampling method (default: "euler_a")
   --steps  STEPS                     number of sample steps (default: 20)
+  --sigmas SIGMAS                    Custom sigma values for the sampler, comma-separated list (e.g., "14.61,7.8,3.5,0.0")
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate
