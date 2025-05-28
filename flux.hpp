@@ -185,6 +185,13 @@ namespace Flux {
 
         ModulationOut(ggml_tensor* shift = NULL, ggml_tensor* scale = NULL, ggml_tensor* gate = NULL)
             : shift(shift), scale(scale), gate(gate) {}
+
+        ModulationOut(struct ggml_context* ctx, ggml_tensor* vec, int64_t offset) {
+            int64_t stride = vec->nb[1] * vec->ne[1];
+            shift          = ggml_view_2d(ctx, vec, vec->ne[0], vec->ne[1], vec->nb[1], stride * (offset + 0));  // [N, dim]
+            scale          = ggml_view_2d(ctx, vec, vec->ne[0], vec->ne[1], vec->nb[1], stride * (offset + 1));  // [N, dim]
+            gate           = ggml_view_2d(ctx, vec, vec->ne[0], vec->ne[1], vec->nb[1], stride * (offset + 2));  // [N, dim]
+        }
     };
 
     struct Modulation : public GGMLBlock {
@@ -210,19 +217,12 @@ namespace Flux {
             auto m = ggml_reshape_3d(ctx, out, vec->ne[0], multiplier, vec->ne[1]);  // [N, multiplier, dim]
             m      = ggml_cont(ctx, ggml_permute(ctx, m, 0, 2, 1, 3));               // [multiplier, N, dim]
 
-            int64_t offset = m->nb[1] * m->ne[1];
-            auto shift_0   = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 0);  // [N, dim]
-            auto scale_0   = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 1);  // [N, dim]
-            auto gate_0    = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 2);  // [N, dim]
-
+            ModulationOut m_0 = ModulationOut(ctx, m, 0);
             if (is_double) {
-                auto shift_1 = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 3);  // [N, dim]
-                auto scale_1 = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 4);  // [N, dim]
-                auto gate_1  = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 5);  // [N, dim]
-                return {ModulationOut(shift_0, scale_0, gate_0), ModulationOut(shift_1, scale_1, gate_1)};
+                return {m_0, ModulationOut(ctx, m, 3)};
             }
 
-            return {ModulationOut(shift_0, scale_0, gate_0), ModulationOut()};
+            return {m_0, ModulationOut()};
         }
     };
 
@@ -242,25 +242,33 @@ namespace Flux {
 
     struct DoubleStreamBlock : public GGMLBlock {
         bool flash_attn;
+        bool prune_mod;
+        int idx = 0;
 
     public:
         DoubleStreamBlock(int64_t hidden_size,
                           int64_t num_heads,
                           float mlp_ratio,
+                          int idx         = 0,
                           bool qkv_bias   = false,
-                          bool flash_attn = false)
-            : flash_attn(flash_attn) {
+                          bool flash_attn = false,
+                          bool prune_mod  = false)
+            : idx(idx), flash_attn(flash_attn), prune_mod(prune_mod) {
             int64_t mlp_hidden_dim = hidden_size * mlp_ratio;
-            blocks["img_mod"]      = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
-            blocks["img_norm1"]    = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
-            blocks["img_attn"]     = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, flash_attn));
+            if (!prune_mod) {
+                blocks["img_mod"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
+            }
+            blocks["img_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
+            blocks["img_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, flash_attn));
 
             blocks["img_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             blocks["img_mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, mlp_hidden_dim));
             // img_mlp.1 is nn.GELU(approximate="tanh")
             blocks["img_mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(mlp_hidden_dim, hidden_size));
 
-            blocks["txt_mod"]   = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
+            if (!prune_mod) {
+                blocks["txt_mod"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
+            }
             blocks["txt_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             blocks["txt_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, flash_attn));
 
@@ -270,6 +278,25 @@ namespace Flux {
             blocks["txt_mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(mlp_hidden_dim, hidden_size));
         }
 
+        std::vector<ModulationOut> get_distil_img_mod(struct ggml_context* ctx, struct ggml_tensor* vec) {
+            // TODO: not hardcoded?
+            const int single_blocks_count = 38;
+            const int double_blocks_count = 19;
+
+            int64_t offset = 6 * idx + 3 * single_blocks_count;
+            return {ModulationOut(ctx, vec, offset), ModulationOut(ctx, vec, offset + 3)};
+        }
+
+        std::vector<ModulationOut> get_distil_txt_mod(struct ggml_context* ctx, struct ggml_tensor* vec) {
+            // TODO: not hardcoded?
+            const int single_blocks_count = 38;
+            const int double_blocks_count = 19;
+
+            int64_t offset = 6 * idx + 6 * double_blocks_count + 3 * single_blocks_count;
+            return {ModulationOut(ctx, vec, offset), ModulationOut(ctx, vec, offset + 3)};
+        }
+
+        // TODO: chroma (prune_mod) -> get modulations from offset vec
         std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
                                                                     struct ggml_tensor* img,
                                                                     struct ggml_tensor* txt,
@@ -279,8 +306,6 @@ namespace Flux {
             // txt: [N, n_txt_token, hidden_size]
             // pe: [n_img_token + n_txt_token, d_head/2, 2, 2]
             // return: ([N, n_img_token, hidden_size], [N, n_txt_token, hidden_size])
-
-            auto img_mod   = std::dynamic_pointer_cast<Modulation>(blocks["img_mod"]);
             auto img_norm1 = std::dynamic_pointer_cast<LayerNorm>(blocks["img_norm1"]);
             auto img_attn  = std::dynamic_pointer_cast<SelfAttention>(blocks["img_attn"]);
 
@@ -288,7 +313,6 @@ namespace Flux {
             auto img_mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.0"]);
             auto img_mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.2"]);
 
-            auto txt_mod   = std::dynamic_pointer_cast<Modulation>(blocks["txt_mod"]);
             auto txt_norm1 = std::dynamic_pointer_cast<LayerNorm>(blocks["txt_norm1"]);
             auto txt_attn  = std::dynamic_pointer_cast<SelfAttention>(blocks["txt_attn"]);
 
@@ -296,10 +320,22 @@ namespace Flux {
             auto txt_mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["txt_mlp.0"]);
             auto txt_mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["txt_mlp.2"]);
 
-            auto img_mods          = img_mod->forward(ctx, vec);
+            std::vector<ModulationOut> img_mods;
+            if (prune_mod) {
+                img_mods = get_distil_img_mod(ctx, vec);
+            } else {
+                auto img_mod = std::dynamic_pointer_cast<Modulation>(blocks["img_mod"]);
+                img_mods     = img_mod->forward(ctx, vec);
+            }
             ModulationOut img_mod1 = img_mods[0];
             ModulationOut img_mod2 = img_mods[1];
-            auto txt_mods          = txt_mod->forward(ctx, vec);
+            std::vector<ModulationOut> txt_mods;
+            if (prune_mod) {
+                txt_mods = get_distil_txt_mod(ctx, vec);
+            } else {
+                auto txt_mod = std::dynamic_pointer_cast<Modulation>(blocks["txt_mod"]);
+                txt_mods     = txt_mod->forward(ctx, vec);
+            }
             ModulationOut txt_mod1 = txt_mods[0];
             ModulationOut txt_mod2 = txt_mods[1];
 
@@ -373,14 +409,18 @@ namespace Flux {
         int64_t hidden_size;
         int64_t mlp_hidden_dim;
         bool flash_attn;
+        bool prune_mod;
+        int idx = 0;
 
     public:
         SingleStreamBlock(int64_t hidden_size,
                           int64_t num_heads,
                           float mlp_ratio = 4.0f,
+                          int idx         = 0,
                           float qk_scale  = 0.f,
-                          bool flash_attn = false)
-            : hidden_size(hidden_size), num_heads(num_heads), flash_attn(flash_attn) {
+                          bool flash_attn = false,
+                          bool prune_mod  = false)
+            : hidden_size(hidden_size), num_heads(num_heads), idx(idx), flash_attn(flash_attn), prune_mod(prune_mod) {
             int64_t head_dim = hidden_size / num_heads;
             float scale      = qk_scale;
             if (scale <= 0.f) {
@@ -393,7 +433,14 @@ namespace Flux {
             blocks["norm"]     = std::shared_ptr<GGMLBlock>(new QKNorm(head_dim));
             blocks["pre_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             // mlp_act is nn.GELU(approximate="tanh")
-            blocks["modulation"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, false));
+            if (!prune_mod) {
+                blocks["modulation"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, false));
+            }
+        }
+
+        ModulationOut get_distil_mod(struct ggml_context* ctx, struct ggml_tensor* vec) {
+            int64_t offset = 3 * idx;
+            return ModulationOut(ctx, vec, offset);
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
@@ -404,15 +451,18 @@ namespace Flux {
             // pe: [n_token, d_head/2, 2, 2]
             // return: [N, n_token, hidden_size]
 
-            auto linear1    = std::dynamic_pointer_cast<Linear>(blocks["linear1"]);
-            auto linear2    = std::dynamic_pointer_cast<Linear>(blocks["linear2"]);
-            auto norm       = std::dynamic_pointer_cast<QKNorm>(blocks["norm"]);
-            auto pre_norm   = std::dynamic_pointer_cast<LayerNorm>(blocks["pre_norm"]);
-            auto modulation = std::dynamic_pointer_cast<Modulation>(blocks["modulation"]);
+            auto linear1  = std::dynamic_pointer_cast<Linear>(blocks["linear1"]);
+            auto linear2  = std::dynamic_pointer_cast<Linear>(blocks["linear2"]);
+            auto norm     = std::dynamic_pointer_cast<QKNorm>(blocks["norm"]);
+            auto pre_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["pre_norm"]);
+            ModulationOut mod;
+            if (prune_mod) {
+                mod = get_distil_mod(ctx, vec);
+            } else {
+                auto modulation = std::dynamic_pointer_cast<Modulation>(blocks["modulation"]);
 
-            auto mods         = modulation->forward(ctx, vec);
-            ModulationOut mod = mods[0];
-
+                mod = modulation->forward(ctx, vec)[0];
+            }
             auto x_mod   = Flux::modulate(ctx, pre_norm->forward(ctx, x), mod.shift, mod.scale);
             auto qkv_mlp = linear1->forward(ctx, x_mod);                            // [N, n_token, hidden_size * 3 + mlp_hidden_dim]
             qkv_mlp      = ggml_cont(ctx, ggml_permute(ctx, qkv_mlp, 2, 0, 1, 3));  // [hidden_size * 3 + mlp_hidden_dim, N, n_token]
@@ -454,13 +504,27 @@ namespace Flux {
     };
 
     struct LastLayer : public GGMLBlock {
+        bool prune_mod;
+
     public:
         LastLayer(int64_t hidden_size,
                   int64_t patch_size,
-                  int64_t out_channels) {
-            blocks["norm_final"]         = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-06f, false));
-            blocks["linear"]             = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, patch_size * patch_size * out_channels));
-            blocks["adaLN_modulation.1"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, 2 * hidden_size));
+                  int64_t out_channels,
+                  bool prune_mod = false) : prune_mod(prune_mod) {
+            blocks["norm_final"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-06f, false));
+            blocks["linear"]     = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, patch_size * patch_size * out_channels));
+            if (!prune_mod) {
+                blocks["adaLN_modulation.1"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, 2 * hidden_size));
+            }
+        }
+
+        ModulationOut get_distil_mod(struct ggml_context* ctx, struct ggml_tensor* vec) {
+            int64_t offset = vec->ne[2] - 2;
+            int64_t stride = vec->nb[1] * vec->ne[1];
+            auto shift     = ggml_view_2d(ctx, vec, vec->ne[0], vec->ne[1], vec->nb[1], stride * (offset + 0));  // [N, dim]
+            auto scale     = ggml_view_2d(ctx, vec, vec->ne[0], vec->ne[1], vec->nb[1], stride * (offset + 1));  // [N, dim]
+            // No gate
+            return ModulationOut(shift, scale, NULL);
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
@@ -469,20 +533,55 @@ namespace Flux {
             // x: [N, n_token, hidden_size]
             // c: [N, hidden_size]
             // return: [N, n_token, patch_size * patch_size * out_channels]
-            auto norm_final         = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_final"]);
-            auto linear             = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
-            auto adaLN_modulation_1 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.1"]);
+            auto norm_final = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_final"]);
+            auto linear     = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
+            struct ggml_tensor *shift, *scale;
+            if (prune_mod) {
+                auto mod = get_distil_mod(ctx, c);
+                shift    = mod.shift;
+                scale    = mod.scale;
+            } else {
+                auto adaLN_modulation_1 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.1"]);
 
-            auto m = adaLN_modulation_1->forward(ctx, ggml_silu(ctx, c));  // [N, 2 * hidden_size]
-            m      = ggml_reshape_3d(ctx, m, c->ne[0], 2, c->ne[1]);       // [N, 2, hidden_size]
-            m      = ggml_cont(ctx, ggml_permute(ctx, m, 0, 2, 1, 3));     // [2, N, hidden_size]
+                auto m = adaLN_modulation_1->forward(ctx, ggml_silu(ctx, c));  // [N, 2 * hidden_size]
+                m      = ggml_reshape_3d(ctx, m, c->ne[0], 2, c->ne[1]);       // [N, 2, hidden_size]
+                m      = ggml_cont(ctx, ggml_permute(ctx, m, 0, 2, 1, 3));     // [2, N, hidden_size]
 
-            int64_t offset = m->nb[1] * m->ne[1];
-            auto shift     = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 0);  // [N, hidden_size]
-            auto scale     = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 1);  // [N, hidden_size]
+                int64_t offset = m->nb[1] * m->ne[1];
+                shift          = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 0);  // [N, hidden_size]
+                scale          = ggml_view_2d(ctx, m, m->ne[0], m->ne[1], m->nb[1], offset * 1);  // [N, hidden_size]
+            }
 
             x = Flux::modulate(ctx, norm_final->forward(ctx, x), shift, scale);
             x = linear->forward(ctx, x);
+
+            return x;
+        }
+    };
+
+    struct ChromaApproximator : public GGMLBlock {
+        int64_t inner_size = 5120;
+        int64_t n_layers   = 5;
+        ChromaApproximator(int64_t in_channels = 64, int64_t hidden_size = 3072) {
+            blocks["in_proj"] = std::shared_ptr<GGMLBlock>(new Linear(in_channels, inner_size, true));
+            for (int i = 0; i < n_layers; i++) {
+                blocks["norms." + std::to_string(i)]  = std::shared_ptr<GGMLBlock>(new RMSNorm(inner_size));
+                blocks["layers." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new MLPEmbedder(inner_size, inner_size));
+            }
+            blocks["out_proj"] = std::shared_ptr<GGMLBlock>(new Linear(inner_size, hidden_size, true));
+        }
+
+        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+            auto in_proj  = std::dynamic_pointer_cast<Linear>(blocks["in_proj"]);
+            auto out_proj = std::dynamic_pointer_cast<Linear>(blocks["out_proj"]);
+
+            x = in_proj->forward(ctx, x);
+            for (int i = 0; i < n_layers; i++) {
+                auto norm  = std::dynamic_pointer_cast<RMSNorm>(blocks["norms." + std::to_string(i)]);
+                auto embed = std::dynamic_pointer_cast<MLPEmbedder>(blocks["layers." + std::to_string(i)]);
+                x          = ggml_add_inplace(ctx, x, embed->forward(ctx, norm->forward(ctx, x)));
+            }
+            x = out_proj->forward(ctx, x);
 
             return x;
         }
@@ -504,6 +603,7 @@ namespace Flux {
         bool qkv_bias               = true;
         bool guidance_embed         = true;
         bool flash_attn             = true;
+        bool chroma_guidance        = false;
     };
 
     struct Flux : public GGMLBlock {
@@ -645,11 +745,15 @@ namespace Flux {
             : params(params) {
             int64_t pe_dim = params.hidden_size / params.num_heads;
 
-            blocks["img_in"]    = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, params.hidden_size, true));
-            blocks["time_in"]   = std::shared_ptr<GGMLBlock>(new MLPEmbedder(256, params.hidden_size));
-            blocks["vector_in"] = std::shared_ptr<GGMLBlock>(new MLPEmbedder(params.vec_in_dim, params.hidden_size));
-            if (params.guidance_embed) {
-                blocks["guidance_in"] = std::shared_ptr<GGMLBlock>(new MLPEmbedder(256, params.hidden_size));
+            blocks["img_in"] = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, params.hidden_size, true));
+            if (params.chroma_guidance) {
+                blocks["distilled_guidance_layer"] = std::shared_ptr<GGMLBlock>(new ChromaApproximator(params.in_channels, params.hidden_size));
+            } else {
+                blocks["time_in"]   = std::shared_ptr<GGMLBlock>(new MLPEmbedder(256, params.hidden_size));
+                blocks["vector_in"] = std::shared_ptr<GGMLBlock>(new MLPEmbedder(params.vec_in_dim, params.hidden_size));
+                if (params.guidance_embed) {
+                    blocks["guidance_in"] = std::shared_ptr<GGMLBlock>(new MLPEmbedder(256, params.hidden_size));
+                }
             }
             blocks["txt_in"] = std::shared_ptr<GGMLBlock>(new Linear(params.context_in_dim, params.hidden_size, true));
 
@@ -657,19 +761,24 @@ namespace Flux {
                 blocks["double_blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new DoubleStreamBlock(params.hidden_size,
                                                                                                                 params.num_heads,
                                                                                                                 params.mlp_ratio,
+                                                                                                                i,
                                                                                                                 params.qkv_bias,
-                                                                                                                params.flash_attn));
+                                                                                                                params.flash_attn,
+                                                                                                                params.chroma_guidance));
             }
 
             for (int i = 0; i < params.depth_single_blocks; i++) {
                 blocks["single_blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new SingleStreamBlock(params.hidden_size,
                                                                                                                 params.num_heads,
                                                                                                                 params.mlp_ratio,
+                                                                                                                i,
                                                                                                                 0.f,
-                                                                                                                params.flash_attn));
+                                                                                                                params.flash_attn,
+                                                                                                                params.chroma_guidance));
             }
 
-            blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, params.out_channels));
+            // TODO: no modulation for chroma
+            blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, params.out_channels, params.chroma_guidance));
         }
 
         struct ggml_tensor* patchify(struct ggml_context* ctx,
@@ -728,23 +837,45 @@ namespace Flux {
                                          struct ggml_tensor* pe,
                                          std::vector<int> skip_layers = std::vector<int>()) {
             auto img_in      = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
-            auto time_in     = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);
-            auto vector_in   = std::dynamic_pointer_cast<MLPEmbedder>(blocks["vector_in"]);
             auto txt_in      = std::dynamic_pointer_cast<Linear>(blocks["txt_in"]);
             auto final_layer = std::dynamic_pointer_cast<LastLayer>(blocks["final_layer"]);
 
-            img      = img_in->forward(ctx, img);
-            auto vec = time_in->forward(ctx, ggml_nn_timestep_embedding(ctx, timesteps, 256, 10000, 1000.f));
+            img = img_in->forward(ctx, img);
+            struct ggml_tensor* vec;
+            if (params.chroma_guidance) {
+                int64_t mod_index_length = 344;
+                auto approx              = std::dynamic_pointer_cast<ChromaApproximator>(blocks["distilled_guidance_layer"]);
+                auto distill_timestep    = ggml_nn_timestep_embedding(ctx, timesteps, 16, 10000, 1000.f);
+                auto distill_guidance    = ggml_nn_timestep_embedding(ctx, guidance, 16, 10000, 1000.f);
 
-            if (params.guidance_embed) {
-                GGML_ASSERT(guidance != NULL);
-                auto guidance_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["guidance_in"]);
-                // bf16 and fp16 result is different
-                auto g_in = ggml_nn_timestep_embedding(ctx, guidance, 256, 10000, 1000.f);
-                vec       = ggml_add(ctx, vec, guidance_in->forward(ctx, g_in));
+                // auto arrange          = ggml_arange(ctx, 0, (float)mod_index_length, 1); // Not working on a lot of backends
+                auto arrange          = y;
+                auto modulation_index = ggml_nn_timestep_embedding(ctx, arrange, 32, 10000, 1000.f);
+
+                auto timestep_guidance = ggml_concat(ctx, distill_timestep, distill_guidance, 0);
+                timestep_guidance      = ggml_repeat(ctx, distill_timestep, modulation_index);
+                // TODO Batch broadcast?
+
+                vec = ggml_concat(ctx, timestep_guidance, modulation_index, 0);  // [N, 344, 64]
+                vec = approx->forward(ctx, vec);                                 // [N, 344, hidden_size]
+
+                // Permute for consistency with non-distilled modulation implementation
+                vec = ggml_cont(ctx, ggml_permute(ctx, vec, 0, 2, 1, 3));  // [344, N, hidden_size]
+            } else {
+                auto time_in   = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);
+                auto vector_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["vector_in"]);
+                vec            = time_in->forward(ctx, ggml_nn_timestep_embedding(ctx, timesteps, 256, 10000, 1000.f));
+                if (params.guidance_embed) {
+                    GGML_ASSERT(guidance != NULL);
+                    auto guidance_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["guidance_in"]);
+                    // bf16 and fp16 result is different
+                    auto g_in = ggml_nn_timestep_embedding(ctx, guidance, 256, 10000, 1000.f);
+                    vec       = ggml_add(ctx, vec, guidance_in->forward(ctx, g_in));
+                }
+
+                vec = ggml_add(ctx, vec, vector_in->forward(ctx, y));
             }
 
-            vec = ggml_add(ctx, vec, vector_in->forward(ctx, y));
             txt = txt_in->forward(ctx, txt);
 
             for (int i = 0; i < params.depth; i++) {
@@ -868,6 +999,10 @@ namespace Flux {
                     // not schnell
                     flux_params.guidance_embed = true;
                 }
+                if (tensor_name.find("distilled_guidance_layer.in_proj.weight") != std::string::npos) {
+                    // Chroma
+                    flux_params.chroma_guidance = true;
+                }
                 size_t db = tensor_name.find("double_blocks.");
                 if (db != std::string::npos) {
                     tensor_name     = tensor_name.substr(db);  // remove prefix
@@ -887,7 +1022,9 @@ namespace Flux {
             }
 
             LOG_INFO("Flux blocks: %d double, %d single", flux_params.depth, flux_params.depth_single_blocks);
-            if (!flux_params.guidance_embed) {
+            if (flux_params.chroma_guidance) {
+                LOG_INFO("Using pruned modulation (Chroma)");
+            } else if (!flux_params.guidance_embed) {
                 LOG_INFO("Flux guidance is disabled (Schnell mode)");
             }
 
@@ -918,7 +1055,14 @@ namespace Flux {
             if (c_concat != NULL) {
                 c_concat = to_backend(c_concat);
             }
-            y         = to_backend(y);
+            if (!flux_params.chroma_guidance) {
+                y = to_backend(y);
+            } else {
+                // ggml_arrange is not working on some backends, so let's reuse y to precompute it
+                std::vector<float> range = arange(0, 344);
+                y                        = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, range.size());
+                set_backend_tensor_data(y, range.data());
+            }
             timesteps = to_backend(timesteps);
             if (flux_params.guidance_embed) {
                 guidance = to_backend(guidance);
