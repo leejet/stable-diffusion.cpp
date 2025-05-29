@@ -603,7 +603,7 @@ namespace Flux {
         bool qkv_bias               = true;
         bool guidance_embed         = true;
         bool flash_attn             = true;
-        bool chroma_guidance        = false;
+        bool is_chroma        = false;
     };
 
     struct Flux : public GGMLBlock {
@@ -746,7 +746,7 @@ namespace Flux {
             int64_t pe_dim = params.hidden_size / params.num_heads;
 
             blocks["img_in"] = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, params.hidden_size, true));
-            if (params.chroma_guidance) {
+            if (params.is_chroma) {
                 blocks["distilled_guidance_layer"] = std::shared_ptr<GGMLBlock>(new ChromaApproximator(params.in_channels, params.hidden_size));
             } else {
                 blocks["time_in"]   = std::shared_ptr<GGMLBlock>(new MLPEmbedder(256, params.hidden_size));
@@ -764,7 +764,7 @@ namespace Flux {
                                                                                                                 i,
                                                                                                                 params.qkv_bias,
                                                                                                                 params.flash_attn,
-                                                                                                                params.chroma_guidance));
+                                                                                                                params.is_chroma));
             }
 
             for (int i = 0; i < params.depth_single_blocks; i++) {
@@ -774,11 +774,11 @@ namespace Flux {
                                                                                                                 i,
                                                                                                                 0.f,
                                                                                                                 params.flash_attn,
-                                                                                                                params.chroma_guidance));
+                                                                                                                params.is_chroma));
             }
 
             // TODO: no modulation for chroma
-            blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, params.out_channels, params.chroma_guidance));
+            blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, params.out_channels, params.is_chroma));
         }
 
         struct ggml_tensor* patchify(struct ggml_context* ctx,
@@ -842,7 +842,7 @@ namespace Flux {
 
             img = img_in->forward(ctx, img);
             struct ggml_tensor* vec;
-            if (params.chroma_guidance) {
+            if (params.is_chroma) {
                 int64_t mod_index_length = 344;
                 auto approx              = std::dynamic_pointer_cast<ChromaApproximator>(blocks["distilled_guidance_layer"]);
                 auto distill_timestep    = ggml_nn_timestep_embedding(ctx, timesteps, 16, 10000, 1000.f);
@@ -915,7 +915,6 @@ namespace Flux {
             img     = ggml_cont(ctx, ggml_permute(ctx, img, 0, 2, 1, 3));  // [N, n_img_token, hidden_size]
 
             img = final_layer->forward(ctx, img, vec);  // (N, T, patch_size ** 2 * out_channels)
-
             return img;
         }
 
@@ -1004,7 +1003,7 @@ namespace Flux {
                 }
                 if (tensor_name.find("distilled_guidance_layer.in_proj.weight") != std::string::npos) {
                     // Chroma
-                    flux_params.chroma_guidance = true;
+                    flux_params.is_chroma = true;
                 }
                 size_t db = tensor_name.find("double_blocks.");
                 if (db != std::string::npos) {
@@ -1025,7 +1024,7 @@ namespace Flux {
             }
 
             LOG_INFO("Flux blocks: %d double, %d single", flux_params.depth, flux_params.depth_single_blocks);
-            if (flux_params.chroma_guidance) {
+            if (flux_params.is_chroma) {
                 LOG_INFO("Using pruned modulation (Chroma)");
             } else if (!flux_params.guidance_embed) {
                 LOG_INFO("Flux guidance is disabled (Schnell mode)");
@@ -1058,10 +1057,10 @@ namespace Flux {
             if (c_concat != NULL) {
                 c_concat = to_backend(c_concat);
             }
-            if (!flux_params.chroma_guidance) {
+            if (!flux_params.is_chroma) {
                 y = to_backend(y);
             } else {
-                // ggml_arrange is not working on some backends, so let's reuse y to precompute it
+                // ggml_arrange is not working on some backends, and y isn't used, so let's reuse y to precompute it
                 std::vector<float> range = arange(0, 344);
                 y                        = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, range.size());
                 set_backend_tensor_data(y, range.data());
