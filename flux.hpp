@@ -850,12 +850,15 @@ namespace Flux {
 
                 // auto arrange          = ggml_arange(ctx, 0, (float)mod_index_length, 1); // Not working on a lot of backends
                 auto arrange          = y;
-                auto modulation_index = ggml_nn_timestep_embedding(ctx, arrange, 32, 10000, 1000.f);
+                auto modulation_index = ggml_nn_timestep_embedding(ctx, arrange, 32, 10000, 1000.f);// [1, 344, 32]
+                
+                // Batch broadcast (will it ever be useful)
+                modulation_index      = ggml_repeat(ctx, modulation_index, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, modulation_index->ne[0], modulation_index->ne[1], img->ne[2], modulation_index->ne[3]));// [N, 344, 32]
 
-                auto timestep_guidance = ggml_concat(ctx, distill_timestep, distill_guidance, 0);
-                timestep_guidance      = ggml_repeat(ctx, distill_timestep, modulation_index);
-                // TODO Batch broadcast?
 
+                auto timestep_guidance = ggml_concat(ctx, distill_timestep, distill_guidance, 0); // [N, 1, 32]
+                timestep_guidance      = ggml_repeat(ctx, timestep_guidance, modulation_index);   // [N, 344, 32]
+                
                 vec = ggml_concat(ctx, timestep_guidance, modulation_index, 0);  // [N, 344, 64]
                 vec = approx->forward(ctx, vec);                                 // [N, 344, hidden_size]
 
@@ -1064,7 +1067,7 @@ namespace Flux {
                 set_backend_tensor_data(y, range.data());
             }
             timesteps = to_backend(timesteps);
-            if (flux_params.guidance_embed) {
+            if (flux_params.guidance_embed || flux_params.is_chroma) {
                 guidance = to_backend(guidance);
             }
 
