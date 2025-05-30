@@ -977,7 +977,8 @@ namespace Flux {
     public:
         FluxParams flux_params;
         Flux flux;
-        std::vector<float> pe_vec;  // for cache
+        std::vector<float> pe_vec, range;  // for cache
+        SDVersion version;
 
         FluxRunner(ggml_backend_t backend,
                    std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
@@ -1060,8 +1061,8 @@ namespace Flux {
                 y = to_backend(y);
             } else {
                 // ggml_arrange is not working on some backends, and y isn't used, so let's reuse y to precompute it
-                std::vector<float> range = arange(0, 344);
-                y                        = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, range.size());
+                range = arange(0, 344);
+                y     = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, range.size());
                 set_backend_tensor_data(y, range.data());
             }
             timesteps = to_backend(timesteps);
