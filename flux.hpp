@@ -603,7 +603,7 @@ namespace Flux {
         bool qkv_bias               = true;
         bool guidance_embed         = true;
         bool flash_attn             = true;
-        bool is_chroma        = false;
+        bool is_chroma              = false;
     };
 
     struct Flux : public GGMLBlock {
@@ -850,20 +850,19 @@ namespace Flux {
 
                 // auto arrange          = ggml_arange(ctx, 0, (float)mod_index_length, 1); // Not working on a lot of backends
                 auto arrange          = y;
-                auto modulation_index = ggml_nn_timestep_embedding(ctx, arrange, 32, 10000, 1000.f);// [1, 344, 32]
-                
+                auto modulation_index = ggml_nn_timestep_embedding(ctx, arrange, 32, 10000, 1000.f);  // [1, 344, 32]
+
                 // Batch broadcast (will it ever be useful)
-                modulation_index      = ggml_repeat(ctx, modulation_index, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, modulation_index->ne[0], modulation_index->ne[1], img->ne[2], modulation_index->ne[3]));// [N, 344, 32]
+                modulation_index = ggml_repeat(ctx, modulation_index, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, modulation_index->ne[0], modulation_index->ne[1], img->ne[2]));  // [N, 344, 32]
 
+                auto timestep_guidance = ggml_concat(ctx, distill_timestep, distill_guidance, 0);  // [N, 1, 32]
+                timestep_guidance      = ggml_repeat(ctx, timestep_guidance, modulation_index);    // [N, 344, 32]
 
-                auto timestep_guidance = ggml_concat(ctx, distill_timestep, distill_guidance, 0); // [N, 1, 32]
-                timestep_guidance      = ggml_repeat(ctx, timestep_guidance, modulation_index);   // [N, 344, 32]
-                
                 vec = ggml_concat(ctx, timestep_guidance, modulation_index, 0);  // [N, 344, 64]
-                vec = approx->forward(ctx, vec);                                 // [N, 344, hidden_size]
-
                 // Permute for consistency with non-distilled modulation implementation
-                vec = ggml_cont(ctx, ggml_permute(ctx, vec, 0, 2, 1, 3));  // [344, N, hidden_size]
+                vec = ggml_cont(ctx, ggml_permute(ctx, vec, 0, 2, 1, 3));  // [344, N, 64]
+                vec = approx->forward(ctx, vec);                                 // [344, N, hidden_size]
+
             } else {
                 auto time_in   = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);
                 auto vector_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["vector_in"]);
