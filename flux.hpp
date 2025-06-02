@@ -884,7 +884,7 @@ namespace Flux {
                 vec = approx->forward(ctx, vec);                           // [344, N, hidden_size]
 
                 if (y != NULL) {
-                    txt_img_mask = ggml_concat(ctx, y, ggml_scale_inplace(ctx, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, img->ne[1]), 0), 0);
+                    txt_img_mask = ggml_pad(ctx, y, img->ne[1], 0, 0, 0);
                 }
             } else {
                 auto time_in   = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);

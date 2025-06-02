@@ -434,6 +434,7 @@ public:
                 tokens.insert(tokens.end(), length - tokens.size(), pad_token_id);
                 weights.insert(weights.end(), length - weights.size(), 1.0);
                 if (attention_mask != nullptr) {
+                    // maybe keep some padding tokens unmasked? 
                     attention_mask->insert(attention_mask->end(), length - attention_mask->size(), -HUGE_VALF);
                 }
             }
@@ -594,7 +595,7 @@ public:
         }
         if (past_bias != NULL) {
             if (mask != NULL) {
-                mask = ggml_repeat(ctx,mask,past_bias);
+                mask = ggml_repeat(ctx, mask, past_bias);
                 mask = ggml_add(ctx, mask, past_bias);
             } else {
                 mask = past_bias;
