@@ -876,7 +876,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
         kq      = ggml_scale_inplace(ctx, kq, scale);
         if (mask) {
-            kq = ggml_add(ctx, kq, mask);
+            kq = ggml_add_inplace(ctx, kq, mask);
         }
         if (diag_mask_inf) {
             kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);
