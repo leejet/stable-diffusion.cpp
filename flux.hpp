@@ -1084,7 +1084,30 @@ namespace Flux {
                 c_concat = to_backend(c_concat);
             }
             if (flux_params.is_chroma) {
-                flux.chroma_modify_mask_to_attend_padding(y, ggml_nelements(y), 1);
+                int mask_pad                            = 1;
+                const char* SD_CHROMA_MASK_PAD_OVERRIDE = getenv("SD_CHROMA_MASK_PAD_OVERRIDE");
+                if (SD_CHROMA_MASK_PAD_OVERRIDE != nullptr) {
+                    std::string mask_pad_str = SD_CHROMA_MASK_PAD_OVERRIDE;
+                    try {
+                        mask_pad = std::stoi(mask_pad_str);
+                    } catch (const std::invalid_argument&) {
+                        LOG_WARN("SD_CHROMA_MASK_PAD_OVERRIDE environment variable is not a valid integer (%s). Falling back to default (%d)", SD_CHROMA_MASK_PAD_OVERRIDE, mask_pad);
+                    } catch (const std::out_of_range&) {
+                        LOG_WARN("SD_CHROMA_MASK_PAD_OVERRIDE environment variable value is out of range for `int` type (%s). Falling back to default (%d)", SD_CHROMA_MASK_PAD_OVERRIDE, mask_pad);
+                    }
+                }
+                flux.chroma_modify_mask_to_attend_padding(y, ggml_nelements(y), mask_pad);
+
+                const char* SD_CHROMA_USE_DIT_MASK = getenv("SD_CHROMA_USE_DIT_MASK");
+                if (SD_CHROMA_USE_DIT_MASK != nullptr) {
+                    std::string sd_chroma_use_DiT_mask_str = SD_CHROMA_USE_DIT_MASK;
+                    if (sd_chroma_use_DiT_mask_str == "OFF" || sd_chroma_use_DiT_mask_str == "FALSE") {
+                        y = NULL;
+                    } else if (sd_chroma_use_DiT_mask_str != "ON" && sd_chroma_use_DiT_mask_str != "TRUE") {
+                        LOG_WARN("SD_CHROMA_USE_DIT_MASK environment variable has unexpected value. Assuming default (\"ON\"). (Expected \"ON\"/\"TRUE\" or\"OFF\"/\"FALSE\", got \"%s\")", SD_CHROMA_USE_DIT_MASK);
+                    }
+                }
+
                 // ggml_arrange is not working on some backends, and y isn't used, so let's reuse y to precompute it
                 range             = arange(0, 344);
                 precompute_arange = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, range.size());

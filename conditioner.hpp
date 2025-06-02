@@ -1318,6 +1318,16 @@ struct PixArtCLIPEmbedder : public Conditioner {
             auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
             auto t5_attn_mask_chunk = vector_to_ggml_tensor(work_ctx, chunk_mask);
 
+            const char* SD_CHROMA_USE_T5_MASK = getenv("SD_CHROMA_USE_T5_MASK");
+            if (SD_CHROMA_USE_T5_MASK != nullptr) {
+                std::string sd_chroma_use_t5_mask_str = SD_CHROMA_USE_T5_MASK;
+                if (sd_chroma_use_t5_mask_str == "OFF" || sd_chroma_use_t5_mask_str == "FALSE") {
+                    t5_attn_mask_chunk = NULL;
+                } else if (sd_chroma_use_t5_mask_str != "ON" && sd_chroma_use_t5_mask_str != "TRUE") {
+                    LOG_WARN("SD_CHROMA_USE_T5_MASK environment variable has unexpected value. Assuming default (\"ON\"). (Expected \"ON\"/\"TRUE\" or\"OFF\"/\"FALSE\", got \"%s\")", SD_CHROMA_USE_T5_MASK);
+                }
+            }
+
             t5->compute(n_threads,
                         input_ids,
                         &chunk_hidden_states,
