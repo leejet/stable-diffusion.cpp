@@ -717,7 +717,7 @@ namespace Flux {
                 if (num_pad >= num_extra_padding) {
                     break;
                 }
-                if (isinf(mask_data[i])) {
+                if (std::isinf(mask_data[i])) {
                     mask_data[i] = 0;
                     ++num_pad;
                 }
