@@ -711,7 +711,18 @@ namespace Flux {
         }
 
         void chroma_modify_mask_to_attend_padding(struct ggml_tensor* mask, int max_seq_length, int num_extra_padding = 8) {
-            // TODO: implement
+            float* mask_data = (float*)mask->data;
+            int num_pad      = 0;
+            for (int64_t i = 0; i < max_seq_length; i++) {
+                if (num_pad >= num_extra_padding) {
+                    break;
+                }
+                if (isinf(mask_data[i])) {
+                    mask_data[i] = 0;
+                    ++num_pad;
+                }
+            }
+            // LOG_DEBUG("PAD: %d", num_pad);
         }
 
         // Generate positional embeddings
@@ -1073,7 +1084,7 @@ namespace Flux {
                 c_concat = to_backend(c_concat);
             }
             if (flux_params.is_chroma) {
-                flux.chroma_modify_mask_to_attend_padding(y, context->ne[1], 1);
+                flux.chroma_modify_mask_to_attend_padding(y, ggml_nelements(y), 1);
                 // ggml_arrange is not working on some backends, and y isn't used, so let's reuse y to precompute it
                 range             = arange(0, 344);
                 precompute_arange = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, range.size());
