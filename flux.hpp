@@ -1084,6 +1084,22 @@ namespace Flux {
                 c_concat = to_backend(c_concat);
             }
             if (flux_params.is_chroma) {
+                const char* SD_CHROMA_ENABLE_GUIDANCE = getenv("SD_CHROMA_ENABLE_GUIDANCE");
+                bool disable_guidance                 = true;
+                if (SD_CHROMA_ENABLE_GUIDANCE != NULL) {
+                    std::string enable_guidance_str = SD_CHROMA_ENABLE_GUIDANCE;
+                    if (enable_guidance_str == "ON" || enable_guidance_str == "TRUE") {
+                        LOG_WARN("Chroma guidance has been enabled. Image might be broken. (SD_CHROMA_ENABLE_GUIDANCE env variable to \"OFF\" to disable)", SD_CHROMA_ENABLE_GUIDANCE);
+                        disable_guidance = false;
+                    } else if (enable_guidance_str != "OFF" && enable_guidance_str != "FALSE") {
+                        LOG_WARN("SD_CHROMA_ENABLE_GUIDANCE environment variable has unexpected value. Assuming default (\"OFF\"). (Expected \"ON\"/\"TRUE\" or\"OFF\"/\"FALSE\", got \"%s\")", SD_CHROMA_ENABLE_GUIDANCE);
+                    }
+                }
+                if (disable_guidance) {
+                    LOG_DEBUG("Forcing guidance to 0 for chroma model (SD_CHROMA_ENABLE_GUIDANCE env variable to \"ON\" to enable)");
+                    guidance = ggml_set_f32(guidance, 0);
+                }
+
                 int mask_pad                            = 1;
                 const char* SD_CHROMA_MASK_PAD_OVERRIDE = getenv("SD_CHROMA_MASK_PAD_OVERRIDE");
                 if (SD_CHROMA_MASK_PAD_OVERRIDE != nullptr) {
