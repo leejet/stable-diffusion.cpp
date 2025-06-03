@@ -297,7 +297,6 @@ namespace Flux {
             return {ModulationOut(ctx, vec, offset), ModulationOut(ctx, vec, offset + 3)};
         }
 
-        // TODO: chroma (prune_mod) -> get modulations from offset vec
         std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
                                                                     struct ggml_tensor* img,
                                                                     struct ggml_tensor* txt,
@@ -795,7 +794,6 @@ namespace Flux {
                                                                                                                 params.is_chroma));
             }
 
-            // TODO: no modulation for chroma
             blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new LastLayer(params.hidden_size, 1, params.out_channels, params.is_chroma));
         }
 
