@@ -150,7 +150,12 @@ SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             bool keep_clip_on_cpu,
                             bool keep_control_net_cpu,
                             bool keep_vae_on_cpu,
-                            bool diffusion_flash_attn);
+                            bool diffusion_flash_attn,
+                            // DeepCache parameters
+                            int dc_cache_interval = 0,
+                            int dc_cache_depth    = 3,
+                            int dc_start_steps    = 0,
+                            int dc_end_steps      = 9999);
 
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 

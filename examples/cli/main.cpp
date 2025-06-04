@@ -129,6 +129,12 @@ struct SDParams {
     float slg_scale              = 0.f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+
+    // DeepCache parameters
+    int dc_cache_interval = 0; // 0 to disable
+    int dc_cache_depth    = 3;
+    int dc_start_steps    = 0;
+    int dc_end_steps      = 9999; // Effectively all steps
 };
 
 void print_params(SDParams params) {
@@ -178,6 +184,10 @@ void print_params(SDParams params) {
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
+    if (params.dc_cache_interval > 0) {
+        printf("    deepcache:         interval=%d, depth=%d, start=%d, end=%d\n",
+               params.dc_cache_interval, params.dc_cache_depth, params.dc_start_steps, params.dc_end_steps);
+    }
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -244,6 +254,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            Colors the logging tags according to level\n");
+    printf("  --deepcache CACHE_PARAMS           Enable DeepCache for UNet. CACHE_PARAMS are comma-separated: interval,depth,start_steps,end_steps. Example: \"3,3,0,1000\"\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -629,6 +640,46 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "--deepcache") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            std::string dc_params_str = argv[i];
+            std::vector<std::string> dc_tokens;
+            size_t start = 0;
+            size_t end = dc_params_str.find(',');
+            while (end != std::string::npos) {
+                dc_tokens.push_back(dc_params_str.substr(start, end - start));
+                start = end + 1;
+                end = dc_params_str.find(',', start);
+            }
+            dc_tokens.push_back(dc_params_str.substr(start));
+
+            if (dc_tokens.size() != 4) {
+                fprintf(stderr, "error: --deepcache requires 4 comma-separated values: interval,depth,start_steps,end_steps\n");
+                exit(1);
+            }
+            try {
+                params.dc_cache_interval = std::stoi(dc_tokens[0]);
+                params.dc_cache_depth = std::stoi(dc_tokens[1]);
+                params.dc_start_steps = std::stoi(dc_tokens[2]);
+                params.dc_end_steps = std::stoi(dc_tokens[3]);
+                if (params.dc_cache_interval <= 0) {
+                     fprintf(stderr, "error: deepcache interval must be > 0\n");
+                     exit(1);
+                }
+                 if (params.dc_cache_depth < 0) {
+                     fprintf(stderr, "error: deepcache depth must be >= 0\n");
+                     exit(1);
+                }
+            } catch (const std::invalid_argument& e) {
+                fprintf(stderr, "error: invalid number in --deepcache parameters: %s\n", e.what());
+                exit(1);
+            } catch (const std::out_of_range& e) {
+                fprintf(stderr, "error: number out of range in --deepcache parameters: %s\n", e.what());
+                exit(1);
+            }
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);

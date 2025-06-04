@@ -184,8 +184,33 @@ public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1, std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types, bool flash_attn = false)
-        : version(version) {
+    // DeepCache parameters
+    int dc_cache_interval_ = 0; 
+    int dc_cache_depth_    = 0;
+    int dc_start_steps_    = 0;
+    int dc_end_steps_      = 0;
+    bool dc_input_cache_   = true; 
+    bool dc_middle_cache_  = true; 
+    bool dc_output_cache_  = true; 
+
+    // DeepCache runtime state
+    float dc_current_time_ = -1.f;
+    int dc_current_step_   = -1;   
+    int dc_model_step_     = 0;      
+    ggml_tensor* dc_cache_h_ = nullptr; 
+
+    UnetModelBlock(SDVersion version = VERSION_SD1, 
+                   std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types, 
+                   bool flash_attn = false,
+                   int dc_cache_interval = 0,
+                   int dc_cache_depth    = 3,
+                   int dc_start_steps    = 0,
+                   int dc_end_steps      = 9999)
+        : version(version),
+          dc_cache_interval_(dc_cache_interval),
+          dc_cache_depth_(dc_cache_depth),
+          dc_start_steps_(dc_start_steps),
+          dc_end_steps_(dc_end_steps) {
         if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
             num_head_channels = 64;
@@ -344,6 +369,17 @@ public:
         blocks["out.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(model_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
+    void reset_deepcache_state() {
+        // Called at the beginning of each new image generation (e.g. before a txt2img/img2img call or per batch item)
+        dc_current_time_ = -1.f;
+        dc_current_step_ = -1;
+        dc_model_step_ = 0;
+        // dc_cache_h_ is expected to be in a work_ctx that will be freed,
+        // so just nulling the pointer is sufficient. If it were in a persistent
+        // context, it would need to be explicitly freed here.
+        dc_cache_h_ = nullptr;
+    }
+
     struct ggml_tensor* resblock_forward(std::string name,
                                          struct ggml_context* ctx,
                                          struct ggml_tensor* x,
@@ -376,7 +412,8 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
+    struct ggml_tensor* forward(struct ggml_context* ctx, // This is the per-step compute_ctx
+                                struct ggml_context* persistent_work_ctx, // This is for dc_cache_h_
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* timesteps,
                                 struct ggml_tensor* context,
@@ -385,6 +422,33 @@ public:
                                 int num_video_frames                      = -1,
                                 std::vector<struct ggml_tensor*> controls = {},
                                 float control_strength                    = 0.f) {
+        // DeepCache state update
+        bool dc_enabled = dc_cache_interval_ > 0;
+        bool dc_cache_apply = false;
+        bool dc_step_cache_interval_is_zero = false;
+
+        if (dc_enabled) {
+            float t_val = ggml_tensor_get_f32(timesteps, 0); // Assuming N=1 for DeepCache state simplicity
+            if (dc_current_time_ == -1.f || t_val > dc_current_time_ ) { // Indicates a new sequence or first step
+                dc_model_step_ = 0;
+                dc_current_step_ = -1; 
+                // dc_cache_h_ should be nullptr already if reset_deepcache_state was called
+            }
+            
+            dc_cache_apply = (dc_start_steps_ <= dc_model_step_ && dc_model_step_ <= dc_end_steps_);
+
+            if (dc_cache_apply) {
+                dc_current_step_++;
+            } else {
+                dc_current_step_ = -1; 
+            }
+            dc_current_time_ = t_val;
+            dc_model_step_++;
+            if (dc_current_step_ != -1) { // only if cache is active for this step
+                dc_step_cache_interval_is_zero = (dc_current_step_ % dc_cache_interval_ == 0);
+            }
+        }
+
         // x: [N, in_channels, h, w] or [N, in_channels/2, h, w]
         // timesteps: [N,]
         // context: [N, max_position, hidden_size] or [1, max_position, hidden_size]. for example, [N, 77, 768]
@@ -437,90 +501,166 @@ public:
 
         // input_blocks
         std::vector<struct ggml_tensor*> hs;
+        int conceptual_module_id = -1; // 0-indexed conceptual module ID
+        bool input_skipped_deeper = false;
+        auto h = x; // Initialize h with x before the first block operation
 
-        // input block 0
-        auto h = input_blocks_0_0->forward(ctx, x);
+        // Declare variables that were being jumped over here
+        size_t len_mults = channel_mult.size();
+        int internal_block_counter = 0; // For naming blocks like "input_blocks.1.0", "input_blocks.2.0"
+        int ds = 1;
 
+        // input block 0 (initial conv)
+        conceptual_module_id++; // conceptual_module_id is now 0
+        h = input_blocks_0_0->forward(ctx, h); // Use h = x as input
         ggml_set_name(h, "bench-start");
         hs.push_back(h);
-        // input block 1-11
-        size_t len_mults    = channel_mult.size();
-        int input_block_idx = 0;
-        int ds              = 1;
-        for (int i = 0; i < len_mults; i++) {
+
+        if (dc_enabled && conceptual_module_id == dc_cache_depth_ && dc_cache_apply && dc_input_cache_ && !dc_step_cache_interval_is_zero) {
+            input_skipped_deeper = true;
+            goto after_input_blocks_processing_label; 
+        }
+
+        // input_blocks main loop
+        // len_mults, internal_block_counter, ds are already declared above
+
+        for (int i = 0; i < len_mults; i++) { // Iterating through levels
             int mult = channel_mult[i];
-            for (int j = 0; j < num_res_blocks; j++) {
-                input_block_idx += 1;
-                std::string name = "input_blocks." + std::to_string(input_block_idx) + ".0";
-                h                = resblock_forward(name, ctx, h, emb, num_video_frames);  // [N, mult*model_channels, h, w]
+            for (int j = 0; j < num_res_blocks; j++) { // Iterating through resblocks in a level
+                internal_block_counter++; 
+                conceptual_module_id++; // This group (ResBlock + optional Attn) is one conceptual module
+
+                std::string res_name = "input_blocks." + std::to_string(internal_block_counter) + ".0";
+                h = resblock_forward(res_name, ctx, h, emb, num_video_frames);
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
-                    std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
-                    h                = attention_layer_forward(name, ctx, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
+                    std::string attn_name = "input_blocks." + std::to_string(internal_block_counter) + ".1";
+                    h = attention_layer_forward(attn_name, ctx, h, context, num_video_frames);
                 }
                 hs.push_back(h);
+
+                if (dc_enabled && conceptual_module_id == dc_cache_depth_ && dc_cache_apply && dc_input_cache_ && !dc_step_cache_interval_is_zero) {
+                    input_skipped_deeper = true;
+                    goto after_input_blocks_processing_label;
+                }
             }
-            if (i != len_mults - 1) {
+            if (i != len_mults - 1) { // If not the last level, there's a downsample block
+                internal_block_counter++;
+                conceptual_module_id++; // Downsample is one conceptual module
                 ds *= 2;
-                input_block_idx += 1;
-
-                std::string name = "input_blocks." + std::to_string(input_block_idx) + ".0";
-                auto block       = std::dynamic_pointer_cast<DownSampleBlock>(blocks[name]);
-
-                h = block->forward(ctx, h);  // [N, mult*model_channels, h/(2^(i+1)), w/(2^(i+1))]
+                std::string down_name = "input_blocks." + std::to_string(internal_block_counter) + ".0";
+                auto block = std::dynamic_pointer_cast<DownSampleBlock>(blocks[down_name]);
+                h = block->forward(ctx, h);
                 hs.push_back(h);
+
+                if (dc_enabled && conceptual_module_id == dc_cache_depth_ && dc_cache_apply && dc_input_cache_ && !dc_step_cache_interval_is_zero) {
+                    input_skipped_deeper = true;
+                    goto after_input_blocks_processing_label;
+                }
             }
         }
-        // [N, 4*model_channels, h/8, w/8]
 
-        // middle_block
-        h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
-        h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
-        h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
+    after_input_blocks_processing_label:;
+        // Middle block - this logic should apply regardless of input_skipped_deeper
+        // The value of 'h' entering this section is what matters.
+        if (dc_enabled && dc_cache_apply && dc_middle_cache_ && !dc_step_cache_interval_is_zero) {
+            // Middle block's computation is skipped. 'h' remains unchanged from input stage.
+        } else {
+            // Middle block is computed, potentially updating 'h'.
+            h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);
+            h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);
+            h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);
+        }
+        // Now, h is the xuh that would be passed to output blocks or cached.
 
         if (controls.size() > 0) {
             auto cs = ggml_scale_inplace(ctx, controls[controls.size() - 1], control_strength);
             h       = ggml_add(ctx, h, cs);  // middle control
         }
         int control_offset = controls.size() - 2;
-
+        
         // output_blocks
-        int output_block_idx = 0;
-        for (int i = (int)len_mults - 1; i >= 0; i--) {
-            for (int j = 0; j < num_res_blocks + 1; j++) {
+        // Determine total number of "conceptual" output blocks similar to ComfyUI's list
+        // This is complex due to C++ structure. For SD 1.5, it's 12.
+        // len_mults = 4 (0,1,2,3). num_res_blocks = 2.
+        // Output blocks: level 3 (inner) has 3 blocks (Res, Attn, Res, Up). level 2,1,0 has 3 blocks. Total 3*4=12.
+        // Let's estimate total_output_blocks roughly as len_mults * (num_res_blocks +1) if each level always has Attn and Up.
+        // Or count them properly:
+        int total_output_blocks = 0;
+        int temp_ds = 1; // ds at the bottleneck before upsampling starts
+        for(int k=0; k < len_mults -1; ++k) temp_ds *=2;
+
+        for (int k_level = (int)len_mults - 1; k_level >= 0; k_level--) {
+            for (int k_res = 0; k_res < num_res_blocks + 1; k_res++) {
+                total_output_blocks++;
+            }
+        }
+
+
+        int conceptual_output_block_id = -1; // 0-indexed conceptual ID for output blocks
+        int internal_output_block_idx_for_map = -1; // 0-indexed for map lookup, matching constructor
+        ds = temp_ds; // ds should track current resolution factor for attention_resolutions check
+
+        for (int i = (int)len_mults - 1; i >= 0; i--) { // Iterating through levels (from bottleneck up)
+            for (int j = 0; j < num_res_blocks + 1; j++) { // Iterating through blocks in a level
+                conceptual_output_block_id++; // This is the 0-indexed ID for logic (e.g. comparing with Python id)
+                internal_output_block_idx_for_map++; // This is the 0-indexed ID for block map lookup
+
+                if (dc_enabled && dc_cache_apply && dc_output_cache_ && !dc_step_cache_interval_is_zero) { // If it's a cache reuse step
+                    if (conceptual_output_block_id < (total_output_blocks - dc_cache_depth_ - 1) ) {
+                        if (hs.empty()) { 
+                            LOG_ERROR("DeepCache/UNet Error: hs stack empty before popping for skipped output block (conceptual_id %d).", conceptual_output_block_id);
+                            return nullptr; 
+                        }
+                        hs.pop_back(); // Pop corresponding skip connection
+                        
+                        // Simulate ds change if an upsampler was skipped
+                        // This requires knowing if this specific 'internal_output_block_idx_for_map' contained an upsampler
+                        // Check based on 'i' and 'j' for upsampler presence
+                        bool was_upsampler_block = (i > 0 && j == num_res_blocks);
+                        if (was_upsampler_block) {
+                             ds /= 2; 
+                        }
+                        continue; // Skip processing this output block
+                    }
+                }
+                
+                if (hs.empty()) {
+                    LOG_ERROR("DeepCache/UNet Error: hs stack is empty when expecting skip connection for output block (conceptual_id %d, map_id %d).", conceptual_output_block_id, internal_output_block_idx_for_map);
+                    return nullptr; 
+                }
                 auto h_skip = hs.back();
                 hs.pop_back();
 
-                if (controls.size() > 0) {
+                if (controls.size() > 0 && control_offset >=0 && (size_t)control_offset < controls.size()) {
                     auto cs = ggml_scale_inplace(ctx, controls[control_offset], control_strength);
                     h_skip  = ggml_add(ctx, h_skip, cs);  // control net condition
                     control_offset--;
                 }
 
                 h = ggml_concat(ctx, h, h_skip, 2);
+                
+                std::string name_res = "output_blocks." + std::to_string(internal_output_block_idx_for_map) + ".0";
+                h = resblock_forward(name_res, ctx, h, emb, num_video_frames);
 
-                std::string name = "output_blocks." + std::to_string(output_block_idx) + ".0";
-
-                h = resblock_forward(name, ctx, h, emb, num_video_frames);
-
-                int up_sample_idx = 1;
+                int up_sample_idx = 1; // This is for naming the upsample block if attention is also present
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
-                    std::string name = "output_blocks." + std::to_string(output_block_idx) + ".1";
-
-                    h = attention_layer_forward(name, ctx, h, context, num_video_frames);
-
+                    std::string name_attn = "output_blocks." + std::to_string(internal_output_block_idx_for_map) + ".1";
+                    h = attention_layer_forward(name_attn, ctx, h, context, num_video_frames);
                     up_sample_idx++;
                 }
 
-                if (i > 0 && j == num_res_blocks) {
-                    std::string name = "output_blocks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx);
-                    auto block       = std::dynamic_pointer_cast<UpSampleBlock>(blocks[name]);
-
-                    h = block->forward(ctx, h);
-
-                    ds /= 2;
+                bool is_upsampler_block = (i > 0 && j == num_res_blocks);
+                if (is_upsampler_block) { 
+                    std::string name_up = "output_blocks." + std::to_string(internal_output_block_idx_for_map) + "." + std::to_string(up_sample_idx);
+                    auto block_up = std::dynamic_pointer_cast<UpSampleBlock>(blocks[name_up]);
+                    if (!block_up) { 
+                        LOG_ERROR("Failed to get UpSampleBlock: %s. ds=%d, i=%d, j=%d, up_sample_idx=%d, map_id=%d", 
+                                  name_up.c_str(), ds, i, j, up_sample_idx, internal_output_block_idx_for_map); 
+                        return nullptr;
+                    }
+                    h = block_up->forward(ctx, h);
+                    ds /= 2; 
                 }
-
-                output_block_idx += 1;
             }
         }
 
@@ -540,8 +680,14 @@ struct UNetModelRunner : public GGMLRunner {
                     std::map<std::string, enum ggml_type>& tensor_types,
                     const std::string prefix,
                     SDVersion version = VERSION_SD1,
-                    bool flash_attn   = false)
-        : GGMLRunner(backend), unet(version, tensor_types, flash_attn) {
+                    bool flash_attn   = false,
+                    // DeepCache parameters to pass to UnetModelBlock
+                    int dc_cache_interval = 0,
+                    int dc_cache_depth    = 3,
+                    int dc_start_steps    = 0,
+                    int dc_end_steps      = 9999)
+        : GGMLRunner(backend), unet(version, tensor_types, flash_attn, 
+                                    dc_cache_interval, dc_cache_depth, dc_start_steps, dc_end_steps) {
         unet.init(params_ctx, tensor_types, prefix);
     }
 
@@ -553,7 +699,8 @@ struct UNetModelRunner : public GGMLRunner {
         unet.get_param_tensors(tensors, prefix);
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_tensor* x,
+    struct ggml_cgraph* build_graph(struct ggml_context* persistent_work_ctx, // Added
+                                    struct ggml_tensor* x,
                                     struct ggml_tensor* timesteps,
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* c_concat              = NULL,
@@ -578,6 +725,7 @@ struct UNetModelRunner : public GGMLRunner {
         }
 
         struct ggml_tensor* out = unet.forward(compute_ctx,
+                                               persistent_work_ctx, // Added
                                                x,
                                                timesteps,
                                                context,
@@ -598,6 +746,7 @@ struct UNetModelRunner : public GGMLRunner {
                  struct ggml_tensor* context,
                  struct ggml_tensor* c_concat,
                  struct ggml_tensor* y,
+                 struct ggml_context* persistent_work_ctx, // Added
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
@@ -609,7 +758,7 @@ struct UNetModelRunner : public GGMLRunner {
         // c_concat: [N, in_channels, h, w] or [1, in_channels, h, w]
         // y: [N, adm_in_channels] or [1, adm_in_channels]
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength);
+            return build_graph(persistent_work_ctx, x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength);
         };
 
         GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -648,7 +797,8 @@ struct UNetModelRunner : public GGMLRunner {
             struct ggml_tensor* out = NULL;
 
             int t0 = ggml_time_ms();
-            compute(8, x, timesteps, context, NULL, y, num_video_frames, {}, 0.f, &out, work_ctx);
+            // Added work_ctx as persistent_work_ctx, then num_video_frames, controls, control_strength, output, output_ctx
+            compute(8, x, timesteps, context, NULL, y, work_ctx, num_video_frames, {}, 0.f, &out, work_ctx);
             int t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
