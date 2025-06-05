@@ -197,7 +197,8 @@ public:
     float dc_current_time_ = -1.f;
     int dc_current_step_   = -1;   
     int dc_model_step_     = 0;      
-    ggml_tensor* dc_cache_h_ = nullptr; 
+    ggml_tensor* dc_cache_h_ = nullptr;
+    ggml_tensor* dc_h_to_cache_this_step_ = nullptr;
 
     UnetModelBlock(SDVersion version = VERSION_SD1, 
                    std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types, 
@@ -378,7 +379,7 @@ public:
         // Called at the beginning of each new image generation (e.g. before a txt2img/img2img call or per batch item)
         dc_current_time_ = -1.f;
         dc_current_step_ = -1;
-        dc_model_step_ = 0;
+        dc_model_step_ = -1;
         // dc_cache_h_ is expected to be in a work_ctx that will be freed,
         // so just nulling the pointer is sufficient. If it were in a persistent
         // context, it would need to be explicitly freed here.
@@ -428,32 +429,33 @@ public:
                                 std::vector<struct ggml_tensor*> controls = {},
                                 float control_strength                    = 0.f) {
         
-        bool force_dc_disabled_for_test = true; // TEMPORARY TEST FLAG
+        dc_h_to_cache_this_step_ = nullptr;
 
         // DeepCache state update
-        bool dc_enabled = dc_cache_interval_ > 0 && !force_dc_disabled_for_test; // Modified line
-        LOG_DEBUG("DeepCache: UNet forward. dc_enabled: %d (forced_disabled: %d), interval: %d, depth: %d, start: %d, end: %d",
-                  dc_enabled, force_dc_disabled_for_test, dc_cache_interval_, dc_cache_depth_, dc_start_steps_, dc_end_steps_);
+        bool dc_enabled = dc_cache_interval_ > 0;
+        LOG_DEBUG("DeepCache: UNet forward. dc_enabled: %d, interval: %d, depth: %d, start: %d, end: %d",
+                  dc_enabled, dc_cache_interval_, dc_cache_depth_, dc_start_steps_, dc_end_steps_);
         bool dc_cache_apply = false;
         bool dc_step_cache_interval_is_zero = false;
 
         if (dc_enabled) {
-            float t_val = ggml_tensor_get_f32(timesteps, 0); // Assuming N=1 for DeepCache state simplicity
-            if (dc_current_time_ == -1.f || t_val > dc_current_time_ ) { // Indicates a new sequence or first step
-                dc_model_step_ = 0;
-                dc_current_step_ = -1; 
-                // dc_cache_h_ should be nullptr already if reset_deepcache_state was called
+            float t_val = ggml_tensor_get_f32(timesteps, 0);
+
+            // Update step counters only on a new sampling step (i.e., new time value)
+            if (dc_current_time_ != t_val) {
+                dc_current_time_ = t_val;
+                dc_model_step_++; // Increment sampling step counter (0, 1, 2, ...)
+
+                // Update cache-application counter
+                if (dc_start_steps_ <= dc_model_step_ && dc_model_step_ <= dc_end_steps_) {
+                    dc_current_step_++;
+                } else {
+                    dc_current_step_ = -1;
+                }
             }
-            
+
             dc_cache_apply = (dc_start_steps_ <= dc_model_step_ && dc_model_step_ <= dc_end_steps_);
 
-            if (dc_cache_apply) {
-                dc_current_step_++;
-            } else {
-                dc_current_step_ = -1; 
-            }
-            dc_current_time_ = t_val;
-            dc_model_step_++;
             if (dc_current_step_ != -1) { // only if cache is active for this step
                 dc_step_cache_interval_is_zero = (dc_current_step_ % dc_cache_interval_ == 0);
             }
@@ -642,37 +644,15 @@ public:
                 // as 'h' itself might be loaded from cache_h.
                 if (dc_enabled && dc_cache_apply && dc_output_cache_ &&
                     conceptual_output_block_id == (total_output_blocks - dc_cache_depth_ - 1)) {
-                    if (dc_step_cache_interval_is_zero) { // Cache Update Step
-                        LOG_DEBUG("DeepCache: OUTPUT CACHE UPDATE for 'h' at conceptual_output_block_id %d.", conceptual_output_block_id);
-                        if (dc_cache_h_ == nullptr || 
-                            dc_cache_h_->ne[0] != h->ne[0] || dc_cache_h_->ne[1] != h->ne[1] || 
-                            dc_cache_h_->ne[2] != h->ne[2] || dc_cache_h_->ne[3] != h->ne[3] ||
-                            dc_cache_h_->type != h->type) {
-                            LOG_DEBUG("DeepCache: dc_cache_h_ is null or mismatched. Creating new with ggml_dup_tensor.");
-                            dc_cache_h_ = ggml_dup_tensor(persistent_work_ctx, h);
-                            if (dc_cache_h_ == nullptr) {
-                                LOG_ERROR("DeepCache: ggml_dup_tensor failed to allocate dc_cache_h_ in persistent_work_ctx!");
-                                return nullptr; // Critical error
-                            }
-                        } else {
-                            // dc_cache_h_ exists and is suitable. Copy data from current 'h' into its buffer.
-                            // Assuming both h and dc_cache_h_ are CPU tensors as per logs.
-                            LOG_DEBUG("DeepCache: dc_cache_h_ exists and matches. Copying data with memcpy.");
-                            if (h->data != nullptr && dc_cache_h_->data != nullptr) {
-                                memcpy(dc_cache_h_->data, h->data, ggml_nbytes(h));
-                            } else {
-                                LOG_ERROR("DeepCache: Data pointer null for h or dc_cache_h_ during memcpy attempt!");
-                                return nullptr; // Critical error
-                            }
-                        }
+                    if (dc_step_cache_interval_is_zero) { // Cache Save Step
+                        LOG_DEBUG("DeepCache: Marking 'h' for OUTPUT CACHE UPDATE at conceptual_output_block_id %d.", conceptual_output_block_id);
+                        dc_h_to_cache_this_step_ = h;
                     } else { // Cache Reuse Step
                         if (dc_cache_h_ != nullptr) {
                             LOG_DEBUG("DeepCache: OUTPUT CACHE REUSE for 'h' at conceptual_output_block_id %d.", conceptual_output_block_id);
-                            h = dc_cache_h_; // Use the cached tensor
+                            h = ggml_dup_tensor(ctx, dc_cache_h_);
                         } else {
-                            // This should not happen if a CACHE UPDATE step has successfully run before.
                             LOG_WARN("DeepCache: OUTPUT CACHE REUSE MISS for 'h' at conceptual_output_block_id %d. dc_cache_h_ is null! THIS IS UNEXPECTED on a reuse step.", conceptual_output_block_id);
-                            // Fallback: proceed with current 'h' (which means no actual caching happened for 'h')
                         }
                     }
                 }
@@ -739,6 +719,27 @@ public:
         h = out_0->forward(ctx, h);
         h = ggml_silu_inplace(ctx, h);
         h = out_2->forward(ctx, h);
+
+        if (dc_h_to_cache_this_step_ != nullptr) {
+            LOG_DEBUG("DeepCache: Adding cache-save operation to the graph.");
+            if (dc_cache_h_ == nullptr) {
+                LOG_DEBUG("DeepCache: Allocating persistent cache tensor.");
+                dc_cache_h_ = ggml_new_tensor_4d(persistent_work_ctx,
+                                                 dc_h_to_cache_this_step_->type,
+                                                 dc_h_to_cache_this_step_->ne[0],
+                                                 dc_h_to_cache_this_step_->ne[1],
+                                                 dc_h_to_cache_this_step_->ne[2],
+                                                 dc_h_to_cache_this_step_->ne[3]);
+                if (dc_cache_h_ == nullptr) {
+                    LOG_ERROR("DeepCache: Failed to allocate cache tensor in persistent context. Increase work_ctx size.");
+                    return nullptr;
+                }
+            }
+            auto cpy_op = ggml_cpy(ctx, dc_h_to_cache_this_step_, dc_cache_h_);
+            auto dummy_sum = ggml_sum(ctx, cpy_op);
+            h = ggml_add(ctx, h, ggml_scale(ctx, dummy_sum, 0.0f));
+        }
+
         ggml_set_name(h, "bench-end");
         return h;  // [N, out_channels, h, w]
     }

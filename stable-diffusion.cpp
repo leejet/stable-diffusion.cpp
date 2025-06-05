@@ -1627,6 +1627,14 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
+
+    auto unet_model = std::dynamic_pointer_cast<UNetModel>(sd_ctx->sd->diffusion_model);
+    if (unet_model && unet_model->unet.unet.dc_cache_interval_ > 0) {
+        LOG_DEBUG("Allocating extra memory for DeepCache tensor");
+        size_t cache_tensor_size = 1280 * (height/8) * (width/8) * ggml_type_size(sd_ctx->sd->model_wtype);
+        params.mem_size += cache_tensor_size;
+    }
+
     params.mem_size += width * height * 3 * sizeof(float);
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;
@@ -1739,6 +1747,14 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
+
+    auto unet_model = std::dynamic_pointer_cast<UNetModel>(sd_ctx->sd->diffusion_model);
+    if (unet_model && unet_model->unet.unet.dc_cache_interval_ > 0) {
+        LOG_DEBUG("Allocating extra memory for DeepCache tensor");
+        size_t cache_tensor_size = 1280 * (height/8) * (width/8) * ggml_type_size(sd_ctx->sd->model_wtype);
+        params.mem_size += cache_tensor_size;
+    }
+    
     params.mem_size += width * height * 3 * sizeof(float) * 3;
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;
