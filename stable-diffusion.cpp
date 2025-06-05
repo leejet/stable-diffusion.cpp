@@ -1062,7 +1062,18 @@ public:
 
             float* deltas = vec_denoised;
 
-            // https://arxiv.org/pdf/2410.02416
+            // APG: https://arxiv.org/pdf/2410.02416
+
+            bool log_cfg_norm                 = false;
+            const char* SD_LOG_CFG_DELTA_NORM = getenv("SD_LOG_CFG_DELTA_NORM");
+            if (SD_LOG_CFG_DELTA_NORM != nullptr) {
+                std::string sd_log_cfg_norm_str = SD_LOG_CFG_DELTA_NORM;
+                if (sd_log_cfg_norm_str == "ON" || sd_log_cfg_norm_str == "TRUE") {
+                    log_cfg_norm = true;
+                } else if (sd_log_cfg_norm_str != "OFF" && sd_log_cfg_norm_str != "FALSE") {
+                    LOG_WARN("SD_LOG_CFG_DELTA_NORM environment variable has unexpected value. Assuming default (\"OFF\"). (Expected \"ON\"/\"TRUE\" or\"OFF\"/\"FALSE\", got \"%s\")", SD_LOG_CFG_DELTA_NORM);
+                }
+            }
             float apg_scale_factor = 1.;
             float diff_norm        = 0;
             float cond_norm_sq     = 0;
@@ -1085,7 +1096,21 @@ public:
                         // classic CFG (img_cfg_scale == cfg_scale != 1)
                         delta = positive_data[i] - negative_data[i];
                     }
+                    if (apg_params.momentum != 0) {
+                        delta += apg_params.momentum * apg_momentum_buffer[i];
+                        apg_momentum_buffer[i] = delta;
+                    }
+                    if (apg_params.norm_treshold > 0 || log_cfg_norm) {
+                        diff_norm += delta * delta;
+                    }
+                    if (apg_params.eta != 1.0f) {
+                        cond_norm_sq += positive_data[i] * positive_data[i];
+                        dot += positive_data[i] * delta;
+                    }
                     deltas[i] = delta;
+                }
+                if (log_cfg_norm) {
+                    LOG_INFO("CFG Delta norm: %.2f", sqrtf(diff_norm));
                 }
                 if (apg_params.norm_treshold > 0) {
                     diff_norm = sqrtf(diff_norm);
