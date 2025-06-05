@@ -951,7 +951,12 @@ int main(int argc, const char* argv[]) {
                                   params.clip_on_cpu,
                                   params.control_net_cpu,
                                   params.vae_on_cpu,
-                                  params.diffusion_flash_attn);
+                                  params.diffusion_flash_attn,
+                                  // Pass the parsed DeepCache parameters
+                                  params.dc_cache_interval,
+                                  params.dc_cache_depth,
+                                  params.dc_start_steps,
+                                  params.dc_end_steps);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");

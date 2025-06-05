@@ -372,7 +372,11 @@ public:
                 // This is getting complex without modifying StableDiffusionGGML members first.
                 // The new_sd_ctx sets them up. So they *should* be available in StableDiffusionGGML.
                 // We'll add them to StableDiffusionGGML members.
-
+                LOG_DEBUG("DeepCache: StableDiffusionGGML::load_from_file. About to create UNetModel. " \
+                          "this->dc_cache_interval_unet_: %d, this->dc_cache_depth_unet_: %d, " \
+                          "this->dc_start_steps_unet_: %d, this->dc_end_steps_unet_: %d",
+                          this->dc_cache_interval_unet_, this->dc_cache_depth_unet_,
+                          this->dc_start_steps_unet_, this->dc_end_steps_unet_);
                 diffusion_model = std::make_shared<UNetModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn,
                                                               this->dc_cache_interval_unet_, this->dc_cache_depth_unet_,
                                                               this->dc_start_steps_unet_, this->dc_end_steps_unet_);

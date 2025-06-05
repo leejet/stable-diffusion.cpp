@@ -211,6 +211,11 @@ public:
           dc_cache_depth_(dc_cache_depth),
           dc_start_steps_(dc_start_steps),
           dc_end_steps_(dc_end_steps) {
+        LOG_DEBUG("DeepCache: UnetModelBlock CONSTRUCTOR. Received interval: %d, depth: %d, start: %d, end: %d",
+                  dc_cache_interval, dc_cache_depth, dc_start_steps, dc_end_steps); 
+        LOG_DEBUG("DeepCache: UnetModelBlock CONSTRUCTOR. Stored interval: %d, depth: %d, start: %d, end: %d",
+                  this->dc_cache_interval_, this->dc_cache_depth_, this->dc_start_steps_, this->dc_end_steps_); 
+
         if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
             num_head_channels = 64;
@@ -422,8 +427,13 @@ public:
                                 int num_video_frames                      = -1,
                                 std::vector<struct ggml_tensor*> controls = {},
                                 float control_strength                    = 0.f) {
+        
+        bool force_dc_disabled_for_test = true; // TEMPORARY TEST FLAG
+
         // DeepCache state update
-        bool dc_enabled = dc_cache_interval_ > 0;
+        bool dc_enabled = dc_cache_interval_ > 0 && !force_dc_disabled_for_test; // Modified line
+        LOG_DEBUG("DeepCache: UNet forward. dc_enabled: %d (forced_disabled: %d), interval: %d, depth: %d, start: %d, end: %d",
+                  dc_enabled, force_dc_disabled_for_test, dc_cache_interval_, dc_cache_depth_, dc_start_steps_, dc_end_steps_);
         bool dc_cache_apply = false;
         bool dc_step_cache_interval_is_zero = false;
 
@@ -448,6 +458,8 @@ public:
                 dc_step_cache_interval_is_zero = (dc_current_step_ % dc_cache_interval_ == 0);
             }
         }
+        LOG_DEBUG("DeepCache: State update done. model_step: %d, current_step: %d, cache_apply: %d, step_cache_interval_is_zero: %d, current_time: %.2f",
+                  dc_model_step_, dc_current_step_, dc_cache_apply, dc_step_cache_interval_is_zero, dc_current_time_);
 
         // x: [N, in_channels, h, w] or [N, in_channels/2, h, w]
         // timesteps: [N,]
@@ -517,6 +529,8 @@ public:
         hs.push_back(h);
 
         if (dc_enabled && conceptual_module_id == dc_cache_depth_ && dc_cache_apply && dc_input_cache_ && !dc_step_cache_interval_is_zero) {
+            LOG_DEBUG("DeepCache: INPUT SKIP triggered at conceptual_module_id %d (cache_depth %d). Skipping deeper input blocks.", conceptual_module_id, dc_cache_depth_);
+
             input_skipped_deeper = true;
             goto after_input_blocks_processing_label; 
         }
@@ -539,6 +553,7 @@ public:
                 hs.push_back(h);
 
                 if (dc_enabled && conceptual_module_id == dc_cache_depth_ && dc_cache_apply && dc_input_cache_ && !dc_step_cache_interval_is_zero) {
+                    LOG_DEBUG("DeepCache: INPUT SKIP triggered at conceptual_module_id %d (cache_depth %d). Skipping deeper input blocks.", conceptual_module_id, dc_cache_depth_);
                     input_skipped_deeper = true;
                     goto after_input_blocks_processing_label;
                 }
@@ -553,6 +568,7 @@ public:
                 hs.push_back(h);
 
                 if (dc_enabled && conceptual_module_id == dc_cache_depth_ && dc_cache_apply && dc_input_cache_ && !dc_step_cache_interval_is_zero) {
+                    LOG_DEBUG("DeepCache: INPUT SKIP triggered at conceptual_module_id %d (cache_depth %d). Skipping deeper input blocks.", conceptual_module_id, dc_cache_depth_);
                     input_skipped_deeper = true;
                     goto after_input_blocks_processing_label;
                 }
@@ -563,8 +579,11 @@ public:
         // Middle block - this logic should apply regardless of input_skipped_deeper
         // The value of 'h' entering this section is what matters.
         if (dc_enabled && dc_cache_apply && dc_middle_cache_ && !dc_step_cache_interval_is_zero) {
+            LOG_DEBUG("DeepCache: MIDDLE SKIP triggered. Middle block computation skipped.");
+
             // Middle block's computation is skipped. 'h' remains unchanged from input stage.
         } else {
+            LOG_DEBUG("DeepCache: MIDDLE COMPUTE. Middle block will be computed.");
             // Middle block is computed, potentially updating 'h'.
             h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);
             h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);
@@ -585,67 +604,119 @@ public:
         // Output blocks: level 3 (inner) has 3 blocks (Res, Attn, Res, Up). level 2,1,0 has 3 blocks. Total 3*4=12.
         // Let's estimate total_output_blocks roughly as len_mults * (num_res_blocks +1) if each level always has Attn and Up.
         // Or count them properly:
-        int total_output_blocks = 0;
-        int temp_ds = 1; // ds at the bottleneck before upsampling starts
-        for(int k=0; k < len_mults -1; ++k) temp_ds *=2;
-
-        for (int k_level = (int)len_mults - 1; k_level >= 0; k_level--) {
+        // For SD 1.5, len(unet.output_blocks) is 12.
+        // This means conceptual_output_id will go from 0 to 11.
+        int total_output_blocks = 0; 
+        for (int k_level = 0; k_level < len_mults; k_level++) { // Iterate same way as constructor's output_block_idx
             for (int k_res = 0; k_res < num_res_blocks + 1; k_res++) {
                 total_output_blocks++;
             }
         }
+        // LOG_DEBUG("DeepCache: Calculated total_output_blocks = %d", total_output_blocks); // Add this if needed
+
+        int temp_ds = 1; 
+        for(int k=0; k < len_mults -1; ++k) temp_ds *=2;
 
 
-        int conceptual_output_block_id = -1; // 0-indexed conceptual ID for output blocks
-        int internal_output_block_idx_for_map = -1; // 0-indexed for map lookup, matching constructor
-        ds = temp_ds; // ds should track current resolution factor for attention_resolutions check
+        int conceptual_output_block_id = -1; 
+        int internal_output_block_idx_for_map = -1; 
+        ds = temp_ds; 
 
-        for (int i = (int)len_mults - 1; i >= 0; i--) { // Iterating through levels (from bottleneck up)
-            for (int j = 0; j < num_res_blocks + 1; j++) { // Iterating through blocks in a level
-                conceptual_output_block_id++; // This is the 0-indexed ID for logic (e.g. comparing with Python id)
-                internal_output_block_idx_for_map++; // This is the 0-indexed ID for block map lookup
+        for (int i = (int)len_mults - 1; i >= 0; i--) { 
+            for (int j = 0; j < num_res_blocks + 1; j++) { 
+                conceptual_output_block_id++; 
+                internal_output_block_idx_for_map++; 
 
-                if (dc_enabled && dc_cache_apply && dc_output_cache_ && !dc_step_cache_interval_is_zero) { // If it's a cache reuse step
+                // Determine if this block's processing should be skipped due to output caching rule
+                bool skip_due_to_output_cache_rule = false;
+                if (dc_enabled && dc_cache_apply && dc_output_cache_ && !dc_step_cache_interval_is_zero) { 
                     if (conceptual_output_block_id < (total_output_blocks - dc_cache_depth_ - 1) ) {
-                        if (hs.empty()) { 
-                            LOG_ERROR("DeepCache/UNet Error: hs stack empty before popping for skipped output block (conceptual_id %d).", conceptual_output_block_id);
-                            return nullptr; 
-                        }
-                        hs.pop_back(); // Pop corresponding skip connection
-                        
-                        // Simulate ds change if an upsampler was skipped
-                        // This requires knowing if this specific 'internal_output_block_idx_for_map' contained an upsampler
-                        // Check based on 'i' and 'j' for upsampler presence
-                        bool was_upsampler_block = (i > 0 && j == num_res_blocks);
-                        if (was_upsampler_block) {
-                             ds /= 2; 
-                        }
-                        continue; // Skip processing this output block
+                        LOG_DEBUG("DeepCache: OUTPUT SKIP evaluated for conceptual_output_block_id %d (cache boundary %d). Block processing will be skipped.",
+                                  conceptual_output_block_id, (total_output_blocks - dc_cache_depth_ - 1));
+                        skip_due_to_output_cache_rule = true;
                     }
                 }
                 
+                // Cache Update/Reuse for 'h' (main feature path) at the boundary
+                // This logic applies regardless of whether the *current block's computation with h_skip* is skipped,
+                // as 'h' itself might be loaded from cache_h.
+                if (dc_enabled && dc_cache_apply && dc_output_cache_ &&
+                    conceptual_output_block_id == (total_output_blocks - dc_cache_depth_ - 1)) {
+                    if (dc_step_cache_interval_is_zero) { // Cache Update Step
+                        LOG_DEBUG("DeepCache: OUTPUT CACHE UPDATE for 'h' at conceptual_output_block_id %d.", conceptual_output_block_id);
+                        if (dc_cache_h_ == nullptr || 
+                            dc_cache_h_->ne[0] != h->ne[0] || dc_cache_h_->ne[1] != h->ne[1] || 
+                            dc_cache_h_->ne[2] != h->ne[2] || dc_cache_h_->ne[3] != h->ne[3] ||
+                            dc_cache_h_->type != h->type) {
+                            LOG_DEBUG("DeepCache: dc_cache_h_ is null or mismatched. Creating new with ggml_dup_tensor.");
+                            dc_cache_h_ = ggml_dup_tensor(persistent_work_ctx, h);
+                            if (dc_cache_h_ == nullptr) {
+                                LOG_ERROR("DeepCache: ggml_dup_tensor failed to allocate dc_cache_h_ in persistent_work_ctx!");
+                                return nullptr; // Critical error
+                            }
+                        } else {
+                            // dc_cache_h_ exists and is suitable. Copy data from current 'h' into its buffer.
+                            // Assuming both h and dc_cache_h_ are CPU tensors as per logs.
+                            LOG_DEBUG("DeepCache: dc_cache_h_ exists and matches. Copying data with memcpy.");
+                            if (h->data != nullptr && dc_cache_h_->data != nullptr) {
+                                memcpy(dc_cache_h_->data, h->data, ggml_nbytes(h));
+                            } else {
+                                LOG_ERROR("DeepCache: Data pointer null for h or dc_cache_h_ during memcpy attempt!");
+                                return nullptr; // Critical error
+                            }
+                        }
+                    } else { // Cache Reuse Step
+                        if (dc_cache_h_ != nullptr) {
+                            LOG_DEBUG("DeepCache: OUTPUT CACHE REUSE for 'h' at conceptual_output_block_id %d.", conceptual_output_block_id);
+                            h = dc_cache_h_; // Use the cached tensor
+                        } else {
+                            // This should not happen if a CACHE UPDATE step has successfully run before.
+                            LOG_WARN("DeepCache: OUTPUT CACHE REUSE MISS for 'h' at conceptual_output_block_id %d. dc_cache_h_ is null! THIS IS UNEXPECTED on a reuse step.", conceptual_output_block_id);
+                            // Fallback: proceed with current 'h' (which means no actual caching happened for 'h')
+                        }
+                    }
+                }
+
+                // If this block's processing is skipped by output cache rule, just account for ds and continue
+                if (skip_due_to_output_cache_rule) {
+                    // If an upsampler was part of this conceptual skipped block, adjust ds
+                    bool was_upsampler_block = (i > 0 && j == num_res_blocks);
+                    if (was_upsampler_block) {
+                         ds /= 2; 
+                    }
+                    // CRITICAL: We do NOT pop from hs if we are skipping the block's computation.
+                    // Python's continue happens BEFORE hs.pop().
+                    continue; 
+                }
+
+                // If we reach here, this output block is meant to be processed (not skipped by output cache rule).
+                // Now, check if we have a corresponding skip connection from the input stage.
                 if (hs.empty()) {
-                    LOG_ERROR("DeepCache/UNet Error: hs stack is empty when expecting skip connection for output block (conceptual_id %d, map_id %d).", conceptual_output_block_id, internal_output_block_idx_for_map);
+                    // This means the input stage was truncated more severely than the output stage expects.
+                    // This configuration (input_depth vs output_depth) is problematic.
+                    LOG_ERROR("DeepCache/UNet Error: hs stack is empty for PROCESSED output block (conceptual_id %d). Input cache_depth (%d) likely too small for output_depth (%d) or UNet structure.",
+                              conceptual_output_block_id, dc_cache_depth_, dc_cache_depth_ /*This should be output cache depth if different, but we use one dc_cache_depth_*/);
                     return nullptr; 
                 }
                 auto h_skip = hs.back();
-                hs.pop_back();
+                hs.pop_back(); // Pop only when processing the block
 
+                // Apply controlnet to h_skip if applicable
                 if (controls.size() > 0 && control_offset >=0 && (size_t)control_offset < controls.size()) {
                     auto cs = ggml_scale_inplace(ctx, controls[control_offset], control_strength);
-                    h_skip  = ggml_add(ctx, h_skip, cs);  // control net condition
+                    h_skip  = ggml_add(ctx, h_skip, cs);
                     control_offset--;
                 }
 
+                // Actual block computation
                 h = ggml_concat(ctx, h, h_skip, 2);
-                
                 std::string name_res = "output_blocks." + std::to_string(internal_output_block_idx_for_map) + ".0";
                 h = resblock_forward(name_res, ctx, h, emb, num_video_frames);
 
-                int up_sample_idx = 1; // This is for naming the upsample block if attention is also present
+                int up_sample_idx = 1;
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
-                    std::string name_attn = "output_blocks." + std::to_string(internal_output_block_idx_for_map) + ".1";
-                    h = attention_layer_forward(name_attn, ctx, h, context, num_video_frames);
+                    std::string name__attn = "output_blocks." + std::to_string(internal_output_block_idx_for_map) + ".1";
+                    h = attention_layer_forward(name__attn, ctx, h, context, num_video_frames); // Use name__attn
                     up_sample_idx++;
                 }
 
