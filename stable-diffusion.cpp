@@ -1118,7 +1118,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, decode, &out);
                 };
-                sd_tiling(x, result, 8, tile_size, 0.5f, on_tiling, decode);
+                sd_tiling(x, result, 8, tile_size, 0.5f, on_tiling);
             } else {
                 first_stage_model->compute(n_threads, x, decode, &result);
             }
@@ -1132,7 +1132,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     tae_first_stage->compute(n_threads, in, decode, &out);
                 };
-                sd_tiling(x, result, 8, 64, 0.5f, on_tiling, decode);
+                sd_tiling(x, result, 8, 64, 0.5f, on_tiling);
             } else {
                 tae_first_stage->compute(n_threads, x, decode, &result);
             }
