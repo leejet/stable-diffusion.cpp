@@ -1324,13 +1324,21 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, true, &out, NULL);
                 };
-                sd_tiling(x, result, 8, tile_size, 0.5f, on_tiling, false);
+                sd_tiling(x, result, 8, tile_size, 0.5f, on_tiling);
             } else {
                 first_stage_model->compute(n_threads, x, false, &result, work_ctx);
             }
             first_stage_model->free_compute_buffer();
         } else {
-            tae_first_stage->compute(n_threads, x, false, &result, work_ctx);
+             if (vae_tiling && !decode_video) {
+                // split latent in 32x32 tiles and compute in several steps
+                auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+                    tae_first_stage->compute(n_threads, in, true, &out, NULL);
+                };
+                sd_tiling(x, result, 8, 64, 0.5f, on_tiling);
+            } else {
+                tae_first_stage->compute(n_threads, x, false, &result, work_ctx);
+            }
             tae_first_stage->free_compute_buffer();
         }
 
@@ -1469,7 +1477,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, true, &out, NULL);
                 };
-                sd_tiling(x, result, 8, tile_size, 0.5f, on_tiling, true);
+                sd_tiling(x, result, 8, tile_size, 0.5f, on_tiling);
             } else {
                 first_stage_model->compute(n_threads, x, true, &result, work_ctx);
             }
@@ -1481,7 +1489,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     tae_first_stage->compute(n_threads, in, true, &out);
                 };
-                sd_tiling(x, result, 8, 64, 0.5f, on_tiling, true);
+                sd_tiling(x, result, 8, 64, 0.5f, on_tiling);
             } else {
                 tae_first_stage->compute(n_threads, x, true, &result);
             }
