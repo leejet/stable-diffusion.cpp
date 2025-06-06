@@ -1297,6 +1297,11 @@ public:
                 LOG_WARN("OOR");
             }
         }
+        if(!decode){
+            // TODO: also use and arg for this one?
+            // to keep the compute buffer size consistent
+            tile_size*=1.30539;
+        }
         if (!use_tiny_autoencoder) {
             process_vae_input_tensor(x);
             if (vae_tiling && !decode_video) {
