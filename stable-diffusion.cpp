@@ -1304,6 +1304,19 @@ public:
     ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode_video = false) {
         int64_t t0          = ggml_time_ms();
         ggml_tensor* result = NULL;
+        int tile_size = 32;
+        // TODO: arg instead of env?
+        const char* SD_TILE_SIZE = getenv("SD_TILE_SIZE");
+        if (SD_TILE_SIZE != nullptr) {
+            std::string sd_tile_size_str = SD_TILE_SIZE;
+            try {
+                tile_size = std::stoi(sd_tile_size_str);
+            } catch (const std::invalid_argument&) {
+                LOG_WARN("Invalid");
+            } catch (const std::out_of_range&) {
+                LOG_WARN("OOR");
+            }
+        }
         if (!use_tiny_autoencoder) {
             process_vae_input_tensor(x);
             if (vae_tiling && !decode_video) {
@@ -1311,7 +1324,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, true, &out, NULL);
                 };
-                sd_tiling(x, result, 8, 32, 0.5f, on_tiling, false);
+                sd_tiling(x, result, 8, tile_size, 0.5f, on_tiling, false);
             } else {
                 first_stage_model->compute(n_threads, x, false, &result, work_ctx);
             }
@@ -1434,7 +1447,19 @@ public:
                                         C,
                                         x->ne[3]);
         }
-
+        int tile_size = 32;
+        // TODO: arg instead of env?
+        const char* SD_TILE_SIZE = getenv("SD_TILE_SIZE");
+        if (SD_TILE_SIZE != nullptr) {
+            std::string sd_tile_size_str = SD_TILE_SIZE;
+            try {
+                tile_size = std::stoi(sd_tile_size_str);
+            } catch (const std::invalid_argument&) {
+                LOG_WARN("Invalid");
+            } catch (const std::out_of_range&) {
+                LOG_WARN("OOR");
+            }
+        }
         int64_t t0 = ggml_time_ms();
         if (!use_tiny_autoencoder) {
             process_latent_out(x);
@@ -1444,7 +1469,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, true, &out, NULL);
                 };
-                sd_tiling(x, result, 8, 32, 0.5f, on_tiling, true);
+                sd_tiling(x, result, 8, tile_size, 0.5f, on_tiling, true);
             } else {
                 first_stage_model->compute(n_threads, x, true, &result, work_ctx);
             }
