@@ -627,7 +627,7 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
 
     float tile_overlap_factor_x = (float)(input_tile_size * num_tiles_x - input_width) / (float)(input_tile_size * (num_tiles_x - 1));
     if (num_tiles_x <= 2) {
-        if (input_width == input_tile_size) {
+        if (input_width <= input_tile_size) {
             num_tiles_x           = 1;
             tile_overlap_factor_x = 0;
         } else {
@@ -647,7 +647,7 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
 
     float tile_overlap_factor_y = (float)(input_tile_size * num_tiles_y - input_height) / (float)(input_tile_size * (num_tiles_y - 1));
     if (num_tiles_y <= 2) {
-        if (input_height == input_tile_size) {
+        if (input_height <= input_tile_size) {
             num_tiles_y           = 1;
             tile_overlap_factor_y = 0;
         } else {
