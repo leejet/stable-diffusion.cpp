@@ -1054,6 +1054,20 @@ public:
                                                  decode ? 3 : C,
                                                  x->ne[3]);  // channels
         int64_t t0          = ggml_time_ms();
+
+        int tile_size = 32;
+        // TODO: arg instead of env?
+        const char* SD_TILE_SIZE = getenv("SD_TILE_SIZE");
+        if (SD_TILE_SIZE != nullptr) {
+            std::string sd_tile_size_str = SD_TILE_SIZE;
+            try {
+                tile_size = std::stoi(sd_tile_size_str);
+            } catch (const std::invalid_argument&) {
+                LOG_WARN("Invalid");
+            } catch (const std::out_of_range&) {
+                LOG_WARN("OOR");
+            }
+        }
         if (!use_tiny_autoencoder) {
             if (decode) {
                 ggml_tensor_scale(x, 1.0f / scale_factor);
@@ -1065,7 +1079,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, decode, &out);
                 };
-                sd_tiling(x, result, 8, 32, 0.5f, on_tiling, decode);
+                sd_tiling(x, result, 8, tile_size, 0.5f, on_tiling, decode);
             } else {
                 first_stage_model->compute(n_threads, x, decode, &result);
             }
