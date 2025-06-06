@@ -824,18 +824,25 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
     int tile_overlap_y     = (int32_t)(tile_size * tile_overlap_factor_y);
     int non_tile_overlap_y = tile_size - tile_overlap_y;
 
-    int input_tile_size  = tile_size;
-    int output_tile_size = tile_size;
+    int tile_size_x = tile_size < small_width ? tile_size : small_width;
+    int tile_size_y = tile_size < small_height ? tile_size : small_height;
+
+    int input_tile_size_x  = tile_size_x;
+    int input_tile_size_y  = tile_size_y;
+    int output_tile_size_x = tile_size_x;
+    int output_tile_size_y = tile_size_y;
 
     if (big_out) {
-        output_tile_size *= scale;
+        output_tile_size_x *= scale;
+        output_tile_size_y *= scale;
     } else {
-        input_tile_size *= scale;
+        input_tile_size_x *= scale;
+        input_tile_size_y *= scale;
     }
 
     struct ggml_init_params params = {};
-    params.mem_size += input_tile_size * input_tile_size * input->ne[2] * sizeof(float);     // input chunk
-    params.mem_size += output_tile_size * output_tile_size * output->ne[2] * sizeof(float);  // output chunk
+    params.mem_size += input_tile_size_x * input_tile_size_y * input->ne[2] * sizeof(float);     // input chunk
+    params.mem_size += output_tile_size_x * output_tile_size_y * output->ne[2] * sizeof(float);  // output chunk
     params.mem_size += 3 * ggml_tensor_overhead();
     params.mem_buffer = NULL;
     params.no_alloc   = false;
@@ -850,9 +857,9 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
     }
 
     // tiling
-    ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, input_tile_size, input_tile_size, input->ne[2], 1);
-    ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, output_tile_size, output_tile_size, output->ne[2], 1);
-    int num_tiles = num_tiles_x * num_tiles_y;
+    ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, input_tile_size_x, input_tile_size_y, input->ne[2], 1);
+    ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, output_tile_size_x, output_tile_size_y, output->ne[2], 1);
+    int num_tiles            = num_tiles_x * num_tiles_y;
     LOG_INFO("processing %i tiles", num_tiles);
     pretty_progress(0, num_tiles, 0.0f);
     int tile_count = 1;
@@ -860,9 +867,9 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
     float last_time = 0.0f;
     for (int y = 0; y < small_height && !last_y; y += non_tile_overlap_y) {
         int dy = 0;
-        if (y + tile_size >= small_height) {
+        if (y + tile_size_y >= small_height) {
             int _y = y;
-            y      = small_height - tile_size;
+            y      = small_height - tile_size_y;
             dy     = _y - y;
             if (big_out) {
                 dy *= scale;
@@ -871,9 +878,9 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
         }
         for (int x = 0; x < small_width && !last_x; x += non_tile_overlap_x) {
             int dx = 0;
-            if (x + tile_size >= small_width) {
+            if (x + tile_size_x >= small_width) {
                 int _x = x;
-                x      = small_width - tile_size;
+                x      = small_width - tile_size_x;
                 dx     = _x - x;
                 if (big_out) {
                     dx *= scale;
