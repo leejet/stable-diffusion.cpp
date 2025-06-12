@@ -915,6 +915,14 @@ int main(int argc, const char* argv[]) {
             fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
             return 1;
         }
+        if (params.width % 64 != 0) {
+            fprintf(stderr, "error: the width of the Control Net image must be a multiple of 64\n");
+            return 1;
+        }
+        if (params.height % 64 != 0) {
+            fprintf(stderr, "error: the height of the Control Net image must be a multiple of 64\n");
+            return 1;
+        }
         control_image = new sd_image_t{(uint32_t)params.width,
                                        (uint32_t)params.height,
                                        3,
