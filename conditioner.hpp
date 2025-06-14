@@ -1322,14 +1322,14 @@ struct PixArtCLIPEmbedder : public Conditioner {
 
         size_t chunk_count = t5_tokens.size() / chunk_len;
 
-        bool use_mask                     = true;
+        bool use_mask                     = false;
         const char* SD_CHROMA_USE_T5_MASK = getenv("SD_CHROMA_USE_T5_MASK");
         if (SD_CHROMA_USE_T5_MASK != nullptr) {
             std::string sd_chroma_use_t5_mask_str = SD_CHROMA_USE_T5_MASK;
-            if (sd_chroma_use_t5_mask_str == "OFF" || sd_chroma_use_t5_mask_str == "FALSE") {
-                use_mask = false;
-            } else if (sd_chroma_use_t5_mask_str != "ON" && sd_chroma_use_t5_mask_str != "TRUE") {
-                LOG_WARN("SD_CHROMA_USE_T5_MASK environment variable has unexpected value. Assuming default (\"ON\"). (Expected \"ON\"/\"TRUE\" or\"OFF\"/\"FALSE\", got \"%s\")", SD_CHROMA_USE_T5_MASK);
+            if (sd_chroma_use_t5_mask_str == "ON" || sd_chroma_use_t5_mask_str == "TRUE") {
+                use_mask = true;
+            } else if (sd_chroma_use_t5_mask_str != "OFF" && sd_chroma_use_t5_mask_str != "FALSE") {
+                LOG_WARN("SD_CHROMA_USE_T5_MASK environment variable has unexpected value. Assuming default (\"OFF\"). (Expected \"OFF\"/\"FALSE\" or\"ON\"/\"TRUE\", got \"%s\")", SD_CHROMA_USE_T5_MASK);
             }
         }
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
