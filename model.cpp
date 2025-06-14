@@ -1107,7 +1107,7 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         std::string new_name = prefix + name;
-        new_name             = convert_tensor_name(new_name);
+        new_name             = prefix == "unet." ? convert_tensor_name(new_name) : new_name;
 
         TensorStorage tensor_storage(new_name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
         tensor_storage.reverse_ne();
@@ -1568,7 +1568,7 @@ SDVersion ModelLoader::get_sd_version() {
                     }
                 }
             }
-            if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos || tensor_storage.name.find("cond_stage_model.1") != std::string::npos) {
+            if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos || tensor_storage.name.find("cond_stage_model.1") != std::string::npos || tensor_storage.name.find("te.1") != std::string::npos) {
                 has_multiple_encoders = true;
                 if (is_unet) {
                     is_xl = true;
