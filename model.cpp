@@ -1106,10 +1106,8 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             n_dims = 1;
         }
 
-        std::string new_name = prefix + name;
-        new_name             = prefix == "unet." ? convert_tensor_name(new_name) : new_name;
 
-        TensorStorage tensor_storage(new_name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
+        TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
         tensor_storage.reverse_ne();
 
         size_t tensor_data_size = end - begin;
@@ -1150,13 +1148,18 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
         return false;
     }
     for (auto ts : tensor_storages) {
-        if (ts.name.find("label_emb") != std::string::npos) {
+        if (ts.name.find("add_embedding") != std::string::npos || ts.name.find("label_emb") != std::string::npos) {
             // probably SDXL
             LOG_DEBUG("Fixing name for SDXL output blocks.2.2");
             for (auto& tensor_storage : tensor_storages) {
-                auto pos = tensor_storage.name.find("model.diffusion_model.output_blocks.2.1.conv");
+                int len  = 34;
+                auto pos = tensor_storage.name.find("unet.up_blocks.0.upsamplers.0.conv");
+                if (pos == std::string::npos) {
+                    len = 44;
+                    pos = tensor_storage.name.find("model.diffusion_model.output_blocks.2.1.conv");
+                }
                 if (pos != std::string::npos) {
-                    tensor_storage.name = "model.diffusion_model.output_blocks.2.2.conv" + tensor_storage.name.substr(44);
+                    tensor_storage.name = "model.diffusion_model.output_blocks.2.2.conv" + tensor_storage.name.substr(len);
                     LOG_DEBUG("NEW NAME: %s", tensor_storage.name.c_str());
                     add_preprocess_tensor_storage_types(tensor_storages_types, tensor_storage.name, tensor_storage.type);
                 }
@@ -1559,7 +1562,7 @@ SDVersion ModelLoader::get_sd_version() {
             if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
                 return VERSION_SD3;
             }
-            if (tensor_storage.name.find("model.diffusion_model.input_blocks.") != std::string::npos) {
+            if (tensor_storage.name.find("model.diffusion_model.input_blocks.") != std::string::npos || tensor_storage.name.find("unet.down_blocks.") != std::string::npos) {
                 is_unet = true;
                 if (has_multiple_encoders) {
                     is_xl = true;
@@ -1590,7 +1593,7 @@ SDVersion ModelLoader::get_sd_version() {
             token_embedding_weight = tensor_storage;
             // break;
         }
-        if (tensor_storage.name == "model.diffusion_model.input_blocks.0.0.weight" || tensor_storage.name == "model.diffusion_model.img_in.weight") {
+        if (tensor_storage.name == "model.diffusion_model.input_blocks.0.0.weight" || tensor_storage.name == "model.diffusion_model.img_in.weight" || tensor_storage.name == "unet.conv_in.weight") {
             input_block_weight  = tensor_storage;
             input_block_checked = true;
             if (found_family) {
@@ -1675,7 +1678,7 @@ ggml_type ModelLoader::get_diffusion_model_wtype() {
             continue;
         }
 
-        if (tensor_storage.name.find("model.diffusion_model.") == std::string::npos) {
+        if (tensor_storage.name.find("model.diffusion_model.") == std::string::npos && tensor_storage.name.find("unet.") == std::string::npos) {
             continue;
         }
 
