@@ -1069,13 +1069,12 @@ protected:
     struct ggml_context* params_ctx     = NULL;
     ggml_backend_buffer_t params_buffer = NULL;
 
-    struct ggml_context* compute_ctx     = NULL;
-    ggml_backend_sched_t compute_sched   = NULL; 
+    struct ggml_context* compute_ctx    = NULL;
+    struct ggml_gallocr* compute_allocr = NULL;
 
     std::map<struct ggml_tensor*, const void*> backend_tensor_data_map;
 
-    ggml_backend_t backend     = NULL; 
-    ggml_backend_t cpu_backend = NULL; 
+    ggml_backend_t backend = NULL;
 
     void alloc_params_ctx() {
         struct ggml_init_params params;
@@ -1096,7 +1095,7 @@ protected:
 
     void alloc_compute_ctx() {
         struct ggml_init_params params;
-        params.mem_size   = static_cast<size_t>(ggml_tensor_overhead() * MAX_GRAPH_SIZE * 2 + ggml_graph_overhead_custom(MAX_GRAPH_SIZE, false));
+        params.mem_size   = static_cast<size_t>(ggml_tensor_overhead() * MAX_GRAPH_SIZE + ggml_graph_overhead());
         params.mem_buffer = NULL;
         params.no_alloc   = true;
 
@@ -1112,72 +1111,47 @@ protected:
     }
 
     bool alloc_compute_buffer(get_graph_cb_t get_graph) {
-        if (compute_sched != NULL) {
+        if (compute_allocr != NULL) {
             return true;
         }
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_graph();
         backend_tensor_data_map.clear();
+        compute_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
 
-        ggml_backend_t backends_list[2];
-        int n_backends_for_sched = 0;
-
-        backends_list[n_backends_for_sched++] = this->backend;
-        if (this->cpu_backend) {
-            backends_list[n_backends_for_sched++] = this->cpu_backend;
-        }
-        
-        compute_sched = ggml_backend_sched_new(backends_list, NULL, n_backends_for_sched, MAX_GRAPH_SIZE, false, false);
-        if (!compute_sched) {
-            LOG_ERROR("%s: failed to create backend scheduler\n", get_desc().c_str());
+        if (!ggml_gallocr_reserve(compute_allocr, gf)) {
+            // failed to allocate the compute buffer
+            LOG_ERROR("%s: failed to allocate the compute buffer\n", get_desc().c_str());
+            free_compute_buffer();
             return false;
         }
 
-        if (!ggml_backend_sched_reserve(compute_sched, gf)) {
-            LOG_ERROR("%s: failed to reserve memory with backend scheduler for graph\n", get_desc().c_str());
-            ggml_backend_sched_free(compute_sched);
-            compute_sched = NULL;
-            return false;
-        }
-
-        for (int i = 0; i < n_backends_for_sched; ++i) {
-            size_t buffer_size = ggml_backend_sched_get_buffer_size(compute_sched, backends_list[i]);
-            LOG_DEBUG("%s compute buffer size for %s: %.2f MB",
-                      get_desc().c_str(),
-                      ggml_backend_name(backends_list[i]),
-                      buffer_size / 1024.0 / 1024.0);
-        }
+        // compute the required memory
+        size_t compute_buffer_size = ggml_gallocr_get_buffer_size(compute_allocr, 0);
+        LOG_DEBUG("%s compute buffer size: %.2f MB(%s)",
+                  get_desc().c_str(),
+                  compute_buffer_size / 1024.0 / 1024.0,
+                  ggml_backend_is_cpu(backend) ? "RAM" : "VRAM");
         return true;
     }
 
     void cpy_data_to_backend_tensor() {
         for (auto& kv : backend_tensor_data_map) {
             auto tensor = kv.first;
-            auto data_src = kv.second;
+            auto data   = kv.second;
 
-            if (tensor->data == NULL && tensor->buffer == NULL) {
-                 continue;
-            }
-            ggml_backend_tensor_set(tensor, data_src, 0, ggml_nbytes(tensor));
+            ggml_backend_tensor_set(tensor, data, 0, ggml_nbytes(tensor));
         }
+
         backend_tensor_data_map.clear();
     }
 
 public:
     virtual std::string get_desc() = 0;
 
-    GGMLRunner(ggml_backend_t backend_in)
-        : backend(backend_in) {
+    GGMLRunner(ggml_backend_t backend)
+        : backend(backend) {
         alloc_params_ctx();
-        if (!ggml_backend_is_cpu(this->backend)) {
-            this->cpu_backend = ggml_backend_cpu_init();
-            if (!this->cpu_backend) {
-                // Avoid calling pure virtual get_desc() here.
-                LOG_ERROR("FATAL: Failed to initialize CPU backend for fallback.");
-            }
-        } else {
-            this->cpu_backend = NULL; 
-        }
     }
 
     virtual ~GGMLRunner() {
@@ -1185,10 +1159,6 @@ public:
         free_compute_buffer();
         free_params_ctx();
         free_compute_ctx();
-        if (cpu_backend) {
-            ggml_backend_free(cpu_backend);
-            cpu_backend = NULL;
-        }
     }
 
     void reset_compute_ctx() {
@@ -1200,17 +1170,22 @@ public:
         size_t num_tensors = ggml_tensor_num(params_ctx);
         params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, backend);
         if (params_buffer == NULL) {
-            LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %zu",
+            LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %i",
                       get_desc().c_str(),
                       num_tensors);
             return false;
         }
         size_t params_buffer_size = ggml_backend_buffer_get_size(params_buffer);
-        LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s) (%zu tensors)",
+        LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)",
                   get_desc().c_str(),
                   params_buffer_size / (1024.0 * 1024.0),
                   ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
                   num_tensors);
+        // printf("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)\n",
+        //           get_desc().c_str(),
+        //           params_buffer_size / (1024.0 * 1024.0),
+        //           ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
+        //           num_tensors);
         return true;
     }
 
@@ -1229,12 +1204,13 @@ public:
     }
 
     void free_compute_buffer() {
-        if (compute_sched != NULL) {
-            ggml_backend_sched_free(compute_sched);
-            compute_sched = NULL;
+        if (compute_allocr != NULL) {
+            ggml_gallocr_free(compute_allocr);
+            compute_allocr = NULL;
         }
     }
 
+    // do copy after alloc graph
     void set_backend_tensor_data(struct ggml_tensor* tensor, const void* data) {
         backend_tensor_data_map[tensor] = data;
     }
@@ -1244,12 +1220,11 @@ public:
         if (tensor == NULL) {
             return NULL;
         }
-        bool tensor_on_host_or_unmanaged = tensor->buffer == NULL || ggml_backend_buffer_is_host(tensor->buffer);
-        bool is_param_tensor = false; 
-
-        if (tensor_on_host_or_unmanaged && !is_param_tensor) {
+        // it's performing a compute, check if backend isn't cpu
+        if (!ggml_backend_is_cpu(backend) && (tensor->buffer == NULL || ggml_backend_buffer_is_host(tensor->buffer))) {
+            // pass input tensors to gpu memory
             auto backend_tensor = ggml_dup_tensor(compute_ctx, tensor);
-            ggml_set_name(backend_tensor, tensor->name); 
+
             set_backend_tensor_data(backend_tensor, tensor->data);
             return backend_tensor;
         } else {
@@ -1262,56 +1237,26 @@ public:
                  bool free_compute_buffer_immediately = true,
                  struct ggml_tensor** output          = NULL,
                  struct ggml_context* output_ctx      = NULL) {
-        
-        if (!alloc_compute_buffer(get_graph)) {
-            LOG_ERROR("%s: Failed to allocate/reserve compute buffer with scheduler.", get_desc().c_str());
-            return;
-        }
-
-        reset_compute_ctx(); 
-        struct ggml_cgraph* gf = get_graph(); 
-
-        GGML_ASSERT(compute_sched != NULL);
-        ggml_backend_sched_reset(compute_sched);
-
-        if (!ggml_backend_sched_alloc_graph(compute_sched, gf)) {
-            LOG_ERROR("%s: ggml_backend_sched_alloc_graph failed\n", get_desc().c_str());
-            return;
-        }
-
+        alloc_compute_buffer(get_graph);
+        reset_compute_ctx();
+        struct ggml_cgraph* gf = get_graph();
+        GGML_ASSERT(ggml_gallocr_alloc_graph(compute_allocr, gf));
         cpy_data_to_backend_tensor();
-
-        if (ggml_backend_is_cpu(this->backend)) {
-            ggml_backend_cpu_set_n_threads(this->backend, n_threads);
-        } else if (this->cpu_backend) {
-            ggml_backend_cpu_set_n_threads(this->cpu_backend, n_threads);
-        }
-        
-        enum ggml_status status = ggml_backend_sched_graph_compute(compute_sched, gf);
-        if (status != GGML_STATUS_SUCCESS) {
-            LOG_ERROR("%s: ggml_backend_sched_graph_compute failed with status %d (%s)\n",
-                get_desc().c_str(), status, ggml_status_to_string(status));
-            return;
+        if (ggml_backend_is_cpu(backend)) {
+            ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
 
+        ggml_backend_graph_compute(backend, gf);
 #ifdef GGML_PERF
-        // ggml_graph_print(gf);
+        ggml_graph_print(gf);
 #endif
-        if (output != NULL && ggml_graph_n_nodes(gf) > 0) {
-            struct ggml_tensor* result_tensor_in_graph = ggml_graph_node(gf, ggml_graph_n_nodes(gf) - 1);
-
+        if (output != NULL) {
+            auto result = ggml_graph_node(gf, -1);
             if (*output == NULL && output_ctx != NULL) {
-                *output = ggml_dup_tensor(output_ctx, result_tensor_in_graph); 
+                *output = ggml_dup_tensor(output_ctx, result);
             }
             if (*output != NULL) {
-                ggml_backend_t result_backend = ggml_backend_sched_get_tensor_backend(compute_sched, result_tensor_in_graph);
-                if (result_backend == NULL) { 
-                    LOG_ERROR("%s: Could not determine backend for result tensor %s\n", get_desc().c_str(), result_tensor_in_graph->name);
-                } else {
-                     ggml_backend_tensor_get_and_sync(result_backend,
-                                                 result_tensor_in_graph,
-                                                 (*output)->data, 0, ggml_nbytes(*output));
-                }
+                ggml_backend_tensor_get_and_sync(backend, result, (*output)->data, 0, ggml_nbytes(*output));
             }
         }
 
