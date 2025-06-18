@@ -112,17 +112,32 @@ public:
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
 
+    // DeepCache parameters for UNet
+    int dc_cache_interval_unet_ = 0;
+    int dc_cache_depth_unet_    = 3;
+    int dc_start_steps_unet_    = 0;
+    int dc_end_steps_unet_      = 9999;
+
     StableDiffusionGGML() = default;
 
     StableDiffusionGGML(int n_threads,
                         bool vae_decode_only,
                         bool free_params_immediately,
                         std::string lora_model_dir,
-                        rng_type_t rng_type)
+                        rng_type_t rng_type,
+                        // DeepCache parameters
+                        int dc_cache_interval,
+                        int dc_cache_depth,
+                        int dc_start_steps,
+                        int dc_end_steps)
         : n_threads(n_threads),
           vae_decode_only(vae_decode_only),
           free_params_immediately(free_params_immediately),
-          lora_model_dir(lora_model_dir) {
+          lora_model_dir(lora_model_dir),
+          dc_cache_interval_unet_(dc_cache_interval),
+          dc_cache_depth_unet_(dc_cache_depth),
+          dc_start_steps_unet_(dc_start_steps),
+          dc_end_steps_unet_(dc_end_steps) {
         if (rng_type == STD_DEFAULT_RNG) {
             rng = std::make_shared<STDDefaultRNG>();
         } else if (rng_type == CUDA_RNG) {
@@ -342,7 +357,14 @@ public:
                 } else {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_loader.tensor_storages_types, embeddings_path, version);
                 }
-                diffusion_model = std::make_shared<UNetModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn);
+                LOG_DEBUG("DeepCache: StableDiffusionGGML::load_from_file. About to create UNetModel. " \
+                          "this->dc_cache_interval_unet_: %d, this->dc_cache_depth_unet_: %d, " \
+                          "this->dc_start_steps_unet_: %d, this->dc_end_steps_unet_: %d",
+                          this->dc_cache_interval_unet_, this->dc_cache_depth_unet_,
+                          this->dc_start_steps_unet_, this->dc_end_steps_unet_);
+                diffusion_model = std::make_shared<UNetModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn,
+                                                              this->dc_cache_interval_unet_, this->dc_cache_depth_unet_,
+                                                              this->dc_start_steps_unet_, this->dc_end_steps_unet_);
             }
 
             cond_stage_model->alloc_params_buffer();
@@ -617,8 +639,11 @@ public:
         }
 
         int64_t t0              = ggml_time_ms();
-        struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, -1, {}, 0.f, &out);
+        struct ggml_tensor* out = NULL; // Output tensor will be allocated by compute if output_ctx is provided
+        struct ggml_tensor* out_tensor = ggml_dup_tensor(work_ctx, x_t);
+
+        // diffusion_model->compute(n_threads, x, timesteps, context, c_concat, y, guidance, num_video_frames, controls, control_strength, persistent_work_ctx, output, output_ctx, skip_layers)
+        diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, -1, {}, 0.f, work_ctx, &out_tensor, work_ctx);
         diffusion_model->free_compute_buffer();
 
         double result = 0.f;
@@ -890,6 +915,7 @@ public:
                                          -1,
                                          controls,
                                          control_strength,
+                                         work_ctx, 
                                          &out_cond);
             } else {
                 diffusion_model->compute(n_threads,
@@ -902,6 +928,7 @@ public:
                                          -1,
                                          controls,
                                          control_strength,
+                                         work_ctx, 
                                          &out_cond);
             }
 
@@ -922,6 +949,7 @@ public:
                                          -1,
                                          controls,
                                          control_strength,
+                                         work_ctx, 
                                          &out_uncond);
                 negative_data = (float*)out_uncond->data;
             }
@@ -942,6 +970,7 @@ public:
                                          -1,
                                          controls,
                                          control_strength,
+                                         work_ctx, 
                                          &out_skip,
                                          NULL,
                                          skip_layers);
@@ -1130,7 +1159,12 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      bool keep_clip_on_cpu,
                      bool keep_control_net_cpu,
                      bool keep_vae_on_cpu,
-                     bool diffusion_flash_attn) {
+                     bool diffusion_flash_attn,
+                     // DeepCache parameters
+                     int dc_cache_interval,
+                     int dc_cache_depth,
+                     int dc_start_steps,
+                     int dc_end_steps) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == NULL) {
         return NULL;
@@ -1151,7 +1185,11 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                          vae_decode_only,
                                          free_params_immediately,
                                          lora_model_dir,
-                                         rng_type);
+                                         rng_type,
+                                         dc_cache_interval,
+                                         dc_cache_depth,
+                                         dc_start_steps,
+                                         dc_end_steps);
     if (sd_ctx->sd == NULL) {
         return NULL;
     }
@@ -1439,6 +1477,15 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         LOG_INFO("generating image: %i/%i - seed %" PRId64, b + 1, batch_count, cur_seed);
 
         sd_ctx->sd->rng->manual_seed(cur_seed);
+        
+        // Reset DeepCache state for the UNet model for this new image/seed
+
+        auto unet_model = std::dynamic_pointer_cast<UNetModel>(sd_ctx->sd->diffusion_model);
+        if (unet_model) {
+            unet_model->unet.unet.reset_deepcache_state();
+        }
+
+
         struct ggml_tensor* x_t   = init_latent;
         struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
         ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
@@ -1561,6 +1608,14 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
+
+    auto unet_model = std::dynamic_pointer_cast<UNetModel>(sd_ctx->sd->diffusion_model);
+    if (unet_model && unet_model->unet.unet.dc_cache_interval_ > 0) {
+        LOG_DEBUG("Allocating extra memory for DeepCache tensor");
+        size_t cache_tensor_size = 1280 * (height/8) * (width/8) * ggml_type_size(sd_ctx->sd->model_wtype);
+        params.mem_size += cache_tensor_size;
+    }
+
     params.mem_size += width * height * 3 * sizeof(float);
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;
@@ -1673,6 +1728,14 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
+
+    auto unet_model = std::dynamic_pointer_cast<UNetModel>(sd_ctx->sd->diffusion_model);
+    if (unet_model && unet_model->unet.unet.dc_cache_interval_ > 0) {
+        LOG_DEBUG("Allocating extra memory for DeepCache tensor");
+        size_t cache_tensor_size = 1280 * (height/8) * (width/8) * ggml_type_size(sd_ctx->sd->model_wtype);
+        params.mem_size += cache_tensor_size;
+    }
+    
     params.mem_size += width * height * 3 * sizeof(float) * 3;
     params.mem_size *= batch_count;
     params.mem_buffer = NULL;
