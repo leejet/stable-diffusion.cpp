@@ -748,8 +748,38 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_chunk(struct ggml_contex
 
 typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
+__STATIC_INLINE__ void
+sd_tiling_calc_tiles(int &num_tiles_dim, float& tile_overlap_factor_dim, int small_dim, int tile_size, const float tile_overlap_factor) {
+
+    int tile_overlap     = (tile_size * tile_overlap_factor);
+    int non_tile_overlap = tile_size - tile_overlap;
+
+    num_tiles_dim = (small_dim - tile_overlap) / non_tile_overlap;
+    int overshoot_dim = ((num_tiles_dim + 1) * non_tile_overlap + tile_overlap) % small_dim;
+
+    if ((overshoot_dim != non_tile_overlap) && (overshoot_dim <= num_tiles_dim * (tile_size / 2 - tile_overlap))) {
+        // if tiles don't fit perfectly using the desired overlap
+        // and there is enough room to squeeze an extra tile without overlap becoming >0.5
+        num_tiles_dim++;
+    }
+
+    tile_overlap_factor_dim = (float)(tile_size * num_tiles_dim - small_dim) / (float)(tile_size * (num_tiles_dim - 1));
+    if (num_tiles_dim <= 2) {
+        if (small_dim <= tile_size) {
+            num_tiles_dim           = 1;
+            tile_overlap_factor_dim = 0;
+        } else {
+            num_tiles_dim           = 2;
+            tile_overlap_factor_dim = (2 * tile_size - small_dim) / (float)tile_size;
+        }
+    }
+}
+
 // Tiling
-__STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
+__STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input, ggml_tensor* output, const int scale,
+                                            const int p_tile_size_x, const int p_tile_size_y,
+                                            const float tile_overlap_factor, on_tile_process on_processing) {
+
     output = ggml_set_f32(output, 0);
 
     int input_width   = (int)input->ne[0];
@@ -770,62 +800,27 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
         small_height = input_height;
     }
 
-    int tile_overlap     = (tile_size * tile_overlap_factor);
-    int non_tile_overlap = tile_size - tile_overlap;
+    int num_tiles_x;
+    float tile_overlap_factor_x;
+    sd_tiling_calc_tiles(num_tiles_x, tile_overlap_factor_x, small_width, p_tile_size_x, tile_overlap_factor);
 
-    int num_tiles_x = (small_width - tile_overlap) / non_tile_overlap;
-    int overshoot_x = ((num_tiles_x + 1) * non_tile_overlap + tile_overlap) % small_width;
-
-    if ((overshoot_x != non_tile_overlap) && (overshoot_x <= num_tiles_x * (tile_size / 2 - tile_overlap))) {
-        // if tiles don't fit perfectly using the desired overlap
-        // and there is enough room to squeeze an extra tile without overlap becoming >0.5
-        num_tiles_x++;
-    }
-
-    float tile_overlap_factor_x = (float)(tile_size * num_tiles_x - small_width) / (float)(tile_size * (num_tiles_x - 1));
-    if (num_tiles_x <= 2) {
-        if (small_width <= tile_size) {
-            num_tiles_x           = 1;
-            tile_overlap_factor_x = 0;
-        } else {
-            num_tiles_x           = 2;
-            tile_overlap_factor_x = (2 * tile_size - small_width) / (float)tile_size;
-        }
-    }
-
-    int num_tiles_y = (small_height - tile_overlap) / non_tile_overlap;
-    int overshoot_y = ((num_tiles_y + 1) * non_tile_overlap + tile_overlap) % small_height;
-
-    if ((overshoot_y != non_tile_overlap) && (overshoot_y <= num_tiles_y * (tile_size / 2 - tile_overlap))) {
-        // if tiles don't fit perfectly using the desired overlap
-        // and there is enough room to squeeze an extra tile without overlap becoming >0.5
-        num_tiles_y++;
-    }
-
-    float tile_overlap_factor_y = (float)(tile_size * num_tiles_y - small_height) / (float)(tile_size * (num_tiles_y - 1));
-    if (num_tiles_y <= 2) {
-        if (small_height <= tile_size) {
-            num_tiles_y           = 1;
-            tile_overlap_factor_y = 0;
-        } else {
-            num_tiles_y           = 2;
-            tile_overlap_factor_y = (2 * tile_size - small_height) / (float)tile_size;
-        }
-    }
+    int num_tiles_y;
+    float tile_overlap_factor_y;
+    sd_tiling_calc_tiles(num_tiles_y, tile_overlap_factor_y, small_height, p_tile_size_y, tile_overlap_factor);
 
     LOG_DEBUG("num tiles : %d, %d ", num_tiles_x, num_tiles_y);
     LOG_DEBUG("optimal overlap : %f, %f (targeting %f)", tile_overlap_factor_x, tile_overlap_factor_y, tile_overlap_factor);
 
     GGML_ASSERT(input_width % 2 == 0 && input_height % 2 == 0 && output_width % 2 == 0 && output_height % 2 == 0);  // should be multiple of 2
 
-    int tile_overlap_x     = (int32_t)(tile_size * tile_overlap_factor_x);
-    int non_tile_overlap_x = tile_size - tile_overlap_x;
+    int tile_overlap_x     = (int32_t)(p_tile_size_x * tile_overlap_factor_x);
+    int non_tile_overlap_x = p_tile_size_x - tile_overlap_x;
 
-    int tile_overlap_y     = (int32_t)(tile_size * tile_overlap_factor_y);
-    int non_tile_overlap_y = tile_size - tile_overlap_y;
+    int tile_overlap_y     = (int32_t)(p_tile_size_y * tile_overlap_factor_y);
+    int non_tile_overlap_y = p_tile_size_y - tile_overlap_y;
 
-    int tile_size_x = tile_size < small_width ? tile_size : small_width;
-    int tile_size_y = tile_size < small_height ? tile_size : small_height;
+    int tile_size_x = p_tile_size_x < small_width ? p_tile_size_x : small_width;
+    int tile_size_y = p_tile_size_y < small_height ? p_tile_size_y : small_height;
 
     int input_tile_size_x  = tile_size_x;
     int input_tile_size_y  = tile_size_y;
@@ -912,6 +907,11 @@ __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const 
         pretty_progress(num_tiles, num_tiles, last_time);
     }
     ggml_free(tiles_ctx);
+}
+
+__STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale,
+    const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
+    sd_tiling_non_square(input, output, scale, tile_size, tile_size, tile_overlap_factor, on_processing);
 }
 
 __STATIC_INLINE__ struct ggml_tensor* ggml_group_norm_32(struct ggml_context* ctx,
