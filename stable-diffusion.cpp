@@ -357,21 +357,6 @@ public:
                 } else {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_loader.tensor_storages_types, embeddings_path, version);
                 }
-                // Pass DeepCache params from StableDiffusionGGML members if they are stored there, or 0/defaults for now
-                // For this example, assume they are not yet members of StableDiffusionGGML, so pass defaults
-                // Or, if we add them to SD_API new_sd_ctx, they'd be passed here.
-                // For now, this means UNetModel would need its own DeepCache fields to be set.
-                // Let's assume new_sd_ctx will pass them to StableDiffusionGGML, which then passes them here.
-                // This requires dc_params to be members of StableDiffusionGGML or passed around.
-                // For now, directly use the dc_params from this function's scope IF they are added to load_from_file signature
-                // (which they are not yet). So, temporary default values or a TODO to thread them.
-                // For the current structure, UNetModel gets them via its constructor, called by StableDiffusionGGML::load_from_file.
-                // So, `this->dc_cache_interval_` etc. if they become members of StableDiffusionGGML.
-                // Let's assume they are NOT members of StableDiffusionGGML yet, and UNetModel uses its constructor defaults.
-                // To fix this, `dc_cache_interval_unet` etc would be passed to `load_from_file`.
-                // This is getting complex without modifying StableDiffusionGGML members first.
-                // The new_sd_ctx sets them up. So they *should* be available in StableDiffusionGGML.
-                // We'll add them to StableDiffusionGGML members.
                 LOG_DEBUG("DeepCache: StableDiffusionGGML::load_from_file. About to create UNetModel. " \
                           "this->dc_cache_interval_unet_: %d, this->dc_cache_depth_unet_: %d, " \
                           "this->dc_start_steps_unet_: %d, this->dc_end_steps_unet_: %d",
@@ -655,9 +640,7 @@ public:
 
         int64_t t0              = ggml_time_ms();
         struct ggml_tensor* out = NULL; // Output tensor will be allocated by compute if output_ctx is provided
-                                        // Or we can pre-allocate it as before, but compute needs its address.
-        // Let's pre-allocate `out` as it was, compute needs `&out` and then `work_ctx` for where `out` should live
-        struct ggml_tensor* out_tensor = ggml_dup_tensor(work_ctx, x_t); // pre-allocate as before
+        struct ggml_tensor* out_tensor = ggml_dup_tensor(work_ctx, x_t);
 
         // diffusion_model->compute(n_threads, x, timesteps, context, c_concat, y, guidance, num_video_frames, controls, control_strength, persistent_work_ctx, output, output_ctx, skip_layers)
         diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, -1, {}, 0.f, work_ctx, &out_tensor, work_ctx);
@@ -932,7 +915,7 @@ public:
                                          -1,
                                          controls,
                                          control_strength,
-                                         work_ctx, // Pass persistent work_ctx
+                                         work_ctx, 
                                          &out_cond);
             } else {
                 diffusion_model->compute(n_threads,
@@ -945,7 +928,7 @@ public:
                                          -1,
                                          controls,
                                          control_strength,
-                                         work_ctx, // Pass persistent work_ctx
+                                         work_ctx, 
                                          &out_cond);
             }
 
@@ -966,7 +949,7 @@ public:
                                          -1,
                                          controls,
                                          control_strength,
-                                         work_ctx, // Pass persistent work_ctx
+                                         work_ctx, 
                                          &out_uncond);
                 negative_data = (float*)out_uncond->data;
             }
@@ -987,7 +970,7 @@ public:
                                          -1,
                                          controls,
                                          control_strength,
-                                         work_ctx, // Pass persistent work_ctx
+                                         work_ctx, 
                                          &out_skip,
                                          NULL,
                                          skip_layers);
@@ -1496,9 +1479,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         sd_ctx->sd->rng->manual_seed(cur_seed);
         
         // Reset DeepCache state for the UNet model for this new image/seed
-        // Need to access unet.reset_deepcache_state()
-        // Assuming diffusion_model is UNetModel, which has a UNetModelRunner named 'unet'
-        // This requires dynamic_cast or a more direct way if UNetModel exposes this
+
         auto unet_model = std::dynamic_pointer_cast<UNetModel>(sd_ctx->sd->diffusion_model);
         if (unet_model) {
             unet_model->unet.unet.reset_deepcache_state();

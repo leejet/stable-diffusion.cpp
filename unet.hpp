@@ -376,7 +376,7 @@ public:
     }
 
     void reset_deepcache_state() {
-        // Called at the beginning of each new image generation (e.g. before a txt2img/img2img call or per batch item)
+        
         dc_current_time_ = -1.f;
         dc_current_step_ = -1;
         dc_model_step_ = -1;
@@ -519,7 +519,6 @@ public:
         bool input_skipped_deeper = false;
         auto h = x; // Initialize h with x before the first block operation
 
-        // Declare variables that were being jumped over here
         size_t len_mults = channel_mult.size();
         int internal_block_counter = 0; // For naming blocks like "input_blocks.1.0", "input_blocks.2.0"
         int ds = 1;
@@ -544,7 +543,7 @@ public:
             int mult = channel_mult[i];
             for (int j = 0; j < num_res_blocks; j++) { // Iterating through resblocks in a level
                 internal_block_counter++; 
-                conceptual_module_id++; // This group (ResBlock + optional Attn) is one conceptual module
+                conceptual_module_id++;
 
                 std::string res_name = "input_blocks." + std::to_string(internal_block_counter) + ".0";
                 h = resblock_forward(res_name, ctx, h, emb, num_video_frames);
@@ -600,12 +599,7 @@ public:
         int control_offset = controls.size() - 2;
         
         // output_blocks
-        // Determine total number of "conceptual" output blocks similar to ComfyUI's list
-        // This is complex due to C++ structure. For SD 1.5, it's 12.
-        // len_mults = 4 (0,1,2,3). num_res_blocks = 2.
-        // Output blocks: level 3 (inner) has 3 blocks (Res, Attn, Res, Up). level 2,1,0 has 3 blocks. Total 3*4=12.
-        // Let's estimate total_output_blocks roughly as len_mults * (num_res_blocks +1) if each level always has Attn and Up.
-        // Or count them properly:
+        // Determine total number of "conceptual" output blocks 
         // For SD 1.5, len(unet.output_blocks) is 12.
         // This means conceptual_output_id will go from 0 to 11.
         int total_output_blocks = 0; 
@@ -664,8 +658,6 @@ public:
                     if (was_upsampler_block) {
                          ds /= 2; 
                     }
-                    // CRITICAL: We do NOT pop from hs if we are skipping the block's computation.
-                    // Python's continue happens BEFORE hs.pop().
                     continue; 
                 }
 
@@ -673,7 +665,6 @@ public:
                 // Now, check if we have a corresponding skip connection from the input stage.
                 if (hs.empty()) {
                     // This means the input stage was truncated more severely than the output stage expects.
-                    // This configuration (input_depth vs output_depth) is problematic.
                     LOG_ERROR("DeepCache/UNet Error: hs stack is empty for PROCESSED output block (conceptual_id %d). Input cache_depth (%d) likely too small for output_depth (%d) or UNet structure.",
                               conceptual_output_block_id, dc_cache_depth_, dc_cache_depth_ /*This should be output cache depth if different, but we use one dc_cache_depth_*/);
                     return nullptr; 
@@ -684,8 +675,8 @@ public:
                 // Apply controlnet to h_skip if applicable
                 if (controls.size() > 0 && control_offset >=0 && (size_t)control_offset < controls.size()) {
                     auto cs = ggml_scale_inplace(ctx, controls[control_offset], control_strength);
-                    h_skip  = ggml_add(ctx, h_skip, cs);
-                    control_offset--;
+                    h_skip  = ggml_add(ctx, h_skip, cs);  // control net condition
+                    control_offset--; 
                 }
 
                 // Actual block computation
@@ -771,7 +762,7 @@ struct UNetModelRunner : public GGMLRunner {
         unet.get_param_tensors(tensors, prefix);
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_context* persistent_work_ctx, // Added
+    struct ggml_cgraph* build_graph(struct ggml_context* persistent_work_ctx,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* timesteps,
                                     struct ggml_tensor* context,
@@ -797,7 +788,7 @@ struct UNetModelRunner : public GGMLRunner {
         }
 
         struct ggml_tensor* out = unet.forward(compute_ctx,
-                                               persistent_work_ctx, // Added
+                                               persistent_work_ctx,
                                                x,
                                                timesteps,
                                                context,
@@ -818,7 +809,7 @@ struct UNetModelRunner : public GGMLRunner {
                  struct ggml_tensor* context,
                  struct ggml_tensor* c_concat,
                  struct ggml_tensor* y,
-                 struct ggml_context* persistent_work_ctx, // Added
+                 struct ggml_context* persistent_work_ctx, 
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
@@ -869,7 +860,7 @@ struct UNetModelRunner : public GGMLRunner {
             struct ggml_tensor* out = NULL;
 
             int t0 = ggml_time_ms();
-            // Added work_ctx as persistent_work_ctx, then num_video_frames, controls, control_strength, output, output_ctx
+            
             compute(8, x, timesteps, context, NULL, y, work_ctx, num_video_frames, {}, 0.f, &out, work_ctx);
             int t1 = ggml_time_ms();
 
