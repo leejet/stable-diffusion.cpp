@@ -90,6 +90,8 @@ struct SDParams {
     std::string mask_path;
     std::string control_image_path;
 
+    std::vector<std::string> kontext_image_paths;
+
     std::string prompt;
     std::string negative_prompt;
     float min_cfg     = 1.0f;
@@ -245,6 +247,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            Colors the logging tags according to level\n");
     printf("  -v, --verbose                      print extra info\n");
+    printf("  -ki, --kontext_img [PATH]        Reference image for Flux Kontext models (can be used multiple times) \n");
 }
 
 void parse_args(int argc, const char** argv, SDParams& params) {
@@ -629,6 +632,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "-ki" || arg == "--kontext-img") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.kontext_image_paths.push_back(argv[i]);
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -821,8 +830,40 @@ int main(int argc, const char* argv[]) {
         fprintf(stderr, "SVD support is broken, do not use it!!!\n");
         return 1;
     }
+    bool vae_decode_only = true;
 
-    bool vae_decode_only          = true;
+    std::vector<sd_image_t> kontext_imgs;
+    for (auto& path : params.kontext_image_paths) {
+        vae_decode_only       = false;
+        int c                 = 0;
+        int width             = 0;
+        int height            = 0;
+        uint8_t* image_buffer = stbi_load(path.c_str(), &width, &height, &c, 3);
+        if (image_buffer == NULL) {
+            fprintf(stderr, "load image from '%s' failed\n", path.c_str());
+            return 1;
+        }
+        if (c < 3) {
+            fprintf(stderr, "the number of channels for the input image must be >= 3, but got %d channels\n", c);
+            free(image_buffer);
+            return 1;
+        }
+        if (width <= 0) {
+            fprintf(stderr, "error: the width of image must be greater than 0\n");
+            free(image_buffer);
+            return 1;
+        }
+        if (height <= 0) {
+            fprintf(stderr, "error: the height of image must be greater than 0\n");
+            free(image_buffer);
+            return 1;
+        }
+        kontext_imgs.push_back({(uint32_t)width,
+                                (uint32_t)height,
+                                3,
+                                image_buffer});
+    }
+
     uint8_t* input_image_buffer   = NULL;
     uint8_t* control_image_buffer = NULL;
     uint8_t* mask_image_buffer    = NULL;
@@ -963,6 +1004,7 @@ int main(int argc, const char* argv[]) {
                           params.style_ratio,
                           params.normalize_input,
                           params.input_id_images_path.c_str(),
+                          kontext_imgs.data(), kontext_imgs.size(),
                           params.skip_layers.data(),
                           params.skip_layers.size(),
                           params.slg_scale,
@@ -1032,6 +1074,7 @@ int main(int argc, const char* argv[]) {
                               params.style_ratio,
                               params.normalize_input,
                               params.input_id_images_path.c_str(),
+                              kontext_imgs.data(), kontext_imgs.size(),
                               params.skip_layers.data(),
                               params.skip_layers.size(),
                               params.slg_scale,
@@ -1075,11 +1118,11 @@ int main(int argc, const char* argv[]) {
 
     std::string dummy_name, ext, lc_ext;
     bool is_jpg;
-    size_t last = params.output_path.find_last_of(".");
+    size_t last      = params.output_path.find_last_of(".");
     size_t last_path = std::min(params.output_path.find_last_of("/"),
                                 params.output_path.find_last_of("\\"));
-    if (last != std::string::npos // filename has extension
-    && (last_path == std::string::npos || last > last_path)) {
+    if (last != std::string::npos  // filename has extension
+        && (last_path == std::string::npos || last > last_path)) {
         dummy_name = params.output_path.substr(0, last);
         ext = lc_ext = params.output_path.substr(last);
         std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
@@ -1087,7 +1130,7 @@ int main(int argc, const char* argv[]) {
     } else {
         dummy_name = params.output_path;
         ext = lc_ext = "";
-        is_jpg = false;
+        is_jpg       = false;
     }
     // appending ".png" to absent or unknown extension
     if (!is_jpg && lc_ext != ".png") {
@@ -1099,7 +1142,7 @@ int main(int argc, const char* argv[]) {
             continue;
         }
         std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
-        if(is_jpg) {
+        if (is_jpg) {
             stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                            results[i].data, 90, get_image_params(params, params.seed + i).c_str());
             printf("save result JPEG image to '%s'\n", final_image_path.c_str());
