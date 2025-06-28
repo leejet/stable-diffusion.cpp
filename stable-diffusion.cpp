@@ -48,7 +48,8 @@ const char* sampling_methods_str[] = {
     "iPNDM_v",
     "LCM",
     "DDIM \"trailing\"",
-    "TCD"};
+    "TCD"
+};
 
 /*================================================== Helper Functions ================================================*/
 
@@ -617,7 +618,7 @@ public:
 
         int64_t t0              = ggml_time_ms();
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, -1, {}, 0.f, std::vector<struct ggml_tensor*>(), &out);
+        diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, {}, -1, {}, 0.f, &out);
         diffusion_model->free_compute_buffer();
 
         double result = 0.f;
@@ -681,7 +682,7 @@ public:
             float curr_multiplier        = kv.second;
             lora_state_diff[lora_name] -= curr_multiplier;
         }
-
+        
         size_t rm = lora_state_diff.size() - lora_state.size();
         if (rm != 0) {
             LOG_INFO("Attempting to apply %lu LoRAs (removing %lu applied LoRAs)", lora_state.size(), rm);
@@ -799,12 +800,12 @@ public:
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         SDCondition id_cond,
-                        std::vector<int> skip_layers                  = {},
-                        float slg_scale                               = 0,
-                        float skip_layer_start                        = 0.01,
-                        float skip_layer_end                          = 0.2,
-                        std::vector<struct ggml_tensor*> kontext_imgs = std::vector<struct ggml_tensor*>(),
-                        ggml_tensor* noise_mask                       = NULL) {
+                        std::vector<ggml_tensor*> ref_latents = {},
+                        std::vector<int> skip_layers = {},
+                        float slg_scale              = 0,
+                        float skip_layer_start       = 0.01,
+                        float skip_layer_end         = 0.2,
+                        ggml_tensor* noise_mask      = nullptr) {
         LOG_DEBUG("Sample");
         struct ggml_init_params params;
         size_t data_size = ggml_row_size(init_latent->type, init_latent->ne[0]);
@@ -887,10 +888,10 @@ public:
                                          cond.c_concat,
                                          cond.c_vector,
                                          guidance_tensor,
+                                         ref_latents,
                                          -1,
                                          controls,
                                          control_strength,
-                                         kontext_imgs,
                                          &out_cond);
             } else {
                 diffusion_model->compute(n_threads,
@@ -900,10 +901,10 @@ public:
                                          cond.c_concat,
                                          id_cond.c_vector,
                                          guidance_tensor,
+                                         ref_latents,
                                          -1,
                                          controls,
                                          control_strength,
-                                         kontext_imgs,
                                          &out_cond);
             }
 
@@ -921,10 +922,10 @@ public:
                                          uncond.c_concat,
                                          uncond.c_vector,
                                          guidance_tensor,
+                                         ref_latents,
                                          -1,
                                          controls,
                                          control_strength,
-                                         kontext_imgs,
                                          &out_uncond);
                 negative_data = (float*)out_uncond->data;
             }
@@ -942,10 +943,10 @@ public:
                                          cond.c_concat,
                                          cond.c_vector,
                                          guidance_tensor,
+                                         ref_latents,
                                          -1,
                                          controls,
                                          control_strength,
-                                         kontext_imgs,
                                          &out_skip,
                                          NULL,
                                          skip_layers);
@@ -1213,12 +1214,12 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            float style_ratio,
                            bool normalize_input,
                            std::string input_id_images_path,
-                           std::vector<struct ggml_tensor*> kontext_imgs = std::vector<struct ggml_tensor*>(),
-                           std::vector<int> skip_layers                  = {},
-                           float slg_scale                               = 0,
-                           float skip_layer_start                        = 0.01,
-                           float skip_layer_end                          = 0.2,
-                           ggml_tensor* masked_image                     = NULL) {
+                           std::vector<ggml_tensor*> ref_latents,
+                           std::vector<int> skip_layers = {},
+                           float slg_scale              = 0,
+                           float skip_layer_start       = 0.01,
+                           float skip_layer_end         = 0.2,
+                           ggml_tensor* masked_image    = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1471,11 +1472,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      sigmas,
                                                      start_merge_step,
                                                      id_cond,
+                                                     ref_latents,
                                                      skip_layers,
                                                      slg_scale,
                                                      skip_layer_start,
                                                      skip_layer_end,
-                                                     kontext_imgs,
                                                      noise_mask);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
@@ -1545,8 +1546,6 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float style_ratio,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
-                    sd_image_t* kontext_imgs,
-                    int kontext_img_count,
                     int* skip_layers         = NULL,
                     size_t skip_layers_count = 0,
                     float slg_scale          = 0,
@@ -1605,22 +1604,6 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
     if (sd_version_is_inpaint(sd_ctx->sd->version)) {
         LOG_WARN("This is an inpainting model, this should only be used in img2img mode with a mask");
     }
-    std::vector<struct ggml_tensor*> kontext_latents = std::vector<struct ggml_tensor*>();
-    if (kontext_imgs) {
-        for (int i = 0; i < kontext_img_count; i++) {
-            ggml_tensor* img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, kontext_imgs[i].width, kontext_imgs[i].height, 3, 1);
-            sd_image_to_tensor(kontext_imgs[i].data, img);
-
-            ggml_tensor* latent = NULL;
-            if (!sd_ctx->sd->use_tiny_autoencoder) {
-                ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, img);
-                latent               = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
-            } else {
-                latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
-            }
-            kontext_latents.push_back(latent);
-        }
-    }
 
     sd_image_t* result_images = generate_image(sd_ctx,
                                                work_ctx,
@@ -1642,7 +1625,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                style_ratio,
                                                normalize_input,
                                                input_id_images_path_c_str,
-                                               kontext_latents,
+                                               {},
                                                skip_layers_vec,
                                                slg_scale,
                                                skip_layer_start,
@@ -1676,8 +1659,6 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float style_ratio,
                     bool normalize_input,
                     const char* input_id_images_path_c_str,
-                    sd_image_t* kontext_imgs,
-                    int kontext_img_count,
                     int* skip_layers         = NULL,
                     size_t skip_layers_count = 0,
                     float slg_scale          = 0,
@@ -1793,23 +1774,6 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
     }
 
-    std::vector<struct ggml_tensor*> kontext_latents = std::vector<struct ggml_tensor*>();
-    if (kontext_imgs) {
-        for (int i = 0; i < kontext_img_count; i++) {
-            ggml_tensor* img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-            sd_image_to_tensor(kontext_imgs[i].data, img);
-
-            ggml_tensor* latent = NULL;
-            if (!sd_ctx->sd->use_tiny_autoencoder) {
-                ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, img);
-                latent               = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
-            } else {
-                latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
-            }
-            kontext_latents.push_back(latent);
-        }
-    }
-
     print_ggml_tensor(init_latent, true);
     size_t t1 = ggml_time_ms();
     LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
@@ -1842,7 +1806,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                style_ratio,
                                                normalize_input,
                                                input_id_images_path_c_str,
-                                               kontext_latents,
+                                               {},
                                                skip_layers_vec,
                                                slg_scale,
                                                skip_layer_start,
@@ -1985,6 +1949,135 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
     int64_t t3 = ggml_time_ms();
 
     LOG_INFO("img2vid completed in %.2fs", (t3 - t0) * 1.0f / 1000);
+
+    return result_images;
+}
+
+
+sd_image_t* edit(sd_ctx_t* sd_ctx,
+                 sd_image_t* ref_images,
+                 int ref_images_count,
+                 const char* prompt_c_str,
+                 const char* negative_prompt_c_str,
+                 int clip_skip,
+                 float cfg_scale,
+                 float guidance,
+                 float eta,
+                 int width,
+                 int height,
+                 sample_method_t sample_method,
+                 int sample_steps,
+                 float strength,
+                 int64_t seed,
+                 int batch_count,
+                 const sd_image_t* control_cond,
+                 float control_strength,
+                 float style_ratio,
+                 bool normalize_input,
+                 int* skip_layers         = NULL,
+                 size_t skip_layers_count = 0,
+                 float slg_scale          = 0,
+                 float skip_layer_start   = 0.01,
+                 float skip_layer_end     = 0.2) {
+    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
+    LOG_DEBUG("edit %dx%d", width, height);
+    if (sd_ctx == NULL) {
+        return NULL;
+    }
+    if (ref_images_count <= 0) {
+        LOG_ERROR("ref images count should > 0");
+        return NULL;
+    }
+
+    struct ggml_init_params params;
+    params.mem_size = static_cast<size_t>(30 * 1024 * 1024);  // 10 MB
+    params.mem_size += width * height * 3 * sizeof(float) * 3 * ref_images_count;
+    params.mem_size *= batch_count;
+    params.mem_buffer = NULL;
+    params.no_alloc   = false;
+    // LOG_DEBUG("mem_size %u ", params.mem_size);
+
+    struct ggml_context* work_ctx = ggml_init(params);
+    if (!work_ctx) {
+        LOG_ERROR("ggml_init() failed");
+        return NULL;
+    }
+
+    if (seed < 0) {
+        srand((int)time(NULL));
+        seed = rand();
+    }
+    sd_ctx->sd->rng->manual_seed(seed);
+
+    int C = 4;
+    if (sd_version_is_sd3(sd_ctx->sd->version)) {
+        C = 16;
+    } else if (sd_version_is_flux(sd_ctx->sd->version)) {
+        C = 16;
+    }
+    int W                    = width / 8;
+    int H                    = height / 8;
+    ggml_tensor* init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
+    if (sd_version_is_sd3(sd_ctx->sd->version)) {
+        ggml_set_f32(init_latent, 0.0609f);
+    } else if (sd_version_is_flux(sd_ctx->sd->version)) {
+        ggml_set_f32(init_latent, 0.1159f);
+    } else {
+        ggml_set_f32(init_latent, 0.f);
+    }
+
+    size_t t0 = ggml_time_ms();
+
+    std::vector<struct ggml_tensor*> ref_latents;
+    for (int i = 0; i < ref_images_count; i++) {
+        ggml_tensor* img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, ref_images[i].width, ref_images[i].height, 3, 1);
+        sd_image_to_tensor(ref_images[i].data, img);
+
+        ggml_tensor* latent = NULL;
+        if (!sd_ctx->sd->use_tiny_autoencoder) {
+            ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, img);
+            latent               = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
+        } else {
+            latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
+        }
+        ref_latents.push_back(latent);
+    }
+    
+    size_t t1 = ggml_time_ms();
+    LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
+
+    sd_image_t* result_images = generate_image(sd_ctx,
+                                               work_ctx,
+                                               init_latent,
+                                               prompt_c_str,
+                                               negative_prompt_c_str,
+                                               clip_skip,
+                                               cfg_scale,
+                                               guidance,
+                                               eta,
+                                               width,
+                                               height,
+                                               sample_method,
+                                               sigmas,
+                                               seed,
+                                               batch_count,
+                                               control_cond,
+                                               control_strength,
+                                               style_ratio,
+                                               normalize_input,
+                                               "",
+                                               ref_latents,
+                                               skip_layers_vec,
+                                               slg_scale,
+                                               skip_layer_start,
+                                               skip_layer_end,
+                                               NULL);
+
+    size_t t2 = ggml_time_ms();
+
+    LOG_INFO("edit completed in %.2fs", (t2 - t0) * 1.0f / 1000);
 
     return result_images;
 }
