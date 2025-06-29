@@ -220,6 +220,32 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            float strength,
                            int64_t seed);
 
+SD_API sd_image_t* edit(sd_ctx_t* sd_ctx,
+                        sd_image_t* ref_images,
+                        int ref_images_count,
+                        const char* prompt,
+                        const char* negative_prompt,
+                        int clip_skip,
+                        float cfg_scale,
+                        float guidance,
+                        float eta,
+                        int width,
+                        int height,
+                        enum sample_method_t sample_method,
+                        int sample_steps,
+                        float strength,
+                        int64_t seed,
+                        int batch_count,
+                        const sd_image_t* control_cond,
+                        float control_strength,
+                        float style_strength,
+                        bool normalize_input,
+                        int* skip_layers,
+                        size_t skip_layers_count,
+                        float slg_scale,
+                        float skip_layer_start,
+                        float skip_layer_end);
+
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
