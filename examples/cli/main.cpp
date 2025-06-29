@@ -653,7 +653,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.ref_image_paths.push_back(argv[i]);
-        } else if (arg == "chroma-disable-dit-mask") {
+        } else if (arg == "--chroma-disable-dit-mask") {
             params.chroma_use_dit_mask = false;
         } else if (arg == "--chroma-use-t5-mask") {
             params.chroma_use_t5_mask = true;
