@@ -48,8 +48,7 @@ const char* sampling_methods_str[] = {
     "iPNDM_v",
     "LCM",
     "DDIM \"trailing\"",
-    "TCD"
-};
+    "TCD"};
 
 /*================================================== Helper Functions ================================================*/
 
@@ -696,7 +695,7 @@ public:
             float curr_multiplier        = kv.second;
             lora_state_diff[lora_name] -= curr_multiplier;
         }
-        
+
         size_t rm = lora_state_diff.size() - lora_state.size();
         if (rm != 0) {
             LOG_INFO("Attempting to apply %lu LoRAs (removing %lu applied LoRAs)", lora_state.size(), rm);
@@ -815,11 +814,11 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
-                        std::vector<int> skip_layers = {},
-                        float slg_scale              = 0,
-                        float skip_layer_start       = 0.01,
-                        float skip_layer_end         = 0.2,
-                        ggml_tensor* noise_mask      = nullptr) {
+                        std::vector<int> skip_layers          = {},
+                        float slg_scale                       = 0,
+                        float skip_layer_start                = 0.01,
+                        float skip_layer_end                  = 0.2,
+                        ggml_tensor* noise_mask               = nullptr) {
         LOG_DEBUG("Sample");
         struct ggml_init_params params;
         size_t data_size = ggml_row_size(init_latent->type, init_latent->ne[0]);
@@ -1973,7 +1972,6 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
     return result_images;
 }
 
-
 sd_image_t* edit(sd_ctx_t* sd_ctx,
                  sd_image_t* ref_images,
                  int ref_images_count,
@@ -2062,7 +2060,7 @@ sd_image_t* edit(sd_ctx_t* sd_ctx,
         }
         ref_latents.push_back(latent);
     }
-    
+
     size_t t1 = ggml_time_ms();
     LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 

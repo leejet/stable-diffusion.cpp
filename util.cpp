@@ -112,7 +112,7 @@ std::vector<std::string> get_files_from_dir(const std::string& dir) {
     sprintf(directoryPath, "%s\\%s\\*", currentDirectory, dir.c_str());
 
     // Find the first file in the directory
-    hFind = FindFirstFile(directoryPath, &findFileData);
+    hFind               = FindFirstFile(directoryPath, &findFileData);
     bool isAbsolutePath = false;
     // Check if the directory was found
     if (hFind == INVALID_HANDLE_VALUE) {
@@ -121,7 +121,7 @@ std::vector<std::string> get_files_from_dir(const std::string& dir) {
         char directoryPathAbsolute[MAX_PATH];
         sprintf(directoryPathAbsolute, "%s*", dir.c_str());
 
-        hFind = FindFirstFile(directoryPathAbsolute, &findFileData);
+        hFind          = FindFirstFile(directoryPathAbsolute, &findFileData);
         isAbsolutePath = true;
         if (hFind == INVALID_HANDLE_VALUE) {
             printf("Absolute path was also wrong.\n");

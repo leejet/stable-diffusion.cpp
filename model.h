@@ -12,9 +12,9 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "gguf.h"
 #include "json.hpp"
 #include "zip.h"
-#include "gguf.h"
 
 #define SD_MAX_DIMS 5
 

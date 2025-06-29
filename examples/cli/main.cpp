@@ -133,9 +133,9 @@ struct SDParams {
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
 
-    bool chroma_use_dit_mask     = true;
-    bool chroma_use_t5_mask      = false;
-    int  chroma_t5_mask_pad      = 1;
+    bool chroma_use_dit_mask = true;
+    bool chroma_use_t5_mask  = false;
+    int chroma_t5_mask_pad   = 1;
 };
 
 void print_params(SDParams params) {
@@ -919,7 +919,7 @@ int main(int argc, const char* argv[]) {
             input_image_buffer = resized_image_buffer;
         }
     } else if (params.mode == EDIT) {
-        vae_decode_only       = false;
+        vae_decode_only = false;
         for (auto& path : params.ref_image_paths) {
             int c                 = 0;
             int width             = 0;
@@ -1113,7 +1113,7 @@ int main(int argc, const char* argv[]) {
                               params.skip_layer_start,
                               params.skip_layer_end);
         }
-    } else { // EDIT
+    } else {  // EDIT
         results = edit(sd_ctx,
                        ref_images.data(),
                        ref_images.size(),
@@ -1176,11 +1176,11 @@ int main(int argc, const char* argv[]) {
 
     std::string dummy_name, ext, lc_ext;
     bool is_jpg;
-    size_t last = params.output_path.find_last_of(".");
+    size_t last      = params.output_path.find_last_of(".");
     size_t last_path = std::min(params.output_path.find_last_of("/"),
                                 params.output_path.find_last_of("\\"));
-    if (last != std::string::npos // filename has extension
-    && (last_path == std::string::npos || last > last_path)) {
+    if (last != std::string::npos  // filename has extension
+        && (last_path == std::string::npos || last > last_path)) {
         dummy_name = params.output_path.substr(0, last);
         ext = lc_ext = params.output_path.substr(last);
         std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
@@ -1188,7 +1188,7 @@ int main(int argc, const char* argv[]) {
     } else {
         dummy_name = params.output_path;
         ext = lc_ext = "";
-        is_jpg = false;
+        is_jpg       = false;
     }
     // appending ".png" to absent or unknown extension
     if (!is_jpg && lc_ext != ".png") {
@@ -1200,7 +1200,7 @@ int main(int argc, const char* argv[]) {
             continue;
         }
         std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
-        if(is_jpg) {
+        if (is_jpg) {
             stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                            results[i].data, 90, get_image_params(params, params.seed + i).c_str());
             printf("save result JPEG image to '%s'\n", final_image_path.c_str());

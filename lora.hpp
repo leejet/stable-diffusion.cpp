@@ -291,7 +291,6 @@ struct LoraModel : public GGMLRunner {
                     std::string hada_2_down_name = "";
                     std::string hada_2_up_name   = "";
 
-
                     hada_1_down_name = fk + ".hada_w1_b";
                     hada_1_up_name   = fk + ".hada_w1_a";
                     hada_1_mid_name  = fk + ".hada_t1";
@@ -414,7 +413,7 @@ struct LoraModel : public GGMLRunner {
                         }
                         lokr_w2 = ggml_merge_lora(compute_ctx, down, up);
                     }
-                    
+
                     // Technically it might be unused, but I believe it's the expected behavior
                     applied_lora_tensors.insert(alpha_name);
 

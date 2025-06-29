@@ -434,7 +434,7 @@ public:
                 tokens.insert(tokens.end(), length - tokens.size(), pad_token_id);
                 weights.insert(weights.end(), length - weights.size(), 1.0);
                 if (attention_mask != nullptr) {
-                    // maybe keep some padding tokens unmasked? 
+                    // maybe keep some padding tokens unmasked?
                     attention_mask->insert(attention_mask->end(), length - attention_mask->size(), -HUGE_VALF);
                 }
             }
@@ -797,7 +797,7 @@ struct T5Runner : public GGMLRunner {
                  struct ggml_tensor* input_ids,
                  struct ggml_tensor* attention_mask,
                  ggml_tensor** output,
-                 ggml_context* output_ctx           = NULL) {
+                 ggml_context* output_ctx = NULL) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(input_ids, attention_mask);
         };

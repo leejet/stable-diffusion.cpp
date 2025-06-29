@@ -1224,14 +1224,15 @@ struct PixArtCLIPEmbedder : public Conditioner {
     T5UniGramTokenizer t5_tokenizer;
     std::shared_ptr<T5Runner> t5;
     size_t chunk_len = 512;
-    bool use_mask = false;
-    int  mask_pad = 1;
+    bool use_mask    = false;
+    int mask_pad     = 1;
 
     PixArtCLIPEmbedder(ggml_backend_t backend,
                        std::map<std::string, enum ggml_type>& tensor_types,
                        int clip_skip = -1,
                        bool use_mask = false,
-                       int mask_pad = 1) : use_mask(use_mask), mask_pad(mask_pad) {
+                       int mask_pad  = 1)
+        : use_mask(use_mask), mask_pad(mask_pad) {
         t5 = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
     }
 
