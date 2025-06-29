@@ -132,6 +132,10 @@ struct SDParams {
     float slg_scale              = 0.f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+
+    bool chroma_use_dit_mask     = true;
+    bool chroma_use_t5_mask      = false;
+    int  chroma_t5_mask_pad      = 1;
 };
 
 void print_params(SDParams params) {
@@ -185,6 +189,9 @@ void print_params(SDParams params) {
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
+    printf("    chroma_use_dit_mask:   %s\n", params.chroma_use_dit_mask ? "true" : "false");
+    printf("    chroma_use_t5_mask:    %s\n", params.chroma_use_t5_mask ? "true" : "false");
+    printf("    chroma_t5_mask_pad:    %d\n", params.chroma_t5_mask_pad);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -252,6 +259,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            colors the logging tags according to level\n");
+    printf("  --chroma-disable-dit-mask          disable dit mask for chroma\n");
+    printf("  --chroma-enable-t5-mask            enable t5 mask for chroma\n");
+    printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -643,6 +653,16 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.ref_image_paths.push_back(argv[i]);
+        } else if (arg == "chroma-disable-dit-mask") {
+            params.chroma_use_dit_mask = false;
+        } else if (arg == "--chroma-use-t5-mask") {
+            params.chroma_use_t5_mask = true;
+        } else if (arg == "--chroma-t5-mask-pad") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.chroma_t5_mask_pad = std::stoi(argv[i]);
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -952,7 +972,10 @@ int main(int argc, const char* argv[]) {
                                   params.clip_on_cpu,
                                   params.control_net_cpu,
                                   params.vae_on_cpu,
-                                  params.diffusion_flash_attn);
+                                  params.diffusion_flash_attn,
+                                  params.chroma_use_dit_mask,
+                                  params.chroma_use_t5_mask,
+                                  params.chroma_t5_mask_pad);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
