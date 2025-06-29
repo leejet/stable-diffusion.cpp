@@ -159,7 +159,10 @@ public:
                         bool clip_on_cpu,
                         bool control_net_cpu,
                         bool vae_on_cpu,
-                        bool diffusion_flash_attn) {
+                        bool diffusion_flash_attn,
+                        bool chroma_use_dit_mask,
+                        bool chroma_use_t5_mask,
+                        int chroma_t5_mask_pad) {
         use_tiny_autoencoder = taesd_path.size() > 0;
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
@@ -342,11 +345,11 @@ public:
                     }
                 }
                 if (is_chroma) {
-                    cond_stage_model = std::make_shared<PixArtCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
+                    cond_stage_model = std::make_shared<PixArtCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types, -1, chroma_use_t5_mask, chroma_t5_mask_pad);
                 } else {
                     cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
                 }
-                diffusion_model = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn);
+                diffusion_model = std::make_shared<FluxModel>(backend, model_loader.tensor_storages_types, version, diffusion_flash_attn, chroma_use_dit_mask);
             } else {
                 if (id_embeddings_path.find("v2") != std::string::npos) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend, model_loader.tensor_storages_types, embeddings_path, version, PM_VERSION_2);
@@ -1146,7 +1149,10 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                      bool keep_clip_on_cpu,
                      bool keep_control_net_cpu,
                      bool keep_vae_on_cpu,
-                     bool diffusion_flash_attn) {
+                     bool diffusion_flash_attn,
+                     bool chroma_use_dit_mask,
+                     bool chroma_use_t5_mask,
+                     int chroma_t5_mask_pad) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
     if (sd_ctx == NULL) {
         return NULL;
@@ -1188,7 +1194,10 @@ sd_ctx_t* new_sd_ctx(const char* model_path_c_str,
                                     keep_clip_on_cpu,
                                     keep_control_net_cpu,
                                     keep_vae_on_cpu,
-                                    diffusion_flash_attn)) {
+                                    diffusion_flash_attn,
+                                    chroma_use_dit_mask,
+                                    chroma_use_t5_mask,
+                                    chroma_t5_mask_pad)) {
         delete sd_ctx->sd;
         sd_ctx->sd = NULL;
         free(sd_ctx);

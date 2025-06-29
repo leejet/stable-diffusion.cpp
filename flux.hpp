@@ -1046,13 +1046,15 @@ namespace Flux {
         Flux flux;
         std::vector<float> pe_vec, range;  // for cache
         SDVersion version;
+        bool use_mask = false;
 
         FluxRunner(ggml_backend_t backend,
                    std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
                    const std::string prefix                            = "",
                    SDVersion version                                   = VERSION_FLUX,
-                   bool flash_attn                                     = false)
-            : GGMLRunner(backend) {
+                   bool flash_attn                                     = false,
+                   bool use_mask                                       = false)
+            : GGMLRunner(backend), use_mask(use_mask) {
             flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
@@ -1116,7 +1118,7 @@ namespace Flux {
                                         struct ggml_tensor* y,
                                         struct ggml_tensor* guidance,
                                         std::vector<ggml_tensor*> ref_latents = {},
-                                        std::vector<int> skip_layers = std::vector<int>()) {
+                                        std::vector<int> skip_layers = {}) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
 
@@ -1128,38 +1130,16 @@ namespace Flux {
                 c_concat = to_backend(c_concat);
             }
             if (flux_params.is_chroma) {
-                const char* SD_CHROMA_ENABLE_GUIDANCE = getenv("SD_CHROMA_ENABLE_GUIDANCE");
-                bool disable_guidance                 = true;
-                if (SD_CHROMA_ENABLE_GUIDANCE != NULL) {
-                    std::string enable_guidance_str = SD_CHROMA_ENABLE_GUIDANCE;
-                    if (enable_guidance_str == "ON" || enable_guidance_str == "TRUE") {
-                        LOG_WARN("Chroma guidance has been enabled. Image might be broken. (SD_CHROMA_ENABLE_GUIDANCE env variable to \"OFF\" to disable)", SD_CHROMA_ENABLE_GUIDANCE);
-                        disable_guidance = false;
-                    } else if (enable_guidance_str != "OFF" && enable_guidance_str != "FALSE") {
-                        LOG_WARN("SD_CHROMA_ENABLE_GUIDANCE environment variable has unexpected value. Assuming default (\"OFF\"). (Expected \"ON\"/\"TRUE\" or\"OFF\"/\"FALSE\", got \"%s\")", SD_CHROMA_ENABLE_GUIDANCE);
-                    }
-                }
-                if (disable_guidance) {
-                    LOG_DEBUG("Forcing guidance to 0 for chroma model (SD_CHROMA_ENABLE_GUIDANCE env variable to \"ON\" to enable)");
-                    guidance = ggml_set_f32(guidance, 0);
-                }
+                guidance = ggml_set_f32(guidance, 0);
 
-
-                const char* SD_CHROMA_USE_DIT_MASK = getenv("SD_CHROMA_USE_DIT_MASK");
-                if (SD_CHROMA_USE_DIT_MASK != nullptr) {
-                    std::string sd_chroma_use_DiT_mask_str = SD_CHROMA_USE_DIT_MASK;
-                    if (sd_chroma_use_DiT_mask_str == "OFF" || sd_chroma_use_DiT_mask_str == "FALSE") {
-                        y = NULL;
-                    } else if (sd_chroma_use_DiT_mask_str != "ON" && sd_chroma_use_DiT_mask_str != "TRUE") {
-                        LOG_WARN("SD_CHROMA_USE_DIT_MASK environment variable has unexpected value. Assuming default (\"ON\"). (Expected \"ON\"/\"TRUE\" or\"OFF\"/\"FALSE\", got \"%s\")", SD_CHROMA_USE_DIT_MASK);
-                    }
+                if (!use_mask) {
+                    y = NULL;
                 }
 
                 // ggml_arrange is not working on some backends, and y isn't used, so let's reuse y to precompute it
                 range             = arange(0, 344);
                 precompute_arange = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, range.size());
                 set_backend_tensor_data(precompute_arange, range.data());
-                // y = NULL;
             }
             y = to_backend(y);
 

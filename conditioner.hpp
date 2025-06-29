@@ -1222,10 +1222,14 @@ struct PixArtCLIPEmbedder : public Conditioner {
     T5UniGramTokenizer t5_tokenizer;
     std::shared_ptr<T5Runner> t5;
     size_t chunk_len = 512;
+    bool use_mask = false;
+    int  mask_pad = 1;
 
     PixArtCLIPEmbedder(ggml_backend_t backend,
                        std::map<std::string, enum ggml_type>& tensor_types,
-                       int clip_skip = -1) {
+                       int clip_skip = -1,
+                       bool use_mask = false,
+                       int mask_pad = 1) : use_mask(use_mask), mask_pad(mask_pad) {
         t5 = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
     }
 
@@ -1322,16 +1326,6 @@ struct PixArtCLIPEmbedder : public Conditioner {
 
         size_t chunk_count = t5_tokens.size() / chunk_len;
 
-        bool use_mask                     = false;
-        const char* SD_CHROMA_USE_T5_MASK = getenv("SD_CHROMA_USE_T5_MASK");
-        if (SD_CHROMA_USE_T5_MASK != nullptr) {
-            std::string sd_chroma_use_t5_mask_str = SD_CHROMA_USE_T5_MASK;
-            if (sd_chroma_use_t5_mask_str == "ON" || sd_chroma_use_t5_mask_str == "TRUE") {
-                use_mask = true;
-            } else if (sd_chroma_use_t5_mask_str != "OFF" && sd_chroma_use_t5_mask_str != "FALSE") {
-                LOG_WARN("SD_CHROMA_USE_T5_MASK environment variable has unexpected value. Assuming default (\"OFF\"). (Expected \"OFF\"/\"FALSE\" or\"ON\"/\"TRUE\", got \"%s\")", SD_CHROMA_USE_T5_MASK);
-            }
-        }
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
             // t5
             std::vector<int> chunk_tokens(t5_tokens.begin() + chunk_idx * chunk_len,
@@ -1390,18 +1384,6 @@ struct PixArtCLIPEmbedder : public Conditioner {
             ggml_set_f32(hidden_states, 0.f);
         }
 
-        int mask_pad                            = 1;
-        const char* SD_CHROMA_MASK_PAD_OVERRIDE = getenv("SD_CHROMA_MASK_PAD_OVERRIDE");
-        if (SD_CHROMA_MASK_PAD_OVERRIDE != nullptr) {
-            std::string mask_pad_str = SD_CHROMA_MASK_PAD_OVERRIDE;
-            try {
-                mask_pad = std::stoi(mask_pad_str);
-            } catch (const std::invalid_argument&) {
-                LOG_WARN("SD_CHROMA_MASK_PAD_OVERRIDE environment variable is not a valid integer (%s). Falling back to default (%d)", SD_CHROMA_MASK_PAD_OVERRIDE, mask_pad);
-            } catch (const std::out_of_range&) {
-                LOG_WARN("SD_CHROMA_MASK_PAD_OVERRIDE environment variable value is out of range for `int` type (%s). Falling back to default (%d)", SD_CHROMA_MASK_PAD_OVERRIDE, mask_pad);
-            }
-        }
         modify_mask_to_attend_padding(t5_attn_mask, ggml_nelements(t5_attn_mask), mask_pad);
 
         return SDCondition(hidden_states, t5_attn_mask, NULL);

@@ -137,8 +137,9 @@ struct FluxModel : public DiffusionModel {
     FluxModel(ggml_backend_t backend,
               std::map<std::string, enum ggml_type>& tensor_types,
               SDVersion version = VERSION_FLUX,
-              bool flash_attn   = false)
-        : flux(backend, tensor_types, "model.diffusion_model", version, flash_attn) {
+              bool flash_attn   = false,
+              bool use_mask     = false)
+        : flux(backend, tensor_types, "model.diffusion_model", version, flash_attn, use_mask) {
     }
 
     void alloc_params_buffer() {
