@@ -872,7 +872,7 @@ namespace Flux {
                                          struct ggml_tensor* y,
                                          struct ggml_tensor* guidance,
                                          struct ggml_tensor* pe,
-                                         struct ggml_tensor* arange   = NULL,
+                                         struct ggml_tensor* mod_index_arange   = NULL,
                                          std::vector<int> skip_layers = {}) {
             auto img_in      = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
             auto txt_in      = std::dynamic_pointer_cast<Linear>(blocks["txt_in"]);
@@ -887,9 +887,10 @@ namespace Flux {
                 auto distill_timestep    = ggml_nn_timestep_embedding(ctx, timesteps, 16, 10000, 1000.f);
                 auto distill_guidance    = ggml_nn_timestep_embedding(ctx, guidance, 16, 10000, 1000.f);
 
-                // auto arange          = ggml_arange(ctx, 0, (float)mod_index_length, 1); // Not working on a lot of backends, precomputing it on CPU instead
+                // auto mod_index_arange  = ggml_arange(ctx, 0, (float)mod_index_length, 1); 
+                // ggml_arange tot working on a lot of backends, precomputing it on CPU instead
                 GGML_ASSERT(arange != NULL);
-                auto modulation_index = ggml_nn_timestep_embedding(ctx, arange, 32, 10000, 1000.f);  // [1, 344, 32]
+                auto modulation_index = ggml_nn_timestep_embedding(ctx, mod_index_arange, 32, 10000, 1000.f);  // [1, 344, 32]
 
                 // Batch broadcast (will it ever be useful)
                 modulation_index = ggml_repeat(ctx, modulation_index, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, modulation_index->ne[0], modulation_index->ne[1], img->ne[2]));  // [N, 344, 32]
@@ -982,7 +983,7 @@ namespace Flux {
                                     struct ggml_tensor* y,
                                     struct ggml_tensor* guidance,
                                     struct ggml_tensor* pe,
-                                    struct ggml_tensor* arange   = NULL,
+                                    struct ggml_tensor* mod_index_arange   = NULL,
                                     std::vector<ggml_tensor*> ref_latents = {},
                                     std::vector<int> skip_layers = {}) {
             // Forward pass of DiT.
@@ -1024,7 +1025,7 @@ namespace Flux {
                 }
             }
 
-            auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe, arange, skip_layers);  // [N, num_tokens, C * patch_size * patch_size]
+            auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe, mod_index_arange, skip_layers);  // [N, num_tokens, C * patch_size * patch_size]
             if (out->ne[1] > img_tokens) {
                 out = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3)); // [num_tokens, N, C * patch_size * patch_size]
                 out = ggml_view_3d(ctx, out, out->ne[0], out->ne[1], img_tokens, out->nb[1], out->nb[2], 0);
@@ -1044,7 +1045,8 @@ namespace Flux {
     public:
         FluxParams flux_params;
         Flux flux;
-        std::vector<float> pe_vec, range;  // for cache
+        std::vector<float> pe_vec;
+        std::vector<float> mod_index_arange_vec;  // for cache
         SDVersion version;
         bool use_mask = false;
 
@@ -1122,7 +1124,7 @@ namespace Flux {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
 
-            struct ggml_tensor* precompute_arange = NULL;
+            struct ggml_tensor* mod_index_arange = NULL;
 
             x       = to_backend(x);
             context = to_backend(context);
@@ -1136,10 +1138,10 @@ namespace Flux {
                     y = NULL;
                 }
 
-                // ggml_arrange is not working on some backends, and y isn't used, so let's reuse y to precompute it
-                range             = arange(0, 344);
-                precompute_arange = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, range.size());
-                set_backend_tensor_data(precompute_arange, range.data());
+                // ggml_arange is not working on some backends, precompute it
+                mod_index_arange_vec  = arange(0, 344);
+                mod_index_arange = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, mod_index_arange_vec.size());
+                set_backend_tensor_data(mod_index_arange, mod_index_arange_vec.data());
             }
             y = to_backend(y);
 
@@ -1168,7 +1170,7 @@ namespace Flux {
                                                    y,
                                                    guidance,
                                                    pe,
-                                                   precompute_arange,
+                                                   mod_index_arange,
                                                    ref_latents,
                                                    skip_layers);
 

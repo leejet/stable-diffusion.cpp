@@ -902,6 +902,7 @@ struct SD3CLIPEmbedder : public Conditioner {
 
                 t5->compute(n_threads,
                             input_ids,
+                            NULL,
                             &chunk_hidden_states_t5,
                             work_ctx);
                 {
@@ -1147,6 +1148,7 @@ struct FluxCLIPEmbedder : public Conditioner {
 
                 t5->compute(n_threads,
                             input_ids,
+                            NULL,
                             &chunk_hidden_states,
                             work_ctx);
                 {
@@ -1340,9 +1342,9 @@ struct PixArtCLIPEmbedder : public Conditioner {
 
             t5->compute(n_threads,
                         input_ids,
+                        t5_attn_mask_chunk,
                         &chunk_hidden_states,
-                        work_ctx,
-                        t5_attn_mask_chunk);
+                        work_ctx);
             {
                 auto tensor         = chunk_hidden_states;
                 float original_mean = ggml_tensor_mean(tensor);

@@ -795,9 +795,9 @@ struct T5Runner : public GGMLRunner {
 
     void compute(const int n_threads,
                  struct ggml_tensor* input_ids,
+                 struct ggml_tensor* attention_mask,
                  ggml_tensor** output,
-                 ggml_context* output_ctx           = NULL,
-                 struct ggml_tensor* attention_mask = NULL) {
+                 ggml_context* output_ctx           = NULL) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(input_ids, attention_mask);
         };
@@ -966,7 +966,7 @@ struct T5Embedder {
             struct ggml_tensor* out = NULL;
 
             int t0 = ggml_time_ms();
-            model.compute(8, input_ids, &out, work_ctx);
+            model.compute(8, input_ids, NULL, &out, work_ctx);
             int t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
