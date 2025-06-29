@@ -1,4 +1,4 @@
-import { html, render, useSignal, signal, useEffect, batch } from './preact.js';
+import { html, render, useSignal, signal, useEffect } from './preact.js';
 
 const modes = ["Text2Image", "Image2Image"]
 
@@ -44,7 +44,6 @@ const model_state = signal({
     batch_count: -1
 });
 
-
 const preview_state = signal({
     scale: 1,
     panX: 0,
@@ -88,6 +87,7 @@ function App () {
         }
     }, [params.value.dark_mode]);
 
+    // ui elements
     const TextAreaField = ({name, placeholder, param, oninput}) => {
         const field_st = useSignal({ classes: "" });
         const updateFocus = () => field_st.value = { classes: "focus" };
@@ -251,6 +251,41 @@ function App () {
         params.value = { ...params.value, [el.target.name]: parseFloat(el.target.value) }
     };
 
+    const zoomPreview = (e) => {
+        e.preventDefault();
+        const scaleAmount = 0.1;
+        const maxScale = 3;
+        const minScale = 1;
+        let scale = 0;
+        if(e.deltaY < 0) {
+            scale = Math.min(preview_state.value.scale + scaleAmount, maxScale);
+        } else {
+            scale = Math.max(preview_state.value.scale - scaleAmount, minScale);
+        }
+        preview_state.value = {
+            ...preview_state.value, scale};
+    };
+    const previewMouseDown = (e) => {
+        preview_state.value = {
+            ...preview_state.value,
+            isPanning: true,
+            startX: e.clientX - preview_state.value.panX,
+            startY: e.clientY - preview_state.value.panY };
+    };
+    const previewMouseUp = (e) => {
+        preview_state.value = {
+            ...preview_state.value, isPanning: false};
+    };
+    const previewMouseMove = (e) => {
+        if(preview_state.value.isPanning) {
+            preview_state.value = {
+                ...preview_state.value,
+                panX: e.clientX - preview_state.value.startX,
+                panY: e.clientY - preview_state.value.startY };
+        }
+    };
+
+    // main function
     const requestGeneration = async () => {
         if(runtime.value.generating) {
             runtime.value = { ...runtime.value, generating: false, images: [] };
@@ -369,42 +404,6 @@ function App () {
             }
         }
         runtime.value = { ...runtime.value, generating: false };
-    };
-
-    const zoomPreview = (e) => {
-        e.preventDefault();
-        const scaleAmount = 0.1;
-        const maxScale = 3;
-        const minScale = 1;
-        let scale = 0;
-        if(e.deltaY < 0) {
-            scale = Math.min(preview_state.value.scale + scaleAmount, maxScale);
-        } else {
-            scale = Math.max(preview_state.value.scale - scaleAmount, minScale);
-        }
-        preview_state.value = {
-            ...preview_state.value, scale};
-    };
-    const previewMouseDown = (e) => {
-        console.log("Down");
-        preview_state.value = {
-            ...preview_state.value,
-            isPanning: true,
-            startX: e.clientX - preview_state.value.panX,
-            startY: e.clientY - preview_state.value.panY };
-    };
-    const previewMouseUp = (e) => {
-        console.log("Up - Leave");
-        preview_state.value = {
-            ...preview_state.value, isPanning: false};
-    };
-    const previewMouseMove = (e) => {
-        if(preview_state.value.isPanning) {
-            preview_state.value = {
-                ...preview_state.value,
-                panX: e.clientX - preview_state.value.startX,
-                panY: e.clientY - preview_state.value.startY };
-        }
     };
 
     return html`
