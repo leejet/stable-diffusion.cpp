@@ -247,7 +247,7 @@ struct LoraModel : public GGMLRunner {
         std::set<std::string> applied_lora_tensors;
         for (auto it : model_tensors) {
             std::string k_tensor       = it.first;
-            struct ggml_tensor* weight = model_tensors[it.first];
+            struct ggml_tensor* weight = it.second;
 
             std::vector<std::string> keys = to_lora_keys(k_tensor, version);
             if (keys.size() == 0)
