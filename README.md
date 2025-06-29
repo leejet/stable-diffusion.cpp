@@ -14,6 +14,7 @@ Inference of Stable Diffusion and Flux in pure C/C++
     - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
 - [Flux-dev/Flux-schnell Support](./docs/flux.md)
 - [FLUX.1-Kontext-dev](./docs/kontext.md)
+- [Chroma](./docs/chroma.md)
 - [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) and [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo) support
 - [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
 - 16-bit, 32-bit float support
@@ -274,6 +275,9 @@ arguments:
   --control-net-cpu                  keep controlnet in cpu (for low vram)
   --canny                            apply canny preprocessor (edge detection)
   --color                            colors the logging tags according to level
+  --chroma-disable-dit-mask          disable dit mask for chroma
+  --chroma-enable-t5-mask            enable t5 mask for chroma
+  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma
   -v, --verbose                      print extra info
 ```
 
