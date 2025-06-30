@@ -39,6 +39,10 @@
 #include "ggml-vulkan.h"
 #endif
 
+#ifdef SD_USE_OPENCL
+#include "ggml-opencl.h"
+#endif
+
 #ifdef SD_USE_SYCL
 #include "ggml-sycl.h"
 #endif
@@ -113,7 +117,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_kronecker(ggml_context* ctx, struct g
                                      a->ne[0] * b->ne[0],
                                      a->ne[1] * b->ne[1],
                                      a->ne[2] * b->ne[2],
-                                     a->ne[3] * b->ne[3]),
+                                     a->ne[3] * b->ne[3],
+                                     GGML_SCALE_MODE_NEAREST), 
                     b);
 }
 

@@ -181,6 +181,14 @@ public:
             LOG_WARN("Failed to initialize Vulkan backend");
         }
 #endif
+#ifdef SD_USE_OPENCL
+        LOG_DEBUG("Using OpenCL backend");
+        // ggml_log_set(ggml_log_callback_default, nullptr); // Optional ggml logs
+        backend = ggml_backend_opencl_init();
+        if (!backend) {
+            LOG_WARN("Failed to initialize OpenCL backend");
+        }
+#endif
 #ifdef SD_USE_SYCL
         LOG_DEBUG("Using SYCL backend");
         backend = ggml_backend_sycl_init(0);
