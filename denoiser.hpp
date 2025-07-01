@@ -181,7 +181,7 @@ struct AYSSchedule : SigmaSchedule {
             LOG_INFO("AYS using SVD noise levels");
             inputs = noise_levels[2];
         } else {
-            LOG_ERROR("Version not compatable with AYS scheduler");
+            LOG_ERROR("Version not compatible with AYS scheduler");
             return results;
         }
 
