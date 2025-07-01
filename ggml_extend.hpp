@@ -602,6 +602,8 @@ typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
 // Tiling
 __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
+    output = ggml_set_f32(output, 0);
+
     int input_width   = (int)input->ne[0];
     int input_height  = (int)input->ne[1];
     int output_width  = (int)output->ne[0];
