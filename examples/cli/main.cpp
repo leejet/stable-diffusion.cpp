@@ -206,7 +206,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
     printf("  --clip_l                           path to the clip-l text encoder\n");
     printf("  --clip_g                           path to the clip-g text encoder\n");
-    printf("  --t5xxl                            path to the the t5xxl text encoder\n");
+    printf("  --t5xxl                            path to the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
@@ -222,7 +222,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
-    printf("  -r, --ref_image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
+    printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
