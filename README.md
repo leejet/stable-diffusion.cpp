@@ -392,7 +392,8 @@ Using formats of different precisions will yield results of varying quality.
 
 These projects wrap `stable-diffusion.cpp` for easier use in other languages/frameworks.
 
-* Golang: [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
+* Golang (non-cgo): [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
+* Golang (cgo): [Binozo/GoStableDiffusion](https://github.com/Binozo/GoStableDiffusion)
 * C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
 * Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
 * Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)
