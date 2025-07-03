@@ -459,8 +459,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 if (sd_version_is_sdxl(version)) {
                     text_model2->compute(n_threads,
                                          input_ids2,
-                                         0,
-                                         NULL,
+                                         num_custom_embeddings,
+                                         token_embed_custom.data(),
                                          max_token_idx,
                                          false,
                                          &chunk_hidden_states2, work_ctx);
@@ -470,8 +470,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                     if (chunk_idx == 0) {
                         text_model2->compute(n_threads,
                                              input_ids2,
-                                             0,
-                                             NULL,
+                                             num_custom_embeddings,
+                                             token_embed_custom.data(),
                                              max_token_idx,
                                              true,
                                              &pooled,
