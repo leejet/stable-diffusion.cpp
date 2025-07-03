@@ -60,6 +60,7 @@ const char* modes_str[] = {
     "edit",
     "convert",
 };
+#define SD_ALL_MODES_STR "txt2img, img2img, edit, convert"
 
 enum SDMode {
     TXT2IMG,
@@ -199,7 +200,11 @@ void print_usage(int argc, const char* argv[]) {
     printf("\n");
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
-    printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)\n");
+    printf("  -M, --mode [MODE]                  run mode, one of:\n");
+    printf("                                     txt2img: generate an image from a text prompt (default)\n");
+    printf("                                     img2img: generate an image from a text prompt and an initial image (--init-img)\n");
+    printf("                                     edit:    modify an image (--ref-image) based on text instructions\n");
+    printf("                                     convert: convert a model file to gguf format, optionally with quantization\n");
     printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to full model\n");
@@ -291,8 +296,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             }
             if (mode_found == -1) {
                 fprintf(stderr,
-                        "error: invalid mode %s, must be one of [txt2img, img2img, img2vid, convert]\n",
-                        mode_selected);
+                        "error: invalid mode %s, must be one of [%s]\n",
+                        mode_selected, SD_ALL_MODES_STR);
                 exit(1);
             }
             params.mode = (SDMode)mode_found;
