@@ -1841,6 +1841,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
         };
         int tensor_count = 0;
         int64_t t1       = ggml_time_ms();
+        bool partial = false;
         for (auto& tensor_storage : processed_tensor_storages) {
             if (tensor_storage.file_index != file_index) {
                 ++tensor_count;
@@ -1922,13 +1923,19 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
                 }
             }
+            size_t tensor_max = processed_tensor_storages.size();
             int64_t t2 = ggml_time_ms();
-            pretty_progress(++tensor_count, processed_tensor_storages.size(), (t2 - t1) / 1000.0f);
+            pretty_progress(++tensor_count, tensor_max, (t2 - t1) / 1000.0f);
             t1 = t2;
+            partial = tensor_count != tensor_max;
         }
 
         if (zip != NULL) {
             zip_close(zip);
+        }
+
+        if (partial) {
+            printf("\n");
         }
 
         if (!success) {
