@@ -97,7 +97,7 @@ struct TensorStorage {
 
     size_t file_index = 0;
     int index_in_zip  = -1;  // >= means stored in a zip file
-    size_t offset     = 0;   // offset in file
+    uint64_t offset   = 0;   // offset in file
 
     TensorStorage() = default;
 
@@ -140,10 +140,10 @@ struct TensorStorage {
 
     std::vector<TensorStorage> chunk(size_t n) {
         std::vector<TensorStorage> chunks;
-        size_t chunk_size = nbytes_to_read() / n;
+        uint64_t chunk_size = nbytes_to_read() / n;
         // printf("%d/%d\n", chunk_size, nbytes_to_read());
         reverse_ne();
-        for (int i = 0; i < n; i++) {
+        for (size_t i = 0; i < n; i++) {
             TensorStorage chunk_i = *this;
             chunk_i.ne[0]         = ne[0] / n;
             chunk_i.offset        = offset + i * chunk_size;
