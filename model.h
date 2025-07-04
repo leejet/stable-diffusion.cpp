@@ -210,6 +210,7 @@ public:
     std::map<std::string, enum ggml_type> tensor_storages_types;
 
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
+    bool model_is_unet();
     SDVersion get_sd_version();
     ggml_type get_sd_wtype();
     ggml_type get_conditioner_wtype();
