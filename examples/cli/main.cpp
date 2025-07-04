@@ -60,6 +60,7 @@ const char* modes_str[] = {
     "edit",
     "convert",
 };
+#define SD_ALL_MODES_STR "txt2img, img2img, edit, convert"
 
 enum SDMode {
     TXT2IMG,
@@ -199,14 +200,18 @@ void print_usage(int argc, const char* argv[]) {
     printf("\n");
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
-    printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)\n");
+    printf("  -M, --mode [MODE]                  run mode, one of:\n");
+    printf("                                     txt2img: generate an image from a text prompt (default)\n");
+    printf("                                     img2img: generate an image from a text prompt and an initial image (--init-img)\n");
+    printf("                                     edit:    modify an image (--ref-image) based on text instructions\n");
+    printf("                                     convert: convert a model file to gguf format, optionally with quantization\n");
     printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to full model\n");
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
     printf("  --clip_l                           path to the clip-l text encoder\n");
     printf("  --clip_g                           path to the clip-g text encoder\n");
-    printf("  --t5xxl                            path to the the t5xxl text encoder\n");
+    printf("  --t5xxl                            path to the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
@@ -222,7 +227,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
-    printf("  -r, --ref_image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
+    printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
@@ -291,8 +296,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             }
             if (mode_found == -1) {
                 fprintf(stderr,
-                        "error: invalid mode %s, must be one of [txt2img, img2img, img2vid, convert]\n",
-                        mode_selected);
+                        "error: invalid mode %s, must be one of [%s]\n",
+                        mode_selected, SD_ALL_MODES_STR);
                 exit(1);
             }
             params.mode = (SDMode)mode_found;
