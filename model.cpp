@@ -100,6 +100,7 @@ const char* unused_tensors[] = {
     "model_ema.diffusion_model",
     "embedding_manager",
     "denoiser.sigmas",
+    "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight", // only used during training
 };
 
 bool is_unused_tensor(std::string name) {
