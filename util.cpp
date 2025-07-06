@@ -370,6 +370,49 @@ void pretty_progress(int step, int steps, float time) {
     }
 }
 
+#ifdef SD_SHOW_REMAINING_TIME
+void pretty_progress(int step, int steps, float time, float left) {
+    if (sd_progress_cb) {
+        sd_progress_cb(step, steps, time, sd_progress_cb_data);
+        return;
+    }
+    if (step == 0) {
+        return;
+    }
+    std::string progress = "  |";
+    int max_progress     = 50;
+    int32_t current      = (int32_t)(step * 1.f * max_progress / steps);
+    for (int i = 0; i < 50; i++) {
+        if (i > current) {
+            progress += " ";
+        } else if (i == current && i != max_progress - 1) {
+            progress += ">";
+        } else {
+            progress += "=";
+        }
+    }
+    progress += "|";
+    printf(time > 1.0f ? "\r%s %i/%i - %.2fs/it" : "\r%s %i/%i - %.2fit/s\033[K",
+           progress.c_str(), step, steps,
+           time > 1.0f || time == 0 ? time : (1.0f / time));
+    if (left >= 60.0f) {
+        /* same number of spaces and backspaces */
+        printf(", %.0fm %.2fs left         \b\b\b\b\b\b\b\b\b",
+               /* min appears faster than mul+div for me, 19.31s vs 19.34s average */
+               floor(left / 60.0f), std::min(59.99f, fmod(left, 60.0f)));
+               //floor(left / 60.0f), floor(fmod(left, 60.0f) * 100.0f) / 100.0f);
+    } else if (left > 0) {
+        printf(", %.2fs left               \b\b\b\b\b\b\b\b\b\b\b\b\b\b\b", left);
+    } else {
+        printf("                           \b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b");
+    }
+    fflush(stdout);  // for linux
+    if (step == steps) {
+        printf("\n");
+    }
+}
+#endif  // SD_SHOW_REMAINING_TIME
+
 std::string ltrim(const std::string& s) {
     auto it = std::find_if(s.begin(), s.end(), [](int ch) {
         return !std::isspace(ch);

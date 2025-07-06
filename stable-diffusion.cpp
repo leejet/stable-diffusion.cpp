@@ -886,7 +886,6 @@ public:
             if (step == 1) {
                 pretty_progress(0, (int)steps, 0);
             }
-            int64_t t0 = ggml_time_us();
 
             std::vector<float> scaling = denoiser->get_scalings(sigma);
             GGML_ASSERT(scaling.size() == 3);
@@ -1008,11 +1007,6 @@ public:
                 // v = latent_result, eps = latent_result
                 // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
                 vec_denoised[i] = latent_result * c_out + vec_input[i] * c_skip;
-            }
-            int64_t t1 = ggml_time_us();
-            if (step > 0) {
-                pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
-                // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
             if (noise_mask != nullptr) {
                 for (int64_t x = 0; x < denoised->ne[0]; x++) {
