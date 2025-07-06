@@ -10,6 +10,8 @@
 #include "stable-diffusion.h"
 #include "util.h"
 #include "vocab.hpp"
+#include "clip.hpp"
+#include "lora.hpp"
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -2119,7 +2121,7 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
     return false;
 }
 
-bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type) {
+bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type, const std::unordered_map<std::string, float>& loras) {
     auto backend    = ggml_backend_cpu_init();
     size_t mem_size = 1 * 1024 * 1024;  // for padding
     mem_size += tensor_storages.size() * ggml_tensor_overhead();
@@ -2128,6 +2130,9 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
     ggml_context* ggml_ctx = ggml_init({mem_size, NULL, false});
 
     gguf_context* gguf_ctx = gguf_init_empty();
+
+    // lora lookup table
+    std::map<std::string, struct ggml_tensor*> tensors;
 
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
         const std::string& name = tensor_storage.name;
@@ -2154,19 +2159,44 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
 
         gguf_add_tensor(gguf_ctx, tensor);
 
+        tensors[name] = tensor;
+
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb, backend);
-    ggml_backend_free(backend);
-    LOG_INFO("load tensors done");
-    LOG_INFO("trying to save tensors to %s", file_path.c_str());
-    if (success) {
-        gguf_write_to_file(gguf_ctx, file_path.c_str(), false);
+    if (!load_tensors(on_new_tensor_cb, backend)) {
+        ggml_backend_free(backend);
+        ggml_free(ggml_ctx);
+        gguf_free(gguf_ctx);
+        return false;
     }
+
+    LOG_INFO("load tensors done");
+
+    for (const auto& [lora_path, lora_scale] : loras) {
+        LoraModel lora(backend, lora_path);
+        if (!lora.load_from_file()) {
+            LOG_WARN("load lora tensors from '%s' failed", lora_path.c_str());
+            ggml_backend_free(backend);
+            ggml_free(ggml_ctx);
+            gguf_free(gguf_ctx);
+            return false;
+        }
+
+        lora.multiplier = lora_scale;
+        lora.apply(tensors, get_sd_version(), 4);
+        lora.free_params_buffer();
+        LOG_INFO("applied '%s':%f", lora_path.c_str(), lora_scale);
+    }
+
+    ggml_backend_free(backend);
+
+    LOG_INFO("trying to save tensors to %s", file_path.c_str());
+    gguf_write_to_file(gguf_ctx, file_path.c_str(), false);
+
     ggml_free(ggml_ctx);
     gguf_free(gguf_ctx);
-    return success;
+    return true;
 }
 
 int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type) {
@@ -2193,7 +2223,7 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
     return mem_size;
 }
 
-bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type) {
+bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type, const char* prompt, const char* lora_model_dir) {
     ModelLoader model_loader;
 
     if (!model_loader.init_from_file(input_path)) {
@@ -2207,6 +2237,38 @@ bool convert(const char* input_path, const char* vae_path, const char* output_pa
             return false;
         }
     }
-    bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type);
+
+    // process prompt for loras
+    std::unordered_map<std::string, float> loras;
+    if (prompt != nullptr && lora_model_dir != nullptr) {
+        auto result_pair = extract_and_remove_lora(prompt);
+        std::unordered_map<std::string, float> extracted_loras = result_pair.first;
+
+        for (auto& kv : extracted_loras) {
+            LOG_INFO("lora %s:%.2f", kv.first.c_str(), kv.second);
+
+            // save_to_gguf_file expects file paths
+            std::string st_file_path   = path_join(lora_model_dir, kv.first + ".safetensors");
+            std::string ckpt_file_path = path_join(lora_model_dir, kv.first + ".ckpt");
+            std::string file_path;
+            if (file_exists(st_file_path)) {
+                file_path = st_file_path;
+            } else if (file_exists(ckpt_file_path)) {
+                file_path = ckpt_file_path;
+            } else {
+                LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), kv.first.c_str());
+                continue;
+            }
+
+            LOG_INFO("found at '%s'", file_path.c_str());
+            loras[file_path] = kv.second;
+        }
+
+        if (result_pair.second != "") {
+            LOG_WARN("unused prompt after lora extraction: '%s'", result_pair.second.c_str());
+        }
+    }
+
+    bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, loras);
     return success;
 }
