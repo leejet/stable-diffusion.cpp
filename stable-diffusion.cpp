@@ -841,6 +841,11 @@ public:
                         float skip_layer_start                = 0.01,
                         float skip_layer_end                  = 0.2,
                         ggml_tensor* noise_mask               = nullptr) {
+
+        // TODO (Pix2Pix): separate image guidance params (right now it's reusing distilled guidance)
+
+        float img_cfg_scale = guidance;
+
         LOG_DEBUG("Sample");
         struct ggml_init_params params;
         size_t data_size = ggml_row_size(init_latent->type, init_latent->ne[0]);
@@ -863,12 +868,15 @@ public:
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, noise);
 
         bool has_unconditioned = cfg_scale != 1.0 && uncond.c_crossattn != NULL;
+        bool has_img_guidance  = version == VERSION_INSTRUCT_PIX2PIX && cfg_scale != img_cfg_scale;
+        has_unconditioned = has_unconditioned || has_img_guidance;
         bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
 
         // denoise wrapper
-        struct ggml_tensor* out_cond   = ggml_dup_tensor(work_ctx, x);
-        struct ggml_tensor* out_uncond = NULL;
-        struct ggml_tensor* out_skip   = NULL;
+        struct ggml_tensor* out_cond     = ggml_dup_tensor(work_ctx, x);
+        struct ggml_tensor* out_uncond   = NULL;
+        struct ggml_tensor* out_skip     = NULL;
+        struct ggml_tensor* out_img_cond = NULL;
 
         if (has_unconditioned) {
             out_uncond = ggml_dup_tensor(work_ctx, x);
@@ -880,6 +888,9 @@ public:
                 has_skiplayer = false;
                 LOG_WARN("SLG is incompatible with %s models", model_version_to_str[version]);
             }
+        }
+        if (has_img_guidance) {
+            out_img_cond = ggml_dup_tensor(work_ctx, x);
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -965,6 +976,23 @@ public:
                 negative_data = (float*)out_uncond->data;
             }
 
+            float* img_cond_data = NULL;
+            if (has_img_guidance) {
+                diffusion_model->compute(n_threads,
+                                         noised_input,
+                                         timesteps,
+                                         uncond.c_crossattn,
+                                         cond.c_concat,
+                                         uncond.c_vector,
+                                         guidance_tensor,
+                                         ref_latents,
+                                         -1,
+                                         controls,
+                                         control_strength,
+                                         &out_img_cond);
+                img_cond_data = (float*)out_img_cond->data;
+            }
+
             int step_count         = sigmas.size();
             bool is_skiplayer_step = has_skiplayer && step > (int)(skip_layer_start * step_count) && step < (int)(skip_layer_end * step_count);
             float* skip_layer_data = NULL;
@@ -1000,7 +1028,11 @@ public:
                         int64_t i3  = i / out_cond->ne[0] * out_cond->ne[1] * out_cond->ne[2];
                         float scale = min_cfg + (cfg_scale - min_cfg) * (i3 * 1.0f / ne3);
                     } else {
-                        latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                        if(has_img_guidance){
+                            latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                        } else {
+                            latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                        }
                     }
                 }
                 if (is_skiplayer_step) {
@@ -1408,7 +1440,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                                            sd_ctx->sd->diffusion_model->get_adm_in_channels());
 
     SDCondition uncond;
-    if (cfg_scale != 1.0) {
+    if (cfg_scale != 1.0 || sd_ctx->sd->version == VERSION_INSTRUCT_PIX2PIX && cfg_scale!=guidance) {
         bool force_zero_embeddings = false;
         if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.size() == 0 && !sd_ctx->sd->is_using_edm_v_parameterization) {
             force_zero_embeddings = true;
