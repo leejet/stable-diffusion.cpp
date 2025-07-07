@@ -1695,7 +1695,7 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_SD1_INPAINT;
         }
         if(is_ip2p) {
-            return VERSION_INSTRUCT_PIX2PIX;
+            return VERSION_SD1_PIX2PIX;
         }
         return VERSION_SD1;
     } else if (token_embedding_weight.ne[0] == 1024) {

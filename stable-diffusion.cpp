@@ -1470,7 +1470,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                                            sd_ctx->sd->diffusion_model->get_adm_in_channels());
 
     SDCondition uncond;
-    if (cfg_scale != 1.0 || sd_ctx->sd->version == VERSION_INSTRUCT_PIX2PIX && cfg_scale != guidance) {
+    if (cfg_scale != 1.0 || sd_version_use_concat(sd_ctx->sd->version) && cfg_scale != guidance) {
         bool force_zero_embeddings = false;
         if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.size() == 0 && !sd_ctx->sd->is_using_edm_v_parameterization) {
             force_zero_embeddings = true;
@@ -1541,7 +1541,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         cond.c_concat   = masked_latent;
         uncond.c_concat = empty_latent;
         // noise_mask = masked_latent;
-    } else if (sd_ctx->sd->version == VERSION_INSTRUCT_PIX2PIX) {
+    } else if (sd_version_is_edit(sd_ctx->sd->version)) {
         cond.c_concat     = masked_latent;
         auto empty_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, masked_latent->ne[0], masked_latent->ne[1], masked_latent->ne[2], masked_latent->ne[3]);
         ggml_set_f32(empty_latent, 0);
@@ -1883,7 +1883,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                 }
             }
         }
-    } else if (sd_ctx->sd->version == VERSION_INSTRUCT_PIX2PIX) {
+    } else if (sd_version_is_edit(sd_ctx->sd->version)) {
         // Not actually masked, we're just highjacking the masked_latent variable since it will be used the same way
         if (!sd_ctx->sd->use_tiny_autoencoder) {
             masked_latent = sd_ctx->sd->get_first_stage_encoding_mode(work_ctx, init_moments);
