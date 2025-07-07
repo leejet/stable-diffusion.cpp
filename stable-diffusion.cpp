@@ -32,6 +32,7 @@ const char* model_version_to_str[] = {
     "SD 2.x Inpaint",
     "SDXL",
     "SDXL Inpaint",
+    "SDXL Instruct-Pix2Pix",
     "SVD",
     "SD3.x",
     "Flux",

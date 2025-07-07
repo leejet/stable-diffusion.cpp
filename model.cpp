@@ -1674,10 +1674,13 @@ SDVersion ModelLoader::get_sd_version() {
         }
     }
     bool is_inpaint = input_block_weight.ne[2] == 9;
-    bool is_ip2p =  input_block_weight.ne[2] == 8;
+    bool is_ip2p    = input_block_weight.ne[2] == 8;
     if (is_xl) {
         if (is_inpaint) {
             return VERSION_SDXL_INPAINT;
+        }
+        if (is_ip2p) {
+            return VERSION_SDXL_PIX2PIX;
         }
         return VERSION_SDXL;
     }
@@ -1694,7 +1697,7 @@ SDVersion ModelLoader::get_sd_version() {
         if (is_inpaint) {
             return VERSION_SD1_INPAINT;
         }
-        if(is_ip2p) {
+        if (is_ip2p) {
             return VERSION_SD1_PIX2PIX;
         }
         return VERSION_SD1;
