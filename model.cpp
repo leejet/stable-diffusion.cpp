@@ -2088,6 +2088,45 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
     return true;
 }
 
+std::vector<std::pair<std::string,ggml_type> > parse_quant_overrides (const std::string & overrides)
+{
+    std::vector<std::pair<std::string, ggml_type> > result;
+    for (const auto & item : splitString(overrides, ',')) {
+        if (item.size() == 0)
+            continue;
+        std::string::size_type pos = item.find('=');
+        if (pos == std::string::npos) {
+            LOG_WARN("ignoring invalid quant override \"%s\"", item.c_str());
+            continue;
+        }
+        std::string tensor_pattern = item.substr(0, pos);
+        std::string quant_name = item.substr(pos + 1);
+
+        ggml_type over_type = GGML_TYPE_COUNT;
+
+        if (quant_name == "f32") {
+            over_type = GGML_TYPE_F32;
+        }
+        else {
+            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+                auto trait = ggml_get_type_traits((ggml_type)i);
+                if (trait->to_float && trait->type_size && quant_name == trait->type_name) {
+                    over_type = (ggml_type)i;
+                }
+            }
+        }
+
+        if (over_type != GGML_TYPE_COUNT) {
+            result.emplace_back(tensor_pattern, over_type);
+        }
+        else {
+            LOG_WARN("ignoring invalid quant override \"%s\"", item.c_str());
+        }
+
+    }
+    return result;
+}
+
 bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type) {
     const std::string& name = tensor_storage.name;
     if (type != GGML_TYPE_COUNT) {
@@ -2119,7 +2158,7 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
     return false;
 }
 
-bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type) {
+bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type, const char * overrides) {
     auto backend    = ggml_backend_cpu_init();
     size_t mem_size = 1 * 1024 * 1024;  // for padding
     mem_size += tensor_storages.size() * ggml_tensor_overhead();
@@ -2129,12 +2168,25 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
 
     gguf_context* gguf_ctx = gguf_init_empty();
 
+    if (overrides == nullptr)
+        overrides = "";
+    auto quant_overrides = parse_quant_overrides(overrides);
+
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
         const std::string& name = tensor_storage.name;
-
         ggml_type tensor_type = tensor_storage.type;
-        if (tensor_should_be_converted(tensor_storage, type)) {
-            tensor_type = type;
+        ggml_type change_type = type;
+
+        for (const auto & quant_override : quant_overrides) {
+            std::regex pattern(quant_override.first);
+            if (std::regex_search(name, pattern)) {
+                change_type = quant_override.second;
+                break;
+            }
+        }
+
+        if (tensor_should_be_converted(tensor_storage, change_type)) {
+            tensor_type = change_type;
         }
 
         ggml_tensor* tensor = ggml_new_tensor(ggml_ctx, tensor_type, tensor_storage.n_dims, tensor_storage.ne);
@@ -2193,7 +2245,8 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
     return mem_size;
 }
 
-bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type) {
+bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type,
+    const char * output_tensor_type) {
     ModelLoader model_loader;
 
     if (!model_loader.init_from_file(input_path)) {
@@ -2207,6 +2260,6 @@ bool convert(const char* input_path, const char* vae_path, const char* output_pa
             return false;
         }
     }
-    bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type);
+    bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, output_tensor_type);
     return success;
 }
