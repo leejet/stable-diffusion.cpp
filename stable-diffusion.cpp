@@ -1887,7 +1887,12 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     } else if (sd_version_is_edit(sd_ctx->sd->version)) {
         // Not actually masked, we're just highjacking the masked_latent variable since it will be used the same way
         if (!sd_ctx->sd->use_tiny_autoencoder) {
-            masked_latent = sd_ctx->sd->get_first_stage_encoding_mode(work_ctx, init_moments);
+            if (sd_ctx->sd->is_using_edm_v_parameterization) {
+                // for CosXL edit
+                masked_latent = sd_ctx->sd->get_first_stage_encoding(work_ctx, init_moments);
+            } else {
+                masked_latent = sd_ctx->sd->get_first_stage_encoding_mode(work_ctx, init_moments);
+            }
         } else {
             masked_latent = init_latent;
         }
