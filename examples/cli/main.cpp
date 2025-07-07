@@ -246,6 +246,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
+    printf("  --size WxH                         image size, in pixel space ( alternative to -H and -W )\n");
+    printf("  --aspect-ratio WxH                 image aspect ratio to fill missing part of size. ( for example --size 576x1 and --aspect-ratio 9x16 means width 576, height 1024)\n");
     printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
     printf("                                     sampling method (default: \"euler_a\")\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
@@ -504,6 +506,41 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.width = std::stoi(argv[i]);
+        } else if (arg == "--size"){
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+
+            std::string size_value = argv[i];
+            size_t separator_position = size_value.find('x');
+            if (separator_position == std::string::npos){
+                invalid_arg = true;
+                break;
+            }
+
+            params.width = std::stoi(size_value.substr(0,separator_position));
+            params.height = std::stoi(size_value.substr(separator_position+1));
+        } else if (arg == "--aspect-ratio"){
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            std::string aspect_ratio_value = argv[i];
+            size_t separator_position = aspect_ratio_value.find('x');
+            if (separator_position == std::string::npos){
+                invalid_arg = true;
+                break;
+            }
+
+            size_t aspect_ratio_width = std::stoi(aspect_ratio_value.substr(0,separator_position));
+            size_t aspect_ratio_height = std::stoi(aspect_ratio_value.substr(separator_position+1));
+
+            if (params.width == 1){
+                params.width = params.height / aspect_ratio_height * aspect_ratio_width;
+            } else if (params.height == 1){
+                params.height = params.width / aspect_ratio_width * aspect_ratio_height;
+            }
         } else if (arg == "--steps") {
             if (++i >= argc) {
                 invalid_arg = true;
