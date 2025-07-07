@@ -828,25 +828,26 @@ public:
                         SDCondition uncond,
                         ggml_tensor* control_hint,
                         float control_strength,
-                        float min_cfg,
-                        float cfg_scale,
-                        float guidance,
+                        sd_guidance_params_t guidance,
                         float eta,
                         sample_method_t method,
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
-                        std::vector<int> skip_layers          = {},
-                        float slg_scale                       = 0,
-                        float skip_layer_start                = 0.01,
-                        float skip_layer_end                  = 0.2,
                         ggml_tensor* noise_mask               = nullptr) {
+        std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
+
         // TODO (Pix2Pix): separate image guidance params (right now it's reusing distilled guidance)
 
-        float img_cfg_scale = guidance;
+        float cfg_scale     = guidance.txt_cfg;
+        float img_cfg_scale = guidance.img_cfg;
+        float slg_scale     = guidance.slg.scale;
+
+        float min_cfg = guidance.min_cfg;
+
         if (img_cfg_scale != cfg_scale && !sd_version_use_concat(version)) {
-            LOG_WARN("2-conditioning CFG is not supported with this model, disabling it...");
+            LOG_WARN("2-conditioning CFG is not supported with this model, disabling it for better performance...");
             img_cfg_scale = cfg_scale;
         }
 
@@ -912,7 +913,7 @@ public:
             float t = denoiser->sigma_to_t(sigma);
             std::vector<float> timesteps_vec(x->ne[3], t);  // [N, ]
             auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
-            std::vector<float> guidance_vec(x->ne[3], guidance);
+            std::vector<float> guidance_vec(x->ne[3], guidance.distilled_guidance);
             auto guidance_tensor = vector_to_ggml_tensor(work_ctx, guidance_vec);
 
             copy_ggml_tensor(noised_input, input);
@@ -997,7 +998,7 @@ public:
             }
 
             int step_count         = sigmas.size();
-            bool is_skiplayer_step = has_skiplayer && step > (int)(skip_layer_start * step_count) && step < (int)(skip_layer_end * step_count);
+            bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
             float* skip_layer_data = NULL;
             if (is_skiplayer_step) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
@@ -1038,7 +1039,7 @@ public:
                             latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
                         }
                     }
-                } else if(has_img_guidance){
+                } else if (has_img_guidance) {
                     // img_cfg_scale == 1
                     latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
                 }
@@ -1304,8 +1305,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            std::string prompt,
                            std::string negative_prompt,
                            int clip_skip,
-                           float cfg_scale,
-                           float guidance,
+                           sd_guidance_params_t guidance,
                            float eta,
                            int width,
                            int height,
@@ -1319,11 +1319,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            bool normalize_input,
                            std::string input_id_images_path,
                            std::vector<ggml_tensor*> ref_latents,
-                           std::vector<int> skip_layers = {},
-                           float slg_scale              = 0,
-                           float skip_layer_start       = 0.01,
-                           float skip_layer_end         = 0.2,
-                           ggml_tensor* masked_latent    = NULL) {
+                           ggml_tensor* masked_latent = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1471,7 +1467,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                                            sd_ctx->sd->diffusion_model->get_adm_in_channels());
 
     SDCondition uncond;
-    if (cfg_scale != 1.0 || sd_version_use_concat(sd_ctx->sd->version) && cfg_scale != guidance) {
+    if (guidance.txt_cfg != 1.0 || sd_version_use_concat(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg) {
         bool force_zero_embeddings = false;
         if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.size() == 0 && !sd_ctx->sd->is_using_edm_v_parameterization) {
             force_zero_embeddings = true;
@@ -1569,6 +1565,9 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
             LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);
         }
 
+        // Disable min_cfg
+        guidance.min_cfg = guidance.txt_cfg;
+
         struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx,
                                                      x_t,
                                                      noise,
@@ -1576,8 +1575,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      uncond,
                                                      image_hint,
                                                      control_strength,
-                                                     cfg_scale,
-                                                     cfg_scale,
                                                      guidance,
                                                      eta,
                                                      sample_method,
@@ -1585,10 +1582,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
-                                                     skip_layers,
-                                                     slg_scale,
-                                                     skip_layer_start,
-                                                     skip_layer_end,
                                                      noise_mask);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
@@ -1667,8 +1660,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     const char* prompt_c_str,
                     const char* negative_prompt_c_str,
                     int clip_skip,
-                    float cfg_scale,
-                    float guidance,
+                    sd_guidance_params_t guidance,
                     float eta,
                     int width,
                     int height,
@@ -1680,13 +1672,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str,
-                    int* skip_layers         = NULL,
-                    size_t skip_layers_count = 0,
-                    float slg_scale          = 0,
-                    float skip_layer_start   = 0.01,
-                    float skip_layer_end     = 0.2) {
-    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
+                    const char* input_id_images_path_c_str) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1731,7 +1717,6 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                prompt_c_str,
                                                negative_prompt_c_str,
                                                clip_skip,
-                                               cfg_scale,
                                                guidance,
                                                eta,
                                                width,
@@ -1745,11 +1730,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                style_ratio,
                                                normalize_input,
                                                input_id_images_path_c_str,
-                                               {},
-                                               skip_layers_vec,
-                                               slg_scale,
-                                               skip_layer_start,
-                                               skip_layer_end);
+                                               {});
 
     size_t t1 = ggml_time_ms();
 
@@ -1764,8 +1745,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     const char* prompt_c_str,
                     const char* negative_prompt_c_str,
                     int clip_skip,
-                    float cfg_scale,
-                    float guidance,
+                    sd_guidance_params_t guidance,
                     float eta,
                     int width,
                     int height,
@@ -1778,13 +1758,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str,
-                    int* skip_layers         = NULL,
-                    size_t skip_layers_count = 0,
-                    float slg_scale          = 0,
-                    float skip_layer_start   = 0.01,
-                    float skip_layer_end     = 0.2) {
-    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
+                    const char* input_id_images_path_c_str) {
     LOG_DEBUG("img2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1834,7 +1808,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     ggml_tensor* init_moments = NULL;
     if (!sd_ctx->sd->use_tiny_autoencoder) {
         init_moments = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
-        init_latent               = sd_ctx->sd->get_first_stage_encoding(work_ctx, init_moments);
+        init_latent  = sd_ctx->sd->get_first_stage_encoding(work_ctx, init_moments);
     } else {
         init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
     }
@@ -1927,7 +1901,6 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                prompt_c_str,
                                                negative_prompt_c_str,
                                                clip_skip,
-                                               cfg_scale,
                                                guidance,
                                                eta,
                                                width,
@@ -1942,10 +1915,6 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                normalize_input,
                                                input_id_images_path_c_str,
                                                {},
-                                               skip_layers_vec,
-                                               slg_scale,
-                                               skip_layer_start,
-                                               skip_layer_end,
                                                masked_latent);
 
     size_t t2 = ggml_time_ms();
@@ -1963,8 +1932,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            int motion_bucket_id,
                            int fps,
                            float augmentation_level,
-                           float min_cfg,
-                           float cfg_scale,
+                           sd_guidance_params_t guidance,
                            enum sample_method_t sample_method,
                            int sample_steps,
                            float strength,
@@ -2041,9 +2009,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                                                  uncond,
                                                  {},
                                                  0.f,
-                                                 min_cfg,
-                                                 cfg_scale,
-                                                 0.f,
+                                                 guidance,
                                                  0.f,
                                                  sample_method,
                                                  sigmas,
@@ -2094,26 +2060,19 @@ sd_image_t* edit(sd_ctx_t* sd_ctx,
                  const char* prompt_c_str,
                  const char* negative_prompt_c_str,
                  int clip_skip,
-                 float cfg_scale,
-                 float guidance,
+                 sd_guidance_params_t guidance,
                  float eta,
                  int width,
                  int height,
-                 sample_method_t sample_method,
+                 enum sample_method_t sample_method,
                  int sample_steps,
-                 float strength,
                  int64_t seed,
                  int batch_count,
                  const sd_image_t* control_cond,
                  float control_strength,
                  float style_ratio,
                  bool normalize_input,
-                 int* skip_layers         = NULL,
-                 size_t skip_layers_count = 0,
-                 float slg_scale          = 0,
-                 float skip_layer_start   = 0.01,
-                 float skip_layer_end     = 0.2) {
-    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
+                 const char* input_id_images_path_c_str) {
     LOG_DEBUG("edit %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -2173,7 +2132,6 @@ sd_image_t* edit(sd_ctx_t* sd_ctx,
                                                prompt_c_str,
                                                negative_prompt_c_str,
                                                clip_skip,
-                                               cfg_scale,
                                                guidance,
                                                eta,
                                                width,
@@ -2188,10 +2146,6 @@ sd_image_t* edit(sd_ctx_t* sd_ctx,
                                                normalize_input,
                                                "",
                                                ref_latents,
-                                               skip_layers_vec,
-                                               slg_scale,
-                                               skip_layer_start,
-                                               skip_layer_end,
                                                NULL);
 
     size_t t2 = ggml_time_ms();
