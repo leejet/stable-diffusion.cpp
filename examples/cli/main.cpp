@@ -87,7 +87,7 @@ struct SDParams {
     std::string stacked_id_embeddings_path;
     std::string input_id_images_path;
     sd_type_t wtype = SD_TYPE_COUNT;
-    std::string tensor_wtype;
+    std::string tensor_type_rules;
     std::string lora_model_dir;
     std::string output_path = "output.png";
     std::string input_path;
@@ -224,7 +224,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
     printf("                                     If not specified, the default is the type of the weight file\n");
-    printf("  --tensor-type [EXPRESSION]         weight type per tensor pattern (example: \"^vae\\.=f16,model\\.=q8_0\")\n");
+    printf("  --tensor-type-rules [EXPRESSION]   weight type per tensor pattern (example: \"^vae\\.=f16,model\\.=q8_0\")\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
@@ -406,12 +406,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                         valid_types.c_str());
                 exit(1);
             }
-        } else if (arg == "--tensor-type") {
+        } else if (arg == "--tensor-type-rules") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            params.tensor_wtype = argv[i];
+            params.tensor_type_rules = argv[i];
         } else if (arg == "--lora-model-dir") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -741,8 +741,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         exit(1);
     }
 
-    if (params.mode != CONVERT && params.tensor_wtype.size() > 0) {
-        fprintf(stderr, "warning: --tensor-type is currently supported only for conversion\n");
+    if (params.mode != CONVERT && params.tensor_type_rules.size() > 0) {
+        fprintf(stderr, "warning: --tensor-type-rules is currently supported only for conversion\n");
     }
 
     if (params.seed < 0) {
@@ -857,7 +857,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if (params.mode == CONVERT) {
-        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype, params.tensor_wtype.c_str());
+        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype, params.tensor_type_rules.c_str());
         if (!success) {
             fprintf(stderr,
                     "convert '%s'/'%s' to '%s' failed\n",
