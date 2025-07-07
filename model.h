@@ -82,6 +82,10 @@ static inline bool sd_version_is_dit(SDVersion version) {
     return false;
 }
 
+static bool sd_version_use_concat(SDVersion version) {
+    return version == VERSION_INSTRUCT_PIX2PIX || sd_version_is_inpaint(version);
+}
+
 enum PMVersion {
     PM_VERSION_1,
     PM_VERSION_2,

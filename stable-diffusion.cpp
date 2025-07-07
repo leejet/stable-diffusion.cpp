@@ -844,6 +844,10 @@ public:
         // TODO (Pix2Pix): separate image guidance params (right now it's reusing distilled guidance)
 
         float img_cfg_scale = guidance;
+        if (img_cfg_scale != cfg_scale && !sd_version_use_concat(version)) {
+            LOG_WARN("2-conditioning CFG is not supported with this model, disabling it...");
+            img_cfg_scale = cfg_scale;
+        }
 
         LOG_DEBUG("Sample");
         struct ggml_init_params params;
@@ -866,9 +870,8 @@ public:
 
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, noise);
 
-        bool has_unconditioned = cfg_scale != 1.0 && uncond.c_crossattn != NULL;
-        bool has_img_guidance  = version == VERSION_INSTRUCT_PIX2PIX && cfg_scale != img_cfg_scale;
-        has_unconditioned      = has_unconditioned || has_img_guidance;
+        bool has_unconditioned = img_cfg_scale != 1.0 && uncond.c_crossattn != NULL;
+        bool has_img_guidance  = cfg_scale != img_cfg_scale && uncond.c_crossattn != NULL;
         bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
 
         // denoise wrapper
@@ -1030,9 +1033,13 @@ public:
                         if (has_img_guidance) {
                             latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
                         } else {
+                            // img_cfg_scale == cfg_scale
                             latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
                         }
                     }
+                } else if(has_img_guidance){
+                    // img_cfg_scale == 1
+                    latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
                 }
                 if (is_skiplayer_step) {
                     latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
