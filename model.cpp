@@ -874,7 +874,13 @@ void convert_tensor(void* src,
         } else {
             std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
             const float* im = imatrix.data();
-            ggml_quantize_chunk(dst_type, (float*)src, dst, 0, nrows, n_per_row, im);
+            float* fsrc     = (float*)malloc(n * sizeof(float));
+            double* dsrc    = (double*)src;
+            for (int64_t i = 0; i < n; i++) {
+                fsrc[i] = (float)(dsrc[i]);
+            }
+            ggml_quantize_chunk(dst_type, fsrc, dst, 0, nrows, n_per_row, im);
+            free(fsrc);
         }
     } else if (dst_type == GGML_TYPE_F64) {
         if (src_type == GGML_TYPE_F16) {
@@ -890,7 +896,13 @@ void convert_tensor(void* src,
                 throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
                                                 ggml_type_name(src_type)));
             }
-            qtype->to_float(src, (float*)dst, n);
+            float* fdst = (float*)malloc(n * sizeof(float));
+            qtype->to_float(src, fdst, n);
+            double* ddst = (double*)dst;
+            for (int64_t i = 0; i < n; i++) {
+                ddst[i] = (double)(fdst[i]);
+            }
+            free(fdst);
         }
     } else {
         // src_type == GGML_TYPE_F16 => dst_type is quantized
