@@ -13,7 +13,8 @@ Inference of Stable Diffusion and Flux in pure C/C++
 - SD1.x, SD2.x, SDXL and [SD3/SD3.5](./docs/sd3.md) support
     - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
 - [Flux-dev/Flux-schnell Support](./docs/flux.md)
-
+- [FLUX.1-Kontext-dev](./docs/kontext.md)
+- [Chroma](./docs/chroma.md)
 - [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) and [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo) support
 - [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
 - 16-bit, 32-bit float support
@@ -21,7 +22,7 @@ Inference of Stable Diffusion and Flux in pure C/C++
 - Accelerated memory-efficient CPU inference
     - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
 - AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA, Metal, Vulkan and SYCL backend for GPU acceleration.
+- Full CUDA, Metal, Vulkan, OpenCL and SYCL backend for GPU acceleration.
 - Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
 - Flash Attention for memory usage optimization
@@ -49,7 +50,7 @@ Inference of Stable Diffusion and Flux in pure C/C++
     - Linux
     - Mac OS
     - Windows
-    - Android (via Termux)
+    - Android (via Termux, [Local Diffusion](https://github.com/rmatif/Local-Diffusion))
 
 ### TODO
 
@@ -159,6 +160,73 @@ cmake .. -DSD_VULKAN=ON
 cmake --build . --config Release
 ```
 
+##### Using OpenCL (for Adreno GPU)
+
+Currently, it supports only Adreno GPUs and is primarily optimized for Q4_0 type
+
+To build for Windows ARM please refers to [Windows 11 Arm64
+](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/OPENCL.md#windows-11-arm64)
+
+Building for Android:
+
+  Android NDK:
+       Download and install the Android NDK from the [official Android developer site](https://developer.android.com/ndk/downloads).
+
+Setup OpenCL Dependencies for NDK:
+
+You need to provide OpenCL headers and the ICD loader library to your NDK sysroot.
+
+*   OpenCL Headers:
+    ```bash
+    # In a temporary working directory
+    git clone https://github.com/KhronosGroup/OpenCL-Headers
+    cd OpenCL-Headers
+    # Replace <YOUR_NDK_PATH> with your actual NDK installation path
+    # e.g., cp -r CL /path/to/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+    sudo cp -r CL <YOUR_NDK_PATH>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+    cd ..
+    ```
+
+*   OpenCL ICD Loader:
+    ```bash
+    # In the same temporary working directory
+    git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader
+    cd OpenCL-ICD-Loader
+    mkdir build_ndk && cd build_ndk
+
+    # Replace <YOUR_NDK_PATH> in the CMAKE_TOOLCHAIN_FILE and OPENCL_ICD_LOADER_HEADERS_DIR
+    cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_TOOLCHAIN_FILE=<YOUR_NDK_PATH>/build/cmake/android.toolchain.cmake \
+      -DOPENCL_ICD_LOADER_HEADERS_DIR=<YOUR_NDK_PATH>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include \
+      -DANDROID_ABI=arm64-v8a \
+      -DANDROID_PLATFORM=24 \
+      -DANDROID_STL=c++_shared
+
+    ninja
+    # Replace <YOUR_NDK_PATH>
+    # e.g., cp libOpenCL.so /path/to/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
+    sudo cp libOpenCL.so <YOUR_NDK_PATH>/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
+    cd ../..
+    ```
+
+Build `stable-diffusion.cpp` for Android with OpenCL:
+
+```bash
+mkdir build-android && cd build-android
+
+# Replace <YOUR_NDK_PATH> with your actual NDK installation path
+# e.g., -DCMAKE_TOOLCHAIN_FILE=/path/to/android-ndk-r26c/build/cmake/android.toolchain.cmake
+cmake .. -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=<YOUR_NDK_PATH>/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-28 \
+  -DGGML_OPENMP=OFF \
+  -DSD_OPENCL=ON
+
+ninja
+```
+*(Note: Don't forget to include `LD_LIBRARY_PATH=/vendor/lib64` in your command line before running the binary)*
+
 ##### Using SYCL
 
 Using SYCL makes the computation run on the Intel GPU. Please make sure you have installed the related driver and [Intel® oneAPI Base toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) before start. More details and steps can refer to [llama.cpp SYCL backend](https://github.com/ggerganov/llama.cpp/blob/master/docs/backend/SYCL.md#linux).
@@ -220,7 +288,7 @@ arguments:
   -m, --model [MODEL]                path to full model
   --diffusion-model                  path to the standalone diffusion model
   --clip_l                           path to the clip-l text encoder
-  --clip_g                           path to the clip-l text encoder
+  --clip_g                           path to the clip-g text encoder
   --t5xxl                            path to the the t5xxl text encoder
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
@@ -231,26 +299,32 @@ arguments:
   --normalize-input                  normalize PHOTOMAKER input id images
   --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now
   --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)
-  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)
+  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)
                                      If not specified, the default is the type of the weight file
   --lora-model-dir [DIR]             lora model directory
   -i, --init-img [IMAGE]             path to the input image, required by img2img
+  --mask [MASK]                      path to the mask image, required by img2img with mask
   --control-image [IMAGE]            path to image condition, control net
+  -r, --ref_image [PATH]             reference image for Flux Kontext models (can be used multiple times)
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
   --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)
+  --guidance SCALE                   guidance scale for img2img (default: 3.5)
+  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)
+                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium
+  --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)
   --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])
   --skip-layer-start START           SLG enabling point: (default: 0.01)
   --skip-layer-end END               SLG disabling point: (default: 0.2)
-									 SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])
+                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])
   --strength STRENGTH                strength for noising/unnoising (default: 0.75)
   --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%)
   --control-strength STRENGTH        strength to apply Control Net (default: 0.9)
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
-  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}
+  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}
                                      sampling method (default: "euler_a")
   --steps  STEPS                     number of sample steps (default: 20)
   --rng {std_default, cuda}          RNG (default: cuda)
@@ -267,7 +341,10 @@ arguments:
                                      This might crash if it is not supported by the backend.
   --control-net-cpu                  keep controlnet in cpu (for low vram)
   --canny                            apply canny preprocessor (edge detection)
-  --color                            Colors the logging tags according to level
+  --color                            colors the logging tags according to level
+  --chroma-disable-dit-mask          disable dit mask for chroma
+  --chroma-enable-t5-mask            enable t5 mask for chroma
+  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma
   -v, --verbose                      print extra info
 ```
 
@@ -315,10 +392,12 @@ Using formats of different precisions will yield results of varying quality.
 
 These projects wrap `stable-diffusion.cpp` for easier use in other languages/frameworks.
 
-* Golang: [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
+* Golang (non-cgo): [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
+* Golang (cgo): [Binozo/GoStableDiffusion](https://github.com/Binozo/GoStableDiffusion)
 * C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
 * Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
 * Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)
+* Flutter/Dart: [rmatif/Local-Diffusion](https://github.com/rmatif/Local-Diffusion)
 
 ## UIs
 
@@ -327,6 +406,7 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 - [Jellybox](https://jellybox.com)
 - [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
 - [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
+- [Local Diffusion](https://github.com/rmatif/Local-Diffusion)
 
 ## Contributors
 

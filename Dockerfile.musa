@@ -2,14 +2,17 @@ ARG MUSA_VERSION=rc3.1.1
 
 FROM mthreads/musa:${MUSA_VERSION}-devel-ubuntu22.04 as build
 
-RUN apt-get update && apt-get install -y cmake
+RUN apt-get update && apt-get install -y ccache cmake git
 
 WORKDIR /sd.cpp
 
 COPY . .
 
 RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_MUSA=ON -DCMAKE_BUILD_TYPE=Release && \
+    cmake .. -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_C_FLAGS="${CMAKE_C_FLAGS} -fopenmp -I/usr/lib/llvm-14/lib/clang/14.0.0/include -L/usr/lib/llvm-14/lib" \
+        -DCMAKE_CXX_FLAGS="${CMAKE_CXX_FLAGS} -fopenmp -I/usr/lib/llvm-14/lib/clang/14.0.0/include -L/usr/lib/llvm-14/lib" \
+        -DSD_MUSA=ON -DCMAKE_BUILD_TYPE=Release && \
     cmake --build . --config Release
 
 FROM mthreads/musa:${MUSA_VERSION}-runtime-ubuntu22.04 as runtime

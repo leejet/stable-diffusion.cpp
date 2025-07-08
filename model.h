@@ -12,9 +12,9 @@
 
 #include "ggml-backend.h"
 #include "ggml.h"
+#include "gguf.h"
 #include "json.hpp"
 #include "zip.h"
-#include "gguf.h"
 
 #define SD_MAX_DIMS 5
 
@@ -210,6 +210,7 @@ public:
     std::map<std::string, enum ggml_type> tensor_storages_types;
 
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
+    bool model_is_unet();
     SDVersion get_sd_version();
     ggml_type get_sd_wtype();
     ggml_type get_conditioner_wtype();
@@ -221,7 +222,7 @@ public:
                       ggml_backend_t backend,
                       std::set<std::string> ignore_tensors = {});
 
-    bool save_to_gguf_file(const std::string& file_path, ggml_type type);
+    bool save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules);
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
     ~ModelLoader() = default;

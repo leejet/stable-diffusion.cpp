@@ -57,13 +57,16 @@ const char* modes_str[] = {
     "txt2img",
     "img2img",
     "img2vid",
+    "edit",
     "convert",
 };
+#define SD_ALL_MODES_STR "txt2img, img2img, edit, convert"
 
 enum SDMode {
     TXT2IMG,
     IMG2IMG,
     IMG2VID,
+    EDIT,
     CONVERT,
     MODE_COUNT
 };
@@ -84,11 +87,13 @@ struct SDParams {
     std::string stacked_id_embeddings_path;
     std::string input_id_images_path;
     sd_type_t wtype = SD_TYPE_COUNT;
+    std::string tensor_type_rules;
     std::string lora_model_dir;
     std::string output_path = "output.png";
     std::string input_path;
     std::string mask_path;
     std::string control_image_path;
+    std::vector<std::string> ref_image_paths;
 
     std::string prompt;
     std::string negative_prompt;
@@ -129,6 +134,10 @@ struct SDParams {
     float slg_scale              = 0.f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+
+    bool chroma_use_dit_mask = true;
+    bool chroma_use_t5_mask  = false;
+    int chroma_t5_mask_pad   = 1;
 };
 
 void print_params(SDParams params) {
@@ -154,6 +163,10 @@ void print_params(SDParams params) {
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    mask_img:          %s\n", params.mask_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
+    printf("    ref_images_paths:\n");
+    for (auto& path : params.ref_image_paths) {
+        printf("        %s\n", path.c_str());
+    };
     printf("    clip on cpu:       %s\n", params.clip_on_cpu ? "true" : "false");
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
     printf("    vae decoder on cpu:%s\n", params.vae_on_cpu ? "true" : "false");
@@ -178,6 +191,9 @@ void print_params(SDParams params) {
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
+    printf("    chroma_use_dit_mask:   %s\n", params.chroma_use_dit_mask ? "true" : "false");
+    printf("    chroma_use_t5_mask:    %s\n", params.chroma_use_t5_mask ? "true" : "false");
+    printf("    chroma_t5_mask_pad:    %d\n", params.chroma_t5_mask_pad);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -185,14 +201,18 @@ void print_usage(int argc, const char* argv[]) {
     printf("\n");
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
-    printf("  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)\n");
+    printf("  -M, --mode [MODE]                  run mode, one of:\n");
+    printf("                                     txt2img: generate an image from a text prompt (default)\n");
+    printf("                                     img2img: generate an image from a text prompt and an initial image (--init-img)\n");
+    printf("                                     edit:    modify an image (--ref-image) based on text instructions\n");
+    printf("                                     convert: convert a model file to gguf format, optionally with quantization\n");
     printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to full model\n");
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
     printf("  --clip_l                           path to the clip-l text encoder\n");
     printf("  --clip_g                           path to the clip-g text encoder\n");
-    printf("  --t5xxl                            path to the the t5xxl text encoder\n");
+    printf("  --t5xxl                            path to the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
@@ -204,10 +224,12 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
     printf("                                     If not specified, the default is the type of the weight file\n");
+    printf("  --tensor-type-rules [EXPRESSION]   weight type per tensor pattern (example: \"^vae\\.=f16,model\\.=q8_0\")\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
+    printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
@@ -243,7 +265,10 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     This might crash if it is not supported by the backend.\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
-    printf("  --color                            Colors the logging tags according to level\n");
+    printf("  --color                            colors the logging tags according to level\n");
+    printf("  --chroma-disable-dit-mask          disable dit mask for chroma\n");
+    printf("  --chroma-enable-t5-mask            enable t5 mask for chroma\n");
+    printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -273,8 +298,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             }
             if (mode_found == -1) {
                 fprintf(stderr,
-                        "error: invalid mode %s, must be one of [txt2img, img2img, img2vid, convert]\n",
-                        mode_selected);
+                        "error: invalid mode %s, must be one of [%s]\n",
+                        mode_selected, SD_ALL_MODES_STR);
                 exit(1);
             }
             params.mode = (SDMode)mode_found;
@@ -381,6 +406,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                         valid_types.c_str());
                 exit(1);
             }
+        } else if (arg == "--tensor-type-rules") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.tensor_type_rules = argv[i];
         } else if (arg == "--lora-model-dir") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -629,6 +660,22 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             params.skip_layer_end = std::stof(argv[i]);
+        } else if (arg == "-r" || arg == "--ref-image") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.ref_image_paths.push_back(argv[i]);
+        } else if (arg == "--chroma-disable-dit-mask") {
+            params.chroma_use_dit_mask = false;
+        } else if (arg == "--chroma-enable-t5-mask") {
+            params.chroma_use_t5_mask = true;
+        } else if (arg == "--chroma-t5-mask-pad") {
+            if (++i >= argc) {
+                invalid_arg = true;
+                break;
+            }
+            params.chroma_t5_mask_pad = std::stoi(argv[i]);
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             print_usage(argc, argv);
@@ -657,7 +704,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 
     if ((params.mode == IMG2IMG || params.mode == IMG2VID) && params.input_path.length() == 0) {
-        fprintf(stderr, "error: when using the img2img mode, the following arguments are required: init-img\n");
+        fprintf(stderr, "error: when using the img2img/img2vid mode, the following arguments are required: init-img\n");
+        print_usage(argc, argv);
+        exit(1);
+    }
+
+    if (params.mode == EDIT && params.ref_image_paths.size() == 0) {
+        fprintf(stderr, "error: when using the edit mode, the following arguments are required: ref-image\n");
         print_usage(argc, argv);
         exit(1);
     }
@@ -686,6 +739,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     if (params.strength < 0.f || params.strength > 1.f) {
         fprintf(stderr, "error: can only work with strength in [0.0, 1.0]\n");
         exit(1);
+    }
+
+    if (params.mode != CONVERT && params.tensor_type_rules.size() > 0) {
+        fprintf(stderr, "warning: --tensor-type-rules is currently supported only for conversion\n");
     }
 
     if (params.seed < 0) {
@@ -800,7 +857,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if (params.mode == CONVERT) {
-        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype);
+        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype, params.tensor_type_rules.c_str());
         if (!success) {
             fprintf(stderr,
                     "convert '%s'/'%s' to '%s' failed\n",
@@ -826,6 +883,7 @@ int main(int argc, const char* argv[]) {
     uint8_t* input_image_buffer   = NULL;
     uint8_t* control_image_buffer = NULL;
     uint8_t* mask_image_buffer    = NULL;
+    std::vector<sd_image_t> ref_images;
 
     if (params.mode == IMG2IMG || params.mode == IMG2VID) {
         vae_decode_only = false;
@@ -877,6 +935,37 @@ int main(int argc, const char* argv[]) {
             free(input_image_buffer);
             input_image_buffer = resized_image_buffer;
         }
+    } else if (params.mode == EDIT) {
+        vae_decode_only = false;
+        for (auto& path : params.ref_image_paths) {
+            int c                 = 0;
+            int width             = 0;
+            int height            = 0;
+            uint8_t* image_buffer = stbi_load(path.c_str(), &width, &height, &c, 3);
+            if (image_buffer == NULL) {
+                fprintf(stderr, "load image from '%s' failed\n", path.c_str());
+                return 1;
+            }
+            if (c < 3) {
+                fprintf(stderr, "the number of channels for the input image must be >= 3, but got %d channels\n", c);
+                free(image_buffer);
+                return 1;
+            }
+            if (width <= 0) {
+                fprintf(stderr, "error: the width of image must be greater than 0\n");
+                free(image_buffer);
+                return 1;
+            }
+            if (height <= 0) {
+                fprintf(stderr, "error: the height of image must be greater than 0\n");
+                free(image_buffer);
+                return 1;
+            }
+            ref_images.push_back({(uint32_t)width,
+                                  (uint32_t)height,
+                                  3,
+                                  image_buffer});
+        }
     }
 
     sd_ctx_t* sd_ctx = new_sd_ctx(params.model_path.c_str(),
@@ -900,7 +989,10 @@ int main(int argc, const char* argv[]) {
                                   params.clip_on_cpu,
                                   params.control_net_cpu,
                                   params.vae_on_cpu,
-                                  params.diffusion_flash_attn);
+                                  params.diffusion_flash_attn,
+                                  params.chroma_use_dit_mask,
+                                  params.chroma_use_t5_mask,
+                                  params.chroma_t5_mask_pad);
 
     if (sd_ctx == NULL) {
         printf("new_sd_ctx_t failed\n");
@@ -968,7 +1060,7 @@ int main(int argc, const char* argv[]) {
                           params.slg_scale,
                           params.skip_layer_start,
                           params.skip_layer_end);
-    } else {
+    } else if (params.mode == IMG2IMG || params.mode == IMG2VID) {
         sd_image_t input_image = {(uint32_t)params.width,
                                   (uint32_t)params.height,
                                   3,
@@ -1038,6 +1130,32 @@ int main(int argc, const char* argv[]) {
                               params.skip_layer_start,
                               params.skip_layer_end);
         }
+    } else {  // EDIT
+        results = edit(sd_ctx,
+                       ref_images.data(),
+                       ref_images.size(),
+                       params.prompt.c_str(),
+                       params.negative_prompt.c_str(),
+                       params.clip_skip,
+                       params.cfg_scale,
+                       params.guidance,
+                       params.eta,
+                       params.width,
+                       params.height,
+                       params.sample_method,
+                       params.sample_steps,
+                       params.strength,
+                       params.seed,
+                       params.batch_count,
+                       control_image,
+                       params.control_strength,
+                       params.style_ratio,
+                       params.normalize_input,
+                       params.skip_layers.data(),
+                       params.skip_layers.size(),
+                       params.slg_scale,
+                       params.skip_layer_start,
+                       params.skip_layer_end);
     }
 
     if (results == NULL) {
@@ -1075,11 +1193,11 @@ int main(int argc, const char* argv[]) {
 
     std::string dummy_name, ext, lc_ext;
     bool is_jpg;
-    size_t last = params.output_path.find_last_of(".");
+    size_t last      = params.output_path.find_last_of(".");
     size_t last_path = std::min(params.output_path.find_last_of("/"),
                                 params.output_path.find_last_of("\\"));
-    if (last != std::string::npos // filename has extension
-    && (last_path == std::string::npos || last > last_path)) {
+    if (last != std::string::npos  // filename has extension
+        && (last_path == std::string::npos || last > last_path)) {
         dummy_name = params.output_path.substr(0, last);
         ext = lc_ext = params.output_path.substr(last);
         std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
@@ -1087,7 +1205,7 @@ int main(int argc, const char* argv[]) {
     } else {
         dummy_name = params.output_path;
         ext = lc_ext = "";
-        is_jpg = false;
+        is_jpg       = false;
     }
     // appending ".png" to absent or unknown extension
     if (!is_jpg && lc_ext != ".png") {
@@ -1099,7 +1217,7 @@ int main(int argc, const char* argv[]) {
             continue;
         }
         std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
-        if(is_jpg) {
+        if (is_jpg) {
             stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                            results[i].data, 90, get_image_params(params, params.seed + i).c_str());
             printf("save result JPEG image to '%s'\n", final_image_path.c_str());

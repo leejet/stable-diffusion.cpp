@@ -39,6 +39,10 @@
 #include "ggml-vulkan.h"
 #endif
 
+#ifdef SD_USE_OPENCL
+#include "ggml-opencl.h"
+#endif
+
 #ifdef SD_USE_SYCL
 #include "ggml-sycl.h"
 #endif
@@ -113,7 +117,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_kronecker(ggml_context* ctx, struct g
                                      a->ne[0] * b->ne[0],
                                      a->ne[1] * b->ne[1],
                                      a->ne[2] * b->ne[2],
-                                     a->ne[3] * b->ne[3]),
+                                     a->ne[3] * b->ne[3],
+                                     GGML_SCALE_MODE_NEAREST),
                     b);
 }
 
@@ -597,6 +602,8 @@ typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
 // Tiling
 __STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
+    output = ggml_set_f32(output, 0);
+
     int input_width   = (int)input->ne[0];
     int input_height  = (int)input->ne[1];
     int output_width  = (int)output->ne[0];
@@ -864,6 +871,18 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         v = ggml_reshape_3d(ctx, v, d_head, L_k, n_head * N);  // [N * n_head, L_k, d_head]
         v = ggml_cast(ctx, v, GGML_TYPE_F16);
 
+        if (mask != nullptr) {
+            mask = ggml_transpose(ctx, mask);
+
+            if (mask->ne[1] < GGML_PAD(q->ne[1], GGML_KQ_MASK_PAD)) {
+                LOG_DEBUG("mask dims %ld, %ld, %ld, %ld\n", mask->ne[0], mask->ne[1], mask->ne[2], mask->ne[3]);
+                LOG_DEBUG("needs padding, padding from %ld to %ld\n", mask->ne[1], GGML_PAD(q->ne[1], GGML_KQ_MASK_PAD));
+                mask = ggml_pad(ctx, mask, 0, GGML_PAD(q->ne[1], GGML_KQ_MASK_PAD) - mask->ne[1], 0, 0);
+            }
+
+            mask = ggml_cast(ctx, mask, GGML_TYPE_F16);
+        }
+
         kqv = ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0, 0);
         ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
 
@@ -876,7 +895,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
         kq      = ggml_scale_inplace(ctx, kq, scale);
         if (mask) {
-            kq = ggml_add(ctx, kq, mask);
+            kq = ggml_add_inplace(ctx, kq, mask);
         }
         if (diag_mask_inf) {
             kq = ggml_diag_mask_inf_inplace(ctx, kq, 0);

@@ -678,8 +678,8 @@ public:
     bool with_final_ln        = true;
 
     CLIPTextModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                  int clip_skip_value = -1,
-                  bool with_final_ln  = true)
+                  bool with_final_ln  = true,
+                  int clip_skip_value = -1)
         : version(version), with_final_ln(with_final_ln) {
         if (version == OPEN_CLIP_VIT_H_14) {
             hidden_size       = 1024;
@@ -701,7 +701,7 @@ public:
 
     void set_clip_skip(int skip) {
         if (skip <= 0) {
-            return;
+            skip = -1;
         }
         clip_skip = skip;
     }
@@ -871,9 +871,9 @@ struct CLIPTextModelRunner : public GGMLRunner {
                         std::map<std::string, enum ggml_type>& tensor_types,
                         const std::string prefix,
                         CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                        int clip_skip_value = 1,
-                        bool with_final_ln  = true)
-        : GGMLRunner(backend), model(version, clip_skip_value, with_final_ln) {
+                        bool with_final_ln  = true,
+                        int clip_skip_value = -1)
+        : GGMLRunner(backend), model(version, with_final_ln, clip_skip_value) {
         model.init(params_ctx, tensor_types, prefix);
     }
 
