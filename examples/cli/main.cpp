@@ -1058,7 +1058,7 @@ int main(int argc, const char* argv[]) {
             params.augmentation_level,
         };
 
-        results              = generate_video(sd_ctx, &vid_gen_params);
+        results              = generate_video(sd_ctx, &vid_gen_params, (step_callback_t)step_callback);
         expected_num_results = params.video_frames;
     }
 

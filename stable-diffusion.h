@@ -235,7 +235,7 @@ SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_para
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params, step_callback_t step_callback);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
-SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params);  // broken
+SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, step_callback_t step_callback);  // broken
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 

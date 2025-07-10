@@ -1894,7 +1894,7 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
     return init_latent;
 }
 
-sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params,step_callback_t step_callback) {
+sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params, step_callback_t step_callback) {
     int width  = sd_img_gen_params->width;
     int height = sd_img_gen_params->height;
     if (sd_version_is_dit(sd_ctx->sd->version)) {
@@ -2113,7 +2113,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     return result_images;
 }
 
-SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params) {
+SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, step_callback_t step_callback) {
     if (sd_ctx == NULL || sd_vid_gen_params == NULL) {
         return NULL;
     }
@@ -2195,7 +2195,10 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                  sd_vid_gen_params->sample_method,
                                                  sigmas,
                                                  -1,
-                                                 SDCondition(NULL, NULL, NULL));
+                                                 SDCondition(NULL, NULL, NULL),
+                                                 {},
+                                                 NULL,
+                                                 step_callback);
 
     int64_t t2 = ggml_time_ms();
     LOG_INFO("sampling completed, taking %.2fs", (t2 - t1) * 1.0f / 1000);
