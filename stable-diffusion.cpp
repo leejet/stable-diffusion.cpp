@@ -1031,7 +1031,7 @@ void preview_image(ggml_context* work_ctx,
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
         struct ggml_tensor* preview_tensor = NULL;
-        if (preview_mode != SD_PREVIEW_PROJ) {
+        if (preview_mode != SD_PREVIEW_NONE && preview_mode != SD_PREVIEW_PROJ) {
             preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
                                                 (denoised->ne[0] * 8),
                                                 (denoised->ne[1] * 8),
