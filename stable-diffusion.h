@@ -111,6 +111,14 @@ enum sd_log_level_t {
     SD_LOG_ERROR
 };
 
+enum sd_preview_policy_t {
+    SD_PREVIEW_NONE,
+    SD_PREVIEW_PROJ,
+    SD_PREVIEW_TAE,
+    SD_PREVIEW_VAE,
+    N_PREVIEWS
+};
+
 typedef struct {
     const char* model_path;
     const char* clip_l_path;
@@ -134,6 +142,7 @@ typedef struct {
     bool keep_control_net_on_cpu;
     bool keep_vae_on_cpu;
     bool diffusion_flash_attn;
+    bool tae_preview_only;
     bool diffusion_conv_direct;
     bool vae_conv_direct;
     bool chroma_use_dit_mask;
@@ -228,11 +237,11 @@ SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
-typedef void (*step_callback_t)(int, struct ggml_tensor*, int);
+typedef void (*step_callback_t)(int, sd_image_t);
 
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
-SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params, step_callback_t step_callback);
+SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params, sd_preview_policy_t preview_mode, int preview_interval, step_callback_t step_callback);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
 SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, step_callback_t step_callback);  // broken
