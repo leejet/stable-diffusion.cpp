@@ -1554,6 +1554,7 @@ struct T5CLIPEmbedder : public Conditioner {
                                             chunk_hidden_states->ne[0],
                                             ggml_nelements(hidden_states) / chunk_hidden_states->ne[0]);
         } else {
+            // TODO: maybe precompute embeddings for <pad> token and fill with that instead? (proper uncond)
             hidden_states = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 4096, chunk_len);
             ggml_set_f32(hidden_states, 0.f);
             t5_attn_mask = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, chunk_len);
