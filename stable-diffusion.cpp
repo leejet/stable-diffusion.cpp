@@ -2042,7 +2042,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
-    if (sd_ctx->sd->first_stage_model != nullptr && sd_ctx->sd->tae_first_stage != nullptr) {
+    if (preview_mode!=SD_PREVIEW_NONE && preview_mode!=SD_PREVIEW_PROJ) {
         params.mem_size *= 2;
     }
     params.mem_size += width * height * 3 * sizeof(float) * 3;
