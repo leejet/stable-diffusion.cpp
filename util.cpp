@@ -420,6 +420,12 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
 }
+sd_progress_cb_t sd_get_progress_callback(){
+    return sd_progress_cb;
+}
+void* sd_get_progress_callback_data(){
+    return sd_progress_cb_data;
+}
 const char* sd_get_system_info() {
     static char buffer[1024];
     std::stringstream ss;
