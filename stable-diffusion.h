@@ -219,6 +219,8 @@ typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
+SD_API sd_progress_cb_t sd_get_progress_callback();
+SD_API void* sd_get_progress_callback_data();
 SD_API int32_t get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 
