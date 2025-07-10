@@ -1109,7 +1109,6 @@ struct FluxCLIPEmbedder : public Conditioner {
     FluxCLIPEmbedder(ggml_backend_t backend,
                      std::map<std::string, enum ggml_type>& tensor_types,
                      int clip_skip = -1) {
-
         for (auto pair : tensor_types) {
             if (pair.first.find("text_encoders.clip_l") != std::string::npos) {
                 use_clip_l = true;
@@ -1319,7 +1318,6 @@ struct FluxCLIPEmbedder : public Conditioner {
                 ggml_set_f32(chunk_hidden_states, 0.f);
             }
 
-            
             int64_t t1 = ggml_time_ms();
             LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
             if (force_zero_embeddings) {
@@ -1328,12 +1326,12 @@ struct FluxCLIPEmbedder : public Conditioner {
                     vec[i] = 0;
                 }
             }
-            
+
             hidden_states_vec.insert(hidden_states_vec.end(),
-            (float*)chunk_hidden_states->data,
-            ((float*)chunk_hidden_states->data) + ggml_nelements(chunk_hidden_states));
+                                     (float*)chunk_hidden_states->data,
+                                     ((float*)chunk_hidden_states->data) + ggml_nelements(chunk_hidden_states));
         }
-        
+
         if (hidden_states_vec.size() > 0) {
             hidden_states = vector_to_ggml_tensor(work_ctx, hidden_states_vec);
             hidden_states = ggml_reshape_2d(work_ctx,
@@ -1388,35 +1386,54 @@ struct PixArtCLIPEmbedder : public Conditioner {
     bool use_mask    = false;
     int mask_pad     = 1;
 
+    bool use_t5 = false;
+
     PixArtCLIPEmbedder(ggml_backend_t backend,
                        std::map<std::string, enum ggml_type>& tensor_types,
                        int clip_skip = -1,
                        bool use_mask = false,
                        int mask_pad  = 1)
         : use_mask(use_mask), mask_pad(mask_pad) {
-        t5 = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
+        for (auto pair : tensor_types) {
+            if (pair.first.find("text_encoders.t5xxl") != std::string::npos) {
+                use_t5 = true;
+            }
+        }
+
+        if (!use_t5) {
+            LOG_WARN("IMPORTANT NOTICE: No text encoders provided, cannot process prompts!");
+            return;
+        } else {
+            t5 = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
+        }
     }
 
     void set_clip_skip(int clip_skip) {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
-        t5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
+        if (use_t5) {
+            t5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
+        }
     }
 
     void alloc_params_buffer() {
-        t5->alloc_params_buffer();
+        if (use_t5) {
+            t5->alloc_params_buffer();
+        }
     }
 
     void free_params_buffer() {
-        t5->free_params_buffer();
+        if (use_t5) {
+            t5->free_params_buffer();
+        }
     }
 
     size_t get_params_buffer_size() {
         size_t buffer_size = 0;
-
-        buffer_size += t5->get_params_buffer_size();
-
+        if (use_t5) {
+            buffer_size += t5->get_params_buffer_size();
+        }
         return buffer_size;
     }
 
@@ -1442,17 +1459,18 @@ struct PixArtCLIPEmbedder : public Conditioner {
         std::vector<int> t5_tokens;
         std::vector<float> t5_weights;
         std::vector<float> t5_mask;
-        for (const auto& item : parsed_attention) {
-            const std::string& curr_text = item.first;
-            float curr_weight            = item.second;
+        if (use_t5) {
+            for (const auto& item : parsed_attention) {
+                const std::string& curr_text = item.first;
+                float curr_weight            = item.second;
 
-            std::vector<int> curr_tokens = t5_tokenizer.Encode(curr_text, true);
-            t5_tokens.insert(t5_tokens.end(), curr_tokens.begin(), curr_tokens.end());
-            t5_weights.insert(t5_weights.end(), curr_tokens.size(), curr_weight);
+                std::vector<int> curr_tokens = t5_tokenizer.Encode(curr_text, true);
+                t5_tokens.insert(t5_tokens.end(), curr_tokens.begin(), curr_tokens.end());
+                t5_weights.insert(t5_weights.end(), curr_tokens.size(), curr_weight);
+            }
+
+            t5_tokenizer.pad_tokens(t5_tokens, t5_weights, &t5_mask, max_length, padding);
         }
-
-        t5_tokenizer.pad_tokens(t5_tokens, t5_weights, &t5_mask, max_length, padding);
-
         return {t5_tokens, t5_weights, t5_mask};
     }
 
@@ -1489,38 +1507,44 @@ struct PixArtCLIPEmbedder : public Conditioner {
         std::vector<float> hidden_states_vec;
 
         size_t chunk_count = t5_tokens.size() / chunk_len;
-
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
             // t5
-            std::vector<int> chunk_tokens(t5_tokens.begin() + chunk_idx * chunk_len,
-                                          t5_tokens.begin() + (chunk_idx + 1) * chunk_len);
-            std::vector<float> chunk_weights(t5_weights.begin() + chunk_idx * chunk_len,
-                                             t5_weights.begin() + (chunk_idx + 1) * chunk_len);
-            std::vector<float> chunk_mask(t5_attn_mask_vec.begin() + chunk_idx * chunk_len,
-                                          t5_attn_mask_vec.begin() + (chunk_idx + 1) * chunk_len);
 
-            auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
-            auto t5_attn_mask_chunk = use_mask ? vector_to_ggml_tensor(work_ctx, chunk_mask) : NULL;
+            if (use_t5) {
+                std::vector<int> chunk_tokens(t5_tokens.begin() + chunk_idx * chunk_len,
+                                              t5_tokens.begin() + (chunk_idx + 1) * chunk_len);
+                std::vector<float> chunk_weights(t5_weights.begin() + chunk_idx * chunk_len,
+                                                 t5_weights.begin() + (chunk_idx + 1) * chunk_len);
+                std::vector<float> chunk_mask(t5_attn_mask_vec.begin() + chunk_idx * chunk_len,
+                                              t5_attn_mask_vec.begin() + (chunk_idx + 1) * chunk_len);
 
-            t5->compute(n_threads,
-                        input_ids,
-                        t5_attn_mask_chunk,
-                        &chunk_hidden_states,
-                        work_ctx);
-            {
-                auto tensor         = chunk_hidden_states;
-                float original_mean = ggml_tensor_mean(tensor);
-                for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
-                    for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
-                        for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
-                            float value = ggml_tensor_get_f32(tensor, i0, i1, i2);
-                            value *= chunk_weights[i1];
-                            ggml_tensor_set_f32(tensor, value, i0, i1, i2);
+                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
+                auto t5_attn_mask_chunk = use_mask ? vector_to_ggml_tensor(work_ctx, chunk_mask) : NULL;
+                t5->compute(n_threads,
+                            input_ids,
+                            t5_attn_mask_chunk,
+                            &chunk_hidden_states,
+                            work_ctx);
+                {
+                    auto tensor         = chunk_hidden_states;
+                    float original_mean = ggml_tensor_mean(tensor);
+                    for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
+                        for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
+                            for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
+                                float value = ggml_tensor_get_f32(tensor, i0, i1, i2);
+                                value *= chunk_weights[i1];
+                                ggml_tensor_set_f32(tensor, value, i0, i1, i2);
+                            }
                         }
                     }
+                    float new_mean = ggml_tensor_mean(tensor);
+                    ggml_tensor_scale(tensor, (original_mean / new_mean));
                 }
-                float new_mean = ggml_tensor_mean(tensor);
-                ggml_tensor_scale(tensor, (original_mean / new_mean));
+            } else {
+                chunk_hidden_states = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 4096, chunk_len);
+                ggml_set_f32(chunk_hidden_states, 0.f);
+                t5_attn_mask = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, chunk_len);
+                ggml_set_f32(t5_attn_mask, -HUGE_VALF);
             }
 
             int64_t t1 = ggml_time_ms();
@@ -1544,8 +1568,10 @@ struct PixArtCLIPEmbedder : public Conditioner {
                                             chunk_hidden_states->ne[0],
                                             ggml_nelements(hidden_states) / chunk_hidden_states->ne[0]);
         } else {
-            hidden_states = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 4096, 256);
+            hidden_states = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 4096, chunk_len);
             ggml_set_f32(hidden_states, 0.f);
+            t5_attn_mask = ggml_new_tensor_1d(work_ctx, GGML_TYPE_F32, chunk_len);
+            ggml_set_f32(t5_attn_mask, -HUGE_VALF);
         }
 
         modify_mask_to_attend_padding(t5_attn_mask, ggml_nelements(t5_attn_mask), mask_pad);
