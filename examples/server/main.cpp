@@ -1211,7 +1211,8 @@ void start_server(SDParams params) {
                                     params.ctxParams.clip_on_cpu,
                                     params.ctxParams.control_net_cpu,
                                     params.ctxParams.vae_on_cpu,
-                                    params.ctxParams.diffusion_flash_attn);
+                                    params.ctxParams.diffusion_flash_attn,
+                                    true, false, 1);
                 if (sd_ctx == NULL) {
                     printf("new_sd_ctx_t failed\n");
                     std::lock_guard<std::mutex> results_lock(results_mutex);
@@ -1240,6 +1241,7 @@ void start_server(SDParams params) {
                                   params.lastRequest.clip_skip,
                                   params.lastRequest.cfg_scale,
                                   params.lastRequest.guidance,
+                                  0.f,  // eta
                                   params.lastRequest.width,
                                   params.lastRequest.height,
                                   params.lastRequest.sample_method,
@@ -1301,7 +1303,7 @@ void start_server(SDParams params) {
                 end_task_json["status"] = "Done";
                 end_task_json["data"]   = images_json;
                 end_task_json["step"]   = -1;
-                end_task_json["steps"]   = 0;
+                end_task_json["steps"]  = 0;
                 end_task_json["eta"]    = "?";
                 std::lock_guard<std::mutex> results_lock(results_mutex);
                 task_results[task_id] = end_task_json;
