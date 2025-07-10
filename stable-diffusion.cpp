@@ -967,7 +967,7 @@ void preview_image(ggml_context* work_ctx,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
                         ggml_tensor* denoise_mask             = nullptr,
-                        sd_preview_policy_t preview_mode                   = SD_PREVIEW_PROJ,
+                        sd_preview_policy_t preview_mode                   = SD_PREVIEW_NONE,
                         int preview_interval                               = 1,
                         std::function<void(int, sd_image_t)> step_callback = nullptr) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
@@ -1665,7 +1665,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     std::vector<ggml_tensor*> ref_latents,
                                     ggml_tensor* concat_latent                                      = NULL,
                                     ggml_tensor* denoise_mask                                       = NULL,
-                                    sd_preview_policy_t preview_mode                   = SD_PREVIEW_PROJ,
+                                    sd_preview_policy_t preview_mode                   = SD_PREVIEW_NONE,
                                     int preview_interval                               = 1,
                                     std::function<void(int, sd_image_t)> step_callback = nullptr) {
     if (seed < 0) {
