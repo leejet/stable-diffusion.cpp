@@ -228,7 +228,7 @@ SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
-typedef void (*step_callback_t)(int, struct ggml_tensor*, enum SDVersion);
+typedef void (*step_callback_t)(int, struct ggml_tensor*, int);
 
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);

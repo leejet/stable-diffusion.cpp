@@ -1115,7 +1115,7 @@ int main(int argc, const char* argv[]) {
             params.input_id_images_path.c_str(),
         };
 
-        results              = generate_image(sd_ctx, &img_gen_params, &step_callback);
+        results              = generate_image(sd_ctx, &img_gen_params, (step_callback_t)step_callback);
         expected_num_results = params.batch_count;
     } else if (params.mode == VID_GEN) {
         sd_vid_gen_params_t vid_gen_params = {
