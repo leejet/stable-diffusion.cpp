@@ -182,7 +182,7 @@ void print_params(SDParams params) {
     printf("    chroma_use_dit_mask:   %s\n", params.chroma_use_dit_mask ? "true" : "false");
     printf("    chroma_use_t5_mask:    %s\n", params.chroma_use_t5_mask ? "true" : "false");
     printf("    chroma_t5_mask_pad:    %d\n", params.chroma_t5_mask_pad);
-    printf("    preview_mode:      %d\n", previews_str[params.preview_method]);
+    printf("    preview_mode:      %s\n", previews_str[params.preview_method]);
     printf("    preview_interval:  %d\n", params.preview_interval);
 }
 
