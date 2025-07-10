@@ -848,7 +848,8 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
-                        ggml_tensor* denoise_mask             = nullptr) {
+                        ggml_tensor* denoise_mask             = nullptr,
+                           std::function<void(int, ggml_tensor*, SDVersion)> step_callback = nullptr) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
         float cfg_scale     = guidance.txt_cfg;
@@ -1080,6 +1081,9 @@ public:
                 }
             }
 
+            if (step_callback != nullptr) {
+                step_callback(step, denoised, version);
+            }
             return denoised;
         };
 
@@ -1528,8 +1532,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     bool normalize_input,
                                     std::string input_id_images_path,
                                     std::vector<ggml_tensor*> ref_latents,
-                                    ggml_tensor* concat_latent = NULL,
-                                    ggml_tensor* denoise_mask  = NULL) {
+                                    ggml_tensor* concat_latent                                      = NULL,
+                                    ggml_tensor* denoise_mask                                       = NULL,
+                                    std::function<void(int, ggml_tensor*, SDVersion)> step_callback = nullptr) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1798,7 +1803,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
-                                                     denoise_mask);
+                                                     denoise_mask,
+                                                     step_callback);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
@@ -1872,7 +1878,7 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
     return init_latent;
 }
 
-sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
+sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params,step_callback_t step_callback) {
     int width  = sd_img_gen_params->width;
     int height = sd_img_gen_params->height;
     LOG_DEBUG("generate_image %dx%d", width, height);
@@ -2072,7 +2078,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->input_id_images_path,
                                                         ref_latents,
                                                         concat_latent,
-                                                        denoise_mask);
+                                                        denoise_mask,
+                                                        step_callback);
 
     size_t t2 = ggml_time_ms();
 
