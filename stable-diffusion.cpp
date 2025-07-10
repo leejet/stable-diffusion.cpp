@@ -874,7 +874,7 @@ public:
                        int step,
                        struct ggml_tensor* latents,
                        enum SDVersion version,
-                       sd_preview_policy_t preview_mode,
+                       sd_preview_t preview_mode,
                        ggml_tensor* result,
                        std::function<void(int, sd_image_t)> step_callback) {
         const uint32_t channel = 3;
@@ -985,10 +985,7 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
-                        ggml_tensor* denoise_mask             = nullptr,
-                        sd_preview_policy_t preview_mode                   = SD_PREVIEW_NONE,
-                        int preview_interval                               = 1,
-                        std::function<void(int, sd_image_t)> step_callback = nullptr) {
+                        ggml_tensor* denoise_mask             = nullptr) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
         float cfg_scale     = guidance.txt_cfg;
@@ -1050,7 +1047,8 @@ public:
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
         struct ggml_tensor* preview_tensor = NULL;
-        if (preview_mode != SD_PREVIEW_NONE && preview_mode != SD_PREVIEW_PROJ) {
+        auto sd_preview_mode = sd_get_preview_mode();
+        if (sd_preview_mode != SD_PREVIEW_NONE && sd_preview_mode != SD_PREVIEW_PROJ) {
             preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
                                                 (denoised->ne[0] * 8),
                                                 (denoised->ne[1] * 8),
@@ -1232,10 +1230,11 @@ public:
                 pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
                 // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
-
-            if (step_callback != nullptr) {
-                if (step % preview_interval == 0) {
-                    preview_image(work_ctx, step, denoised, version, preview_mode, preview_tensor, step_callback);
+            auto sd_preview_cb = sd_get_preview_callback();
+            auto sd_preview_mode = sd_get_preview_mode();
+            if (sd_preview_cb != NULL) {
+                if (step % sd_get_preview_interval() == 0) {
+                    preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb);
                 }
             }
             return denoised;
@@ -1687,10 +1686,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     std::string input_id_images_path,
                                     std::vector<ggml_tensor*> ref_latents,
                                     ggml_tensor* concat_latent                                      = NULL,
-                                    ggml_tensor* denoise_mask                                       = NULL,
-                                    sd_preview_policy_t preview_mode                   = SD_PREVIEW_NONE,
-                                    int preview_interval                               = 1,
-                                    std::function<void(int, sd_image_t)> step_callback = nullptr) {
+                                    ggml_tensor* denoise_mask                                       = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1959,10 +1955,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
-                                                     denoise_mask,
-                                                     preview_mode,
-                                                     preview_interval,
-                                                     step_callback);
+                                                     denoise_mask);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
@@ -2036,7 +2029,7 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
     return init_latent;
 }
 
-sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params, sd_preview_policy_t preview_mode, int preview_interval, step_callback_t step_callback) {
+sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     int width  = sd_img_gen_params->width;
     int height = sd_img_gen_params->height;
     if (sd_version_is_dit(sd_ctx->sd->version)) {
@@ -2064,7 +2057,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     if (sd_ctx->sd->stacked_id) {
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
-    if (preview_mode != SD_PREVIEW_NONE && preview_mode != SD_PREVIEW_PROJ) {
+    auto sd_preview_mode = sd_get_preview_mode();
+    if (sd_preview_mode != SD_PREVIEW_NONE && sd_preview_mode != SD_PREVIEW_PROJ) {
         params.mem_size *= 2;
     }
     params.mem_size += width * height * 3 * sizeof(float) * 3;
@@ -2248,10 +2242,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->input_id_images_path,
                                                         ref_latents,
                                                         concat_latent,
-                                                        denoise_mask,
-                                                        preview_mode,
-                                                        preview_interval,
-                                                        step_callback);
+                                                        denoise_mask);
 
     size_t t2 = ggml_time_ms();
 
@@ -2260,7 +2251,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     return result_images;
 }
 
-SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, step_callback_t step_callback) {
+SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params) {
     if (sd_ctx == NULL || sd_vid_gen_params == NULL) {
         return NULL;
     }
@@ -2344,8 +2335,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                  -1,
                                                  SDCondition(NULL, NULL, NULL),
                                                  {},
-                                                 NULL,
-                                                 (sd_preview_policy_t)0, 1,
                                                  NULL);
 
     int64_t t2 = ggml_time_ms();

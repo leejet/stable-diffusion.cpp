@@ -119,10 +119,10 @@ struct SDParams {
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
 
-    sd_preview_policy_t preview_method = SD_PREVIEW_NONE;
-    int preview_interval               = 1;
-    std::string preview_path           = "preview.png";
-    bool taesd_preview                 = false;
+    sd_preview_t preview_method = SD_PREVIEW_NONE;
+    int preview_interval        = 1;
+    std::string preview_path    = "preview.png";
+    bool taesd_preview          = false;
 };
 
 void print_params(SDParams params) {
@@ -605,7 +605,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 preview);
             return -1;
         }
-        params.preview_method = (sd_preview_policy_t)preview_method;
+        params.preview_method = (sd_preview_t)preview_method;
         return 1;
     };
 
@@ -820,6 +820,7 @@ int main(int argc, const char* argv[]) {
                                             }};
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
+    sd_set_preview_callback((sd_preview_cb_t)step_callback, params.preview_method, params.preview_interval);
 
     if (params.verbose) {
         print_params(params);
@@ -1044,7 +1045,7 @@ int main(int argc, const char* argv[]) {
             params.input_id_images_path.c_str(),
         };
 
-        results              = generate_image(sd_ctx, &img_gen_params, params.preview_method, params.preview_interval,(step_callback_t)step_callback);
+        results              = generate_image(sd_ctx, &img_gen_params);
         expected_num_results = params.batch_count;
     } else if (params.mode == VID_GEN) {
         sd_vid_gen_params_t vid_gen_params = {
@@ -1062,7 +1063,7 @@ int main(int argc, const char* argv[]) {
             params.augmentation_level,
         };
 
-        results              = generate_video(sd_ctx, &vid_gen_params, (step_callback_t)step_callback);
+        results              = generate_video(sd_ctx, &vid_gen_params);
         expected_num_results = params.video_frames;
     }
 

@@ -111,7 +111,7 @@ enum sd_log_level_t {
     SD_LOG_ERROR
 };
 
-enum sd_preview_policy_t {
+enum sd_preview_t {
     SD_PREVIEW_NONE,
     SD_PREVIEW_PROJ,
     SD_PREVIEW_TAE,
@@ -216,11 +216,11 @@ typedef struct sd_ctx_t sd_ctx_t;
 
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
 typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
+typedef void (*sd_preview_cb_t)(int, sd_image_t);
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
-SD_API sd_progress_cb_t sd_get_progress_callback();
-SD_API void* sd_get_progress_callback_data();
+SD_API void sd_set_preview_callback(sd_preview_cb_t cb, sd_preview_t mode, int interval);
 SD_API int32_t get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 
@@ -239,14 +239,12 @@ SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
-typedef void (*step_callback_t)(int, sd_image_t);
-
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
-SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params, sd_preview_policy_t preview_mode, int preview_interval, step_callback_t step_callback);
+SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
-SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, step_callback_t step_callback);  // broken
+SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params);  // broken
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
