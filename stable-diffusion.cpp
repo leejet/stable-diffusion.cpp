@@ -1115,30 +1115,6 @@ public:
         return latent;
     }
 
-    ggml_tensor*
-    get_first_stage_encoding_mode(ggml_context* work_ctx, ggml_tensor* moments) {
-        // ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample
-        ggml_tensor* latent       = ggml_new_tensor_4d(work_ctx, moments->type, moments->ne[0], moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
-        struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, latent);
-        ggml_tensor_set_f32_randn(noise, rng);
-        // noise = load_tensor_from_file(work_ctx, "noise.bin");
-        {
-            float mean = 0;
-            for (int i = 0; i < latent->ne[3]; i++) {
-                for (int j = 0; j < latent->ne[2]; j++) {
-                    for (int k = 0; k < latent->ne[1]; k++) {
-                        for (int l = 0; l < latent->ne[0]; l++) {
-                            // mode and mean are the same for gaussians
-                            mean = ggml_tensor_get_f32(moments, l, k, j, i);
-                            ggml_tensor_set_f32(latent, mean, l, k, j, i);
-                        }
-                    }
-                }
-            }
-        }
-        return latent;
-    }
-
     ggml_tensor* compute_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode) {
         int64_t W = x->ne[0];
         int64_t H = x->ne[1];
@@ -1867,7 +1843,14 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                 // for CosXL edit
                 concat_latent = sd_ctx->sd->get_first_stage_encoding(work_ctx, init_moments);
             } else {
-                concat_latent = sd_ctx->sd->get_first_stage_encoding_mode(work_ctx, init_moments);
+                concat_latent = ggml_view_3d(work_ctx,
+                                             init_moments,
+                                             init_moments->ne[0],
+                                             init_moments->ne[1],
+                                             init_moments->ne[2] / 2,
+                                             init_moments->nb[1],
+                                             init_moments->nb[2],
+                                             0);
             }
         } else {
             concat_latent = init_latent;
@@ -1887,7 +1870,6 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         }
     }
 
-    print_ggml_tensor(init_latent, true);
     size_t t1 = ggml_time_ms();
     LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
