@@ -1514,15 +1514,14 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         cond.c_concat   = concat_latent;
         uncond.c_concat = empty_latent;
         denoise_mask    = NULL;
-    } else if (sd_version_is_edit(sd_ctx->sd->version)) {
-        auto empty_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2], init_latent->ne[3]);
+    } else if (sd_version_is_unet_edit(sd_ctx->sd->version)) {
+        auto empty_latent = ggml_dup_tensor(work_ctx, init_latent);
         ggml_set_f32(empty_latent, 0);
         uncond.c_concat = empty_latent;
         if (concat_latent == NULL) {
             concat_latent = empty_latent;
         }
-        cond.c_concat   = concat_latent;
-
+        cond.c_concat   = ref_latents[0];
     }
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
@@ -1782,23 +1781,12 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
     ggml_tensor* concat_latent;
     ggml_tensor* denoise_mask = NULL;
 
-    ggml_tensor* init_latent  = NULL;
-    ggml_tensor* init_moments = NULL;
-    if (!sd_ctx->sd->use_tiny_autoencoder) {
-        init_moments = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
-        init_latent  = sd_ctx->sd->get_first_stage_encoding(work_ctx, init_moments);
-    } else {
-        init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
-    }
-
     if (sd_version_is_inpaint(sd_ctx->sd->version)) {
         int64_t mask_channels = 1;
         if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
             mask_channels = 8 * 8;  // flatten the whole mask
         }
         ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-        // Restore init_img (encode_first_stage has side effects) TODO: remove the side effects?
-        sd_image_to_tensor(init_image.data, init_img);
         sd_apply_mask(init_img, mask_img, masked_img);
         ggml_tensor* masked_latent = NULL;
         if (!sd_ctx->sd->use_tiny_autoencoder) {
@@ -1836,26 +1824,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                 }
             }
         }
-    } else if (sd_version_is_edit(sd_ctx->sd->version)) {
-        // Not actually masked, we're just highjacking the concat_latent variable since it will be used the same way
-        if (!sd_ctx->sd->use_tiny_autoencoder) {
-            if (sd_ctx->sd->is_using_edm_v_parameterization) {
-                // for CosXL edit
-                concat_latent = sd_ctx->sd->get_first_stage_encoding(work_ctx, init_moments);
-            } else {
-                concat_latent = ggml_view_3d(work_ctx,
-                                             init_moments,
-                                             init_moments->ne[0],
-                                             init_moments->ne[1],
-                                             init_moments->ne[2] / 2,
-                                             init_moments->nb[1],
-                                             init_moments->nb[2],
-                                             0);
-            }
-        } else {
-            concat_latent = init_latent;
-        }
-    } 
+    }
     
     {
         // LOG_WARN("Inpainting with a base model is not great");
@@ -1868,6 +1837,14 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                 ggml_tensor_set_f32(denoise_mask, m, ix, iy);
             }
         }
+    }
+
+    ggml_tensor* init_latent = NULL;
+    if (!sd_ctx->sd->use_tiny_autoencoder) {
+        ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
+        init_latent          = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
+    } else {
+        init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
     }
 
     size_t t1 = ggml_time_ms();
@@ -2097,11 +2074,21 @@ sd_image_t* edit(sd_ctx_t* sd_ctx,
         sd_image_to_tensor(ref_images[i].data, img);
 
         ggml_tensor* latent = NULL;
-        if (!sd_ctx->sd->use_tiny_autoencoder) {
+        if (sd_ctx->sd->use_tiny_autoencoder) {
+            latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
+        } else if (sd_ctx->sd->version == VERSION_SD1_PIX2PIX) {
+            latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
+            latent = ggml_view_3d(work_ctx,
+                                  latent,
+                                  latent->ne[0],
+                                  latent->ne[1],
+                                  latent->ne[2] / 2,
+                                  latent->nb[1],
+                                  latent->nb[2],
+                                  0);
+        } else {
             ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, img);
             latent               = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
-        } else {
-            latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
         }
         ref_latents.push_back(latent);
     }

@@ -83,12 +83,12 @@ static inline bool sd_version_is_dit(SDVersion version) {
     return false;
 }
 
-static inline bool sd_version_is_edit(SDVersion version) {
+static inline bool sd_version_is_unet_edit(SDVersion version) {
     return version == VERSION_SD1_PIX2PIX || version == VERSION_SDXL_PIX2PIX;
 }
 
 static bool sd_version_use_concat(SDVersion version) {
-    return sd_version_is_edit(version) || sd_version_is_inpaint(version);
+    return sd_version_is_unet_edit(version) || sd_version_is_inpaint(version);
 }
 
 enum PMVersion {

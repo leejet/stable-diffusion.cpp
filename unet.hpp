@@ -207,7 +207,7 @@ public:
         }
         if (sd_version_is_inpaint(version)) {
             in_channels = 9;
-        } else if (sd_version_is_edit(version)) {
+        } else if (sd_version_is_unet_edit(version)) {
             in_channels = 8;
         }
 
