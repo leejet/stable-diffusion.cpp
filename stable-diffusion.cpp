@@ -826,6 +826,7 @@ public:
                         ggml_tensor* noise,
                         SDCondition cond,
                         SDCondition uncond,
+                        SDCondition img_cond,
                         ggml_tensor* control_hint,
                         float control_strength,
                         sd_guidance_params_t guidance,
@@ -838,15 +839,13 @@ public:
                         ggml_tensor* denoise_mask             = nullptr) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
-        // TODO (Pix2Pix): separate image guidance params (right now it's reusing distilled guidance)
-
         float cfg_scale     = guidance.txt_cfg;
         float img_cfg_scale = guidance.img_cfg;
         float slg_scale     = guidance.slg.scale;
 
         float min_cfg = guidance.min_cfg;
 
-        if (img_cfg_scale != cfg_scale && !sd_version_use_concat(version)) {
+        if (img_cfg_scale != cfg_scale && !sd_version_is_inpaint_or_unet_edit(version)) {
             LOG_WARN("2-conditioning CFG is not supported with this model, disabling it for better performance...");
             img_cfg_scale = cfg_scale;
         }
@@ -873,7 +872,7 @@ public:
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, noise);
 
         bool has_unconditioned = img_cfg_scale != 1.0 && uncond.c_crossattn != NULL;
-        bool has_img_guidance  = cfg_scale != img_cfg_scale && uncond.c_crossattn != NULL;
+        bool has_img_cond      = cfg_scale != img_cfg_scale && img_cond.c_crossattn != NULL;
         bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
 
         // denoise wrapper
@@ -893,7 +892,7 @@ public:
                 LOG_WARN("SLG is incompatible with %s models", model_version_to_str[version]);
             }
         }
-        if (has_img_guidance) {
+        if (has_img_cond) {
             out_img_cond = ggml_dup_tensor(work_ctx, x);
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
@@ -981,13 +980,13 @@ public:
             }
 
             float* img_cond_data = NULL;
-            if (has_img_guidance) {
+            if (has_img_cond) {
                 diffusion_model->compute(n_threads,
                                          noised_input,
                                          timesteps,
-                                         uncond.c_crossattn,
-                                         cond.c_concat,
-                                         uncond.c_vector,
+                                         img_cond.c_crossattn,
+                                         img_cond.c_concat,
+                                         img_cond.c_vector,
                                          guidance_tensor,
                                          ref_latents,
                                          -1,
@@ -1032,14 +1031,15 @@ public:
                         int64_t i3  = i / out_cond->ne[0] * out_cond->ne[1] * out_cond->ne[2];
                         float scale = min_cfg + (cfg_scale - min_cfg) * (i3 * 1.0f / ne3);
                     } else {
-                        if (has_img_guidance) {
+                        if (has_img_cond) {
+                            // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
                             latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
                         } else {
                             // img_cfg_scale == cfg_scale
                             latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
                         }
                     }
-                } else if (has_img_guidance) {
+                } else if (has_img_cond) {
                     // img_cfg_scale == 1
                     latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
                 }
@@ -1444,7 +1444,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                                            sd_ctx->sd->diffusion_model->get_adm_in_channels());
 
     SDCondition uncond;
-    if (guidance.txt_cfg != 1.0 || sd_version_use_concat(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg) {
+    if (guidance.txt_cfg != 1.0 || \
+        (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
         bool force_zero_embeddings = false;
         if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.size() == 0 && !sd_ctx->sd->is_using_edm_v_parameterization) {
             force_zero_embeddings = true;
@@ -1523,6 +1524,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         }
         cond.c_concat   = ref_latents[0];
     }
+    SDCondition img_cond;
+    if (uncond.c_crossattn != NULL && \
+       (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
+        img_cond = SDCondition(uncond.c_crossattn, uncond.c_vector, cond.c_concat);
+    }
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
         int64_t cur_seed       = seed + b;
@@ -1549,6 +1555,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      noise,
                                                      cond,
                                                      uncond,
+                                                     img_cond,
                                                      image_hint,
                                                      control_strength,
                                                      guidance,
@@ -1971,6 +1978,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                                                  noise,
                                                  cond,
                                                  uncond,
+                                                 {},
                                                  {},
                                                  0.f,
                                                  guidance,
