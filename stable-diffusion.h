@@ -129,14 +129,15 @@ typedef struct {
 
 typedef struct sd_ctx_t sd_ctx_t;
 
-typedef struct sd_slg_params_t {
+typedef struct {
     int* layers;
     size_t layer_count;
     float layer_start;
     float layer_end;
     float scale;
 } sd_slg_params_t;
-typedef struct sd_guidance_params_t {
+
+typedef struct {
     float txt_cfg;
     float img_cfg;
     float min_cfg;
