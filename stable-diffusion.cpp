@@ -27,10 +27,12 @@
 const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
+    "Instruct-Pix2Pix",
     "SD 2.x",
     "SD 2.x Inpaint",
     "SDXL",
     "SDXL Inpaint",
+    "SDXL Instruct-Pix2Pix",
     "SVD",
     "SD3.x",
     "Flux",
@@ -824,22 +826,30 @@ public:
                         ggml_tensor* noise,
                         SDCondition cond,
                         SDCondition uncond,
+                        SDCondition img_cond,
                         ggml_tensor* control_hint,
                         float control_strength,
-                        float min_cfg,
-                        float cfg_scale,
-                        float guidance,
+                        sd_guidance_params_t guidance,
                         float eta,
                         sample_method_t method,
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
-                        std::vector<int> skip_layers          = {},
-                        float slg_scale                       = 0,
-                        float skip_layer_start                = 0.01,
-                        float skip_layer_end                  = 0.2,
-                        ggml_tensor* noise_mask               = nullptr) {
+                        ggml_tensor* denoise_mask             = nullptr) {
+        std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
+
+        float cfg_scale     = guidance.txt_cfg;
+        float img_cfg_scale = guidance.img_cfg;
+        float slg_scale     = guidance.slg.scale;
+
+        float min_cfg = guidance.min_cfg;
+
+        if (img_cfg_scale != cfg_scale && !sd_version_is_inpaint_or_unet_edit(version)) {
+            LOG_WARN("2-conditioning CFG is not supported with this model, disabling it for better performance...");
+            img_cfg_scale = cfg_scale;
+        }
+
         LOG_DEBUG("Sample");
         struct ggml_init_params params;
         size_t data_size = ggml_row_size(init_latent->type, init_latent->ne[0]);
@@ -861,13 +871,15 @@ public:
 
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, noise);
 
-        bool has_unconditioned = cfg_scale != 1.0 && uncond.c_crossattn != NULL;
+        bool has_unconditioned = img_cfg_scale != 1.0 && uncond.c_crossattn != NULL;
+        bool has_img_cond      = cfg_scale != img_cfg_scale && img_cond.c_crossattn != NULL;
         bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
 
         // denoise wrapper
-        struct ggml_tensor* out_cond   = ggml_dup_tensor(work_ctx, x);
-        struct ggml_tensor* out_uncond = NULL;
-        struct ggml_tensor* out_skip   = NULL;
+        struct ggml_tensor* out_cond     = ggml_dup_tensor(work_ctx, x);
+        struct ggml_tensor* out_uncond   = NULL;
+        struct ggml_tensor* out_skip     = NULL;
+        struct ggml_tensor* out_img_cond = NULL;
 
         if (has_unconditioned) {
             out_uncond = ggml_dup_tensor(work_ctx, x);
@@ -879,6 +891,9 @@ public:
                 has_skiplayer = false;
                 LOG_WARN("SLG is incompatible with %s models", model_version_to_str[version]);
             }
+        }
+        if (has_img_cond) {
+            out_img_cond = ggml_dup_tensor(work_ctx, x);
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -897,7 +912,7 @@ public:
             float t = denoiser->sigma_to_t(sigma);
             std::vector<float> timesteps_vec(x->ne[3], t);  // [N, ]
             auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
-            std::vector<float> guidance_vec(x->ne[3], guidance);
+            std::vector<float> guidance_vec(x->ne[3], guidance.distilled_guidance);
             auto guidance_tensor = vector_to_ggml_tensor(work_ctx, guidance_vec);
 
             copy_ggml_tensor(noised_input, input);
@@ -964,8 +979,25 @@ public:
                 negative_data = (float*)out_uncond->data;
             }
 
+            float* img_cond_data = NULL;
+            if (has_img_cond) {
+                diffusion_model->compute(n_threads,
+                                         noised_input,
+                                         timesteps,
+                                         img_cond.c_crossattn,
+                                         img_cond.c_concat,
+                                         img_cond.c_vector,
+                                         guidance_tensor,
+                                         ref_latents,
+                                         -1,
+                                         controls,
+                                         control_strength,
+                                         &out_img_cond);
+                img_cond_data = (float*)out_img_cond->data;
+            }
+
             int step_count         = sigmas.size();
-            bool is_skiplayer_step = has_skiplayer && step > (int)(skip_layer_start * step_count) && step < (int)(skip_layer_end * step_count);
+            bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
             float* skip_layer_data = NULL;
             if (is_skiplayer_step) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
@@ -999,8 +1031,17 @@ public:
                         int64_t i3  = i / out_cond->ne[0] * out_cond->ne[1] * out_cond->ne[2];
                         float scale = min_cfg + (cfg_scale - min_cfg) * (i3 * 1.0f / ne3);
                     } else {
-                        latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                        if (has_img_cond) {
+                            // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
+                            latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                        } else {
+                            // img_cfg_scale == cfg_scale
+                            latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                        }
                     }
+                } else if (has_img_cond) {
+                    // img_cfg_scale == 1
+                    latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
                 }
                 if (is_skiplayer_step) {
                     latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
@@ -1014,10 +1055,10 @@ public:
                 pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
                 // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
-            if (noise_mask != nullptr) {
+            if (denoise_mask != nullptr) {
                 for (int64_t x = 0; x < denoised->ne[0]; x++) {
                     for (int64_t y = 0; y < denoised->ne[1]; y++) {
-                        float mask = ggml_tensor_get_f32(noise_mask, x, y);
+                        float mask = ggml_tensor_get_f32(denoise_mask, x, y);
                         for (int64_t k = 0; k < denoised->ne[2]; k++) {
                             float init = ggml_tensor_get_f32(init_latent, x, y, k);
                             float den  = ggml_tensor_get_f32(denoised, x, y, k);
@@ -1240,8 +1281,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            std::string prompt,
                            std::string negative_prompt,
                            int clip_skip,
-                           float cfg_scale,
-                           float guidance,
+                           sd_guidance_params_t guidance,
                            float eta,
                            int width,
                            int height,
@@ -1255,11 +1295,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                            bool normalize_input,
                            std::string input_id_images_path,
                            std::vector<ggml_tensor*> ref_latents,
-                           std::vector<int> skip_layers = {},
-                           float slg_scale              = 0,
-                           float skip_layer_start       = 0.01,
-                           float skip_layer_end         = 0.2,
-                           ggml_tensor* masked_image    = NULL) {
+                           ggml_tensor* concat_latent = NULL,
+                           ggml_tensor* denoise_mask  = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1407,7 +1444,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                                            sd_ctx->sd->diffusion_model->get_adm_in_channels());
 
     SDCondition uncond;
-    if (cfg_scale != 1.0) {
+    if (guidance.txt_cfg != 1.0 ||
+        (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
         bool force_zero_embeddings = false;
         if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.size() == 0 && !sd_ctx->sd->is_using_edm_v_parameterization) {
             force_zero_embeddings = true;
@@ -1446,38 +1484,50 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
     int W = width / 8;
     int H = height / 8;
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
-    ggml_tensor* noise_mask = nullptr;
     if (sd_version_is_inpaint(sd_ctx->sd->version)) {
-        if (masked_image == NULL) {
-            int64_t mask_channels = 1;
-            if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
-                mask_channels = 8 * 8;  // flatten the whole mask
-            }
-            // no mask, set the whole image as masked
-            masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], mask_channels + init_latent->ne[2], 1);
-            for (int64_t x = 0; x < masked_image->ne[0]; x++) {
-                for (int64_t y = 0; y < masked_image->ne[1]; y++) {
-                    if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
-                        // TODO: this might be wrong
-                        for (int64_t c = 0; c < init_latent->ne[2]; c++) {
-                            ggml_tensor_set_f32(masked_image, 0, x, y, c);
-                        }
-                        for (int64_t c = init_latent->ne[2]; c < masked_image->ne[2]; c++) {
-                            ggml_tensor_set_f32(masked_image, 1, x, y, c);
-                        }
-                    } else {
-                        ggml_tensor_set_f32(masked_image, 1, x, y, 0);
-                        for (int64_t c = 1; c < masked_image->ne[2]; c++) {
-                            ggml_tensor_set_f32(masked_image, 0, x, y, c);
-                        }
+        int64_t mask_channels = 1;
+        if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
+            mask_channels = 8 * 8;  // flatten the whole mask
+        }
+        auto empty_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], mask_channels + init_latent->ne[2], 1);
+        // no mask, set the whole image as masked
+        for (int64_t x = 0; x < empty_latent->ne[0]; x++) {
+            for (int64_t y = 0; y < empty_latent->ne[1]; y++) {
+                if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
+                    // TODO: this might be wrong
+                    for (int64_t c = 0; c < init_latent->ne[2]; c++) {
+                        ggml_tensor_set_f32(empty_latent, 0, x, y, c);
+                    }
+                    for (int64_t c = init_latent->ne[2]; c < empty_latent->ne[2]; c++) {
+                        ggml_tensor_set_f32(empty_latent, 1, x, y, c);
+                    }
+                } else {
+                    ggml_tensor_set_f32(empty_latent, 1, x, y, 0);
+                    for (int64_t c = 1; c < empty_latent->ne[2]; c++) {
+                        ggml_tensor_set_f32(empty_latent, 0, x, y, c);
                     }
                 }
             }
         }
-        cond.c_concat   = masked_image;
-        uncond.c_concat = masked_image;
-    } else {
-        noise_mask = masked_image;
+        if (concat_latent == NULL) {
+            concat_latent = empty_latent;
+        }
+        cond.c_concat   = concat_latent;
+        uncond.c_concat = empty_latent;
+        denoise_mask    = NULL;
+    } else if (sd_version_is_unet_edit(sd_ctx->sd->version)) {
+        auto empty_latent = ggml_dup_tensor(work_ctx, init_latent);
+        ggml_set_f32(empty_latent, 0);
+        uncond.c_concat = empty_latent;
+        if (concat_latent == NULL) {
+            concat_latent = empty_latent;
+        }
+        cond.c_concat = ref_latents[0];
+    }
+    SDCondition img_cond;
+    if (uncond.c_crossattn != NULL &&
+        (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
+        img_cond = SDCondition(uncond.c_crossattn, uncond.c_vector, cond.c_concat);
     }
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
@@ -1497,15 +1547,17 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
             LOG_INFO("PHOTOMAKER: start_merge_step: %d", start_merge_step);
         }
 
+        // Disable min_cfg
+        guidance.min_cfg = guidance.txt_cfg;
+
         struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx,
                                                      x_t,
                                                      noise,
                                                      cond,
                                                      uncond,
+                                                     img_cond,
                                                      image_hint,
                                                      control_strength,
-                                                     cfg_scale,
-                                                     cfg_scale,
                                                      guidance,
                                                      eta,
                                                      sample_method,
@@ -1513,11 +1565,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
-                                                     skip_layers,
-                                                     slg_scale,
-                                                     skip_layer_start,
-                                                     skip_layer_end,
-                                                     noise_mask);
+                                                     denoise_mask);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
@@ -1595,8 +1643,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     const char* prompt_c_str,
                     const char* negative_prompt_c_str,
                     int clip_skip,
-                    float cfg_scale,
-                    float guidance,
+                    sd_guidance_params_t guidance,
                     float eta,
                     int width,
                     int height,
@@ -1608,13 +1655,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str,
-                    int* skip_layers         = NULL,
-                    size_t skip_layers_count = 0,
-                    float slg_scale          = 0,
-                    float skip_layer_start   = 0.01,
-                    float skip_layer_end     = 0.2) {
-    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
+                    const char* input_id_images_path_c_str) {
     LOG_DEBUG("txt2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1659,7 +1700,6 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                prompt_c_str,
                                                negative_prompt_c_str,
                                                clip_skip,
-                                               cfg_scale,
                                                guidance,
                                                eta,
                                                width,
@@ -1673,11 +1713,7 @@ sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                                                style_ratio,
                                                normalize_input,
                                                input_id_images_path_c_str,
-                                               {},
-                                               skip_layers_vec,
-                                               slg_scale,
-                                               skip_layer_start,
-                                               skip_layer_end);
+                                               {});
 
     size_t t1 = ggml_time_ms();
 
@@ -1692,8 +1728,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     const char* prompt_c_str,
                     const char* negative_prompt_c_str,
                     int clip_skip,
-                    float cfg_scale,
-                    float guidance,
+                    sd_guidance_params_t guidance,
                     float eta,
                     int width,
                     int height,
@@ -1706,13 +1741,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                     float control_strength,
                     float style_ratio,
                     bool normalize_input,
-                    const char* input_id_images_path_c_str,
-                    int* skip_layers         = NULL,
-                    size_t skip_layers_count = 0,
-                    float slg_scale          = 0,
-                    float skip_layer_start   = 0.01,
-                    float skip_layer_end     = 0.2) {
-    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
+                    const char* input_id_images_path_c_str) {
     LOG_DEBUG("img2img %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -1756,7 +1785,8 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
 
     sd_image_to_tensor(init_image.data, init_img);
 
-    ggml_tensor* masked_image;
+    ggml_tensor* concat_latent;
+    ggml_tensor* denoise_mask = NULL;
 
     if (sd_version_is_inpaint(sd_ctx->sd->version)) {
         int64_t mask_channels = 1;
@@ -1765,22 +1795,22 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         }
         ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
         sd_apply_mask(init_img, mask_img, masked_img);
-        ggml_tensor* masked_image_0 = NULL;
+        ggml_tensor* masked_latent = NULL;
         if (!sd_ctx->sd->use_tiny_autoencoder) {
             ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
-            masked_image_0       = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
+            masked_latent        = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
         } else {
-            masked_image_0 = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
+            masked_latent = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
         }
-        masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, masked_image_0->ne[0], masked_image_0->ne[1], mask_channels + masked_image_0->ne[2], 1);
-        for (int ix = 0; ix < masked_image_0->ne[0]; ix++) {
-            for (int iy = 0; iy < masked_image_0->ne[1]; iy++) {
+        concat_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, masked_latent->ne[0], masked_latent->ne[1], mask_channels + masked_latent->ne[2], 1);
+        for (int ix = 0; ix < masked_latent->ne[0]; ix++) {
+            for (int iy = 0; iy < masked_latent->ne[1]; iy++) {
                 int mx = ix * 8;
                 int my = iy * 8;
                 if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
-                    for (int k = 0; k < masked_image_0->ne[2]; k++) {
-                        float v = ggml_tensor_get_f32(masked_image_0, ix, iy, k);
-                        ggml_tensor_set_f32(masked_image, v, ix, iy, k);
+                    for (int k = 0; k < masked_latent->ne[2]; k++) {
+                        float v = ggml_tensor_get_f32(masked_latent, ix, iy, k);
+                        ggml_tensor_set_f32(concat_latent, v, ix, iy, k);
                     }
                     // "Encode" 8x8 mask chunks into a flattened 1x64 vector, and concatenate to masked image
                     for (int x = 0; x < 8; x++) {
@@ -1788,28 +1818,30 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                             float m = ggml_tensor_get_f32(mask_img, mx + x, my + y);
                             // TODO: check if the way the mask is flattened is correct (is it supposed to be x*8+y or x+8*y?)
                             // python code was using "b (h 8) (w 8) -> b (8 8) h w"
-                            ggml_tensor_set_f32(masked_image, m, ix, iy, masked_image_0->ne[2] + x * 8 + y);
+                            ggml_tensor_set_f32(concat_latent, m, ix, iy, masked_latent->ne[2] + x * 8 + y);
                         }
                     }
                 } else {
                     float m = ggml_tensor_get_f32(mask_img, mx, my);
-                    ggml_tensor_set_f32(masked_image, m, ix, iy, 0);
-                    for (int k = 0; k < masked_image_0->ne[2]; k++) {
-                        float v = ggml_tensor_get_f32(masked_image_0, ix, iy, k);
-                        ggml_tensor_set_f32(masked_image, v, ix, iy, k + mask_channels);
+                    ggml_tensor_set_f32(concat_latent, m, ix, iy, 0);
+                    for (int k = 0; k < masked_latent->ne[2]; k++) {
+                        float v = ggml_tensor_get_f32(masked_latent, ix, iy, k);
+                        ggml_tensor_set_f32(concat_latent, v, ix, iy, k + mask_channels);
                     }
                 }
             }
         }
-    } else {
+    }
+
+    {
         // LOG_WARN("Inpainting with a base model is not great");
-        masked_image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 1, 1);
-        for (int ix = 0; ix < masked_image->ne[0]; ix++) {
-            for (int iy = 0; iy < masked_image->ne[1]; iy++) {
+        denoise_mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 1, 1);
+        for (int ix = 0; ix < denoise_mask->ne[0]; ix++) {
+            for (int iy = 0; iy < denoise_mask->ne[1]; iy++) {
                 int mx  = ix * 8;
                 int my  = iy * 8;
                 float m = ggml_tensor_get_f32(mask_img, mx, my);
-                ggml_tensor_set_f32(masked_image, m, ix, iy);
+                ggml_tensor_set_f32(denoise_mask, m, ix, iy);
             }
         }
     }
@@ -1822,7 +1854,6 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
     }
 
-    print_ggml_tensor(init_latent, true);
     size_t t1 = ggml_time_ms();
     LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
 
@@ -1840,7 +1871,6 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                prompt_c_str,
                                                negative_prompt_c_str,
                                                clip_skip,
-                                               cfg_scale,
                                                guidance,
                                                eta,
                                                width,
@@ -1855,11 +1885,8 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
                                                normalize_input,
                                                input_id_images_path_c_str,
                                                {},
-                                               skip_layers_vec,
-                                               slg_scale,
-                                               skip_layer_start,
-                                               skip_layer_end,
-                                               masked_image);
+                                               concat_latent,
+                                               denoise_mask);
 
     size_t t2 = ggml_time_ms();
 
@@ -1876,8 +1903,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            int motion_bucket_id,
                            int fps,
                            float augmentation_level,
-                           float min_cfg,
-                           float cfg_scale,
+                           sd_guidance_params_t guidance,
                            enum sample_method_t sample_method,
                            int sample_steps,
                            float strength,
@@ -1953,10 +1979,9 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                                                  cond,
                                                  uncond,
                                                  {},
+                                                 {},
                                                  0.f,
-                                                 min_cfg,
-                                                 cfg_scale,
-                                                 0.f,
+                                                 guidance,
                                                  0.f,
                                                  sample_method,
                                                  sigmas,
@@ -2007,26 +2032,19 @@ sd_image_t* edit(sd_ctx_t* sd_ctx,
                  const char* prompt_c_str,
                  const char* negative_prompt_c_str,
                  int clip_skip,
-                 float cfg_scale,
-                 float guidance,
+                 sd_guidance_params_t guidance,
                  float eta,
                  int width,
                  int height,
-                 sample_method_t sample_method,
+                 enum sample_method_t sample_method,
                  int sample_steps,
-                 float strength,
                  int64_t seed,
                  int batch_count,
                  const sd_image_t* control_cond,
                  float control_strength,
                  float style_ratio,
                  bool normalize_input,
-                 int* skip_layers         = NULL,
-                 size_t skip_layers_count = 0,
-                 float slg_scale          = 0,
-                 float skip_layer_start   = 0.01,
-                 float skip_layer_end     = 0.2) {
-    std::vector<int> skip_layers_vec(skip_layers, skip_layers + skip_layers_count);
+                 const char* input_id_images_path_c_str) {
     LOG_DEBUG("edit %dx%d", width, height);
     if (sd_ctx == NULL) {
         return NULL;
@@ -2064,11 +2082,21 @@ sd_image_t* edit(sd_ctx_t* sd_ctx,
         sd_image_to_tensor(ref_images[i].data, img);
 
         ggml_tensor* latent = NULL;
-        if (!sd_ctx->sd->use_tiny_autoencoder) {
+        if (sd_ctx->sd->use_tiny_autoencoder) {
+            latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
+        } else if (sd_ctx->sd->version == VERSION_SD1_PIX2PIX) {
+            latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
+            latent = ggml_view_3d(work_ctx,
+                                  latent,
+                                  latent->ne[0],
+                                  latent->ne[1],
+                                  latent->ne[2] / 2,
+                                  latent->nb[1],
+                                  latent->nb[2],
+                                  0);
+        } else {
             ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, img);
             latent               = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
-        } else {
-            latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
         }
         ref_latents.push_back(latent);
     }
@@ -2086,7 +2114,6 @@ sd_image_t* edit(sd_ctx_t* sd_ctx,
                                                prompt_c_str,
                                                negative_prompt_c_str,
                                                clip_skip,
-                                               cfg_scale,
                                                guidance,
                                                eta,
                                                width,
@@ -2101,10 +2128,6 @@ sd_image_t* edit(sd_ctx_t* sd_ctx,
                                                normalize_input,
                                                "",
                                                ref_latents,
-                                               skip_layers_vec,
-                                               slg_scale,
-                                               skip_layer_start,
-                                               skip_layer_end,
                                                NULL);
 
     size_t t2 = ggml_time_ms();

@@ -129,6 +129,22 @@ typedef struct {
 
 typedef struct sd_ctx_t sd_ctx_t;
 
+typedef struct {
+    int* layers;
+    size_t layer_count;
+    float layer_start;
+    float layer_end;
+    float scale;
+} sd_slg_params_t;
+
+typedef struct {
+    float txt_cfg;
+    float img_cfg;
+    float min_cfg;
+    float distilled_guidance;
+    sd_slg_params_t slg;
+} sd_guidance_params_t;
+
 SD_API sd_ctx_t* new_sd_ctx(const char* model_path,
                             const char* clip_l_path,
                             const char* clip_g_path,
@@ -161,8 +177,7 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            const char* prompt,
                            const char* negative_prompt,
                            int clip_skip,
-                           float cfg_scale,
-                           float guidance,
+                           sd_guidance_params_t guidance,
                            float eta,
                            int width,
                            int height,
@@ -174,12 +189,7 @@ SD_API sd_image_t* txt2img(sd_ctx_t* sd_ctx,
                            float control_strength,
                            float style_strength,
                            bool normalize_input,
-                           const char* input_id_images_path,
-                           int* skip_layers,
-                           size_t skip_layers_count,
-                           float slg_scale,
-                           float skip_layer_start,
-                           float skip_layer_end);
+                           const char* input_id_images_path);
 
 SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
@@ -187,8 +197,7 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            const char* prompt,
                            const char* negative_prompt,
                            int clip_skip,
-                           float cfg_scale,
-                           float guidance,
+                           sd_guidance_params_t guidance,
                            float eta,
                            int width,
                            int height,
@@ -201,12 +210,7 @@ SD_API sd_image_t* img2img(sd_ctx_t* sd_ctx,
                            float control_strength,
                            float style_strength,
                            bool normalize_input,
-                           const char* input_id_images_path,
-                           int* skip_layers,
-                           size_t skip_layers_count,
-                           float slg_scale,
-                           float skip_layer_start,
-                           float skip_layer_end);
+                           const char* input_id_images_path);
 
 SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            sd_image_t init_image,
@@ -216,8 +220,7 @@ SD_API sd_image_t* img2vid(sd_ctx_t* sd_ctx,
                            int motion_bucket_id,
                            int fps,
                            float augmentation_level,
-                           float min_cfg,
-                           float cfg_scale,
+                           sd_guidance_params_t guidance,
                            enum sample_method_t sample_method,
                            int sample_steps,
                            float strength,
@@ -229,25 +232,19 @@ SD_API sd_image_t* edit(sd_ctx_t* sd_ctx,
                         const char* prompt,
                         const char* negative_prompt,
                         int clip_skip,
-                        float cfg_scale,
-                        float guidance,
+                        sd_guidance_params_t guidance,
                         float eta,
                         int width,
                         int height,
                         enum sample_method_t sample_method,
                         int sample_steps,
-                        float strength,
                         int64_t seed,
                         int batch_count,
                         const sd_image_t* control_cond,
                         float control_strength,
                         float style_strength,
                         bool normalize_input,
-                        int* skip_layers,
-                        size_t skip_layers_count,
-                        float slg_scale,
-                        float skip_layer_start,
-                        float skip_layer_end);
+                        const char* input_id_images_path);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
