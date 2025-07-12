@@ -1444,7 +1444,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
                                                                            sd_ctx->sd->diffusion_model->get_adm_in_channels());
 
     SDCondition uncond;
-    if (guidance.txt_cfg != 1.0 || \
+    if (guidance.txt_cfg != 1.0 ||
         (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
         bool force_zero_embeddings = false;
         if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.size() == 0 && !sd_ctx->sd->is_using_edm_v_parameterization) {
@@ -1522,11 +1522,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx,
         if (concat_latent == NULL) {
             concat_latent = empty_latent;
         }
-        cond.c_concat   = ref_latents[0];
+        cond.c_concat = ref_latents[0];
     }
     SDCondition img_cond;
-    if (uncond.c_crossattn != NULL && \
-       (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
+    if (uncond.c_crossattn != NULL &&
+        (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
         img_cond = SDCondition(uncond.c_crossattn, uncond.c_vector, cond.c_concat);
     }
     for (int b = 0; b < batch_count; b++) {
@@ -1798,7 +1798,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
         ggml_tensor* masked_latent = NULL;
         if (!sd_ctx->sd->use_tiny_autoencoder) {
             ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
-            masked_latent      = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
+            masked_latent        = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
         } else {
             masked_latent = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
         }
@@ -1832,7 +1832,7 @@ sd_image_t* img2img(sd_ctx_t* sd_ctx,
             }
         }
     }
-    
+
     {
         // LOG_WARN("Inpainting with a base model is not great");
         denoise_mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width / 8, height / 8, 1, 1);

@@ -100,7 +100,7 @@ const char* unused_tensors[] = {
     "model_ema.diffusion_model",
     "embedding_manager",
     "denoiser.sigmas",
-    "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight", // only used during training
+    "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
 };
 
 bool is_unused_tensor(std::string name) {
@@ -1169,7 +1169,6 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             n_dims = 1;
         }
 
-
         TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
         tensor_storage.reverse_ne();
 
@@ -1921,7 +1920,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
         };
         int tensor_count = 0;
         int64_t t1       = ggml_time_ms();
-        bool partial = false;
+        bool partial     = false;
         for (auto& tensor_storage : processed_tensor_storages) {
             if (tensor_storage.file_index != file_index) {
                 ++tensor_count;
@@ -2004,9 +2003,9 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                 }
             }
             size_t tensor_max = processed_tensor_storages.size();
-            int64_t t2 = ggml_time_ms();
+            int64_t t2        = ggml_time_ms();
             pretty_progress(++tensor_count, tensor_max, (t2 - t1) / 1000.0f);
-            t1 = t2;
+            t1      = t2;
             partial = tensor_count != tensor_max;
         }
 
