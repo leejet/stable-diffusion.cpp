@@ -950,7 +950,7 @@ int main(int argc, const char* argv[]) {
             guidance_params,
             input_image,
             ref_images.data(),
-            ref_images.size(),
+            (int)ref_images.size(),
             mask_image,
             params.width,
             params.height,
