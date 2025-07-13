@@ -441,10 +441,6 @@ const char* sd_get_system_info() {
     return buffer;
 }
 
-const char* sd_type_name(enum sd_type_t type) {
-    return ggml_type_name((ggml_type)type);
-}
-
 sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image) {
     sd_image_f32_t converted_image;
     converted_image.width   = image.width;
