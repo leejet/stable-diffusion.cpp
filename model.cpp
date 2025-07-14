@@ -835,6 +835,12 @@ void convert_tensor(void* src,
     } else if (src_type == GGML_TYPE_F32) {
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src, (ggml_fp16_t*)dst, n);
+        } else if (dst_type == GGML_TYPE_F64) {
+            double* ddst = (double*)dst;
+            float* fsrc  = (float*)src;
+            for (int64_t i = 0; i < n; i++) {
+                ddst[i] = (double)(fsrc[i]);
+            }
         } else {
             std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
             const float* im = imatrix.data();
@@ -843,6 +849,12 @@ void convert_tensor(void* src,
     } else if (dst_type == GGML_TYPE_F32) {
         if (src_type == GGML_TYPE_F16) {
             ggml_fp16_to_fp32_row((ggml_fp16_t*)src, (float*)dst, n);
+        } else if (src_type == GGML_TYPE_F64) {
+            float* fdst  = (float*)dst;
+            double* dsrc = (double*)src;
+            for (int64_t i = 0; i < n; i++) {
+                fdst[i] = (float)(dsrc[i]);
+            }
         } else {
             auto qtype = ggml_get_type_traits(src_type);
             if (qtype->to_float == NULL) {
@@ -850,6 +862,47 @@ void convert_tensor(void* src,
                                                 ggml_type_name(src_type)));
             }
             qtype->to_float(src, (float*)dst, n);
+        }
+    } else if (src_type == GGML_TYPE_F64) {
+        if (dst_type == GGML_TYPE_F16) {
+            // ggml_fp32_to_fp16_row((float*)src, (ggml_fp16_t*)dst, n);
+            ggml_fp16_t* fdst = (ggml_fp16_t*)dst;
+            double* dsrc      = (double*)src;
+            for (int64_t i = 0; i < n; i++) {
+                fdst[i] = ggml_fp32_to_fp16((float)dsrc[i]);
+            }
+        } else {
+            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            const float* im = imatrix.data();
+            float* fsrc     = (float*)malloc(n * sizeof(float));
+            double* dsrc    = (double*)src;
+            for (int64_t i = 0; i < n; i++) {
+                fsrc[i] = (float)(dsrc[i]);
+            }
+            ggml_quantize_chunk(dst_type, fsrc, dst, 0, nrows, n_per_row, im);
+            free(fsrc);
+        }
+    } else if (dst_type == GGML_TYPE_F64) {
+        if (src_type == GGML_TYPE_F16) {
+            // ggml_fp16_to_fp32_row((ggml_fp16_t*)src, (float*)dst, n);
+            double* ddst      = (double*)dst;
+            ggml_fp16_t* fsrc = (ggml_fp16_t*)src;
+            for (int64_t i = 0; i < n; i++) {
+                ddst[i] = (double)ggml_fp16_to_fp32(fsrc[i]);
+            }
+        } else {
+            auto qtype = ggml_get_type_traits(src_type);
+            if (qtype->to_float == NULL) {
+                throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
+                                                ggml_type_name(src_type)));
+            }
+            float* fdst = (float*)malloc(n * sizeof(float));
+            qtype->to_float(src, fdst, n);
+            double* ddst = (double*)dst;
+            for (int64_t i = 0; i < n; i++) {
+                ddst[i] = (double)(fdst[i]);
+            }
+            free(fdst);
         }
     } else {
         // src_type == GGML_TYPE_F16 => dst_type is quantized
