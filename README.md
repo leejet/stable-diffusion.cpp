@@ -282,14 +282,14 @@ usage: ./bin/sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
-  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)
+  -M, --mode [MODE]                  run mode, one of: [img_gen, convert], default: img_gen
   -t, --threads N                    number of threads to use during computation (default: -1)
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
   -m, --model [MODEL]                path to full model
   --diffusion-model                  path to the standalone diffusion model
   --clip_l                           path to the clip-l text encoder
   --clip_g                           path to the clip-g text encoder
-  --t5xxl                            path to the the t5xxl text encoder
+  --t5xxl                            path to the t5xxl text encoder
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
@@ -301,16 +301,18 @@ arguments:
   --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)
   --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)
                                      If not specified, the default is the type of the weight file
+  --tensor-type-rules [EXPRESSION]   weight type per tensor pattern (example: "^vae\.=f16,model\.=q8_0")
   --lora-model-dir [DIR]             lora model directory
   -i, --init-img [IMAGE]             path to the input image, required by img2img
   --mask [MASK]                      path to the mask image, required by img2img with mask
   --control-image [IMAGE]            path to image condition, control net
-  -r, --ref_image [PATH]             reference image for Flux Kontext models (can be used multiple times)
+  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times)
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
   --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)
-  --guidance SCALE                   guidance scale for img2img (default: 3.5)
+  --img-cfg-scale SCALE              image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)
+  --guidance SCALE                   distilled guidance scale for models with guidance input (default: 3.5)
   --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)
                                      0 means disabled, a value of 2.5 is nice for sd3.5 medium
   --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)
@@ -319,7 +321,7 @@ arguments:
   --skip-layer-end END               SLG disabling point: (default: 0.2)
                                      SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])
   --strength STRENGTH                strength for noising/unnoising (default: 0.75)
-  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%)
+  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)
   --control-strength STRENGTH        strength to apply Control Net (default: 0.9)
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
@@ -371,7 +373,7 @@ Using formats of different precisions will yield results of varying quality.
 
 
 ```
-./bin/sd --mode img2img -m ../models/sd-v1-4.ckpt -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
+./bin/sd -m ../models/sd-v1-4.ckpt -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
 ```
 
 <p align="center">
