@@ -34,6 +34,13 @@ const char* modes_str[] = {
 };
 #define SD_ALL_MODES_STR "img_gen, vid_gen, convert"
 
+const char* previews_str[] = {
+    "none",
+    "proj",
+    "tae",
+    "vae",
+};
+
 enum SDMode {
     IMG_GEN,
     VID_GEN,
@@ -109,6 +116,11 @@ struct SDParams {
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
+
+    sd_preview_t preview_method = SD_PREVIEW_NONE;
+    int preview_interval        = 1;
+    std::string preview_path    = "preview.png";
+    bool taesd_preview          = false;
 };
 
 void print_params(SDParams params) {
@@ -166,6 +178,8 @@ void print_params(SDParams params) {
     printf("    chroma_use_dit_mask:   %s\n", params.chroma_use_dit_mask ? "true" : "false");
     printf("    chroma_use_t5_mask:    %s\n", params.chroma_use_t5_mask ? "true" : "false");
     printf("    chroma_t5_mask_pad:    %d\n", params.chroma_t5_mask_pad);
+    printf("    preview_mode:      %s\n", previews_str[params.preview_method]);
+    printf("    preview_interval:  %d\n", params.preview_interval);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -182,7 +196,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --clip_g                           path to the clip-g text encoder\n");
     printf("  --t5xxl                            path to the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
-    printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
+    printf("  --taesd [TAESD]                    path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
+    printf("  --taesd-preview-only               prevents usage of taesd for decoding the final image. (for use with --preview %s)\n", previews_str[SD_PREVIEW_TAE]);
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
     printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings\n");
@@ -234,6 +249,10 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     This might crash if it is not supported by the backend.\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
+    printf("  --preview {%s,%s,%s,%s}            preview method. (default is %s(disabled))\n", previews_str[0], previews_str[1], previews_str[2], previews_str[3], previews_str[SD_PREVIEW_NONE]);
+    printf("                                     %s is the fastest\n", previews_str[SD_PREVIEW_PROJ]);
+    printf("  --preview-interval [N]             How often to save the image preview");
+    printf("  --preview-path [PATH}              path to write preview image to (default: ./preview.png)\n");
     printf("  --color                            colors the logging tags according to level\n");
     printf("  --chroma-disable-dit-mask          disable dit mask for chroma\n");
     printf("  --chroma-enable-t5-mask            enable t5 mask for chroma\n");
@@ -386,6 +405,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-o", "--output", "", &params.output_path},
         {"-p", "--prompt", "", &params.prompt},
         {"-n", "--negative-prompt", "", &params.negative_prompt},
+        {"", "--preview-path", "", &params.preview_path},
 
         {"", "--upscale-model", "", &params.esrgan_path},
     };
@@ -399,6 +419,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--clip-skip", "", &params.clip_skip},
         {"-b", "--batch-count", "", &params.batch_count},
         {"", "--chroma-t5-mask-pad", "", &params.chroma_t5_mask_pad},
+        {"", "--preview-interval", "", &params.preview_interval},
     };
 
     options.float_options = {
@@ -427,6 +448,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--color", "", true, &params.color},
         {"", "--chroma-disable-dit-mask", "", false, &params.chroma_use_dit_mask},
         {"", "--chroma-enable-t5-mask", "", true, &params.chroma_use_t5_mask},
+        {"", "--taesd-preview-only", "", false, &params.taesd_preview},
     };
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
@@ -557,6 +579,26 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_preview_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* preview = argv[index];
+        int preview_method  = -1;
+        for (int m = 0; m < N_PREVIEWS; m++) {
+            if (!strcmp(preview, previews_str[m])) {
+                preview_method = m;
+            }
+        }
+        if (preview_method == -1) {
+            fprintf(stderr, "error: preview method %s\n",
+                preview);
+            return -1;
+        }
+        params.preview_method = (sd_preview_t)preview_method;
+        return 1;
+    };
+
     options.manual_options = {
         {"-M", "--mode", "", on_mode_arg},
         {"", "--type", "", on_type_arg},
@@ -567,6 +609,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--skip-layers", "", on_skip_layers_arg},
         {"-r", "--ref-image", "", on_ref_image_arg},
         {"-h", "--help", "", on_help_arg},
+        {"", "--preview", "", on_preview_arg},
     };
 
     if (!parse_options(argc, argv, options)) {
@@ -728,10 +771,17 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     fflush(out_stream);
 }
 
+const char* preview_path;
+
+void step_callback(int step, sd_image_t image) {
+    stbi_write_png(preview_path, image.width, image.height, image.channel, image.data, 0);
+}
+
 int main(int argc, const char* argv[]) {
     SDParams params;
 
     parse_args(argc, argv, params);
+    preview_path = params.preview_path.c_str();
 
     sd_guidance_params_t guidance_params = {params.cfg_scale,
                                             params.img_cfg_scale,
@@ -746,6 +796,7 @@ int main(int argc, const char* argv[]) {
                                             }};
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
+    sd_set_preview_callback((sd_preview_cb_t)step_callback, params.preview_method, params.preview_interval);
 
     if (params.verbose) {
         print_params(params);
@@ -887,6 +938,7 @@ int main(int argc, const char* argv[]) {
         params.control_net_cpu,
         params.vae_on_cpu,
         params.diffusion_flash_attn,
+                                  params.taesd_preview,
         params.chroma_use_dit_mask,
         params.chroma_use_t5_mask,
         params.chroma_t5_mask_pad,
