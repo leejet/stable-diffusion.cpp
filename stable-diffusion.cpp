@@ -1805,17 +1805,15 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
             cond.c_concat = empty_latent;
         }
     } else if (sd_version_is_control(sd_ctx->sd->version)) {
-        LOG_DEBUG("HERE");
         auto empty_latent = ggml_dup_tensor(work_ctx, init_latent);
         ggml_set_f32(empty_latent, 0);
         uncond.c_concat = empty_latent;
-        if (sd_version_is_control(sd_ctx->sd->version) && control_latent != NULL && sd_ctx->sd->control_net == NULL) {
+        if (sd_ctx->sd->control_net == NULL) {
             cond.c_concat = control_latent;
         }
         if (cond.c_concat == NULL) {
             cond.c_concat = empty_latent;
         }
-        LOG_DEBUG("HERE");
     }
     SDCondition img_cond;
     if (uncond.c_crossattn != NULL &&
