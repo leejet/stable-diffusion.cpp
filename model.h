@@ -31,11 +31,12 @@ enum SDVersion {
     VERSION_SD3,
     VERSION_FLUX,
     VERSION_FLUX_FILL,
+    VERSION_FLEX_2,
     VERSION_COUNT,
 };
 
 static inline bool sd_version_is_flux(SDVersion version) {
-    if (version == VERSION_FLUX || version == VERSION_FLUX_FILL) {
+    if (version == VERSION_FLUX || version == VERSION_FLUX_FILL || version == VERSION_FLEX_2 ) {
         return true;
     }
     return false;
@@ -70,7 +71,7 @@ static inline bool sd_version_is_sdxl(SDVersion version) {
 }
 
 static inline bool sd_version_is_inpaint(SDVersion version) {
-    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT || version == VERSION_SDXL_INPAINT || version == VERSION_FLUX_FILL) {
+    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT || version == VERSION_SDXL_INPAINT || version == VERSION_FLUX_FILL || version == VERSION_FLEX_2) {
         return true;
     }
     return false;

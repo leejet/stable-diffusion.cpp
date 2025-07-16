@@ -95,7 +95,7 @@ public:
     std::shared_ptr<DiffusionModel> diffusion_model;
     std::shared_ptr<AutoEncoderKL> first_stage_model;
     std::shared_ptr<TinyAutoEncoder> tae_first_stage;
-    std::shared_ptr<ControlNet> control_net;
+    std::shared_ptr<ControlNet> control_net = NULL;
     std::shared_ptr<PhotoMakerIDEncoder> pmid_model;
     std::shared_ptr<LoraModel> pmid_lora;
     std::shared_ptr<PhotoMakerIDEmbed> pmid_id_embeds;
@@ -295,6 +295,11 @@ public:
         } else if (sd_version_is_flux(version)) {
             scale_factor = 0.3611;
             // TODO: shift_factor
+        }
+
+        if(version == VERSION_FLEX_2){
+            // Might need vae encode for control cond
+            vae_decode_only = false;
         }
 
         bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
@@ -933,7 +938,7 @@ public:
 
             std::vector<struct ggml_tensor*> controls;
 
-            if (control_hint != NULL) {
+            if (control_hint != NULL && control_net != NULL) {
                 control_net->compute(n_threads, noised_input, control_hint, timesteps, cond.c_crossattn, cond.c_vector);
                 controls = control_net->controls;
                 // print_ggml_tensor(controls[12]);
@@ -972,7 +977,7 @@ public:
             float* negative_data = NULL;
             if (has_unconditioned) {
                 // uncond
-                if (control_hint != NULL) {
+                if (control_hint != NULL && control_net != NULL) {
                     control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector);
                     controls = control_net->controls;
                 }
@@ -1721,6 +1726,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         int64_t mask_channels = 1;
         if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
             mask_channels = 8 * 8;  // flatten the whole mask
+        } else if (sd_ctx->sd->version == VERSION_FLEX_2) {
+            mask_channels = 1 + init_latent->ne[2];
         }
         auto empty_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], mask_channels + init_latent->ne[2], 1);
         // no mask, set the whole image as masked
@@ -1734,6 +1741,11 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                     for (int64_t c = init_latent->ne[2]; c < empty_latent->ne[2]; c++) {
                         ggml_tensor_set_f32(empty_latent, 1, x, y, c);
                     }
+                } else if (sd_ctx->sd->version == VERSION_FLEX_2) {
+                    for (int64_t c = 0; c < empty_latent->ne[2]; c++) {
+                        // 0x16,1x1,0x16
+                        ggml_tensor_set_f32(empty_latent, c == init_latent->ne[2], x, y, c);
+                    }
                 } else {
                     ggml_tensor_set_f32(empty_latent, 1, x, y, 0);
                     for (int64_t c = 1; c < empty_latent->ne[2]; c++) {
@@ -1742,12 +1754,42 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                 }
             }
         }
-        if (concat_latent == NULL) {
+        if (sd_ctx->sd->version == VERSION_FLEX_2 && image_hint != NULL && sd_ctx->sd->control_net == NULL) {
+            bool no_inpaint = concat_latent == NULL;
+            if (no_inpaint) {
+                concat_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], mask_channels + init_latent->ne[2], 1);
+            }
+            // fill in the control image here
+            struct ggml_tensor* control_latents = NULL;
+            if (!sd_ctx->sd->use_tiny_autoencoder) {
+                struct ggml_tensor* control_moments = sd_ctx->sd->encode_first_stage(work_ctx, image_hint);
+                control_latents                     = sd_ctx->sd->get_first_stage_encoding(work_ctx, control_moments);
+            } else {
+                control_latents = sd_ctx->sd->encode_first_stage(work_ctx, image_hint);
+            }
+            for (int64_t x = 0; x < concat_latent->ne[0]; x++) {
+                for (int64_t y = 0; y < concat_latent->ne[1]; y++) {
+                    if (no_inpaint) {
+                        for (int64_t c = 0; c < concat_latent->ne[2] - control_latents->ne[2]; c++) {
+                            // 0x16,1x1,0x16
+                            ggml_tensor_set_f32(concat_latent, c == init_latent->ne[2], x, y, c);
+                        }
+                    }
+                    for (int64_t c = 0; c < control_latents->ne[2]; c++) {
+                        float v = ggml_tensor_get_f32(control_latents, x, y, c);
+                        ggml_tensor_set_f32(concat_latent, v, x, y, concat_latent->ne[2] - control_latents->ne[2] + c);
+                    }
+                }
+            }
+            // Disable controlnet
+            image_hint = NULL;
+        } else if (concat_latent == NULL) {
             concat_latent = empty_latent;
         }
         cond.c_concat   = concat_latent;
         uncond.c_concat = empty_latent;
         denoise_mask    = NULL;
+    } else if (sd_version_is_unet_edit(sd_ctx->sd->version)) {
     } else if (sd_version_is_unet_edit(sd_ctx->sd->version)) {
         auto empty_latent = ggml_dup_tensor(work_ctx, init_latent);
         ggml_set_f32(empty_latent, 0);
@@ -1935,10 +1977,19 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         sd_mask_to_tensor(sd_img_gen_params->mask_image.data, mask_img);
         sd_image_to_tensor(sd_img_gen_params->init_image.data, init_img);
 
+        if (!sd_ctx->sd->use_tiny_autoencoder) {
+            ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
+            init_latent  = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
+        } else {
+            init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
+        }
+
         if (sd_version_is_inpaint(sd_ctx->sd->version)) {
             int64_t mask_channels = 1;
             if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
                 mask_channels = 8 * 8;  // flatten the whole mask
+        } else if (sd_ctx->sd->version == VERSION_FLEX_2) {
+            mask_channels = 1 + init_latent->ne[2];
             }
             ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
             sd_apply_mask(init_img, mask_img, masked_img);
@@ -1973,6 +2024,32 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                 ggml_tensor_set_f32(concat_latent, m, ix, iy, masked_latent->ne[2] + x * 8 + y);
                             }
                         }
+                } else if (sd_ctx->sd->version == VERSION_FLEX_2) {
+                    float m = ggml_tensor_get_f32(mask_img, mx, my);
+                    // masked image
+                    for (int k = 0; k < masked_latent->ne[2]; k++) {
+                        float v = ggml_tensor_get_f32(masked_latent, ix, iy, k);
+                        ggml_tensor_set_f32(concat_latent, v, ix, iy, k);
+                    }
+                    // downsampled mask
+                    ggml_tensor_set_f32(concat_latent, m, ix, iy, masked_latent->ne[2]);
+                    // control (todo: support this)
+                    for (int k = 0; k < masked_latent->ne[2]; k++) {
+                        ggml_tensor_set_f32(concat_latent, 0, ix, iy, masked_latent->ne[2] + 1 + k);
+                    }
+                } else if (sd_ctx->sd->version == VERSION_FLEX_2) {
+                    float m = ggml_tensor_get_f32(mask_img, mx, my);
+                    // masked image
+                    for (int k = 0; k < masked_latent->ne[2]; k++) {
+                        float v = ggml_tensor_get_f32(masked_latent, ix, iy, k);
+                        ggml_tensor_set_f32(concat_latent, v, ix, iy, k);
+                    }
+                    // downsampled mask
+                    ggml_tensor_set_f32(concat_latent, m, ix, iy, masked_latent->ne[2]);
+                    // control (todo: support this)
+                    for (int k = 0; k < masked_latent->ne[2]; k++) {
+                        ggml_tensor_set_f32(concat_latent, 0, ix, iy, masked_latent->ne[2] + 1 + k);
+                    }
                     } else {
                         float m = ggml_tensor_get_f32(mask_img, mx, my);
                         ggml_tensor_set_f32(concat_latent, m, ix, iy, 0);
@@ -1998,12 +2075,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
             }
         }
 
-        if (!sd_ctx->sd->use_tiny_autoencoder) {
-            ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
-            init_latent          = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
-        } else {
-            init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
-        }
     } else {
         LOG_INFO("TXT2IMG");
         if (sd_version_is_inpaint(sd_ctx->sd->version)) {
