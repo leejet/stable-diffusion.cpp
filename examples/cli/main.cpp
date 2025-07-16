@@ -905,7 +905,8 @@ int main(int argc, const char* argv[]) {
                               input_image_buffer};
 
     sd_image_t* control_image = NULL;
-    if (params.control_net_path.size() > 0 && params.control_image_path.size() > 0) {
+    if (params.control_image_path.size() > 0) {
+        printf("load image from '%s'\n", params.control_image_path.c_str());
         int c                = 0;
         control_image_buffer = stbi_load(params.control_image_path.c_str(), &params.width, &params.height, &c, 3);
         if (control_image_buffer == NULL) {
