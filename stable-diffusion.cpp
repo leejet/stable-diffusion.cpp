@@ -1734,6 +1734,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         } else {
             control_latent = sd_ctx->sd->encode_first_stage(work_ctx, image_hint);
         }
+        ggml_tensor_scale(control_latent, control_strength);
     }
 
     if (sd_version_is_inpaint(sd_ctx->sd->version)) {
