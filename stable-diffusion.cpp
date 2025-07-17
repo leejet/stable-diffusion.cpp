@@ -174,6 +174,7 @@ public:
         vae_decode_only         = sd_ctx_params->vae_decode_only;
         free_params_immediately = sd_ctx_params->free_params_immediately;
         lora_model_dir          = SAFE_STR(sd_ctx_params->lora_model_dir);
+        taesd_path              = SAFE_STR(sd_ctx_params->taesd_path);
         use_tiny_autoencoder    = taesd_path.size() > 0;
         vae_tiling              = sd_ctx_params->vae_tiling;
 
