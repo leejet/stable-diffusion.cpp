@@ -36,41 +36,6 @@
 
 #include "frontend.cpp"
 
-const char* rng_type_to_str[] = {
-    "std_default",
-    "cuda",
-};
-
-// Names of the sampler method, same order as enum sample_method in stable-diffusion.h
-const char* sample_method_str[] = {
-    "euler_a",
-    "euler",
-    "heun",
-    "dpm2",
-    "dpm++2s_a",
-    "dpm++2m",
-    "dpm++2mv2",
-    "ipndm",
-    "ipndm_v",
-    "lcm",
-};
-
-// Names of the sigma schedule overrides, same order as sample_schedule in stable-diffusion.h
-const char* schedule_str[] = {
-    "default",
-    "discrete",
-    "karras",
-    "exponential",
-    "ays",
-    "gits",
-};
-
-enum SDMode {
-    TXT2IMG,
-    IMG2IMG,
-    MODE_COUNT
-};
-
 struct SDCtxParams {
     std::string model_path;
     std::string clip_l_path;
@@ -104,8 +69,6 @@ struct SDCtxParams {
 struct SDRequestParams {
     // TODO set to true if esrgan_path is specified in args
     bool upscale = false;
-
-    SDMode mode = TXT2IMG;
 
     std::string prompt;
     std::string negative_prompt;
@@ -195,11 +158,11 @@ void print_params(SDParams params) {
     printf("    clip_skip:         %d\n", params.lastRequest.clip_skip);
     printf("    width:             %d\n", params.lastRequest.width);
     printf("    height:            %d\n", params.lastRequest.height);
-    printf("    sample_method:     %s\n", sample_method_str[params.lastRequest.sample_method]);
-    printf("    schedule:          %s\n", schedule_str[params.ctxParams.schedule]);
+    printf("    sample_method:     %s\n", sd_sample_method_name(params.lastRequest.sample_method));
+    printf("    schedule:          %s\n", sd_schedule_name(params.ctxParams.schedule));
     printf("    sample_steps:      %d\n", params.lastRequest.sample_steps);
     printf("    strength(img2img): %.2f\n", params.lastRequest.strength);
-    printf("    rng:               %s\n", rng_type_to_str[params.ctxParams.rng_type]);
+    printf("    rng:               %s\n", sd_rng_type_name(params.ctxParams.rng_type));
     printf("    seed:              %ld\n", params.lastRequest.seed);
     printf("    batch_count:       %d\n", params.lastRequest.batch_count);
     printf("    vae_tiling:        %s\n", params.ctxParams.vae_tiling ? "true" : "false");
@@ -512,17 +475,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             const char* schedule_selected = argv[i];
-            int schedule_found            = -1;
-            for (int d = 0; d < N_SCHEDULES; d++) {
-                if (!strcmp(schedule_selected, schedule_str[d])) {
-                    schedule_found = d;
-                }
-            }
-            if (schedule_found == -1) {
+            schedule_t schedule_found     = str_to_schedule(schedule_selected);
+            if (schedule_found == SCHEDULE_COUNT) {
                 invalid_arg = true;
                 break;
             }
-            params.ctxParams.schedule = (schedule_t)schedule_found;
+            params.ctxParams.schedule = schedule_found;
         } else if (arg == "-s" || arg == "--seed") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -535,13 +493,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             const char* sample_method_selected = argv[i];
-            int sample_method_found            = -1;
-            for (int m = 0; m < N_SAMPLE_METHODS; m++) {
-                if (!strcmp(sample_method_selected, sample_method_str[m])) {
-                    sample_method_found = m;
-                }
-            }
-            if (sample_method_found == -1) {
+            int sample_method_found            = str_to_sample_method(sample_method_selected);
+            if (sample_method_found == SAMPLE_METHOD_COUNT) {
                 invalid_arg = true;
                 break;
             }
@@ -689,8 +642,8 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.lastRequest.width) + "x" + std::to_string(params.lastRequest.height) + ", ";
     parameter_string += "Model: " + sd_basename(params.ctxParams.model_path) + ", ";
-    parameter_string += "RNG: " + std::string(rng_type_to_str[params.ctxParams.rng_type]) + ", ";
-    parameter_string += "Sampler: " + std::string(sample_method_str[params.lastRequest.sample_method]);
+    parameter_string += "RNG: " + std::string(sd_rng_type_name(params.ctxParams.rng_type)) + ", ";
+    parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.lastRequest.sample_method));
     if (params.ctxParams.schedule == KARRAS) {
         parameter_string += " karras";
     }
@@ -807,14 +760,9 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     try {
         std::string sample_method = payload["sample_method"];
 
-        int sample_method_found = -1;
-        for (int m = 0; m < N_SAMPLE_METHODS; m++) {
-            if (!strcmp(sample_method.c_str(), sample_method_str[m])) {
-                sample_method_found = m;
-            }
-        }
-        if (sample_method_found >= 0) {
-            params->lastRequest.sample_method = (sample_method_t)sample_method_found;
+        sample_method_t sample_method_found = str_to_sample_method(sample_method.c_str());
+        if (sample_method_found != SAMPLE_METHOD_COUNT) {
+            params->lastRequest.sample_method = sample_method_found;
         } else {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown sampling method: %s\n", sample_method.c_str());
         }
@@ -1011,16 +959,11 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     }
 
     try {
-        std::string schedule = payload["schedule"];
-        int schedule_found   = -1;
-        for (int m = 0; m < N_SCHEDULES; m++) {
-            if (!strcmp(schedule.c_str(), schedule_str[m])) {
-                schedule_found = m;
-            }
-        }
-        if (schedule_found >= 0) {
-            if (params->ctxParams.schedule != (schedule_t)schedule_found) {
-                params->ctxParams.schedule = (schedule_t)schedule_found;
+        std::string schedule      = payload["schedule"];
+        schedule_t schedule_found = str_to_schedule(schedule.c_str());
+        if (schedule_found != SCHEDULE_COUNT) {
+            if (params->ctxParams.schedule != schedule_found) {
+                params->ctxParams.schedule = schedule_found;
                 updatectx                  = true;
             }
         } else {
@@ -1189,30 +1132,31 @@ void start_server(SDParams params) {
                     std::lock_guard<std::mutex> results_lock(results_mutex);
                     task_results[task_id] = task_json;
                 }
-
-                sd_ctx = new_sd_ctx(params.ctxParams.model_path.c_str(),
-                                    params.ctxParams.clip_l_path.c_str(),
-                                    params.ctxParams.clip_g_path.c_str(),
-                                    params.ctxParams.t5xxl_path.c_str(),
-                                    params.ctxParams.diffusion_model_path.c_str(),
-                                    params.ctxParams.vae_path.c_str(),
-                                    params.ctxParams.taesd_path.c_str(),
-                                    params.ctxParams.controlnet_path.c_str(),
-                                    params.ctxParams.lora_model_dir.c_str(),
-                                    params.ctxParams.embeddings_path.c_str(),
-                                    params.ctxParams.stacked_id_embeddings_path.c_str(),
-                                    params.ctxParams.vae_decode_only,
-                                    params.ctxParams.vae_tiling,
-                                    false,
-                                    params.ctxParams.n_threads,
-                                    params.ctxParams.wtype,
-                                    params.ctxParams.rng_type,
-                                    params.ctxParams.schedule,
-                                    params.ctxParams.clip_on_cpu,
-                                    params.ctxParams.control_net_cpu,
-                                    params.ctxParams.vae_on_cpu,
-                                    params.ctxParams.diffusion_flash_attn,
-                                    true, false, 1);
+                sd_ctx_params_t sd_ctx_params = {
+                    params.ctxParams.model_path.c_str(),
+                    params.ctxParams.clip_l_path.c_str(),
+                    params.ctxParams.clip_g_path.c_str(),
+                    params.ctxParams.t5xxl_path.c_str(),
+                    params.ctxParams.diffusion_model_path.c_str(),
+                    params.ctxParams.vae_path.c_str(),
+                    params.ctxParams.taesd_path.c_str(),
+                    params.ctxParams.controlnet_path.c_str(),
+                    params.ctxParams.lora_model_dir.c_str(),
+                    params.ctxParams.embeddings_path.c_str(),
+                    params.ctxParams.stacked_id_embeddings_path.c_str(),
+                    params.ctxParams.vae_decode_only,
+                    params.ctxParams.vae_tiling,
+                    false,
+                    params.ctxParams.n_threads,
+                    params.ctxParams.wtype,
+                    params.ctxParams.rng_type,
+                    params.ctxParams.schedule,
+                    params.ctxParams.clip_on_cpu,
+                    params.ctxParams.control_net_cpu,
+                    params.ctxParams.vae_on_cpu,
+                    params.ctxParams.diffusion_flash_attn,
+                    true, false, 1};
+                sd_ctx = new_sd_ctx(&sd_ctx_params);
                 if (sd_ctx == NULL) {
                     printf("new_sd_ctx_t failed\n");
                     std::lock_guard<std::mutex> results_lock(results_mutex);
@@ -1235,29 +1179,47 @@ void start_server(SDParams params) {
 
             {
                 sd_image_t* results;
-                results = txt2img(sd_ctx,
-                                  params.lastRequest.prompt.c_str(),
-                                  params.lastRequest.negative_prompt.c_str(),
-                                  params.lastRequest.clip_skip,
-                                  params.lastRequest.cfg_scale,
-                                  params.lastRequest.guidance,
-                                  0.f,  // eta
-                                  params.lastRequest.width,
-                                  params.lastRequest.height,
-                                  params.lastRequest.sample_method,
-                                  params.lastRequest.sample_steps,
-                                  params.lastRequest.seed,
-                                  params.lastRequest.batch_count,
-                                  NULL,
-                                  1,
-                                  params.lastRequest.style_ratio,
-                                  params.lastRequest.normalize_input,
-                                  params.input_id_images_path.c_str(),
-                                  params.lastRequest.skip_layers.data(),
-                                  params.lastRequest.skip_layers.size(),
-                                  params.lastRequest.slg_scale,
-                                  params.lastRequest.skip_layer_start,
-                                  params.lastRequest.skip_layer_end);
+                sd_slg_params_t slg = {
+                    params.lastRequest.skip_layers.data(),
+                    params.lastRequest.skip_layers.size(),
+                    params.lastRequest.skip_layer_start,
+                    params.lastRequest.skip_layer_end,
+                    params.lastRequest.slg_scale};
+                sd_guidance_params_t guidance = {
+                    params.lastRequest.cfg_scale,
+                    params.lastRequest.cfg_scale,
+                    params.lastRequest.cfg_scale,
+                    params.lastRequest.guidance,
+                    slg};
+                sd_image_t input_image = {
+                    (uint32_t)params.lastRequest.width,
+                    (uint32_t)params.lastRequest.height,
+                    3,
+                    NULL};
+                sd_image_t mask_img            = input_image;
+                sd_img_gen_params_t gen_params = {
+                    params.lastRequest.prompt.c_str(),
+                    params.lastRequest.negative_prompt.c_str(),
+                    params.lastRequest.clip_skip,
+                    guidance,
+                    input_image,
+                    NULL,  // ref images
+                    0,     // ref images count
+                    mask_img,
+                    params.lastRequest.width,
+                    params.lastRequest.height,
+                    params.lastRequest.sample_method,
+                    params.lastRequest.sample_steps,
+                    0.f,  // eta
+                    1.f,  // denoise strength
+                    params.lastRequest.seed,
+                    params.lastRequest.batch_count,
+                    NULL,  // control image ptr
+                    1.f,   // control strength
+                    params.lastRequest.style_ratio,
+                    params.lastRequest.normalize_input,
+                    params.input_id_images_path.c_str()};
+                results = generate_image(sd_ctx, &gen_params);
 
                 if (results == NULL) {
                     printf("generate failed\n");
@@ -1328,7 +1290,7 @@ void start_server(SDParams params) {
         params_json["guidance"]        = params.lastRequest.guidance;
         params_json["width"]           = params.lastRequest.width;
         params_json["height"]          = params.lastRequest.height;
-        params_json["sample_method"]   = sample_method_str[params.lastRequest.sample_method];
+        params_json["sample_method"]   = sd_sample_method_name(params.lastRequest.sample_method);
         params_json["sample_steps"]    = params.lastRequest.sample_steps;
         params_json["seed"]            = params.lastRequest.seed;
         params_json["batch_count"]     = params.lastRequest.batch_count;
@@ -1352,7 +1314,7 @@ void start_server(SDParams params) {
         context_params["n_threads"]            = params.ctxParams.n_threads;
         context_params["wtype"]                = params.ctxParams.wtype;
         context_params["rng_type"]             = params.ctxParams.rng_type;
-        context_params["schedule"]             = schedule_str[params.ctxParams.schedule];
+        context_params["schedule"]             = sd_schedule_name(params.ctxParams.schedule);
         context_params["clip_on_cpu"]          = params.ctxParams.clip_on_cpu;
         context_params["control_net_cpu"]      = params.ctxParams.control_net_cpu;
         context_params["vae_on_cpu"]           = params.ctxParams.vae_on_cpu;
@@ -1390,8 +1352,8 @@ void start_server(SDParams params) {
     svr->Get("/sample_methods", [](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         json response;
-        for (int m = 0; m < N_SAMPLE_METHODS; m++) {
-            response.push_back(sample_method_str[m]);
+        for (int m = 0; m < SAMPLE_METHOD_COUNT; m++) {
+            response.push_back(sd_sample_method_name((sample_method_t)m));
         }
         res.set_content(response.dump(), "application/json");
     });
@@ -1399,8 +1361,8 @@ void start_server(SDParams params) {
     svr->Get("/schedules", [](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         json response;
-        for (int s = 0; s < N_SCHEDULES; s++) {
-            response.push_back(schedule_str[s]);
+        for (int s = 0; s < SCHEDULE_COUNT; s++) {
+            response.push_back(sd_schedule_name((schedule_t)s));
         }
         res.set_content(response.dump(), "application/json");
     });
