@@ -661,6 +661,7 @@ protected:
         if (version == OPEN_CLIP_VIT_BIGG_14) {
             enum ggml_type wtype      = GGML_TYPE_F32;  // tensor_types.find(prefix + "text_projection") != tensor_types.end() ? tensor_types[prefix + "text_projection"] : GGML_TYPE_F32;
             params["text_projection"] = ggml_new_tensor_2d(ctx, wtype, projection_dim, hidden_size);
+            ggml_set_name(params["text_projection"], (prefix + "text_projection").c_str());
         }
     }
 
@@ -812,6 +813,7 @@ protected:
         } else {
             params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
         }
+        ggml_set_name(params["weight"], (prefix + "weight").c_str());
     }
 
 public:

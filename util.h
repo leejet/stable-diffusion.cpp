@@ -10,6 +10,8 @@
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
+typedef bool (*ggml_graph_eval_callback)(struct ggml_tensor * t, bool ask, void * user_data);
+
 bool ends_with(const std::string& str, const std::string& ending);
 bool starts_with(const std::string& str, const std::string& start);
 bool contains(const std::string& str, const std::string& substr);
@@ -56,6 +58,8 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
 std::string trim(const std::string& s);
 
 std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::string& text);
+ggml_graph_eval_callback get_callback_eval();
+void* get_callback_eval_user_data();
 
 #define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
