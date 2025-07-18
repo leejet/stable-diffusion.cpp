@@ -45,7 +45,7 @@ struct SDCtxParams {
     std::string vae_path;
     std::string taesd_path;
 
-    std::string controlnet_path;
+    std::string control_net_path;
     std::string lora_model_dir;
     std::string embeddings_path;
     std::string stacked_id_embeddings_path;
@@ -59,9 +59,9 @@ struct SDCtxParams {
     rng_type_t rng_type = CUDA_RNG;
     schedule_t schedule = DEFAULT;
 
-    bool control_net_cpu = false;
-    bool clip_on_cpu     = false;
-    bool vae_on_cpu      = false;
+    bool keep_control_net_on_cpu = false;
+    bool keep_clip_on_cpu     = false;
+    bool keep_vae_on_cpu      = false;
 
     bool diffusion_flash_attn = false;
 };
@@ -135,7 +135,7 @@ void print_params(SDParams params) {
     printf("    diffusion_model_path:   %s\n", params.ctxParams.diffusion_model_path.c_str());
     printf("    vae_path:          %s\n", params.ctxParams.vae_path.c_str());
     printf("    taesd_path:        %s\n", params.ctxParams.taesd_path.c_str());
-    printf("    controlnet_path:   %s\n", params.ctxParams.controlnet_path.c_str());
+    printf("    control_net_path:   %s\n", params.ctxParams.control_net_path.c_str());
     printf("    embeddings_path:   %s\n", params.ctxParams.embeddings_path.c_str());
     printf("    stacked_id_embeddings_path:   %s\n", params.ctxParams.stacked_id_embeddings_path.c_str());
     printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
@@ -144,9 +144,9 @@ void print_params(SDParams params) {
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
-    printf("    clip on cpu:       %s\n", params.ctxParams.clip_on_cpu ? "true" : "false");
-    printf("    controlnet cpu:    %s\n", params.ctxParams.control_net_cpu ? "true" : "false");
-    printf("    vae decoder on cpu:%s\n", params.ctxParams.vae_on_cpu ? "true" : "false");
+    printf("    clip on cpu:       %s\n", params.ctxParams.keep_clip_on_cpu ? "true" : "false");
+    printf("    control_net cpu:    %s\n", params.ctxParams.keep_control_net_on_cpu ? "true" : "false");
+    printf("    vae decoder on cpu:%s\n", params.ctxParams.keep_vae_on_cpu ? "true" : "false");
     printf("    diffusion flash attention:%s\n", params.ctxParams.diffusion_flash_attn ? "true" : "false");
     printf("    strength(control): %.2f\n", params.lastRequest.control_strength);
     printf("    prompt:            %s\n", params.lastRequest.prompt.c_str());
@@ -224,7 +224,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
     printf("                                     Might lower quality, since it implies converting k and v to f16.\n");
     printf("                                     This might crash if it is not supported by the backend.\n");
-    printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
+    printf("  --control-net-cpu                  keep control_net in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            Colors the logging tags according to level\n");
     printf("  -v, --verbose                      print extra info\n");
@@ -291,7 +291,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.ctxParams.controlnet_path = argv[i];
+            params.ctxParams.control_net_path = argv[i];
         } else if (arg == "--upscale-model") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -440,13 +440,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         } else if (arg == "--vae-tiling") {
             params.ctxParams.vae_tiling = true;
         } else if (arg == "--control-net-cpu") {
-            params.ctxParams.control_net_cpu = true;
+            params.ctxParams.keep_control_net_on_cpu = true;
         } else if (arg == "--normalize-input") {
             params.lastRequest.normalize_input = true;
         } else if (arg == "--clip-on-cpu") {
-            params.ctxParams.clip_on_cpu = true;  // will slow down get_learned_condiotion but necessary for low MEM GPUs
+            params.ctxParams.keep_clip_on_cpu = true;  // will slow down get_learned_condiotion but necessary for low MEM GPUs
         } else if (arg == "--vae-on-cpu") {
-            params.ctxParams.vae_on_cpu = true;  // will slow down latent decoding but necessary for low MEM GPUs
+            params.ctxParams.keep_vae_on_cpu = true;  // will slow down latent decoding but necessary for low MEM GPUs
         } else if (arg == "--diffusion-fa") {
             params.ctxParams.diffusion_flash_attn = true;  // can reduce MEM significantly
         } else if (arg == "-b" || arg == "--batch-count") {
@@ -819,17 +819,17 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     }
 
     try {
-        bool vae_cpu = payload["vae_on_cpu"];
-        if (params->ctxParams.vae_on_cpu != vae_cpu) {
-            params->ctxParams.vae_on_cpu = vae_cpu;
+        bool vae_cpu = payload["keep_vae_on_cpu"];
+        if (params->ctxParams.keep_vae_on_cpu != vae_cpu) {
+            params->ctxParams.keep_vae_on_cpu = vae_cpu;
             updatectx                    = true;
         }
     } catch (...) {
     }
     try {
-        bool clip_cpu = payload["clip_on_cpu"];
-        if (params->ctxParams.clip_on_cpu != clip_cpu) {
-            params->ctxParams.clip_on_cpu = clip_cpu;
+        bool clip_cpu = payload["keep_clip_on_cpu"];
+        if (params->ctxParams.keep_clip_on_cpu != clip_cpu) {
+            params->ctxParams.keep_clip_on_cpu = clip_cpu;
             updatectx                     = true;
         }
     } catch (...) {
@@ -1140,7 +1140,7 @@ void start_server(SDParams params) {
                     params.ctxParams.diffusion_model_path.c_str(),
                     params.ctxParams.vae_path.c_str(),
                     params.ctxParams.taesd_path.c_str(),
-                    params.ctxParams.controlnet_path.c_str(),
+                    params.ctxParams.control_net_path.c_str(),
                     params.ctxParams.lora_model_dir.c_str(),
                     params.ctxParams.embeddings_path.c_str(),
                     params.ctxParams.stacked_id_embeddings_path.c_str(),
@@ -1151,9 +1151,9 @@ void start_server(SDParams params) {
                     params.ctxParams.wtype,
                     params.ctxParams.rng_type,
                     params.ctxParams.schedule,
-                    params.ctxParams.clip_on_cpu,
-                    params.ctxParams.control_net_cpu,
-                    params.ctxParams.vae_on_cpu,
+                    params.ctxParams.keep_clip_on_cpu,
+                    params.ctxParams.keep_control_net_on_cpu,
+                    params.ctxParams.keep_vae_on_cpu,
                     params.ctxParams.diffusion_flash_attn,
                     true, false, 1};
                 sd_ctx = new_sd_ctx(&sd_ctx_params);
@@ -1305,7 +1305,7 @@ void start_server(SDParams params) {
         // context_params["t5xxl_path"] = params.ctxParams.t5xxl_path;
         // context_params["diffusion_model_path"] = params.ctxParams.diffusion_model_path;
         // context_params["vae_path"] = params.ctxParams.vae_path;
-        // context_params["controlnet_path"] = params.ctxParams.controlnet_path;
+        // context_params["control_net_path"] = params.ctxParams.control_net_path;
         context_params["lora_model_dir"] = params.ctxParams.lora_model_dir;
         // context_params["embeddings_path"] = params.ctxParams.embeddings_path;
         // context_params["stacked_id_embeddings_path"] = params.ctxParams.stacked_id_embeddings_path;
@@ -1315,9 +1315,9 @@ void start_server(SDParams params) {
         context_params["wtype"]                = params.ctxParams.wtype;
         context_params["rng_type"]             = params.ctxParams.rng_type;
         context_params["schedule"]             = sd_schedule_name(params.ctxParams.schedule);
-        context_params["clip_on_cpu"]          = params.ctxParams.clip_on_cpu;
-        context_params["control_net_cpu"]      = params.ctxParams.control_net_cpu;
-        context_params["vae_on_cpu"]           = params.ctxParams.vae_on_cpu;
+        context_params["keep_clip_on_cpu"]          = params.ctxParams.keep_clip_on_cpu;
+        context_params["keep_control_net_on_cpu"]      = params.ctxParams.keep_control_net_on_cpu;
+        context_params["keep_vae_on_cpu"]           = params.ctxParams.keep_vae_on_cpu;
         context_params["diffusion_flash_attn"] = params.ctxParams.diffusion_flash_attn;
 
         // response["taesd_preview"]       = params.taesd_preview;
