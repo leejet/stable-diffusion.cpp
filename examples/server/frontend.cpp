@@ -288,12 +288,12 @@ R"xxx(
                 </div>
                 <div class="line">
                     <div class="input-group">
-                        <label for="vae_on_cpu">VAE on CPU:</label>
-                        <input type="checkbox" id="vae_on_cpu" class="param-input">
+                        <label for="keep_vae_on_cpu">VAE on CPU:</label>
+                        <input type="checkbox" id="keep_vae_on_cpu" class="param-input">
                     </div>
                     <div class="input-group">
-                        <label for="clip_on_cpu">Clip on CPU:</label>
-                        <input type="checkbox" id="clip_on_cpu" class="param-input">
+                        <label for="keep_clip_on_cpu">Clip on CPU:</label>
+                        <input type="checkbox" id="keep_clip_on_cpu" class="param-input">
                     </div>
                 </div>
                 <div class="line">
@@ -581,8 +581,8 @@ R"xxx(
             document.getElementById('seed').value = data.generation_params.seed;
             document.getElementById('batch_count').value = data.generation_params.batch_count;
             document.getElementById('schedule_method').value = data.context_params.schedule;
-            document.getElementById('vae_on_cpu').checked = data.context_params.vae_on_cpu;
-            document.getElementById('clip_on_cpu').checked = data.context_params.clip_on_cpu;
+            document.getElementById('keep_vae_on_cpu').checked = data.context_params.keep_vae_on_cpu;
+            document.getElementById('keep_clip_on_cpu').checked = data.context_params.keep_clip_on_cpu;
             document.getElementById('vae_tiling').checked = data.context_params.vae_tiling;
             document.getElementById('tae_decode').checked = !(data.taesd_preview);
             if (data.generation_params.preview_method) {
@@ -620,8 +620,8 @@ R"xxx(
             const t5xxl = document.getElementById('t5xxl').value;
             const vae = document.getElementById('vae').value;
             const tae = document.getElementById('tae').value;
-            const vae_on_cpu = document.getElementById('vae_on_cpu').checked;
-            const clip_on_cpu = document.getElementById('clip_on_cpu').checked;
+            const keep_vae_on_cpu = document.getElementById('keep_vae_on_cpu').checked;
+            const keep_clip_on_cpu = document.getElementById('keep_clip_on_cpu').checked;
             const vae_tiling = document.getElementById('vae_tiling').checked;
             const tae_decode = document.getElementById('tae_decode').checked;
             const preview_mode = document.getElementById('preview_mode').value;
@@ -648,8 +648,8 @@ R"xxx(
                 ...(t5xxl && { t5xxl: t5xxl }),
                 ...(vae && { vae: vae }),
                 ...(tae && { tae: tae }),
-                ... { vae_on_cpu: vae_on_cpu },
-                ... { clip_on_cpu: clip_on_cpu },
+                ... { keep_vae_on_cpu: keep_vae_on_cpu },
+                ... { keep_clip_on_cpu: keep_clip_on_cpu },
                 ... { vae_tiling: vae_tiling },
                 ... { tae_decode: tae_decode },
                 ...(preview_mode && { preview_mode: preview_mode }),
