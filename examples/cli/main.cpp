@@ -764,17 +764,25 @@ int main(int argc, const char* argv[]) {
 
     parse_args(argc, argv, params);
 
-    sd_guidance_params_t guidance_params = {params.cfg_scale,
-                                            params.img_cfg_scale,
-                                            params.min_cfg,
-                                            params.guidance,
-                                            {
-                                                params.skip_layers.data(),
-                                                params.skip_layers.size(),
-                                                params.skip_layer_start,
-                                                params.skip_layer_end,
-                                                params.slg_scale,
-                                            }};
+    sd_guidance_params_t guidance_params = {
+        params.cfg_scale,
+        params.img_cfg_scale,
+        params.min_cfg,
+        params.guidance,
+        {
+            params.skip_layers.data(),
+            params.skip_layers.size(),
+            params.skip_layer_start,
+            params.skip_layer_end,
+            params.slg_scale,
+        },
+        {
+            params.apg_eta,
+            params.apg_momentum,
+            params.apg_norm_threshold,
+            params.apg_norm_smoothing,
+        },
+    };
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
 
@@ -998,7 +1006,7 @@ int main(int argc, const char* argv[]) {
             params.input_id_images_path.c_str(),
         };
 
-        results              = generate_image(sd_ctx, &img_gen_params, {params.apg_eta, params.apg_momentum, params.apg_norm_threshold});
+        results              = generate_image(sd_ctx, &img_gen_params);
         expected_num_results = params.batch_count;
     } else if (params.mode == VID_GEN) {
         sd_vid_gen_params_t vid_gen_params = {

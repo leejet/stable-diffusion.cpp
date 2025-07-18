@@ -848,7 +848,6 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
-                        sd_apg_params_t apg_params            = {1, 0, 0, 0},
                         ggml_tensor* denoise_mask             = nullptr) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
@@ -913,7 +912,7 @@ public:
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
         std::vector<float> apg_momentum_buffer;
-        if (apg_params.momentum != 0)
+        if (guidance.apg.momentum != 0)
             apg_momentum_buffer.resize((size_t)ggml_nelements(denoised));
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
@@ -1096,14 +1095,14 @@ public:
                         // classic CFG (img_cfg_scale == cfg_scale != 1)
                         delta = positive_data[i] - negative_data[i];
                     }
-                    if (apg_params.momentum != 0) {
-                        delta += apg_params.momentum * apg_momentum_buffer[i];
+                    if (guidance.apg.momentum != 0) {
+                        delta += guidance.apg.momentum * apg_momentum_buffer[i];
                         apg_momentum_buffer[i] = delta;
                     }
-                    if (apg_params.norm_treshold > 0 || log_cfg_norm) {
+                    if (guidance.apg.norm_treshold > 0 || log_cfg_norm) {
                         diff_norm += delta * delta;
                     }
-                    if (apg_params.eta != 1.0f) {
+                    if (guidance.apg.eta != 1.0f) {
                         cond_norm_sq += positive_data[i] * positive_data[i];
                         dot += positive_data[i] * delta;
                     }
@@ -1112,17 +1111,17 @@ public:
                 if (log_cfg_norm) {
                     LOG_INFO("CFG Delta norm: %.2f", sqrtf(diff_norm));
                 }
-                if (apg_params.norm_treshold > 0) {
+                if (guidance.apg.norm_treshold > 0) {
                     diff_norm = sqrtf(diff_norm);
-                    if (apg_params.norm_treshold_smoothing <= 0) {
-                        apg_scale_factor = std::min(1.0f, apg_params.norm_treshold / diff_norm);
+                    if (guidance.apg.norm_treshold_smoothing <= 0) {
+                        apg_scale_factor = std::min(1.0f, guidance.apg.norm_treshold / diff_norm);
                     } else {
                         // Experimental: smooth saturate
-                        float x          = apg_params.norm_treshold / diff_norm;
-                        apg_scale_factor = x / std::pow(1 + std::pow(x, 1.0 / apg_params.norm_treshold_smoothing), apg_params.norm_treshold_smoothing);
+                        float x          = guidance.apg.norm_treshold / diff_norm;
+                        apg_scale_factor = x / std::pow(1 + std::pow(x, 1.0 / guidance.apg.norm_treshold_smoothing), guidance.apg.norm_treshold_smoothing);
                     }
                 }
-                if (apg_params.eta != 1.0f) {
+                if (guidance.apg.eta != 1.0f) {
                     dot *= apg_scale_factor;
                     // pre-normalize (avoids one square root and ne_elements extra divs)
                     dot /= cond_norm_sq;
@@ -1130,12 +1129,12 @@ public:
 
                 for (int i = 0; i < ne_elements; i++) {
                     deltas[i] *= apg_scale_factor;
-                    if (apg_params.eta != 1.0f) {
+                    if (guidance.apg.eta != 1.0f) {
                         float apg_parallel   = dot * positive_data[i];
                         float apg_orthogonal = deltas[i] - apg_parallel;
 
                         // tweak deltas
-                        deltas[i] = apg_orthogonal + apg_params.eta * apg_parallel;
+                        deltas[i] = apg_orthogonal + guidance.apg.eta * apg_parallel;
                     }
                 }
             }
@@ -1636,7 +1635,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     std::string input_id_images_path,
                                     std::vector<ggml_tensor*> ref_latents,
                                     ggml_tensor* concat_latent = NULL,
-                                    sd_apg_params_t apg_params = {},
                                     ggml_tensor* denoise_mask  = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
@@ -1906,7 +1904,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
-                                                     apg_params,
                                                      denoise_mask);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
@@ -1981,7 +1978,7 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
     return init_latent;
 }
 
-sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params, sd_apg_params_t apg_params) {
+sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     int width  = sd_img_gen_params->width;
     int height = sd_img_gen_params->height;
     LOG_DEBUG("generate_image %dx%d", width, height);
@@ -2181,7 +2178,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->input_id_images_path,
                                                         ref_latents,
                                                         concat_latent,
-                                                        apg_params,
                                                         denoise_mask);
 
     size_t t2 = ggml_time_ms();
