@@ -211,9 +211,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --img-cfg-scale SCALE              image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)\n");
     printf("  --guidance SCALE                   distilled guidance scale for models with guidance input (default: 3.5)\n");
     printf("  --apg-eta VALUE                    parallel projected guidance scale for APG (default: 1.0, recommended: between 0 and 1)\n");
-    printf("  --apg-momentum VALUE               CFG update direction momentum for APG (default: 0, recommended: around -0.5)\n");
-    printf("  --apg-nt, --apg-rescale VALUE      CFG update direction norm threshold for APG (default: 0 = disabled, recommended: 4-15)\n");
-    printf("  --apg-nt-smoothing VALUE           EXPERIMENTAL! Norm threshold smoothing for APG (default: 0 = disabled)\n");
+    printf("  --apg-momentum VALUE               Momentum for guidance adjustments with APG (default: 0, recommended: around -0.5 (negative))\n");
+    printf("  --apg-nt VALUE                     APG norm threshold: Upper bound allowed for the amplitude (L2 norm) of guidance updates (default: 0 = disabled, recommended: 4-15)\n");
+    printf("  --apg-nt-smoothing VALUE           EXPERIMENTAL! Norm threshold smoothing for APG, smoothly decrease the amplitude of the guidance update if it gets too close to the norm threshold (default: 0 = disabled)\n");
     printf("                                     (replaces saturation with a smooth approximation)\n");
     printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
     printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
@@ -426,7 +426,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--slg-scale", "", &params.slg_scale},
         {"", "--skip-layer-start", "", &params.skip_layer_start},
         {"", "--skip-layer-end", "", &params.skip_layer_end},
-
+        {"", "--apg-eta", "", &params.apg_eta},
+        {"", "--apg-momentum", "", &params.apg_momentum},
+        {"", "--apg-nt", "", &params.apg_norm_threshold},
+        {"", "--apg-nt-smoothing", "", &params.apg_norm_smoothing},
     };
 
     options.bool_options = {
@@ -439,6 +442,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--canny", "", true, &params.canny_preprocess},
         {"-v", "--verbos", "", true, &params.verbose},
         {"", "--color", "", true, &params.color},
+        {"", "--slg-uncond", "", true, &params.slg_uncond},
         {"", "--chroma-disable-dit-mask", "", false, &params.chroma_use_dit_mask},
         {"", "--chroma-enable-t5-mask", "", true, &params.chroma_use_t5_mask},
     };
