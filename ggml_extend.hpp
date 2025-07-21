@@ -841,9 +841,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
     float scale = (1.0f / sqrt((float)d_head));
 
     int kv_pad = 0;
-    if (flash_attn) {
-        LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
-    }
+    //if (flash_attn) {
+    //    LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
+    //}
     //  is there anything oddly shaped?? ping Green-Sky if you can trip this assert
     GGML_ASSERT(((L_k % 256 == 0) && L_q == L_k) || !(L_k % 256 == 0));
 
@@ -880,9 +880,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
     ggml_tensor* kqv = nullptr;
     // GGML_ASSERT((flash_attn && can_use_flash_attn) || !flash_attn);
     if (can_use_flash_attn && flash_attn) {
-        LOG_DEBUG(" uses flash attention");
+        //LOG_DEBUG(" uses flash attention");
         if (kv_pad != 0) {
-            LOG_DEBUG(" padding k and v dim1 by %d", kv_pad);
+            //LOG_DEBUG(" padding k and v dim1 by %d", kv_pad);
             k = ggml_pad(ctx, k, 0, kv_pad, 0, 0);
         }
         k = ggml_cast(ctx, k, GGML_TYPE_F16);
