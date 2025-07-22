@@ -1,0 +1,19 @@
+ARG SYCL_VERSION=2025.1.0-0
+
+FROM intel/oneapi-basekit:${SYCL_VERSION}-devel-ubuntu24.04 AS build
+
+RUN apt-get update && apt-get install -y cmake
+
+WORKDIR /sd.cpp
+
+COPY . .
+
+RUN mkdir build && cd build && \
+    cmake .. -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DSD_SYCL=ON -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build . --config Release -j$(nproc)
+
+FROM intel/oneapi-basekit:${SYCL_VERSION}-devel-ubuntu24.04 AS runtime
+
+COPY --from=build /sd.cpp/build/bin/sd /sd
+
+ENTRYPOINT [ "/sd" ]
