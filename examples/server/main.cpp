@@ -1628,6 +1628,11 @@ void start_server(SDParams params) {
         }
     });
 
+    // redirect base url to index
+    svr->Get("/", [](const httplib::Request& req, httplib::Response& res) {
+        res.set_redirect("/index.html");
+    });
+
     // bind HTTP listen port, run the HTTP server in a thread
     if (!svr->bind_to_port(params.host, params.port)) {
         // TODO: Error message
