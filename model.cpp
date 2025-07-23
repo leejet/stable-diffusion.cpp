@@ -815,10 +815,25 @@ void f8_e4m3_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
         dst[i] = f8_e4m3_to_f16(src[i]);
     }
 }
+
 void f8_e5m2_to_f16_vec(uint8_t* src, uint16_t* dst, int64_t n) {
     // support inplace op
     for (int64_t i = n - 1; i >= 0; i--) {
         dst[i] = f8_e5m2_to_f16(src[i]);
+    }
+}
+
+void f64_to_f32_vec(double* src, float* dst, int64_t n) {
+    // support inplace op
+    for (int64_t i = 0; i < n; i++) {
+        dst[i] = (float)src[i];
+    }
+}
+
+void i64_to_i32_vec(int64_t* src, int32_t* dst, int64_t n) {
+    // support inplace op
+    for (int64_t i = 0; i < n; i++) {
+        dst[i] = (int32_t)src[i];
     }
 }
 
@@ -1057,13 +1072,13 @@ ggml_type str_to_ggml_type(const std::string& dtype) {
     } else if (dtype == "F32") {
         ttype = GGML_TYPE_F32;
     } else if (dtype == "F64") {
-        ttype = GGML_TYPE_F64;
+        ttype = GGML_TYPE_F32;
     } else if (dtype == "F8_E4M3") {
         ttype = GGML_TYPE_F16;
     } else if (dtype == "F8_E5M2") {
         ttype = GGML_TYPE_F16;
     } else if (dtype == "I64") {
-        ttype = GGML_TYPE_I64;
+        ttype = GGML_TYPE_I32;
     }
     return ttype;
 }
@@ -1185,6 +1200,14 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             tensor_storage.is_f8_e5m2 = true;
             // f8 -> f16
             GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size * 2);
+        } else if (dtype == "F64") {
+            tensor_storage.is_f64 = true;
+            // f64 -> f32
+            GGML_ASSERT(tensor_storage.nbytes() * 2 == tensor_data_size);
+        } else if (dtype == "I64") {
+            tensor_storage.is_i64 = true;
+            // i64 -> i32
+            GGML_ASSERT(tensor_storage.nbytes() * 2 == tensor_data_size);
         } else {
             GGML_ASSERT(tensor_storage.nbytes() == tensor_data_size);
         }
@@ -1945,7 +1968,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                 // for the CPU and Metal backend, we can copy directly into the tensor
                 if (tensor_storage.type == dst_tensor->type) {
                     GGML_ASSERT(ggml_nbytes(dst_tensor) == tensor_storage.nbytes());
-                    read_data(tensor_storage, (char*)dst_tensor->data, nbytes_to_read);
+                    if (tensor_storage.is_f64 || tensor_storage.is_i64) {
+                        read_buffer.resize(tensor_storage.nbytes_to_read());
+                        read_data(tensor_storage, (char*)read_buffer.data(), nbytes_to_read);
+                    } else {
+                        read_data(tensor_storage, (char*)dst_tensor->data, nbytes_to_read);
+                    }
 
                     if (tensor_storage.is_bf16) {
                         // inplace op
@@ -1956,9 +1984,13 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     } else if (tensor_storage.is_f8_e5m2) {
                         // inplace op
                         f8_e5m2_to_f16_vec((uint8_t*)dst_tensor->data, (uint16_t*)dst_tensor->data, tensor_storage.nelements());
+                    } else if (tensor_storage.is_f64) {
+                        f64_to_f32_vec((double*)read_buffer.data(), (float*)dst_tensor->data, tensor_storage.nelements());
+                    } else if (tensor_storage.is_i64) {
+                        i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)dst_tensor->data, tensor_storage.nelements());
                     }
                 } else {
-                    read_buffer.resize(tensor_storage.nbytes());
+                    read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
                     read_data(tensor_storage, (char*)read_buffer.data(), nbytes_to_read);
 
                     if (tensor_storage.is_bf16) {
@@ -1970,13 +2002,19 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     } else if (tensor_storage.is_f8_e5m2) {
                         // inplace op
                         f8_e5m2_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
+                    } else if (tensor_storage.is_f64) {
+                        // inplace op
+                        f64_to_f32_vec((double*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
+                    } else if (tensor_storage.is_i64) {
+                        // inplace op
+                        i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)read_buffer.data(), tensor_storage.nelements());
                     }
 
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
                                    dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
                 }
             } else {
-                read_buffer.resize(tensor_storage.nbytes());
+                read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
                 read_data(tensor_storage, (char*)read_buffer.data(), nbytes_to_read);
 
                 if (tensor_storage.is_bf16) {
@@ -1988,6 +2026,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                 } else if (tensor_storage.is_f8_e5m2) {
                     // inplace op
                     f8_e5m2_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
+                } else if (tensor_storage.is_f64) {
+                    // inplace op
+                    f64_to_f32_vec((double*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
+                } else if (tensor_storage.is_i64) {
+                    // inplace op
+                    i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)read_buffer.data(), tensor_storage.nelements());
                 }
 
                 if (tensor_storage.type == dst_tensor->type) {
