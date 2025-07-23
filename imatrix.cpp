@@ -134,11 +134,16 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor* t, bool ask, void* us
         for (int row = 0; row < (int)src1->ne[1]; ++row) {
             const float* x = data + row * src1->ne[0];
             for (int j = 0; j < (int)src1->ne[0]; ++j) {
-                e.values[j] += x[j] * x[j];
-                e.counts[j]++;
-                if (!std::isfinite(e.values[j])) {
-                    LOG_WARN("%f detected in %s\n", e.values[j], wname.c_str());
-                    exit(1);
+                if (std::isfinite(x[j])) {
+                    e.values[j] += x[j] * x[j];
+                    e.counts[j]++;
+                    if (!std::isfinite(e.values[j])) {
+                        LOG_WARN("%f detected in %s\n", e.values[j], wname.c_str());
+                        exit(1);
+                    }    
+                }else{
+                    // Likely something from an attention mask?
+                    // LOG_WARN("%f detected in %s INPUT\n", x[j], wname.c_str());
                 }
             }
         }
