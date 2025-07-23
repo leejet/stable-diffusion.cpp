@@ -93,6 +93,14 @@ struct SDRequestParams {
     float skip_layer_start       = 0.01;
     float skip_layer_end         = 0.2;
     bool normalize_input         = false;
+
+    // float apg_eta            = 1.0f;
+    // float apg_momentum       = 0.0f;
+    // float apg_norm_threshold = 0.0f;
+    // float apg_norm_smoothing = 0.0f;
+
+    // sd_preview_t preview_method = SD_PREVIEW_NONE;
+    // int preview_interval        = 1;
 };
 
 struct SDParams {
@@ -105,14 +113,25 @@ struct SDParams {
     std::string input_path         = "./server/input.png";
     std::string control_image_path = "./server/control.png";
 
+    // std::string preview_path = "./server/preview.png";
+
     std::string models_dir;
     std::string diffusion_models_dir;
     std::string clip_dir;
     std::string vae_dir;
     std::string tae_dir;
 
+    std::vector<std::string> models_files;
+    std::vector<std::string> diffusion_models_files;
+    std::vector<std::string> clip_files;
+    std::vector<std::string> vae_files;
+    std::vector<std::string> tae_files;
+
     // external dir
     std::string input_id_images_path;
+
+    // Don't use TAE decoding by default
+    // bool taesd_preview = true;
 
     bool verbose = false;
 
@@ -738,13 +757,64 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     } catch (...) {
     }
     try {
-        float cfg_scale               = payload["cfg_scale"];
-        params->lastRequest.cfg_scale = cfg_scale;
-    } catch (...) {
-    }
-    try {
-        float guidance               = payload["guidance"];
-        params->lastRequest.guidance = guidance;
+        json guidance_params = payload["guidance_params"];
+        try {
+            float cfg_scale               = guidance_params["cfg_scale"];
+            params->lastRequest.cfg_scale = cfg_scale;
+        } catch (...) {
+        }
+        try {
+            float guidance               = guidance_params["guidance"];
+            params->lastRequest.guidance = guidance;
+        } catch (...) {
+        }
+        try {
+            json slg = guidance_params["slg"];
+            try {
+                params->lastRequest.skip_layers = slg["layers"].get<std::vector<int>>();
+            } catch (...) {
+            }
+            try {
+                float slg_scale               = slg["scale"];
+                params->lastRequest.slg_scale = slg_scale;
+            } catch (...) {
+            }
+            try {
+                float skip_layer_start               = slg["start"];
+                params->lastRequest.skip_layer_start = skip_layer_start;
+            } catch (...) {
+            }
+            try {
+                float skip_layer_end               = slg["end"];
+                params->lastRequest.skip_layer_end = skip_layer_end;
+            } catch (...) {
+            }
+        } catch (...) {
+        }
+        // try {
+        //     json apg = guidance_params["apg"];
+        //     try {
+        //         float apg_eta               = apg["eta"];
+        //         params->lastRequest.apg_eta = apg_eta;
+        //     } catch (...) {
+        //     }
+        //     try {
+        //         float apg_momentum               = apg["momentum"];
+        //         params->lastRequest.apg_momentum = apg_momentum;
+        //     } catch (...) {
+        //     }
+        //     try {
+        //         float apg_norm_threshold               = apg["norm_threshold"];
+        //         params->lastRequest.apg_norm_threshold = apg_norm_threshold;
+        //     } catch (...) {
+        //     }
+        //     try {
+        //         float apg_norm_smoothing               = apg["norm_smoothing"];
+        //         params->lastRequest.apg_norm_smoothing = apg_norm_smoothing;
+        //     } catch (...) {
+        //     }
+        // } catch (...) {
+        // }
     } catch (...) {
     }
     try {
@@ -842,118 +912,135 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         }
     } catch (...) {
     }
-
+    const int MODEL_UNLOAD = -2;
+    const int MODEL_KEEP   = -1;
     try {
-        std::string model = payload["model"];
-        if (model == "none") {
-            if (params->ctxParams.model_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.model_path = "";
-        } else {
-            std::string new_path = params->models_dir + model;
+        int model_index = payload["model"];
+        if (model_index >= 0 && model_index < params->models_files.size()) {
+            std::string new_path = params->models_dir + params->models_files[model_index];
             if (params->ctxParams.model_path != new_path) {
                 params->ctxParams.model_path           = new_path;
                 params->ctxParams.diffusion_model_path = "";
                 updatectx                              = true;
             }
+        } else {
+            if (model_index == MODEL_UNLOAD) {
+                if (params->ctxParams.model_path != "") {
+                    updatectx = true;
+                }
+                params->ctxParams.model_path = "";
+            } else if (model_index != MODEL_KEEP) {
+                sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid model index: %d\n", model_index);
+            }
         }
     } catch (...) {
     }
     try {
-        std::string diffusion_model = payload["diffusion_model"];
-        if (diffusion_model == "none") {
-            if (params->ctxParams.diffusion_model_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.diffusion_model_path = "";
-        } else {
-            std::string new_path = params->diffusion_models_dir + diffusion_model;
+        int diffusion_model_index = payload["diffusion_model"];
+        if (diffusion_model_index >= 0 && diffusion_model_index < params->diffusion_models_files.size()) {
+            std::string new_path = params->diffusion_models_dir + params->diffusion_models_files[diffusion_model_index];
             if (params->ctxParams.diffusion_model_path != new_path) {
                 params->ctxParams.diffusion_model_path = new_path;
                 params->ctxParams.model_path           = "";
                 updatectx                              = true;
             }
+        } else if (diffusion_model_index == MODEL_UNLOAD) {
+            if (params->ctxParams.diffusion_model_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.diffusion_model_path = "";
+        } else if (diffusion_model_index != MODEL_KEEP) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid diffusion model index: %d\n", diffusion_model_index);
         }
     } catch (...) {
     }
     try {
-        std::string clip_l = payload["clip_l"];
-        if (clip_l == "none") {
-            if (params->ctxParams.clip_l_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.clip_l_path = "";
-        } else {
-            std::string new_path = params->clip_dir + clip_l;
+        int clip_l_index = payload["clip_l"];
+        if (clip_l_index >= 0 && clip_l_index < params->clip_files.size()) {
+            std::string new_path = params->clip_dir + params->clip_files[clip_l_index];
             if (params->ctxParams.clip_l_path != new_path) {
                 params->ctxParams.clip_l_path = new_path;
                 updatectx                     = true;
             }
+        } else if (clip_l_index == MODEL_UNLOAD) {
+            if (params->ctxParams.clip_l_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.clip_l_path = "";
+        } else if (clip_l_index != MODEL_KEEP) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid clip_l index: %d\n", clip_l_index);
         }
     } catch (...) {
     }
     try {
-        std::string clip_g = payload["clip_g"];
-        if (clip_g == "none") {
-            if (params->ctxParams.clip_g_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.clip_g_path = "";
-        } else {
-            std::string new_path = params->clip_dir + clip_g;
+        int clip_g_index = payload["clip_g"];
+        if (clip_g_index >= 0 && clip_g_index < params->clip_files.size()) {
+            std::string new_path = params->clip_dir + params->clip_files[clip_g_index];
             if (params->ctxParams.clip_g_path != new_path) {
                 params->ctxParams.clip_g_path = new_path;
                 updatectx                     = true;
             }
+        } else if (clip_g_index == MODEL_UNLOAD) {
+            if (params->ctxParams.clip_g_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.clip_g_path = "";
+        } else if (clip_g_index != MODEL_KEEP) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid clip_g index: %d\n", clip_g_index);
         }
     } catch (...) {
     }
     try {
-        std::string t5xxl = payload["t5xxl"];
-        if (t5xxl == "none") {
-            if (params->ctxParams.t5xxl_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.t5xxl_path = "";
-        } else {
-            std::string new_path = params->clip_dir + t5xxl;
+        int t5xxl_index = payload["t5xxl"];
+        if (t5xxl_index >= 0 && t5xxl_index < params->clip_files.size()) {
+            std::string new_path = params->clip_dir + params->clip_files[t5xxl_index];
             if (params->ctxParams.t5xxl_path != new_path) {
                 params->ctxParams.t5xxl_path = new_path;
                 updatectx                    = true;
             }
+        } else if (t5xxl_index == MODEL_UNLOAD) {
+            if (params->ctxParams.t5xxl_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.t5xxl_path = "";
+        } else if (t5xxl_index != MODEL_KEEP) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid t5xxl index: %d\n", t5xxl_index);
         }
     } catch (...) {
     }
     try {
-        std::string vae = payload["vae"];
-        if (vae == "none") {
-            if (params->ctxParams.vae_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.vae_path = "";
-        } else {
-            std::string new_path = params->vae_dir + vae;
+        int vae_index = payload["vae"];
+        if (vae_index >= 0 && vae_index < params->vae_files.size()) {
+            std::string new_path = params->vae_dir + params->vae_files[vae_index];
             if (params->ctxParams.vae_path != new_path) {
                 params->ctxParams.vae_path = new_path;
                 updatectx                  = true;
             }
+        } else if (vae_index == MODEL_UNLOAD) {
+            if (params->ctxParams.vae_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.vae_path = "";
+        } else if (vae_index != MODEL_KEEP) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid vae index: %d\n", vae_index);
         }
     } catch (...) {
     }
     try {
-        std::string tae = payload["tae"];
-        if (tae == "none") {
-            if (params->ctxParams.taesd_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.taesd_path = "";
-        } else {
-            std::string new_path = params->tae_dir + tae;
+        int tae_index = payload["tae"];
+        if (tae_index >= 0 && tae_index < params->tae_files.size()) {
+            std::string new_path = params->tae_dir + params->tae_files[tae_index];
             if (params->ctxParams.taesd_path != new_path) {
                 params->ctxParams.taesd_path = new_path;
                 updatectx                    = true;
             }
+        } else if (tae_index == MODEL_UNLOAD) {
+            if (params->ctxParams.taesd_path != "") {
+                updatectx = true;
+            }
+            params->ctxParams.taesd_path = "";
+        } else if (tae_index != MODEL_KEEP) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid tae index: %d\n", tae_index);
         }
     } catch (...) {
     }
@@ -972,6 +1059,54 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     } catch (...) {
     }
 
+    // try {
+    //     bool tae_decode = payload["tae_decode"];
+    //     if (params->taesd_preview == tae_decode) {
+    //         params->taesd_preview = !tae_decode;
+    //         updatectx             = true;
+    //     }
+    // } catch (...) {
+    // }
+
+    // try {
+    //     std::string preview = payload["preview_mode"];
+    //     int preview_found   = -1;
+    //     for (int m = 0; m < N_PREVIEWS; m++) {
+    //         if (!strcmp(preview.c_str(), previews_str[m])) {
+    //             preview_found = m;
+    //         }
+    //     }
+    //     if (preview_found >= 0) {
+    //         if (params->lastRequest.preview_method != (sd_preview_t)preview_found) {
+    //             params->lastRequest.preview_method = (sd_preview_t)preview_found;
+    //         }
+    //     } else {
+    //         sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown preview: %s\n", preview.c_str());
+    //     }
+    // } catch (...) {
+    // }
+    // try {
+    //     int interval                         = payload["preview_interval"];
+    //     params->lastRequest.preview_interval = interval;
+    // } catch (...) {
+    // }
+    try {
+        std::string type = payload["type"];
+        if (type != "") {
+            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+                auto trait = ggml_get_type_traits((ggml_type)i);
+                std::string name(trait->type_name);
+                if (name == "f32" || trait->to_float && trait->type_size) {
+                    if (type == name) {
+                        params->ctxParams.wtype = (enum sd_type_t)i;
+                        updatectx               = true;
+                        break;
+                    }
+                }
+            }
+        }
+    } catch (...) {
+    }
     return updatectx;
 }
 
@@ -1041,9 +1176,31 @@ void update_progress_cb(int step, int steps, float time, void* _data) {
     }
 }
 
+bool is_model_file(const std::string& path) {
+    size_t name_start = path.find_last_of("/\\");
+    if (name_start == std::string::npos) {
+        name_start = 0;
+    }
+    size_t extension_start = path.substr(name_start).find_last_of(".");
+    if (extension_start == std::string::npos) {
+        return false;  // No extension
+    }
+    std::string file_extension = path.substr(name_start + extension_start + 1);
+    return (file_extension == "gguf" || file_extension == "safetensors" || file_extension == "sft" || file_extension == "ckpt");
+}
+
 void start_server(SDParams params) {
+    // preview_path = params.preview_path.c_str();
     sd_set_log_callback(sd_log_cb, (void*)&params);
     sd_set_progress_callback(update_progress_cb, NULL);
+
+    params.models_files                 = list_files(params.models_dir);
+    params.diffusion_models_files       = list_files(params.diffusion_models_dir);
+    params.clip_files                   = list_files(params.clip_dir);
+    params.vae_files                    = list_files(params.vae_dir);
+    params.tae_files                    = list_files(params.tae_dir);
+    std::vector<std::string> lora_files = list_files(params.ctxParams.lora_model_dir);
+
 
     server_log_params = (void*)&params;
 
@@ -1377,36 +1534,63 @@ void start_server(SDParams params) {
         res.set_content(response.dump(), "application/json");
     });
 
-    svr->Get("/models", [&params](const httplib::Request& req, httplib::Response& res) {
+    svr->Get("/models", [&params, &lora_files](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         json response;
-        response["models"] = json::array();
-        for (auto file : list_files(params.models_dir)) {
-            response["models"].push_back(file);
-        }
 
-        response["diffusion_models"] = json::array();
-        for (auto file : list_files(params.diffusion_models_dir)) {
-            response["diffusion_models"].push_back(file);
+        json models;
+        json diffusion_models;
+        json text_encoders;
+        json vaes;
+        json taes;
+        for (size_t i = 0; i < params.models_files.size(); i++) {
+            if (is_model_file(params.models_files[i])) {
+                models.push_back({{"id", i}, {"name", params.models_files[i]}});
+            }
         }
-
-        response["text_encoders"] = json::array();
-        for (auto file : list_files(params.clip_dir)) {
-            response["text_encoders"].push_back(file);
+        for (size_t i = 0; i < params.diffusion_models_files.size(); i++) {
+            if (is_model_file(params.diffusion_models_files[i])) {
+                diffusion_models.push_back({{"id", i}, {"name", params.diffusion_models_files[i]}});
+            }
         }
-
-        response["vaes"] = json::array();
-        for (auto file : list_files(params.vae_dir)) {
-            response["vaes"].push_back(file);
+        for (size_t i = 0; i < params.clip_files.size(); i++) {
+            if (is_model_file(params.clip_files[i])) {
+                text_encoders.push_back({{"id", i}, {"name", params.clip_files[i]}});
+            }
         }
+        for (size_t i = 0; i < params.vae_files.size(); i++) {
+            if (is_model_file(params.vae_files[i])) {
+                vaes.push_back({{"id", i}, {"name", params.vae_files[i]}});
+            }
+        }
+        for (size_t i = 0; i < params.tae_files.size(); i++) {
+            if (is_model_file(params.tae_files[i])) {
+                taes.push_back({{"id", i}, {"name", params.tae_files[i]}});
+            }
+        }
+        response["models"]           = models;
+        response["diffusion_models"] = diffusion_models;
+        response["text_encoders"]    = text_encoders;
+        response["vaes"]             = vaes;
+        response["taes"]             = taes;
 
-        response["taes"] = json::array();
-        for (auto file : list_files(params.tae_dir)) {
-            response["taes"].push_back(file);
+        for (size_t i = 0; i < lora_files.size(); i++) {
+            std::string lora_name = lora_files[i];
+            // Remove file extension
+            size_t pos = lora_name.find_last_of(".");
+            if (pos != std::string::npos) {
+                // Check if extension was either ".safetensors" or ".ckpt"
+                std::string extension = lora_name.substr(pos + 1);
+                lora_name             = lora_name.substr(0, pos);
+                if (extension == "safetensors" || extension == "ckpt") {
+                    response["loras"].push_back(lora_name);
+                }
+            }
         }
 
         res.set_content(response.dump(), "application/json");
     });
+
     svr->Get("/model", [&params](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         json response;
