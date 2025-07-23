@@ -61,7 +61,7 @@ sd_progress_cb_t sd_get_progress_callback();
 void* sd_get_progress_callback_data();
 
 sd_preview_cb_t sd_get_preview_callback();
-sd_preview_t sd_get_preview_mode();
+preview_t sd_get_preview_mode();
 int sd_get_preview_interval();
 
 #define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)

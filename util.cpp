@@ -248,7 +248,7 @@ static sd_progress_cb_t sd_progress_cb = NULL;
 void* sd_progress_cb_data              = NULL;
 
 static sd_preview_cb_t sd_preview_cb = NULL;
-sd_preview_t sd_preview_mode         = SD_PREVIEW_NONE;
+preview_t sd_preview_mode         = PREVIEW_NONE;
 int sd_preview_interval              = 1;
 
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
@@ -424,7 +424,7 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
 }
-void sd_set_preview_callback(sd_preview_cb_t cb, sd_preview_t mode = SD_PREVIEW_PROJ, int interval = 1) {
+void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode = PREVIEW_PROJ, int interval = 1) {
     sd_preview_cb       = cb;
     sd_preview_mode     = mode;
     sd_preview_interval = interval;
@@ -434,7 +434,7 @@ sd_preview_cb_t sd_get_preview_callback() {
     return sd_preview_cb;
 }
 
-sd_preview_t sd_get_preview_mode() {
+preview_t sd_get_preview_mode() {
     return sd_preview_mode;
 }
 int sd_get_preview_interval() {

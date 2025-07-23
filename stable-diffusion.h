@@ -111,12 +111,12 @@ enum sd_log_level_t {
     SD_LOG_ERROR
 };
 
-enum sd_preview_t {
-    SD_PREVIEW_NONE,
-    SD_PREVIEW_PROJ,
-    SD_PREVIEW_TAE,
-    SD_PREVIEW_VAE,
-    N_PREVIEWS
+enum preview_t {
+    PREVIEW_NONE,
+    PREVIEW_PROJ,
+    PREVIEW_TAE,
+    PREVIEW_VAE,
+    PREVIEW_COUNT
 };
 
 typedef struct {
@@ -220,7 +220,7 @@ typedef void (*sd_preview_cb_t)(int, sd_image_t);
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
-SD_API void sd_set_preview_callback(sd_preview_cb_t cb, sd_preview_t mode, int interval);
+SD_API void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval);
 SD_API int32_t get_num_physical_cores();
 SD_API const char* sd_get_system_info();
 
@@ -232,6 +232,8 @@ SD_API const char* sd_sample_method_name(enum sample_method_t sample_method);
 SD_API enum sample_method_t str_to_sample_method(const char* str);
 SD_API const char* sd_schedule_name(enum schedule_t schedule);
 SD_API enum schedule_t str_to_schedule(const char* str);
+SD_API const char* sd_preview_name(enum preview_t preview);
+SD_API enum preview_t str_to_preview(const char* str);
 
 SD_API void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params);
 SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);

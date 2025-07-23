@@ -119,7 +119,7 @@ struct SDParams {
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
 
-    sd_preview_t preview_method = SD_PREVIEW_NONE;
+    preview_t preview_method = PREVIEW_NONE;
     int preview_interval        = 1;
     std::string preview_path    = "preview.png";
     bool taesd_preview          = false;
@@ -201,7 +201,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --t5xxl                            path to the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD]                    path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
-    printf("  --taesd-preview-only               prevents usage of taesd for decoding the final image. (for use with --preview %s)\n", previews_str[SD_PREVIEW_TAE]);
+    printf("  --taesd-preview-only               prevents usage of taesd for decoding the final image. (for use with --preview %s)\n", previews_str[PREVIEW_TAE]);
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
     printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings\n");
@@ -257,8 +257,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     This might crash if it is not supported by the backend.\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
-    printf("  --preview {%s,%s,%s,%s}            preview method. (default is %s(disabled))\n", previews_str[0], previews_str[1], previews_str[2], previews_str[3], previews_str[SD_PREVIEW_NONE]);
-    printf("                                     %s is the fastest\n", previews_str[SD_PREVIEW_PROJ]);
+    printf("  --preview {%s,%s,%s,%s}            preview method. (default is %s(disabled))\n", previews_str[0], previews_str[1], previews_str[2], previews_str[3], previews_str[PREVIEW_NONE]);
+    printf("                                     %s is the fastest\n", previews_str[PREVIEW_PROJ]);
     printf("  --preview-interval [N]             How often to save the image preview");
     printf("  --preview-path [PATH}              path to write preview image to (default: ./preview.png)\n");
     printf("  --color                            colors the logging tags according to level\n");
@@ -595,7 +595,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         }
         const char* preview = argv[index];
         int preview_method  = -1;
-        for (int m = 0; m < N_PREVIEWS; m++) {
+        for (int m = 0; m < PREVIEW_COUNT; m++) {
             if (!strcmp(preview, previews_str[m])) {
                 preview_method = m;
             }
@@ -605,7 +605,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 preview);
             return -1;
         }
-        params.preview_method = (sd_preview_t)preview_method;
+        params.preview_method = (preview_t)preview_method;
         return 1;
     };
 

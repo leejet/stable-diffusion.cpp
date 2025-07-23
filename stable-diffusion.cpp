@@ -874,14 +874,14 @@ public:
                        int step,
                        struct ggml_tensor* latents,
                        enum SDVersion version,
-                       sd_preview_t preview_mode,
+                       preview_t preview_mode,
                        ggml_tensor* result,
                        std::function<void(int, sd_image_t)> step_callback) {
         const uint32_t channel = 3;
         uint32_t width         = latents->ne[0];
         uint32_t height        = latents->ne[1];
         uint32_t dim           = latents->ne[2];
-        if (preview_mode == SD_PREVIEW_PROJ) {
+        if (preview_mode == PREVIEW_PROJ) {
             const float (*latent_rgb_proj)[channel];
 
             if (dim == 16) {
@@ -924,7 +924,7 @@ public:
             step_callback(step, image);
             free(image.data);
         } else {
-            if (preview_mode == SD_PREVIEW_VAE) {
+            if (preview_mode == PREVIEW_VAE) {
                 ggml_tensor_scale(latents, 1.0f / scale_factor);
                 if (vae_tiling) {
                     // split latent in 32x32 tiles and compute in several steps
@@ -940,7 +940,7 @@ public:
                 ggml_tensor_scale(latents, scale_factor);
 
                 ggml_tensor_scale_output(result);
-            } else if (preview_mode == SD_PREVIEW_TAE) {
+            } else if (preview_mode == PREVIEW_TAE) {
                 if (tae_first_stage == nullptr) {
                     LOG_WARN("TAE not found for preview");
                     return;
@@ -1048,7 +1048,7 @@ public:
 
         struct ggml_tensor* preview_tensor = NULL;
         auto sd_preview_mode = sd_get_preview_mode();
-        if (sd_preview_mode != SD_PREVIEW_NONE && sd_preview_mode != SD_PREVIEW_PROJ) {
+        if (sd_preview_mode != PREVIEW_NONE && sd_preview_mode != PREVIEW_PROJ) {
             preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
                                                 (denoised->ne[0] * 8),
                                                 (denoised->ne[1] * 8),
@@ -1445,6 +1445,29 @@ enum schedule_t str_to_schedule(const char* str) {
         }
     }
     return SCHEDULE_COUNT;
+}
+
+const char* preview_to_str[] = {
+    "none",
+    "proj",
+    "tae",
+    "vae",
+};
+
+const char* sd_preview_name(enum preview_t preview) {
+    if (preview < PREVIEW_COUNT) {
+        return preview_to_str[preview];
+    }
+    return NONE_STR;
+}
+
+enum preview_t str_to_preview(const char* str) {
+    for (int i = 0; i < PREVIEW_COUNT; i++) {
+        if (!strcmp(str, preview_to_str[i])) {
+            return (enum preview_t)i;
+        }
+    }
+    return PREVIEW_COUNT;
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
@@ -2058,7 +2081,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
     }
     auto sd_preview_mode = sd_get_preview_mode();
-    if (sd_preview_mode != SD_PREVIEW_NONE && sd_preview_mode != SD_PREVIEW_PROJ) {
+    if (sd_preview_mode != PREVIEW_NONE && sd_preview_mode != PREVIEW_PROJ) {
         params.mem_size *= 2;
     }
     params.mem_size += width * height * 3 * sizeof(float) * 3;
