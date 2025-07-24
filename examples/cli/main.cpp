@@ -85,6 +85,7 @@ struct SDParams {
 
     sample_method_t sample_method = EULER_A;
     schedule_t schedule           = DEFAULT;
+    prediction_t prediction       = DEFAULT_PRED;
     int sample_steps              = 20;
     float strength                = 0.75f;
     float control_strength        = 0.9f;
@@ -156,6 +157,7 @@ void print_params(SDParams params) {
     printf("    height:            %d\n", params.height);
     printf("    sample_method:     %s\n", sd_sample_method_name(params.sample_method));
     printf("    schedule:          %s\n", sd_schedule_name(params.schedule));
+    printf("    prediction:        %s\n", sd_prediction_name(params.prediction));
     printf("    sample_steps:      %d\n", params.sample_steps);
     printf("    strength(img2img): %.2f\n", params.strength);
     printf("    rng:               %s\n", sd_rng_type_name(params.rng_type));
@@ -224,6 +226,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
     printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
+    printf("  --prediction {eps, v, edm_v, sd3_flow, flux_flow}        Prediction type override.\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
@@ -494,6 +497,20 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_prediction_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg = argv[index];
+        params.prediction = str_to_prediction(arg);
+        if (params.prediction == PREDICTION_COUNT) {
+            fprintf(stderr, "error: invalid prediction type %s\n",
+                    arg);
+            return -1;
+        }
+        return 1;
+    };
+
     auto on_sample_method_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
@@ -564,6 +581,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-s", "--seed", "", on_seed_arg},
         {"", "--sampling-method", "", on_sample_method_arg},
         {"", "--schedule", "", on_schedule_arg},
+        {"", "--prediction", "", on_prediction_arg},
         {"", "--skip-layers", "", on_skip_layers_arg},
         {"-r", "--ref-image", "", on_ref_image_arg},
         {"-h", "--help", "", on_help_arg},
@@ -883,6 +901,7 @@ int main(int argc, const char* argv[]) {
         params.wtype,
         params.rng_type,
         params.schedule,
+        params.prediction,
         params.clip_on_cpu,
         params.control_net_cpu,
         params.vae_on_cpu,
