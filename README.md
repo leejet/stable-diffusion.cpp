@@ -410,6 +410,8 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 - [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
 - [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
 - [Local Diffusion](https://github.com/rmatif/Local-Diffusion)
+- [sd.cpp-webui](https://github.com/daniandtheweb/sd.cpp-webui)
+- [LocalAI](https://github.com/mudler/LocalAI)
 
 ## Contributors
 
