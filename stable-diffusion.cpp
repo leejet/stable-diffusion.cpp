@@ -845,6 +845,7 @@ public:
                         float eta,
                         sample_method_t method,
                         const std::vector<float>& sigmas,
+                        int initial_step,
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
@@ -1083,7 +1084,7 @@ public:
             return denoised;
         };
 
-        sample_k_diffusion(method, denoise, work_ctx, x, sigmas, rng, eta);
+        sample_k_diffusion(method, denoise, work_ctx, x, sigmas, initial_step, rng, eta);
 
         x = denoiser->inverse_noise_scaling(sigmas[sigmas.size() - 1], x);
 
@@ -1520,6 +1521,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     int height,
                                     enum sample_method_t sample_method,
                                     const std::vector<float>& sigmas,
+                                    int initial_step,
                                     int64_t seed,
                                     int batch_count,
                                     const sd_image_t* control_cond,
@@ -1530,6 +1532,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     std::vector<ggml_tensor*> ref_latents,
                                     ggml_tensor* concat_latent = NULL,
                                     ggml_tensor* denoise_mask  = NULL) {
+
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1795,6 +1798,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      eta,
                                                      sample_method,
                                                      sigmas,
+                                                     initial_step,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
@@ -1917,6 +1921,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     ggml_tensor* concat_latent = NULL;
     ggml_tensor* denoise_mask  = NULL;
     std::vector<float> sigmas  = sd_ctx->sd->denoiser->get_sigmas(sd_img_gen_params->sample_steps);
+    int initial_step = 0;
 
     if (sd_img_gen_params->init_image.data) {
         LOG_INFO("IMG2IMG");
@@ -1926,7 +1931,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
             t_enc--;
         LOG_INFO("target t_enc is %zu steps", t_enc);
         std::vector<float> sigma_sched;
-        sigma_sched.assign(sigmas.begin() + sd_img_gen_params->sample_steps - t_enc - 1, sigmas.end());
+        initial_step = sd_img_gen_params->sample_steps - t_enc - 1;
+        sigma_sched.assign(sigmas.begin() + initial_step, sigmas.end());
         sigmas = sigma_sched;
 
         ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
@@ -2063,6 +2069,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         height,
                                                         sd_img_gen_params->sample_method,
                                                         sigmas,
+                                                        initial_step,
                                                         seed,
                                                         sd_img_gen_params->batch_count,
                                                         sd_img_gen_params->control_cond,
@@ -2162,6 +2169,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                  0.f,
                                                  sd_vid_gen_params->sample_method,
                                                  sigmas,
+                                                 0,
                                                  -1,
                                                  SDCondition(NULL, NULL, NULL));
 
