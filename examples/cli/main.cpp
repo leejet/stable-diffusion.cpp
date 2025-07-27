@@ -681,6 +681,14 @@ std::string get_image_params(SDParams params, int64_t seed) {
         parameter_string += " " + std::string(sd_schedule_name(params.schedule));
     }
     parameter_string += ", ";
+    for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path}) {
+        if (!te.empty()) {
+            parameter_string += "TE: " + sd_basename(te) + ", ";
+        }
+    }
+    if (!params.diffusion_model_path.empty()) {
+        parameter_string += "Unet: " + sd_basename(params.diffusion_model_path) + ", ";
+    }
     if (!params.vae_path.empty()) {
         parameter_string += "VAE: " + sd_basename(params.vae_path) + ", ";
     }
