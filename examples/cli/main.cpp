@@ -596,13 +596,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         exit(1);
     }
 
-    if (params.width <= 0 || params.width % 64 != 0) {
-        fprintf(stderr, "error: the width must be a multiple of 64\n");
+    if (params.width <= 0) {
+        fprintf(stderr, "error: the width must be greater than 0\n");
         exit(1);
     }
 
-    if (params.height <= 0 || params.height % 64 != 0) {
-        fprintf(stderr, "error: the height must be a multiple of 64\n");
+    if (params.height <= 0) {
+        fprintf(stderr, "error: the height must be greater than 0\n");
         exit(1);
     }
 
