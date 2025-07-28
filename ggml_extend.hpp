@@ -1511,10 +1511,14 @@ public:
             b = params["bias"];
         }
         if (direct) {
-            #if defined(SD_USE_CUDA) || defined(SD_USE_SYCL) || defined(SD_USE_METAL) || defined(SD_USE_OPENCL)
-                return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+            #if defined(SD_USE_CONV2D_DIRECT)
+                #if defined(SD_USE_CUDA) || defined(SD_USE_SYCL) || defined(SD_USE_METAL) || defined(SD_USE_OPENCL)
+                    return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+                #else
+                    return ggml_nn_conv_2d_direct(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+                #endif
             #else
-                return ggml_nn_conv_2d_direct(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+                return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
             #endif
         } else {
             return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
