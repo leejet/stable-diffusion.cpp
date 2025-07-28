@@ -1475,6 +1475,7 @@ protected:
     std::pair<int, int> padding;
     std::pair<int, int> dilation;
     bool bias;
+    bool direct;
 
     void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
         enum ggml_type wtype = GGML_TYPE_F16;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F16;
@@ -1492,14 +1493,16 @@ public:
            std::pair<int, int> stride   = {1, 1},
            std::pair<int, int> padding  = {0, 0},
            std::pair<int, int> dilation = {1, 1},
-           bool bias                    = true)
+           bool bias                    = true,
+           bool direct                  = false)
         : in_channels(in_channels),
           out_channels(out_channels),
           kernel_size(kernel_size),
           stride(stride),
           padding(padding),
           dilation(dilation),
-          bias(bias) {}
+          bias(bias),
+          direct(direct) {}
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
@@ -1507,52 +1510,15 @@ public:
         if (bias) {
             b = params["bias"];
         }
-        return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
-    }
-};
-
-class Conv2dDirect : public UnaryBlock {
-protected:
-    int64_t in_channels;
-    int64_t out_channels;
-    std::pair<int, int> kernel_size;
-    std::pair<int, int> stride;
-    std::pair<int, int> padding;
-    std::pair<int, int> dilation;
-    bool bias;
-
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F16;  //(tensor_types.find(prefix + "weight") != tensor_types.end()) ? tensor_types[prefix + "weight"] : GGML_TYPE_F16;
-        params["weight"]     = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels, out_channels);
-        if (bias) {
-            enum ggml_type wtype = GGML_TYPE_F32;  // (tensor_types.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
-            params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_channels);
+        if (direct) {
+            #if defined(SD_USE_CUDA) || defined(SD_USE_SYCL) || defined(SD_USE_METAL) || defined(SD_USE_OPENCL)
+                return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+            #else
+                return ggml_nn_conv_2d_direct(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+            #endif
+        } else {
+            return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
         }
-    }
-
-public:
-    Conv2dDirect(int64_t in_channels,
-           int64_t out_channels,
-           std::pair<int, int> kernel_size,
-           std::pair<int, int> stride   = {1, 1},
-           std::pair<int, int> padding  = {0, 0},
-           std::pair<int, int> dilation = {1, 1},
-           bool bias                    = true)
-        : in_channels(in_channels),
-          out_channels(out_channels),
-          kernel_size(kernel_size),
-          stride(stride),
-          padding(padding),
-          dilation(dilation),
-          bias(bias) {}
-
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
-        struct ggml_tensor* w = params["weight"];
-        struct ggml_tensor* b = NULL;
-        if (bias) {
-            b = params["bias"];
-        }
-        return ggml_nn_conv_2d_direct(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
     }
 };
 

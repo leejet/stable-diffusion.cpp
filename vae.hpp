@@ -20,13 +20,13 @@ public:
           out_channels(out_channels) {
         // temb_channels is always 0
         blocks["norm1"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2dDirect(in_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
 
         blocks["norm2"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(out_channels));
-        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2dDirect(out_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
 
         if (out_channels != in_channels) {
-            blocks["nin_shortcut"] = std::shared_ptr<GGMLBlock>(new Conv2dDirect(in_channels, out_channels, {1, 1}));
+            blocks["nin_shortcut"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
         }
     }
 
@@ -34,9 +34,9 @@ public:
         // x: [N, in_channels, h, w]
         // t_emb is always None
         auto norm1 = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm1"]);
-        auto conv1 = std::dynamic_pointer_cast<Conv2dDirect>(blocks["conv1"]);
+        auto conv1 = std::dynamic_pointer_cast<Conv2d>(blocks["conv1"]);
         auto norm2 = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm2"]);
-        auto conv2 = std::dynamic_pointer_cast<Conv2dDirect>(blocks["conv2"]);
+        auto conv2 = std::dynamic_pointer_cast<Conv2d>(blocks["conv2"]);
 
         auto h = x;
         h      = norm1->forward(ctx, h);
@@ -51,7 +51,7 @@ public:
 
         // skip connection
         if (out_channels != in_channels) {
-            auto nin_shortcut = std::dynamic_pointer_cast<Conv2dDirect>(blocks["nin_shortcut"]);
+            auto nin_shortcut = std::dynamic_pointer_cast<Conv2d>(blocks["nin_shortcut"]);
 
             x = nin_shortcut->forward(ctx, x);  // [N, out_channels, h, w]
         }
@@ -69,20 +69,20 @@ public:
     AttnBlock(int64_t in_channels)
         : in_channels(in_channels) {
         blocks["norm"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["q"]    = std::shared_ptr<GGMLBlock>(new Conv2dDirect(in_channels, in_channels, {1, 1}));
-        blocks["k"]    = std::shared_ptr<GGMLBlock>(new Conv2dDirect(in_channels, in_channels, {1, 1}));
-        blocks["v"]    = std::shared_ptr<GGMLBlock>(new Conv2dDirect(in_channels, in_channels, {1, 1}));
+        blocks["q"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
+        blocks["k"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
+        blocks["v"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
 
-        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2dDirect(in_channels, in_channels, {1, 1}));
+        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [N, in_channels, h, w]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
-        auto q_proj   = std::dynamic_pointer_cast<Conv2dDirect>(blocks["q"]);
-        auto k_proj   = std::dynamic_pointer_cast<Conv2dDirect>(blocks["k"]);
-        auto v_proj   = std::dynamic_pointer_cast<Conv2dDirect>(blocks["v"]);
-        auto proj_out = std::dynamic_pointer_cast<Conv2dDirect>(blocks["proj_out"]);
+        auto q_proj   = std::dynamic_pointer_cast<Conv2d>(blocks["q"]);
+        auto k_proj   = std::dynamic_pointer_cast<Conv2d>(blocks["k"]);
+        auto v_proj   = std::dynamic_pointer_cast<Conv2d>(blocks["v"]);
+        auto proj_out = std::dynamic_pointer_cast<Conv2d>(blocks["proj_out"]);
 
         auto h_ = norm->forward(ctx, x);
 
@@ -114,7 +114,7 @@ public:
     }
 };
 
-class AE3DConv : public Conv2dDirect {
+class AE3DConv : public Conv2d {
 public:
     AE3DConv(int64_t in_channels,
              int64_t out_channels,
@@ -123,8 +123,9 @@ public:
              std::pair<int, int> stride   = {1, 1},
              std::pair<int, int> padding  = {0, 0},
              std::pair<int, int> dilation = {1, 1},
-             bool bias                    = true)
-        : Conv2dDirect(in_channels, out_channels, kernel_size, stride, padding, dilation, bias) {
+             bool bias                    = true,
+             bool direct                  = false)
+        : Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias, direct) {
         int64_t kernel_padding  = video_kernel_size / 2;
         blocks["time_mix_conv"] = std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(out_channels,
                                                                              out_channels,
@@ -141,7 +142,7 @@ public:
         // result: [N, OC, OH, OW]
         auto time_mix_conv = std::dynamic_pointer_cast<Conv3dnx1x1>(blocks["time_mix_conv"]);
 
-        x = Conv2dDirect::forward(ctx, x);
+        x = Conv2d::forward(ctx, x);
         // timesteps = x.shape[0]
         // x = rearrange(x, "(b t) c h w -> b c t h w", t=timesteps)
         // x = conv3d(x)
@@ -240,7 +241,7 @@ public:
           in_channels(in_channels),
           z_channels(z_channels),
           double_z(double_z) {
-        blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2dDirect(in_channels, ch, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
 
         size_t num_resolutions = ch_mult.size();
 
@@ -268,18 +269,18 @@ public:
         blocks["mid.block_2"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in));
 
         blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(block_in));
-        blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new Conv2dDirect(block_in, double_z ? z_channels * 2 : z_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(block_in, double_z ? z_channels * 2 : z_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
     }
 
     virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [N, in_channels, h, w]
 
-        auto conv_in     = std::dynamic_pointer_cast<Conv2dDirect>(blocks["conv_in"]);
+        auto conv_in     = std::dynamic_pointer_cast<Conv2d>(blocks["conv_in"]);
         auto mid_block_1 = std::dynamic_pointer_cast<ResnetBlock>(blocks["mid.block_1"]);
         auto mid_attn_1  = std::dynamic_pointer_cast<AttnBlock>(blocks["mid.attn_1"]);
         auto mid_block_2 = std::dynamic_pointer_cast<ResnetBlock>(blocks["mid.block_2"]);
         auto norm_out    = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm_out"]);
-        auto conv_out    = std::dynamic_pointer_cast<Conv2dDirect>(blocks["conv_out"]);
+        auto conv_out    = std::dynamic_pointer_cast<Conv2d>(blocks["conv_out"]);
 
         auto h = conv_in->forward(ctx, x);  // [N, ch, h, w]
 
@@ -328,11 +329,14 @@ protected:
                                                     int64_t out_channels,
                                                     std::pair<int, int> kernel_size,
                                                     std::pair<int, int> stride  = {1, 1},
-                                                    std::pair<int, int> padding = {0, 0}) {
+                                                    std::pair<int, int> padding = {0, 0},
+                                                    std::pair<int, int> dilation = {1, 1},
+                                                    bool bias                    = true,
+                                                    bool direct                  = false){
         if (video_decoder) {
             return std::shared_ptr<GGMLBlock>(new AE3DConv(in_channels, out_channels, kernel_size, video_kernel_size, stride, padding));
         } else {
-            return std::shared_ptr<GGMLBlock>(new Conv2dDirect(in_channels, out_channels, kernel_size, stride, padding));
+            return std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias, direct));
         }
     }
 
@@ -363,7 +367,7 @@ public:
         size_t num_resolutions = ch_mult.size();
         int block_in           = ch * ch_mult[num_resolutions - 1];
 
-        blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2dDirect(z_channels, block_in, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, block_in, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
 
         blocks["mid.block_1"] = get_resnet_block(block_in, block_in);
         blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in));
@@ -385,7 +389,7 @@ public:
         }
 
         blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(block_in));
-        blocks["conv_out"] = get_conv_out(block_in, out_ch, {3, 3}, {1, 1}, {1, 1});
+        blocks["conv_out"] = get_conv_out(block_in, out_ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true);
     }
 
     virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) {
@@ -394,12 +398,12 @@ public:
         // merge_strategy is always learned
         // time_mode is always conv-only, so we need to replace conv_out_op/resnet_op to AE3DConv/VideoResBlock
         // AttnVideoBlock will not be used
-        auto conv_in     = std::dynamic_pointer_cast<Conv2dDirect>(blocks["conv_in"]);
+        auto conv_in     = std::dynamic_pointer_cast<Conv2d>(blocks["conv_in"]);
         auto mid_block_1 = std::dynamic_pointer_cast<ResnetBlock>(blocks["mid.block_1"]);
         auto mid_attn_1  = std::dynamic_pointer_cast<AttnBlock>(blocks["mid.attn_1"]);
         auto mid_block_2 = std::dynamic_pointer_cast<ResnetBlock>(blocks["mid.block_2"]);
         auto norm_out    = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm_out"]);
-        auto conv_out    = std::dynamic_pointer_cast<Conv2dDirect>(blocks["conv_out"]);
+        auto conv_out    = std::dynamic_pointer_cast<Conv2d>(blocks["conv_out"]);
 
         // conv_in
         auto h = conv_in->forward(ctx, z);  // [N, block_in, h, w]
@@ -472,9 +476,14 @@ public:
                                                                    dd_config.z_channels,
                                                                    use_video_decoder));
         if (use_quant) {
-            blocks["post_quant_conv"] = std::shared_ptr<GGMLBlock>(new Conv2dDirect(dd_config.z_channels,
+            blocks["post_quant_conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(dd_config.z_channels,
                                                                               embed_dim,
-                                                                              {1, 1}));
+                                                                              {1, 1},
+                                                                              {1, 1},
+                                                                              {0, 0},
+                                                                              {1, 1},
+                                                                              true,
+                                                                              true));
         }
         if (!decode_only) {
             blocks["encoder"] = std::shared_ptr<GGMLBlock>(new Encoder(dd_config.ch,
@@ -486,9 +495,14 @@ public:
             if (use_quant) {
                 int factor = dd_config.double_z ? 2 : 1;
 
-                blocks["quant_conv"] = std::shared_ptr<GGMLBlock>(new Conv2dDirect(embed_dim * factor,
+                blocks["quant_conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(embed_dim * factor,
                                                                              dd_config.z_channels * factor,
-                                                                             {1, 1}));
+                                                                             {1, 1},
+                                                                             {1, 1},
+                                                                             {0, 0},
+                                                                             {1, 1},
+                                                                             true,
+                                                                             true));
             }
         }
     }
@@ -496,7 +510,7 @@ public:
     struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
         if (use_quant) {
-            auto post_quant_conv = std::dynamic_pointer_cast<Conv2dDirect>(blocks["post_quant_conv"]);
+            auto post_quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["post_quant_conv"]);
             z                    = post_quant_conv->forward(ctx, z);  // [N, z_channels, h, w]
         }
         auto decoder = std::dynamic_pointer_cast<Decoder>(blocks["decoder"]);
@@ -513,7 +527,7 @@ public:
 
         auto h = encoder->forward(ctx, x);  // [N, 2*z_channels, h/8, w/8]
         if (use_quant) {
-            auto quant_conv = std::dynamic_pointer_cast<Conv2dDirect>(blocks["quant_conv"]);
+            auto quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["quant_conv"]);
             h               = quant_conv->forward(ctx, h);  // [N, 2*embed_dim, h/8, w/8]
         }
         return h;
