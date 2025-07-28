@@ -58,6 +58,7 @@ if (SD_OPENCL)
     message("-- Use OpenCL as backend stable-diffusion")
     set(GGML_OPENCL ON)
     add_definitions(-DSD_USE_OPENCL)
+    add_definitions(-DSD_USE_CONV2D_DIRECT)
 endif ()
 
 if (SD_HIPBLAS)
