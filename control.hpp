@@ -317,8 +317,8 @@ struct ControlNet : public GGMLRunner {
     bool guided_hint_cached         = false;
 
     ControlNet(ggml_backend_t backend,
-               std::map<std::string, enum ggml_type>& tensor_types,
-               SDVersion version = VERSION_SD1)
+               const String2GGMLType& tensor_types = {},
+               SDVersion version                   = VERSION_SD1)
         : GGMLRunner(backend), control_net(version) {
         control_net.init(params_ctx, tensor_types, "");
     }

@@ -207,6 +207,8 @@ struct TensorStorage {
 
 typedef std::function<bool(const TensorStorage&, ggml_tensor**)> on_new_tensor_cb_t;
 
+typedef std::map<std::string, enum ggml_type> String2GGMLType;
+
 class ModelLoader {
 protected:
     std::vector<std::string> file_paths_;
@@ -225,7 +227,7 @@ protected:
     bool init_from_diffusers_file(const std::string& file_path, const std::string& prefix = "");
 
 public:
-    std::map<std::string, enum ggml_type> tensor_storages_types;
+    String2GGMLType tensor_storages_types;
 
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     bool model_is_unet();

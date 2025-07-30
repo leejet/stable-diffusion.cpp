@@ -204,7 +204,7 @@ struct TinyAutoEncoder : public GGMLRunner {
     bool direct = false;
 
     TinyAutoEncoder(ggml_backend_t backend,
-                    std::map<std::string, enum ggml_type>& tensor_types,
+                    const String2GGMLType& tensor_types,
                     const std::string prefix,
                     bool decoder_only = true,
                     SDVersion version = VERSION_SD1,

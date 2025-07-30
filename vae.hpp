@@ -170,8 +170,8 @@ public:
 
 class VideoResnetBlock : public ResnetBlock {
 protected:
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-        enum ggml_type wtype = (tensor_types.find(prefix + "mix_factor") != tensor_types.end()) ? tensor_types[prefix + "mix_factor"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type wtype = get_type(prefix + "mix_factor", tensor_types, GGML_TYPE_F32);
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 
@@ -557,7 +557,7 @@ struct AutoEncoderKL : public GGMLRunner {
     AutoencodingEngine ae;
 
     AutoEncoderKL(ggml_backend_t backend,
-                  std::map<std::string, enum ggml_type>& tensor_types,
+                  const String2GGMLType& tensor_types,
                   const std::string prefix,
                   bool decode_only       = false,
                   bool use_video_decoder = false,
