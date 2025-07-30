@@ -184,7 +184,7 @@ public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1, std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types, bool flash_attn = false)
+    UnetModelBlock(SDVersion version = VERSION_SD1, std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types, bool flash_attn = false, bool direct = false)
         : version(version) {
         if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
@@ -225,7 +225,7 @@ public:
         }
 
         // input_blocks
-        blocks["input_blocks.0.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, model_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks["input_blocks.0.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, model_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
 
         std::vector<int> input_block_chans;
         input_block_chans.push_back(model_channels);
@@ -237,7 +237,7 @@ public:
             if (version == VERSION_SVD) {
                 return new VideoResBlock(channels, emb_channels, out_channels);
             } else {
-                return new ResBlock(channels, emb_channels, out_channels);
+                return new ResBlock(channels, emb_channels, out_channels, {3, 3});
             }
         };
 
@@ -249,7 +249,7 @@ public:
             if (version == VERSION_SVD) {
                 return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim);
             } else {
-                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, flash_attn);
+                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, flash_attn, direct);
             }
         };
 
@@ -281,7 +281,7 @@ public:
             if (i != len_mults - 1) {
                 input_block_idx += 1;
                 std::string name = "input_blocks." + std::to_string(input_block_idx) + ".0";
-                blocks[name]     = std::shared_ptr<GGMLBlock>(new DownSampleBlock(ch, ch));
+                blocks[name]     = std::shared_ptr<GGMLBlock>(new DownSampleBlock(ch, ch, false, direct));
 
                 input_block_chans.push_back(ch);
                 ds *= 2;
@@ -331,7 +331,7 @@ public:
 
                 if (i > 0 && j == num_res_blocks) {
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx);
-                    blocks[name]     = std::shared_ptr<GGMLBlock>(new UpSampleBlock(ch, ch));
+                    blocks[name]     = std::shared_ptr<GGMLBlock>(new UpSampleBlock(ch, ch, direct));
 
                     ds /= 2;
                 }
@@ -343,7 +343,7 @@ public:
         // out
         blocks["out.0"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(ch));  // ch == model_channels
         // out_1 is nn.SiLU()
-        blocks["out.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(model_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks["out.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(model_channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
     }
 
     struct ggml_tensor* resblock_forward(std::string name,
@@ -542,8 +542,9 @@ struct UNetModelRunner : public GGMLRunner {
                     std::map<std::string, enum ggml_type>& tensor_types,
                     const std::string prefix,
                     SDVersion version = VERSION_SD1,
-                    bool flash_attn   = false)
-        : GGMLRunner(backend), unet(version, tensor_types, flash_attn) {
+                    bool flash_attn   = false,
+                    bool direct       = false)
+        : GGMLRunner(backend), unet(version, tensor_types, flash_attn, direct) {
         unet.init(params_ctx, tensor_types, prefix);
     }
 

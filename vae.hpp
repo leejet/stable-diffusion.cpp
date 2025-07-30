@@ -12,21 +12,24 @@ class ResnetBlock : public UnaryBlock {
 protected:
     int64_t in_channels;
     int64_t out_channels;
+    bool direct = false;
 
 public:
     ResnetBlock(int64_t in_channels,
-                int64_t out_channels)
+                int64_t out_channels,
+                bool direct = false)
         : in_channels(in_channels),
-          out_channels(out_channels) {
+          out_channels(out_channels),
+          direct(direct){
         // temb_channels is always 0
         blocks["norm1"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
+        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
 
         blocks["norm2"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(out_channels));
-        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
+        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
 
         if (out_channels != in_channels) {
-            blocks["nin_shortcut"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
+            blocks["nin_shortcut"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, direct));
         }
     }
 
@@ -64,16 +67,19 @@ public:
 class AttnBlock : public UnaryBlock {
 protected:
     int64_t in_channels;
+    bool direct = false;
 
 public:
-    AttnBlock(int64_t in_channels)
-        : in_channels(in_channels) {
+    AttnBlock(int64_t in_channels,
+              bool direct = false)
+        : in_channels(in_channels),
+          direct(direct){
         blocks["norm"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["q"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
-        blocks["k"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
-        blocks["v"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
+        blocks["q"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, direct));
+        blocks["k"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, direct));
+        blocks["v"]    = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, direct));
 
-        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, true));
+        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, direct));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -177,8 +183,9 @@ protected:
 public:
     VideoResnetBlock(int64_t in_channels,
                      int64_t out_channels,
-                     int video_kernel_size = 3)
-        : ResnetBlock(in_channels, out_channels) {
+                     int video_kernel_size = 3,
+                     bool direct           = false)
+        : ResnetBlock(in_channels, out_channels, direct) {
         // merge_strategy is always learned
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));
     }
@@ -227,6 +234,7 @@ protected:
     int in_channels          = 3;
     int z_channels           = 4;
     bool double_z            = true;
+    bool direct              = false;
 
 public:
     Encoder(int ch,
@@ -234,14 +242,16 @@ public:
             int num_res_blocks,
             int in_channels,
             int z_channels,
-            bool double_z = true)
+            bool double_z = true,
+            bool direct   = false)
         : ch(ch),
           ch_mult(ch_mult),
           num_res_blocks(num_res_blocks),
           in_channels(in_channels),
           z_channels(z_channels),
-          double_z(double_z) {
-        blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
+          double_z(double_z),
+          direct(direct){
+        blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
 
         size_t num_resolutions = ch_mult.size();
 
@@ -255,21 +265,21 @@ public:
             int block_out = ch * ch_mult[i];
             for (int j = 0; j < num_res_blocks; j++) {
                 std::string name = "down." + std::to_string(i) + ".block." + std::to_string(j);
-                blocks[name]     = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_out));
+                blocks[name]     = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_out, direct));
                 block_in         = block_out;
             }
             if (i != num_resolutions - 1) {
                 std::string name = "down." + std::to_string(i) + ".downsample";
-                blocks[name]     = std::shared_ptr<GGMLBlock>(new DownSampleBlock(block_in, block_in, true));
+                blocks[name]     = std::shared_ptr<GGMLBlock>(new DownSampleBlock(block_in, block_in, true, direct));
             }
         }
 
-        blocks["mid.block_1"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in));
-        blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in));
-        blocks["mid.block_2"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in));
+        blocks["mid.block_1"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in, direct));
+        blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in, direct));
+        blocks["mid.block_2"] = std::shared_ptr<GGMLBlock>(new ResnetBlock(block_in, block_in, direct));
 
         blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(block_in));
-        blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(block_in, double_z ? z_channels * 2 : z_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
+        blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(block_in, double_z ? z_channels * 2 : z_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
     }
 
     virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -324,6 +334,7 @@ protected:
     int z_channels           = 4;
     bool video_decoder       = false;
     int video_kernel_size    = 3;
+    bool direct              = false;
 
     virtual std::shared_ptr<GGMLBlock> get_conv_out(int64_t in_channels,
                                                     int64_t out_channels,
@@ -343,9 +354,9 @@ protected:
     virtual std::shared_ptr<GGMLBlock> get_resnet_block(int64_t in_channels,
                                                         int64_t out_channels) {
         if (video_decoder) {
-            return std::shared_ptr<GGMLBlock>(new VideoResnetBlock(in_channels, out_channels, video_kernel_size));
+            return std::shared_ptr<GGMLBlock>(new VideoResnetBlock(in_channels, out_channels, video_kernel_size, direct));
         } else {
-            return std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels));
+            return std::shared_ptr<GGMLBlock>(new ResnetBlock(in_channels, out_channels, direct));
         }
     }
 
@@ -356,21 +367,23 @@ public:
             int num_res_blocks,
             int z_channels,
             bool video_decoder    = false,
-            int video_kernel_size = 3)
+            int video_kernel_size = 3,
+            bool direct           = false)
         : ch(ch),
           out_ch(out_ch),
           ch_mult(ch_mult),
           num_res_blocks(num_res_blocks),
           z_channels(z_channels),
           video_decoder(video_decoder),
-          video_kernel_size(video_kernel_size) {
+          video_kernel_size(video_kernel_size),
+          direct(direct) {
         size_t num_resolutions = ch_mult.size();
         int block_in           = ch * ch_mult[num_resolutions - 1];
 
-        blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, block_in, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
+        blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, block_in, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
 
         blocks["mid.block_1"] = get_resnet_block(block_in, block_in);
-        blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in));
+        blocks["mid.attn_1"]  = std::shared_ptr<GGMLBlock>(new AttnBlock(block_in, direct));
         blocks["mid.block_2"] = get_resnet_block(block_in, block_in);
 
         for (int i = num_resolutions - 1; i >= 0; i--) {
@@ -384,12 +397,12 @@ public:
             }
             if (i != 0) {
                 std::string name = "up." + std::to_string(i) + ".upsample";
-                blocks[name]     = std::shared_ptr<GGMLBlock>(new UpSampleBlock(block_in, block_in));
+                blocks[name]     = std::shared_ptr<GGMLBlock>(new UpSampleBlock(block_in, block_in, direct));
             }
         }
 
         blocks["norm_out"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(block_in));
-        blocks["conv_out"] = get_conv_out(block_in, out_ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true);
+        blocks["conv_out"] = get_conv_out(block_in, out_ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct);
     }
 
     virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) {
@@ -446,6 +459,7 @@ protected:
     bool use_video_decoder = false;
     bool use_quant         = true;
     int embed_dim          = 4;
+    bool direct            = false;
     struct {
         int z_channels           = 4;
         int resolution           = 256;
@@ -460,8 +474,9 @@ protected:
 public:
     AutoencodingEngine(bool decode_only       = true,
                        bool use_video_decoder = false,
-                       SDVersion version      = VERSION_SD1)
-        : decode_only(decode_only), use_video_decoder(use_video_decoder) {
+                       SDVersion version      = VERSION_SD1,
+                       bool direct            = false)
+        : decode_only(decode_only), use_video_decoder(use_video_decoder), direct(direct) {
         if (sd_version_is_dit(version)) {
             dd_config.z_channels = 16;
             use_quant            = false;
@@ -474,7 +489,9 @@ public:
                                                                    dd_config.ch_mult,
                                                                    dd_config.num_res_blocks,
                                                                    dd_config.z_channels,
-                                                                   use_video_decoder));
+                                                                   use_video_decoder,
+                                                                   3,
+                                                                   direct));
         if (use_quant) {
             blocks["post_quant_conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(dd_config.z_channels,
                                                                               embed_dim,
@@ -483,7 +500,7 @@ public:
                                                                               {0, 0},
                                                                               {1, 1},
                                                                               true,
-                                                                              true));
+                                                                              direct));
         }
         if (!decode_only) {
             blocks["encoder"] = std::shared_ptr<GGMLBlock>(new Encoder(dd_config.ch,
@@ -491,7 +508,8 @@ public:
                                                                        dd_config.num_res_blocks,
                                                                        dd_config.in_channels,
                                                                        dd_config.z_channels,
-                                                                       dd_config.double_z));
+                                                                       dd_config.double_z,
+                                                                       direct));
             if (use_quant) {
                 int factor = dd_config.double_z ? 2 : 1;
 
@@ -502,7 +520,7 @@ public:
                                                                              {0, 0},
                                                                              {1, 1},
                                                                              true,
-                                                                             true));
+                                                                             direct));
             }
         }
     }
@@ -543,8 +561,9 @@ struct AutoEncoderKL : public GGMLRunner {
                   const std::string prefix,
                   bool decode_only       = false,
                   bool use_video_decoder = false,
-                  SDVersion version      = VERSION_SD1)
-        : decode_only(decode_only), ae(decode_only, use_video_decoder, version), GGMLRunner(backend) {
+                  SDVersion version      = VERSION_SD1,
+                  bool direct            = false)
+        : decode_only(decode_only), ae(decode_only, use_video_decoder, version, direct), GGMLRunner(backend) {
         ae.init(params_ctx, tensor_types, prefix);
     }
 

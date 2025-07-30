@@ -97,6 +97,8 @@ struct SDParams {
     bool clip_on_cpu              = false;
     bool vae_on_cpu               = false;
     bool diffusion_flash_attn     = false;
+    bool diffusion_conv_direct    = false;
+    bool vae_conv_direct          = false;
     bool canny_preprocess         = false;
     bool color                    = false;
     int upscale_repeats           = 1;
@@ -142,6 +144,8 @@ void print_params(SDParams params) {
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
     printf("    vae decoder on cpu:%s\n", params.vae_on_cpu ? "true" : "false");
     printf("    diffusion flash attention:%s\n", params.diffusion_flash_attn ? "true" : "false");
+    printf("    diffusion Conv2D direct:%s\n", params.diffusion_conv_direct ? "true" : "false");
+    printf("    vae Conv2D direct:%s\n", params.vae_conv_direct ? "true" : "false");
     printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
@@ -232,6 +236,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
     printf("                                     Might lower quality, since it implies converting k and v to f16.\n");
     printf("                                     This might crash if it is not supported by the backend.\n");
+    printf("  --diffusion-conv-direct            use Conv2D direct in the diffusion model");
+    printf("  --vae-conv-direct                  use Conv2D direct in the vae model (should improve the performance)");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            colors the logging tags according to level\n");
@@ -422,6 +428,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--clip-on-cpu", "", true, &params.clip_on_cpu},
         {"", "--vae-on-cpu", "", true, &params.vae_on_cpu},
         {"", "--diffusion-fa", "", true, &params.diffusion_flash_attn},
+        {"", "--diffusion-conv-direct", "", true, &params.diffusion_conv_direct},
+        {"", "--vae-conv-direct", "", true, &params.vae_conv_direct},
         {"", "--canny", "", true, &params.canny_preprocess},
         {"-v", "--verbos", "", true, &params.verbose},
         {"", "--color", "", true, &params.color},
@@ -901,6 +909,8 @@ int main(int argc, const char* argv[]) {
         params.control_net_cpu,
         params.vae_on_cpu,
         params.diffusion_flash_attn,
+        params.diffusion_conv_direct,
+        params.vae_conv_direct,
         params.chroma_use_dit_mask,
         params.chroma_use_t5_mask,
         params.chroma_t5_mask_pad,

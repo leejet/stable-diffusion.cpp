@@ -134,6 +134,8 @@ typedef struct {
     bool keep_control_net_on_cpu;
     bool keep_vae_on_cpu;
     bool diffusion_flash_attn;
+    bool diffusion_conv_direct;
+    bool vae_conv_direct;
     bool chroma_use_dit_mask;
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;

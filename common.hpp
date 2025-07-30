@@ -8,18 +8,21 @@ protected:
     int channels;
     int out_channels;
     bool vae_downsample;
+    bool direct = false;
 
 public:
     DownSampleBlock(int channels,
                     int out_channels,
-                    bool vae_downsample = false)
+                    bool vae_downsample = false,
+                    bool direct         = false)
         : channels(channels),
           out_channels(out_channels),
-          vae_downsample(vae_downsample) {
+          vae_downsample(vae_downsample),
+          direct(direct) {
         if (vae_downsample) {
-            blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {2, 2}, {0, 0}, {1, 1}, true, true));
+            blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {2, 2}, {0, 0}, {1, 1}, true, direct));
         } else {
-            blocks["op"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {2, 2}, {1, 1}));
+            blocks["op"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, true, direct));
         }
     }
 
@@ -43,13 +46,16 @@ class UpSampleBlock : public GGMLBlock {
 protected:
     int channels;
     int out_channels;
+    bool direct = false;
 
 public:
     UpSampleBlock(int channels,
-                  int out_channels)
+                  int out_channels,
+                  bool direct = false)
         : channels(channels),
-          out_channels(out_channels) {
-        blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, true));
+          out_channels(out_channels),
+          direct(direct) {
+        blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -381,7 +387,8 @@ public:
                        int64_t d_head,
                        int64_t depth,
                        int64_t context_dim,
-                       bool flash_attn = false)
+                       bool flash_attn = false,
+                       bool direct = false)
         : in_channels(in_channels),
           n_head(n_head),
           d_head(d_head),
@@ -391,14 +398,14 @@ public:
         // disable_self_attn is always False
         int64_t inner_dim = n_head * d_head;  // in_channels
         blocks["norm"]    = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, inner_dim, {1, 1}));
+        blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, inner_dim, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, direct));
 
         for (int i = 0; i < depth; i++) {
             std::string name = "transformer_blocks." + std::to_string(i);
             blocks[name]     = std::shared_ptr<GGMLBlock>(new BasicTransformerBlock(inner_dim, n_head, d_head, context_dim, false, flash_attn));
         }
 
-        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}));
+        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, true, direct));
     }
 
     virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
