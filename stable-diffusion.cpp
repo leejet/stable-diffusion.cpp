@@ -1939,6 +1939,15 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
 sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     int width  = sd_img_gen_params->width;
     int height = sd_img_gen_params->height;
+    if (sd_version_is_dit(sd_ctx->sd->version)) {
+        if (width % 16 || height % 16) {
+            LOG_ERROR("Image dimensions must be must be a multiple of 16 on each axis for %s models. (Got %dx%d)", model_version_to_str[sd_ctx->sd->version], width, height);
+            return NULL;
+        }
+    } else if (width % 64 || height % 64) {
+        LOG_ERROR("Image dimensions must be must be a multiple of 64 on each axis for %s models. (Got %dx%d)", model_version_to_str[sd_ctx->sd->version], width, height);
+        return NULL;
+    }
     LOG_DEBUG("generate_image %dx%d", width, height);
     if (sd_ctx == NULL || sd_img_gen_params == NULL) {
         return NULL;

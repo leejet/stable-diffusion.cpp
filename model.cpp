@@ -648,7 +648,7 @@ std::string convert_tensor_name(std::string name) {
     return new_name;
 }
 
-void add_preprocess_tensor_storage_types(std::map<std::string, enum ggml_type>& tensor_storages_types, std::string name, enum ggml_type type) {
+void add_preprocess_tensor_storage_types(String2GGMLType& tensor_storages_types, std::string name, enum ggml_type type) {
     std::string new_name = convert_tensor_name(name);
 
     if (new_name.find("cond_stage_model") != std::string::npos && ends_with(new_name, "attn.in_proj_weight")) {

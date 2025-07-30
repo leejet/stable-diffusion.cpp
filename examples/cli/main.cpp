@@ -614,13 +614,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         exit(1);
     }
 
-    if (params.width <= 0 || params.width % 64 != 0) {
-        fprintf(stderr, "error: the width must be a multiple of 64\n");
+    if (params.width <= 0) {
+        fprintf(stderr, "error: the width must be greater than 0\n");
         exit(1);
     }
 
-    if (params.height <= 0 || params.height % 64 != 0) {
-        fprintf(stderr, "error: the height must be a multiple of 64\n");
+    if (params.height <= 0) {
+        fprintf(stderr, "error: the height must be greater than 0\n");
         exit(1);
     }
 
@@ -695,10 +695,24 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(sd_rng_type_name(params.rng_type)) + ", ";
     parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.sample_method));
-    if (params.schedule == KARRAS) {
-        parameter_string += " karras";
+    if (params.schedule != DEFAULT) {
+        parameter_string += " " + std::string(sd_schedule_name(params.schedule));
     }
     parameter_string += ", ";
+    for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path}) {
+        if (!te.empty()) {
+            parameter_string += "TE: " + sd_basename(te) + ", ";
+        }
+    }
+    if (!params.diffusion_model_path.empty()) {
+        parameter_string += "Unet: " + sd_basename(params.diffusion_model_path) + ", ";
+    }
+    if (!params.vae_path.empty()) {
+        parameter_string += "VAE: " + sd_basename(params.vae_path) + ", ";
+    }
+    if (params.clip_skip != -1) {
+        parameter_string += "Clip skip: " + std::to_string(params.clip_skip) + ", ";
+    }
     parameter_string += "Version: stable-diffusion.cpp";
     return parameter_string;
 }
