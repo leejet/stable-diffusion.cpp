@@ -34,7 +34,8 @@ struct UNetModel : public DiffusionModel {
     UNetModel(ggml_backend_t backend,
               const String2GGMLType& tensor_types = {},
               SDVersion version                   = VERSION_SD1,
-              bool flash_attn                     = false)
+              bool flash_attn                     = false,
+              bool direct                         = false)
         : unet(backend, tensor_types, "model.diffusion_model", version, flash_attn, direct) {
     }
 
