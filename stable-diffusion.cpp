@@ -423,7 +423,7 @@ public:
                 } else {
                     controlnet_backend = backend;
                 }
-                control_net = std::make_shared<ControlNet>(controlnet_backend, model_loader.tensor_storages_types, version);
+                control_net = std::make_shared<ControlNet>(controlnet_backend, model_loader.tensor_storages_types, version, sd_ctx_params->diffusion_conv_direct);
             }
 
             if (strstr(SAFE_STR(sd_ctx_params->stacked_id_embed_dir), "v2")) {
