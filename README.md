@@ -339,9 +339,11 @@ arguments:
   --vae-on-cpu                       keep vae in cpu (for low vram)
   --clip-on-cpu                      keep clip in cpu (for low vram)
   --diffusion-fa                     use flash attention in the diffusion model (for low vram)
-  --diffusion-conv-direct            use Conv2D direct in the diffusion model
-  --vae-conv-direct                  use Conv2D direct in the vae model (should improve the performance)
                                      Might lower quality, since it implies converting k and v to f16.
+                                     This might crash if it is not supported by the backend.
+  --diffusion-conv-direct            use Conv2D direct in the diffusion model
+                                     This might crash if it is not supported by the backend.
+  --vae-conv-direct                  use Conv2D direct in the vae model (should improve the performance)
                                      This might crash if it is not supported by the backend.
   --control-net-cpu                  keep controlnet in cpu (for low vram)
   --canny                            apply canny preprocessor (edge detection)
