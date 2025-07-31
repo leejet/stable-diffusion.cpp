@@ -1518,15 +1518,8 @@ public:
         if (bias) {
             b = params["bias"];
         }
-        #if defined(SD_USE_OPENCL)
-            direct = true
-        #endif
         if (direct) {
-            #if defined(SD_USE_CUDA) || defined(SD_USE_SYCL) || defined(SD_USE_METAL)
-                return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
-            #else
-                return ggml_nn_conv_2d_direct(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
-            #endif
+            return ggml_nn_conv_2d_direct(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
         } else {
             return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
         }
