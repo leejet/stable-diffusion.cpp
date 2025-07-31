@@ -16,15 +16,16 @@ class ResidualDenseBlock : public GGMLBlock {
 protected:
     int num_feat;
     int num_grow_ch;
+    bool direct = false;
 
 public:
-    ResidualDenseBlock(int num_feat = 64, int num_grow_ch = 32)
-        : num_feat(num_feat), num_grow_ch(num_grow_ch) {
-        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_grow_ch, {3, 3}, {1, 1}, {1, 1}));
-        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat + num_grow_ch, num_grow_ch, {3, 3}, {1, 1}, {1, 1}));
-        blocks["conv3"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat + 2 * num_grow_ch, num_grow_ch, {3, 3}, {1, 1}, {1, 1}));
-        blocks["conv4"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat + 3 * num_grow_ch, num_grow_ch, {3, 3}, {1, 1}, {1, 1}));
-        blocks["conv5"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat + 4 * num_grow_ch, num_feat, {3, 3}, {1, 1}, {1, 1}));
+    ResidualDenseBlock(int num_feat = 64, int num_grow_ch = 32, bool direct = false)
+        : num_feat(num_feat), num_grow_ch(num_grow_ch), direct(direct) {
+        blocks["conv1"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_grow_ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks["conv2"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat + num_grow_ch, num_grow_ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks["conv3"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat + 2 * num_grow_ch, num_grow_ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks["conv4"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat + 3 * num_grow_ch, num_grow_ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks["conv5"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat + 4 * num_grow_ch, num_feat, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
     }
 
     struct ggml_tensor* lrelu(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -58,10 +59,10 @@ public:
 
 class RRDB : public GGMLBlock {
 public:
-    RRDB(int num_feat, int num_grow_ch = 32) {
-        blocks["rdb1"] = std::shared_ptr<GGMLBlock>(new ResidualDenseBlock(num_feat, num_grow_ch));
-        blocks["rdb2"] = std::shared_ptr<GGMLBlock>(new ResidualDenseBlock(num_feat, num_grow_ch));
-        blocks["rdb3"] = std::shared_ptr<GGMLBlock>(new ResidualDenseBlock(num_feat, num_grow_ch));
+    RRDB(int num_feat, int num_grow_ch = 32, bool direct = false) {
+        blocks["rdb1"] = std::shared_ptr<GGMLBlock>(new ResidualDenseBlock(num_feat, num_grow_ch, direct));
+        blocks["rdb2"] = std::shared_ptr<GGMLBlock>(new ResidualDenseBlock(num_feat, num_grow_ch, direct));
+        blocks["rdb3"] = std::shared_ptr<GGMLBlock>(new ResidualDenseBlock(num_feat, num_grow_ch, direct));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -89,20 +90,21 @@ protected:
     int num_out_ch  = 3;
     int num_feat    = 64;  // default RealESRGAN_x4plus_anime_6B
     int num_grow_ch = 32;  // default RealESRGAN_x4plus_anime_6B
+    bool direct     = false;
 
 public:
-    RRDBNet() {
-        blocks["conv_first"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_in_ch, num_feat, {3, 3}, {1, 1}, {1, 1}));
+    RRDBNet(bool direct = false) {
+        blocks["conv_first"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_in_ch, num_feat, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
         for (int i = 0; i < num_block; i++) {
             std::string name = "body." + std::to_string(i);
             blocks[name]     = std::shared_ptr<GGMLBlock>(new RRDB(num_feat, num_grow_ch));
         }
-        blocks["conv_body"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_feat, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv_body"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_feat, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
         // upsample
-        blocks["conv_up1"]  = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_feat, {3, 3}, {1, 1}, {1, 1}));
-        blocks["conv_up2"]  = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_feat, {3, 3}, {1, 1}, {1, 1}));
-        blocks["conv_hr"]   = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_feat, {3, 3}, {1, 1}, {1, 1}));
-        blocks["conv_last"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_out_ch, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv_up1"]  = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_feat, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks["conv_up2"]  = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_feat, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks["conv_hr"]   = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_feat, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks["conv_last"] = std::shared_ptr<GGMLBlock>(new Conv2d(num_feat, num_out_ch, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
     }
 
     struct ggml_tensor* lrelu(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -142,8 +144,8 @@ struct ESRGAN : public GGMLRunner {
     int scale     = 4;
     int tile_size = 128;  // avoid cuda OOM for 4gb VRAM
 
-    ESRGAN(ggml_backend_t backend, const String2GGMLType& tensor_types = {})
-        : GGMLRunner(backend) {
+    ESRGAN(ggml_backend_t backend, const String2GGMLType& tensor_types = {}, bool direct = false)
+        : GGMLRunner(backend), rrdb_net(direct) {
         rrdb_net.init(params_ctx, tensor_types, "");
     }
 

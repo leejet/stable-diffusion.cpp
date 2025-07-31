@@ -1024,7 +1024,8 @@ int main(int argc, const char* argv[]) {
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (params.esrgan_path.size() > 0 && params.upscale_repeats > 0) {
         upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
-                                                        params.n_threads);
+                                                        params.n_threads,
+                                                        params.diffusion_conv_direct);
 
         if (upscaler_ctx == NULL) {
             printf("new_upscaler_ctx failed\n");
