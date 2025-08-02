@@ -27,6 +27,8 @@
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
+#include "wan.hpp"
+
 const char* modes_str[] = {
     "img_gen",
     "vid_gen",
@@ -744,6 +746,11 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 
 int main(int argc, const char* argv[]) {
     SDParams params;
+    // params.verbose = true;
+    // sd_set_log_callback(sd_log_cb, (void*)&params);
+
+    // WAN::WanVAERunner::load_from_file_and_test(argv[1]);
+    // return 0;
 
     parse_args(argc, argv, params);
 

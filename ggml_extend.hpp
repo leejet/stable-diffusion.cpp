@@ -210,7 +210,7 @@ __STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_
                     if (tensor->type == GGML_TYPE_F32) {
                         printf("  [%d, %d, %d, %d] = %f\n", i, j, k, l, ggml_tensor_get_f32(tensor, l, k, j, i));
                     } else if (tensor->type == GGML_TYPE_F16) {
-                        printf("  [%d, %d, %d, %d] = %i\n", i, j, k, l, ggml_tensor_get_f16(tensor, l, k, j, i));
+                        printf("  [%d, %d, %d, %d] = %f\n", i, j, k, l, ggml_fp16_to_fp32(ggml_tensor_get_f16(tensor, l, k, j, i)));
                     } else if (tensor->type == GGML_TYPE_I32) {
                         printf("  [%d, %d, %d, %d] = %i\n", i, j, k, l, ggml_tensor_get_i32(tensor, l, k, j, i));
                     }
@@ -598,6 +598,116 @@ __STATIC_INLINE__ void ggml_tensor_scale_output(struct ggml_tensor* src) {
     }
 }
 
+// torch like permute
+__STATIC_INLINE__ struct ggml_tensor* ggml_torch_permute(struct ggml_context* ctx,
+                                                         struct ggml_tensor* x,
+                                                         int axis0,
+                                                         int axis1,
+                                                         int axis2,
+                                                         int axis3) {
+    int torch_axes[4] = {axis0, axis1, axis2, axis3};
+
+    int ggml_axes[4] = {0};
+    for (int i = 0; i < 4; ++i) {
+        int found = 0;
+        for (int j = 0; j < 4; ++j) {
+            if (torch_axes[j] == i) {
+                ggml_axes[i] = j;
+                found        = 1;
+                break;
+            }
+        }
+        GGML_ASSERT(found && "Invalid permute input: must be a permutation of 0-3");
+    }
+
+    return ggml_permute(ctx, x, ggml_axes[0], ggml_axes[1], ggml_axes[2], ggml_axes[3]);
+}
+
+__STATIC_INLINE__ struct ggml_tensor* ggml_slice(struct ggml_context* ctx,
+                                                 struct ggml_tensor* x,
+                                                 int64_t dim,
+                                                 int64_t start,
+                                                 int64_t end) {
+    GGML_ASSERT(dim >= 0 && dim < 4);
+    if (x->ne[dim] == 1) {
+        return x;
+    }
+    while (start < 0) {
+        start = x->ne[dim] + start;
+    }
+    while (end < 0) {
+        end = x->ne[dim] + end;
+    }
+    GGML_ASSERT(end > start);
+    GGML_ASSERT(start >= 0 && start < x->ne[dim]);
+    GGML_ASSERT(end > start && end <= x->ne[dim]);
+
+    int perm[4] = {0, 1, 2, 3};
+    for (int i = dim; i < 3; ++i)
+        perm[i] = perm[i + 1];
+    perm[3] = dim;
+
+    int inv_perm[4];
+    for (int i = 0; i < 4; ++i)
+        inv_perm[perm[i]] = i;
+
+    if (dim != 3) {
+        x = ggml_torch_permute(ctx, x, perm[0], perm[1], perm[2], perm[3]);
+        x = ggml_cont(ctx, x);
+    }
+
+    x = ggml_view_4d(
+        ctx, x,
+        x->ne[0], x->ne[1], x->ne[2], end - start,
+        x->nb[1], x->nb[2], x->nb[3], x->nb[3] * start);
+
+    if (dim != 3) {
+        x = ggml_torch_permute(ctx, x, inv_perm[0], inv_perm[1], inv_perm[2], inv_perm[3]);
+    }
+
+    return x;
+}
+
+// example: [N, 3*C, H, W] => ([N, C, H, W], [N, C, H, W], [N, C, H, W])
+__STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_chunk(struct ggml_context* ctx,
+                                                              struct ggml_tensor* x,
+                                                              int num,
+                                                              int64_t dim) {
+    GGML_ASSERT(dim >= 0 && dim < 4);
+    GGML_ASSERT(x->ne[dim] % num == 0);
+
+    int perm[4] = {0, 1, 2, 3};
+    for (int i = dim; i < 3; ++i)
+        perm[i] = perm[i + 1];
+    perm[3] = dim;
+
+    int inv_perm[4];
+    for (int i = 0; i < 4; ++i)
+        inv_perm[perm[i]] = i;
+
+    if (dim != 3) {
+        x = ggml_torch_permute(ctx, x, perm[0], perm[1], perm[2], perm[3]);
+        x = ggml_cont(ctx, x);
+    }
+
+    std::vector<struct ggml_tensor*> chunks;
+    int64_t chunk_size = x->ne[3] / num;
+    for (int i = 0; i < num; i++) {
+        auto chunk = ggml_view_4d(
+            ctx, x,
+            x->ne[0], x->ne[1], x->ne[2], chunk_size,
+            x->nb[1], x->nb[2], x->nb[3], x->nb[3] * i * chunk_size);
+
+        if (dim != 3) {
+            chunk = ggml_torch_permute(ctx, chunk, inv_perm[0], inv_perm[1], inv_perm[2], inv_perm[3]);
+            chunk = ggml_cont(ctx, chunk);
+        }
+        chunks.push_back(chunk);
+    }
+
+    return chunks;
+}
+
 typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
 // Tiling
@@ -706,6 +816,36 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d(struct ggml_context* ctx,
     return x;
 }
 
+// w: [OC*IC, KD, KH, KW]
+// x: [N*IC, ID, IH, IW]
+// b: [OC,]
+// result: [N*OC, OD, OH, OW]
+__STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_3d(struct ggml_context* ctx,
+                                                      struct ggml_tensor* x,
+                                                      struct ggml_tensor* w,
+                                                      struct ggml_tensor* b,
+                                                      int64_t IC,
+                                                      int s0 = 1,
+                                                      int s1 = 1,
+                                                      int s2 = 1,
+                                                      int p0 = 0,
+                                                      int p1 = 0,
+                                                      int p2 = 0,
+                                                      int d0 = 1,
+                                                      int d1 = 1,
+                                                      int d2 = 1) {
+    int64_t OC = w->ne[3] / IC;
+    int64_t N  = x->ne[3] / IC;
+    x          = ggml_conv_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2);
+    
+
+    if (b != NULL) {
+        b = ggml_reshape_4d(ctx, b, 1, 1, 1, b->ne[0]);                     // [OC, 1, 1, 1]
+        x = ggml_add(ctx, x, b);
+    }
+    return x;
+}
+
 // w: [OC，IC, KD, 1 * 1]
 // x: [N, IC, IH, IW]
 // b: [OC,]
@@ -770,6 +910,26 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> split_qkv(struct ggml_context
     auto q         = ggml_view_3d(ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->nb[1], qkv->nb[2], offset * 0);  // [N, L, C]
     auto k         = ggml_view_3d(ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->nb[1], qkv->nb[2], offset * 1);  // [N, L, C]
     auto v         = ggml_view_3d(ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->nb[1], qkv->nb[2], offset * 2);  // [N, L, C]
+    return {q, k, v};
+}
+
+// qkv: [N, 3*C, H, W]
+// return: ([N, C, H, W], [N, C, H, W], [N, C, H, W])
+__STATIC_INLINE__ std::vector<struct ggml_tensor*> split_image_qkv(struct ggml_context* ctx,
+                                                                   struct ggml_tensor* qkv) {
+    int64_t W   = qkv->ne[0];
+    int64_t H   = qkv->ne[1];
+    int64_t C   = qkv->ne[2] / 3;
+    int64_t N   = qkv->ne[3];
+    int64_t nb1 = qkv->nb[1];
+    int64_t nb2 = qkv->nb[2];
+    qkv         = ggml_reshape_4d(ctx, qkv, W * H, C, 3, N);                 // [N, 3, C, H*W]
+    qkv         = ggml_cont(ctx, ggml_torch_permute(ctx, qkv, 0, 1, 3, 2));  // [3, N, C, H*W]
+
+    int64_t offset = qkv->nb[2] * qkv->ne[2];
+    auto q         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[3], offset * 0);  // [N, C, H, W]
+    auto k         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[3], offset * 1);  // [N, C, H, W]
+    auto v         = ggml_view_4d(ctx, qkv, W, H, C, N, nb1, nb2, qkv->nb[3], offset * 2);  // [N, C, H, W]
     return {q, k, v};
 }
 
@@ -1095,7 +1255,7 @@ __STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
 
 /* SDXL with LoRA requires more space */
 #define MAX_PARAMS_TENSOR_NUM 32768
-#define MAX_GRAPH_SIZE 32768
+#define MAX_GRAPH_SIZE 327680
 
 typedef std::map<std::string, enum ggml_type> String2GGMLType;
 
@@ -1544,6 +1704,58 @@ public:
             b = params["bias"];
         }
         return ggml_nn_conv_3d_nx1x1(ctx, x, w, b, stride, padding, dilation);
+    }
+};
+
+class Conv3d : public UnaryBlock {
+protected:
+    int64_t in_channels;
+    int64_t out_channels;
+    std::tuple<int, int, int> kernel_size;
+    std::tuple<int, int, int> stride;
+    std::tuple<int, int, int> padding;
+    std::tuple<int, int, int> dilation;
+    bool bias;
+
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F16;
+        params["weight"]     = ggml_new_tensor_4d(ctx,
+                                                  wtype,
+                                                  std::get<2>(kernel_size),
+                                                  std::get<1>(kernel_size),
+                                                  std::get<0>(kernel_size),
+                                                  in_channels * out_channels);
+        if (bias) {
+            params["bias"]       = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
+        }
+    }
+
+public:
+    Conv3d(int64_t in_channels,
+           int64_t out_channels,
+           std::tuple<int, int, int> kernel_size,
+           std::tuple<int, int, int> stride   = {1, 1, 1},
+           std::tuple<int, int, int> padding  = {0, 0, 0},
+           std::tuple<int, int, int> dilation = {1, 1, 1},
+           bool bias                          = true)
+        : in_channels(in_channels),
+          out_channels(out_channels),
+          kernel_size(kernel_size),
+          stride(stride),
+          padding(padding),
+          dilation(dilation),
+          bias(bias) {}
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* w = params["weight"];
+        struct ggml_tensor* b = NULL;
+        if (bias) {
+            b = params["bias"];
+        }
+        return ggml_nn_conv_3d(ctx, x, w, b, in_channels,
+                               std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
+                               std::get<2>(padding), std::get<1>(padding), std::get<0>(padding),
+                               std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation));
     }
 };
 

@@ -684,6 +684,13 @@ void preprocess_tensor(TensorStorage tensor_storage,
         tensor_storage.unsqueeze();
     }
 
+    // wan vae
+    if (ends_with(new_name, "gamma")) {
+        tensor_storage.reverse_ne();
+        tensor_storage.n_dims = 1;
+        tensor_storage.reverse_ne();
+    }
+
     tensor_storage.name = new_name;
 
     if (new_name.find("cond_stage_model") != std::string::npos &&
@@ -1085,7 +1092,7 @@ ggml_type str_to_ggml_type(const std::string& dtype) {
 
 // https://huggingface.co/docs/safetensors/index
 bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const std::string& prefix) {
-    LOG_DEBUG("init from '%s'", file_path.c_str());
+    LOG_DEBUG("init from '%s', prefix = '%s'", file_path.c_str(), prefix.c_str());
     file_paths_.push_back(file_path);
     size_t file_index = file_paths_.size() - 1;
     std::ifstream file(file_path, std::ios::binary);
@@ -1171,12 +1178,11 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         }
 
         if (n_dims == 5) {
-            if (ne[3] == 1 && ne[4] == 1) {
-                n_dims = 4;
-            } else {
-                LOG_ERROR("invalid tensor '%s'", name.c_str());
-                return false;
-            }
+            n_dims = 4;
+            ne[0] = ne[0]*ne[1];
+            ne[1] = ne[2];
+            ne[2] = ne[3];
+            ne[3] = ne[4];
         }
 
         // ggml_n_dims returns 1 for scalars
