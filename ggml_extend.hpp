@@ -56,6 +56,8 @@
 #define __STATIC_INLINE__ static inline
 #endif
 
+static_assert(GGML_MAX_NAME >= 128, "GGML_MAX_NAME must be at least 128");
+
 // n-mode trensor-matrix product
 // example: 2-mode product
 // A: [ne03, k, ne01, ne00]
