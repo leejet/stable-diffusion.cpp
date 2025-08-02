@@ -708,6 +708,25 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d(struct ggml_context* ctx,
     return x;
 }
 
+__STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d_direct(struct ggml_context* ctx,
+                                                             struct ggml_tensor* x,
+                                                             struct ggml_tensor* w,
+                                                             struct ggml_tensor* b,
+                                                             int s0 = 1,
+                                                             int s1 = 1,
+                                                             int p0 = 0,
+                                                             int p1 = 0,
+                                                             int d0 = 1,
+                                                             int d1 = 1) {
+    x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
+    if (b != NULL) {
+        b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
+        // b = ggml_repeat(ctx, b, x);
+        x = ggml_add(ctx, x, b);
+    }
+    return x;
+}
+
 // w: [OC，IC, KD, 1 * 1]
 // x: [N, IC, IH, IW]
 // b: [OC,]
@@ -1377,6 +1396,19 @@ public:
             tensors[prefix + pair.first] = pair.second;
         }
     }
+
+    virtual std::string get_desc() {
+        return "GGMLBlock";
+    }
+
+    void get_all_blocks(std::vector<GGMLBlock*>& result) {
+        result.push_back(this);
+        for (auto& block_iter : blocks) {
+            if (block_iter.second) {
+                block_iter.second->get_all_blocks(result);
+            }
+        }
+    }
 };
 
 class UnaryBlock : public GGMLBlock {
@@ -1466,6 +1498,7 @@ protected:
     std::pair<int, int> padding;
     std::pair<int, int> dilation;
     bool bias;
+    bool direct = false;
 
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
         enum ggml_type wtype = GGML_TYPE_F16;
@@ -1492,13 +1525,25 @@ public:
           dilation(dilation),
           bias(bias) {}
 
+    void enable_direct() {
+        direct = true;
+    }
+
+    std::string get_desc() {
+        return "Conv2d";
+    }
+
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = NULL;
         if (bias) {
             b = params["bias"];
         }
-        return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+        if (direct) {
+            return ggml_nn_conv_2d_direct(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+        } else {
+            return ggml_nn_conv_2d(ctx, x, w, b, stride.second, stride.first, padding.second, padding.first, dilation.second, dilation.first);
+        }
     }
 };
 
