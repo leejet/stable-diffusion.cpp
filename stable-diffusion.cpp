@@ -628,6 +628,16 @@ public:
                     denoiser->schedule          = std::make_shared<GITSSchedule>();
                     denoiser->schedule->version = version;
                     break;
+                case SGM_UNIFORM:
+                    LOG_INFO("Running with SGM Uniform schedule");
+                    denoiser->schedule          = std::make_shared<SGMUniformSchedule>();
+                    denoiser->schedule->version = version;
+                    break;
+                case SIMPLE:
+                    LOG_INFO("Running with Simple schedule");
+                    denoiser->schedule          = std::make_shared<SimpleSchedule>();
+                    denoiser->schedule->version = version;
+                    break;
                 case DEFAULT:
                     // Don't touch anything.
                     break;
@@ -848,7 +858,13 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
-                        ggml_tensor* denoise_mask             = nullptr) {
+                        ggml_tensor* denoise_mask             = nullptr,
+                        int shifted_timestep                 = -1) {
+        
+        if (shifted_timestep > 0 && !sd_version_is_sdxl(version)) {
+            LOG_WARN("Timestep shifting is only supported for SDXL models. Ignoring --timestep-shift.");
+            shifted_timestep = -1;
+        }
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
         float cfg_scale     = guidance.txt_cfg;
@@ -907,181 +923,218 @@ public:
         if (has_img_cond) {
             out_img_cond = ggml_dup_tensor(work_ctx, x);
         }
-        struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
+    struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
-        auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
-            if (step == 1) {
-                pretty_progress(0, (int)steps, 0);
-            }
-            int64_t t0 = ggml_time_us();
+    auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
+        if (step == 1) {
+            pretty_progress(0, (int)steps, 0);
+        }
+        int64_t t0 = ggml_time_us();
 
-            std::vector<float> scaling = denoiser->get_scalings(sigma);
-            GGML_ASSERT(scaling.size() == 3);
-            float c_skip = scaling[0];
-            float c_out  = scaling[1];
-            float c_in   = scaling[2];
+        std::vector<float> scaling = denoiser->get_scalings(sigma);
+        GGML_ASSERT(scaling.size() == 3);
+        float c_skip = scaling[0];
+        float c_out  = scaling[1];
+        float c_in   = scaling[2];
 
-            float t = denoiser->sigma_to_t(sigma);
-            std::vector<float> timesteps_vec(x->ne[3], t);  // [N, ]
-            auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
-            std::vector<float> guidance_vec(x->ne[3], guidance.distilled_guidance);
-            auto guidance_tensor = vector_to_ggml_tensor(work_ctx, guidance_vec);
+        float t = denoiser->sigma_to_t(sigma);
+        std::vector<float> timesteps_vec;
+        if (shifted_timestep > 0 && sd_version_is_sdxl(version)) {
+            float shifted_t_float = t * (float(shifted_timestep) / float(TIMESTEPS));
+            int64_t shifted_t     = static_cast<int64_t>(roundf(shifted_t_float));
+            shifted_t             = std::max((int64_t)0, std::min((int64_t)(TIMESTEPS - 1), shifted_t));
+            LOG_DEBUG("Shifting timestep from %.2f to %" PRId64 " (sigma: %.4f)", t, shifted_t, sigma);
+            timesteps_vec.assign(x->ne[3], (float)shifted_t);
+        } else {
+            timesteps_vec.assign(x->ne[3], t);
+        }
 
-            copy_ggml_tensor(noised_input, input);
-            // noised_input = noised_input * c_in
-            ggml_tensor_scale(noised_input, c_in);
+        auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
+        std::vector<float> guidance_vec(x->ne[3], guidance.distilled_guidance);
+        auto guidance_tensor = vector_to_ggml_tensor(work_ctx, guidance_vec);
 
-            std::vector<struct ggml_tensor*> controls;
+        copy_ggml_tensor(noised_input, input);
+        // noised_input = noised_input * c_in
+        ggml_tensor_scale(noised_input, c_in);
 
+        std::vector<struct ggml_tensor*> controls;
+
+        if (control_hint != NULL) {
+            control_net->compute(n_threads, noised_input, control_hint, timesteps, cond.c_crossattn, cond.c_vector);
+            controls = control_net->controls;
+            // print_ggml_tensor(controls[12]);
+            // GGML_ASSERT(0);
+        }
+
+        if (start_merge_step == -1 || step <= start_merge_step) {
+            // cond
+            diffusion_model->compute(n_threads,
+                                     noised_input,
+                                     timesteps,
+                                     cond.c_crossattn,
+                                     cond.c_concat,
+                                     cond.c_vector,
+                                     guidance_tensor,
+                                     ref_latents,
+                                     -1,
+                                     controls,
+                                     control_strength,
+                                     &out_cond);
+        } else {
+            diffusion_model->compute(n_threads,
+                                     noised_input,
+                                     timesteps,
+                                     id_cond.c_crossattn,
+                                     cond.c_concat,
+                                     id_cond.c_vector,
+                                     guidance_tensor,
+                                     ref_latents,
+                                     -1,
+                                     controls,
+                                     control_strength,
+                                     &out_cond);
+        }
+
+        float* negative_data = NULL;
+        if (has_unconditioned) {
+            // uncond
             if (control_hint != NULL) {
-                control_net->compute(n_threads, noised_input, control_hint, timesteps, cond.c_crossattn, cond.c_vector);
+                control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector);
                 controls = control_net->controls;
-                // print_ggml_tensor(controls[12]);
-                // GGML_ASSERT(0);
             }
+            diffusion_model->compute(n_threads,
+                                     noised_input,
+                                     timesteps,
+                                     uncond.c_crossattn,
+                                     uncond.c_concat,
+                                     uncond.c_vector,
+                                     guidance_tensor,
+                                     ref_latents,
+                                     -1,
+                                     controls,
+                                     control_strength,
+                                     &out_uncond);
+            negative_data = (float*)out_uncond->data;
+        }
 
-            if (start_merge_step == -1 || step <= start_merge_step) {
-                // cond
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         cond.c_crossattn,
-                                         cond.c_concat,
-                                         cond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_cond);
-            } else {
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         id_cond.c_crossattn,
-                                         cond.c_concat,
-                                         id_cond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_cond);
-            }
+        float* img_cond_data = NULL;
+        if (has_img_cond) {
+            diffusion_model->compute(n_threads,
+                                     noised_input,
+                                     timesteps,
+                                     img_cond.c_crossattn,
+                                     img_cond.c_concat,
+                                     img_cond.c_vector,
+                                     guidance_tensor,
+                                     ref_latents,
+                                     -1,
+                                     controls,
+                                     control_strength,
+                                     &out_img_cond);
+            img_cond_data = (float*)out_img_cond->data;
+        }
 
-            float* negative_data = NULL;
-            if (has_unconditioned) {
-                // uncond
-                if (control_hint != NULL) {
-                    control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector);
-                    controls = control_net->controls;
-                }
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         uncond.c_crossattn,
-                                         uncond.c_concat,
-                                         uncond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_uncond);
-                negative_data = (float*)out_uncond->data;
-            }
+        int step_count         = sigmas.size();
+        bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
+        float* skip_layer_data = NULL;
+        if (is_skiplayer_step) {
+            LOG_DEBUG("Skipping layers at step %d\n", step);
+            // skip layer (same as conditionned)
+            diffusion_model->compute(n_threads,
+                                     noised_input,
+                                     timesteps,
+                                     cond.c_crossattn,
+                                     cond.c_concat,
+                                     cond.c_vector,
+                                     guidance_tensor,
+                                     ref_latents,
+                                     -1,
+                                     controls,
+                                     control_strength,
+                                     &out_skip,
+                                     NULL,
+                                     skip_layers);
+            skip_layer_data = (float*)out_skip->data;
+        }
+        float* vec_denoised      = (float*)denoised->data;
+        float* vec_input         = (float*)input->data;
+        float* positive_data     = (float*)out_cond->data;
+        float* negative_data_ptr = has_unconditioned ? (float*)out_uncond->data : nullptr;
+        float* skip_layer_data_ptr = is_skiplayer_step ? (float*)out_skip->data : nullptr;
+        int ne_elements          = (int)ggml_nelements(denoised);
 
-            float* img_cond_data = NULL;
-            if (has_img_cond) {
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         img_cond.c_crossattn,
-                                         img_cond.c_concat,
-                                         img_cond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_img_cond);
-                img_cond_data = (float*)out_img_cond->data;
-            }
+        if (shifted_timestep > 0 && sd_version_is_sdxl(version)) {
+            int64_t shifted_t_idx = static_cast<int64_t>(roundf(timesteps_vec[0]));
 
-            int step_count         = sigmas.size();
-            bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
-            float* skip_layer_data = NULL;
-            if (is_skiplayer_step) {
-                LOG_DEBUG("Skipping layers at step %d\n", step);
-                // skip layer (same as conditionned)
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         cond.c_crossattn,
-                                         cond.c_concat,
-                                         cond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_skip,
-                                         NULL,
-                                         skip_layers);
-                skip_layer_data = (float*)out_skip->data;
-            }
-            float* vec_denoised  = (float*)denoised->data;
-            float* vec_input     = (float*)input->data;
-            float* positive_data = (float*)out_cond->data;
-            int ne_elements      = (int)ggml_nelements(denoised);
+            float shifted_sigma               = denoiser->t_to_sigma((float)shifted_t_idx);
+            std::vector<float> shifted_scaling = denoiser->get_scalings(shifted_sigma);
+            float shifted_c_skip              = shifted_scaling[0];
+            float shifted_c_out               = shifted_scaling[1];
+            auto compvis_denoiser_ptr         = std::dynamic_pointer_cast<CompVisDenoiser>(denoiser);
+            float sigma_data                  = compvis_denoiser_ptr ? compvis_denoiser_ptr->sigma_data : 1.0f;
+
+            float sigma_sq         = sigma * sigma;
+            float shifted_sigma_sq = shifted_sigma * shifted_sigma;
+            float sigma_data_sq    = sigma_data * sigma_data;
+
+            float input_scale_factor = sqrtf((shifted_sigma_sq + sigma_data_sq) / (sigma_sq + sigma_data_sq));
+
             for (int i = 0; i < ne_elements; i++) {
-                float latent_result = positive_data[i];
+                float model_output_result = positive_data[i];
                 if (has_unconditioned) {
-                    // out_uncond + cfg_scale * (out_cond - out_uncond)
-                    int64_t ne3 = out_cond->ne[3];
-                    if (min_cfg != cfg_scale && ne3 != 1) {
-                        int64_t i3  = i / out_cond->ne[0] * out_cond->ne[1] * out_cond->ne[2];
-                        float scale = min_cfg + (cfg_scale - min_cfg) * (i3 * 1.0f / ne3);
+                    if (has_img_cond) {
+                        model_output_result = negative_data_ptr[i] + img_cfg_scale * (img_cond_data[i] - negative_data_ptr[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
                     } else {
-                        if (has_img_cond) {
-                            // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
-                            latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
-                        } else {
-                            // img_cfg_scale == cfg_scale
-                            latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
-                        }
+                        model_output_result = negative_data_ptr[i] + cfg_scale * (positive_data[i] - negative_data_ptr[i]);
                     }
                 } else if (has_img_cond) {
-                    // img_cfg_scale == 1
-                    latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                    model_output_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
                 }
                 if (is_skiplayer_step) {
-                    latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
+                    model_output_result = model_output_result + slg_scale * (positive_data[i] - skip_layer_data_ptr[i]);
                 }
-                // v = latent_result, eps = latent_result
-                // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
-                vec_denoised[i] = latent_result * c_out + vec_input[i] * c_skip;
+                float adjusted_input = vec_input[i] * input_scale_factor;
+                vec_denoised[i]      = adjusted_input * shifted_c_skip + model_output_result * shifted_c_out;
             }
-            int64_t t1 = ggml_time_us();
-            if (step > 0) {
-                pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
-                // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
+
+        } else {
+            for (int i = 0; i < ne_elements; i++) {
+                float model_output_result = positive_data[i];
+                if (has_unconditioned) {
+                    if (has_img_cond) {
+                        model_output_result = negative_data_ptr[i] + img_cfg_scale * (img_cond_data[i] - negative_data_ptr[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                    } else {
+                        model_output_result = negative_data_ptr[i] + cfg_scale * (positive_data[i] - negative_data_ptr[i]);
+                    }
+                } else if (has_img_cond) {
+                    model_output_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                }
+                if (is_skiplayer_step) {
+                    model_output_result = model_output_result + slg_scale * (positive_data[i] - skip_layer_data_ptr[i]);
+                }
+                vec_denoised[i] = vec_input[i] * c_skip + model_output_result * c_out;
             }
-            if (denoise_mask != nullptr) {
-                for (int64_t x = 0; x < denoised->ne[0]; x++) {
-                    for (int64_t y = 0; y < denoised->ne[1]; y++) {
-                        float mask = ggml_tensor_get_f32(denoise_mask, x, y);
-                        for (int64_t k = 0; k < denoised->ne[2]; k++) {
-                            float init = ggml_tensor_get_f32(init_latent, x, y, k);
-                            float den  = ggml_tensor_get_f32(denoised, x, y, k);
-                            ggml_tensor_set_f32(denoised, init + mask * (den - init), x, y, k);
-                        }
+        }
+        int64_t t1 = ggml_time_us();
+        if (step > 0) {
+            pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
+            // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
+        }
+        if (denoise_mask != nullptr) {
+            for (int64_t x = 0; x < denoised->ne[0]; x++) {
+                for (int64_t y = 0; y < denoised->ne[1]; y++) {
+                    float mask = ggml_tensor_get_f32(denoise_mask, x, y);
+                    for (int64_t k = 0; k < denoised->ne[2]; k++) {
+                        float init = ggml_tensor_get_f32(init_latent, x, y, k);
+                        float den  = ggml_tensor_get_f32(denoised, x, y, k);
+                        ggml_tensor_set_f32(denoised, init + mask * (den - init), x, y, k);
                     }
                 }
             }
+        }
 
-            return denoised;
-        };
+        return denoised;
+    };
 
         sample_k_diffusion(method, denoise, work_ctx, x, sigmas, rng, eta);
 
@@ -1272,6 +1325,8 @@ const char* schedule_to_str[] = {
     "exponential",
     "ays",
     "gits",
+    "sgm_uniform",
+    "simple",
 };
 
 const char* sd_schedule_name(enum schedule_t schedule) {
@@ -1392,6 +1447,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->control_strength            = 0.9f;
     sd_img_gen_params->style_strength              = 20.f;
     sd_img_gen_params->normalize_input             = false;
+    sd_img_gen_params->shifted_timestep            = -1;
 }
 
 char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
@@ -1425,7 +1481,8 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "control_strength: %.2f\n"
              "style_strength: %.2f\n"
              "normalize_input: %s\n"
-             "input_id_images_path: %s\n",
+             "input_id_images_path: %s\n"
+             "shifted_timestep: %d\n",
              SAFE_STR(sd_img_gen_params->prompt),
              SAFE_STR(sd_img_gen_params->negative_prompt),
              sd_img_gen_params->clip_skip,
@@ -1449,7 +1506,8 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->control_strength,
              sd_img_gen_params->style_strength,
              BOOL_STR(sd_img_gen_params->normalize_input),
-             SAFE_STR(sd_img_gen_params->input_id_images_path));
+             SAFE_STR(sd_img_gen_params->input_id_images_path),
+             sd_img_gen_params->shifted_timestep);
 
     return buf;
 }
@@ -1529,7 +1587,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     std::string input_id_images_path,
                                     std::vector<ggml_tensor*> ref_latents,
                                     ggml_tensor* concat_latent = NULL,
-                                    ggml_tensor* denoise_mask  = NULL) {
+                                    ggml_tensor* denoise_mask  = NULL,
+                                    int shifted_timestep       = -1) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -1798,7 +1857,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
-                                                     denoise_mask);
+                                                     denoise_mask,
+                                                     shifted_timestep);
 
         // struct ggml_tensor* x_0 = load_tensor_from_file(ctx, "samples_ddim.bin");
         // print_ggml_tensor(x_0);
@@ -2081,7 +2141,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->input_id_images_path,
                                                         ref_latents,
                                                         concat_latent,
-                                                        denoise_mask);
+                                                        denoise_mask,
+                                                        sd_img_gen_params->shifted_timestep);
 
     size_t t2 = ggml_time_ms();
 

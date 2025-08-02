@@ -57,6 +57,8 @@ enum schedule_t {
     EXPONENTIAL,
     AYS,
     GITS,
+    SGM_UNIFORM,
+    SIMPLE,
     SCHEDULE_COUNT
 };
 
@@ -184,6 +186,7 @@ typedef struct {
     float style_strength;
     bool normalize_input;
     const char* input_id_images_path;
+    int shifted_timestep;
 } sd_img_gen_params_t;
 
 typedef struct {

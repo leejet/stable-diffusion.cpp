@@ -105,6 +105,7 @@ struct SDParams {
     float slg_scale              = 0.f;
     float skip_layer_start       = 0.01f;
     float skip_layer_end         = 0.2f;
+    int shifted_timestep         = -1;
 
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
@@ -163,6 +164,7 @@ void print_params(SDParams params) {
     printf("    batch_count:       %d\n", params.batch_count);
     printf("    vae_tiling:        %s\n", params.vae_tiling ? "true" : "false");
     printf("    upscale_repeats:   %d\n", params.upscale_repeats);
+    printf("    timestep_shift:    %d\n", params.shifted_timestep);
     printf("    chroma_use_dit_mask:   %s\n", params.chroma_use_dit_mask ? "true" : "false");
     printf("    chroma_use_t5_mask:    %s\n", params.chroma_use_t5_mask ? "true" : "false");
     printf("    chroma_t5_mask_pad:    %d\n", params.chroma_t5_mask_pad);
@@ -223,7 +225,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
+    printf("  --schedule {discrete, karras, exponential, ays, gits, sgm_uniform, simple} Denoiser sigma schedule (default: discrete)\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
@@ -235,6 +237,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            colors the logging tags according to level\n");
+    printf("  --timestep-shift N                 shift timestep for NitroFusion models, default: -1 off, recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant\n");
     printf("  --chroma-disable-dit-mask          disable dit mask for chroma\n");
     printf("  --chroma-enable-t5-mask            enable t5 mask for chroma\n");
     printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
@@ -487,7 +490,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         const char* arg = argv[index];
         params.schedule = str_to_schedule(arg);
         if (params.schedule == SCHEDULE_COUNT) {
-            fprintf(stderr, "error: invalid schedule %s\n",
+            fprintf(stderr, "error: invalid schedule %s, must be one of [discrete, karras, exponential, ays, gits, sgm_uniform, simple]\n",
                     arg);
             return -1;
         }
@@ -568,7 +571,18 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-r", "--ref-image", "", on_ref_image_arg},
         {"-h", "--help", "", on_help_arg},
     };
-
+    auto on_timestep_shift_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        params.shifted_timestep = std::stoi(argv[index]);
+        if (params.shifted_timestep != -1 && (params.shifted_timestep < 1 || params.shifted_timestep > 1000)) {
+            fprintf(stderr, "error: timestep-shift must be between 1 and 1000, or -1 to disable\n");
+            return -1;
+        }
+        return 1;
+    };
+    options.manual_options.push_back({"", "--timestep-shift", "", on_timestep_shift_arg});
     if (!parse_options(argc, argv, options)) {
         print_usage(argc, argv);
         exit(1);
@@ -979,6 +993,7 @@ int main(int argc, const char* argv[]) {
             params.style_ratio,
             params.normalize_input,
             params.input_id_images_path.c_str(),
+            params.shifted_timestep,
         };
 
         results              = generate_image(sd_ctx, &img_gen_params);
