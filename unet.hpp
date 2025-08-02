@@ -183,7 +183,7 @@ public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1, const String2GGMLType& tensor_types = {}, bool flash_attn = false, bool direct = false)
+    UnetModelBlock(SDVersion version = VERSION_SD1, const String2GGMLType& tensor_types = {}, bool flash_attn = false)
         : version(version) {
         if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
@@ -224,7 +224,7 @@ public:
         }
 
         // input_blocks
-        blocks["input_blocks.0.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, model_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks["input_blocks.0.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, model_channels, {3, 3}, {1, 1}, {1, 1}));
 
         std::vector<int> input_block_chans;
         input_block_chans.push_back(model_channels);
@@ -236,7 +236,7 @@ public:
             if (version == VERSION_SVD) {
                 return new VideoResBlock(channels, emb_channels, out_channels);
             } else {
-                return new ResBlock(channels, emb_channels, out_channels, {3, 3});
+                return new ResBlock(channels, emb_channels, out_channels);
             }
         };
 
@@ -248,7 +248,7 @@ public:
             if (version == VERSION_SVD) {
                 return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim);
             } else {
-                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, flash_attn, direct);
+                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, flash_attn);
             }
         };
 
@@ -280,7 +280,7 @@ public:
             if (i != len_mults - 1) {
                 input_block_idx += 1;
                 std::string name = "input_blocks." + std::to_string(input_block_idx) + ".0";
-                blocks[name]     = std::shared_ptr<GGMLBlock>(new DownSampleBlock(ch, ch, false, direct));
+                blocks[name]     = std::shared_ptr<GGMLBlock>(new DownSampleBlock(ch, ch));
 
                 input_block_chans.push_back(ch);
                 ds *= 2;
@@ -330,7 +330,7 @@ public:
 
                 if (i > 0 && j == num_res_blocks) {
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx);
-                    blocks[name]     = std::shared_ptr<GGMLBlock>(new UpSampleBlock(ch, ch, direct));
+                    blocks[name]     = std::shared_ptr<GGMLBlock>(new UpSampleBlock(ch, ch));
 
                     ds /= 2;
                 }
@@ -342,7 +342,7 @@ public:
         // out
         blocks["out.0"] = std::shared_ptr<GGMLBlock>(new GroupNorm32(ch));  // ch == model_channels
         // out_1 is nn.SiLU()
-        blocks["out.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(model_channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks["out.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(model_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
     struct ggml_tensor* resblock_forward(std::string name,
@@ -541,10 +541,21 @@ struct UNetModelRunner : public GGMLRunner {
                     const String2GGMLType& tensor_types,
                     const std::string prefix,
                     SDVersion version = VERSION_SD1,
-                    bool flash_attn   = false,
-                    bool direct       = false)
-        : GGMLRunner(backend), unet(version, tensor_types, flash_attn, direct) {
+                    bool flash_attn   = false)
+        : GGMLRunner(backend), unet(version, tensor_types, flash_attn) {
         unet.init(params_ctx, tensor_types, prefix);
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        unet.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                LOG_DEBUG("block %s", block->get_desc().c_str());
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {

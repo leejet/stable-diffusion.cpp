@@ -144,8 +144,8 @@ void print_params(SDParams params) {
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
     printf("    vae decoder on cpu:%s\n", params.vae_on_cpu ? "true" : "false");
     printf("    diffusion flash attention:%s\n", params.diffusion_flash_attn ? "true" : "false");
-    printf("    diffusion Conv2D direct:%s\n", params.diffusion_conv_direct ? "true" : "false");
-    printf("    vae Conv2D direct:%s\n", params.vae_conv_direct ? "true" : "false");
+    printf("    diffusion Conv2d direct:%s\n", params.diffusion_conv_direct ? "true" : "false");
+    printf("    vae Conv2d direct:%s\n", params.vae_conv_direct ? "true" : "false");
     printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
@@ -236,9 +236,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
     printf("                                     Might lower quality, since it implies converting k and v to f16.\n");
     printf("                                     This might crash if it is not supported by the backend.\n");
-    printf("  --diffusion-conv-direct            use Conv2D direct in the diffusion model");
+    printf("  --diffusion-conv-direct            use Conv2d direct in the diffusion model");
     printf("                                     This might crash if it is not supported by the backend.\n");
-    printf("  --vae-conv-direct                  use Conv2D direct in the vae model (should improve the performance)");
+    printf("  --vae-conv-direct                  use Conv2d direct in the vae model (should improve the performance)");
     printf("                                     This might crash if it is not supported by the backend.\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");

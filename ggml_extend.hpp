@@ -1394,6 +1394,19 @@ public:
             tensors[prefix + pair.first] = pair.second;
         }
     }
+
+    virtual std::string get_desc() {
+        return "GGMLBlock";
+    }
+
+    void get_all_blocks(std::vector<GGMLBlock*>& result) {
+        result.push_back(this);
+        for (auto& block_iter : blocks) {
+            if (block_iter.second) {
+                block_iter.second->get_all_blocks(result);
+            }
+        }
+    }
 };
 
 class UnaryBlock : public GGMLBlock {
@@ -1483,7 +1496,7 @@ protected:
     std::pair<int, int> padding;
     std::pair<int, int> dilation;
     bool bias;
-    bool direct;
+    bool direct = false;
 
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
         enum ggml_type wtype = GGML_TYPE_F16;
@@ -1501,16 +1514,22 @@ public:
            std::pair<int, int> stride   = {1, 1},
            std::pair<int, int> padding  = {0, 0},
            std::pair<int, int> dilation = {1, 1},
-           bool bias                    = true,
-           bool direct                  = false)
+           bool bias                    = true)
         : in_channels(in_channels),
           out_channels(out_channels),
           kernel_size(kernel_size),
           stride(stride),
           padding(padding),
           dilation(dilation),
-          bias(bias),
-          direct(direct) {}
+          bias(bias) {}
+
+    void enable_direct() {
+        direct = true;
+    }
+
+    std::string get_desc() {
+        return "Conv2d";
+    }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];

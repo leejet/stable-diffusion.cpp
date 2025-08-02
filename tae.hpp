@@ -17,16 +17,15 @@ class TAEBlock : public UnaryBlock {
 protected:
     int n_in;
     int n_out;
-    bool direct = false;
 
 public:
-    TAEBlock(int n_in, int n_out, bool direct = false)
-        : n_in(n_in), n_out(n_out), direct(direct) {
-        blocks["conv.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_in, n_out, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
-        blocks["conv.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_out, n_out, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
-        blocks["conv.4"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_out, n_out, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+    TAEBlock(int n_in, int n_out)
+        : n_in(n_in), n_out(n_out) {
+        blocks["conv.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_in, n_out, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_out, n_out, {3, 3}, {1, 1}, {1, 1}));
+        blocks["conv.4"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_out, n_out, {3, 3}, {1, 1}, {1, 1}));
         if (n_in != n_out) {
-            blocks["skip"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_in, n_out, {1, 1}, {1, 1}, {1, 1}, {1, 1}, false, direct));
+            blocks["skip"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_in, n_out, {1, 1}, {1, 1}, {1, 1}, {1, 1}, false));
         }
     }
 
@@ -61,32 +60,30 @@ class TinyEncoder : public UnaryBlock {
     int channels    = 64;
     int z_channels  = 4;
     int num_blocks  = 3;
-    bool direct     = false;
 
 public:
-    TinyEncoder(int z_channels = 4, bool direct = false)
-        : z_channels(z_channels),
-          direct(direct) {
+    TinyEncoder(int z_channels = 4)
+        : z_channels(z_channels) {
         int index                       = 0;
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
         for (int i = 0; i < num_blocks; i++) {
-            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, direct));
+            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
         for (int i = 0; i < num_blocks; i++) {
-            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, direct));
+            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
         for (int i = 0; i < num_blocks; i++) {
-            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, direct));
+            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, z_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, z_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -108,37 +105,35 @@ class TinyDecoder : public UnaryBlock {
     int channels     = 64;
     int out_channels = 3;
     int num_blocks   = 3;
-    bool direct      = false;
 
 public:
-    TinyDecoder(int z_channels = 4, bool direct = false)
-        : z_channels(z_channels),
-          direct(direct) {
+    TinyDecoder(int z_channels = 4)
+        : z_channels(z_channels) {
         int index = 0;
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, channels, {3, 3}, {1, 1}, {1, 1}));
         index++;  // nn.ReLU()
 
         for (int i = 0; i < num_blocks; i++) {
-            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, direct));
+            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
         index++;  // nn.Upsample()
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
 
         for (int i = 0; i < num_blocks; i++) {
-            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, direct));
+            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
         index++;  // nn.Upsample()
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
 
         for (int i = 0; i < num_blocks; i++) {
-            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, direct));
+            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
         index++;  // nn.Upsample()
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, direct));
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, true, direct));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) {
@@ -170,20 +165,18 @@ public:
 class TAESD : public GGMLBlock {
 protected:
     bool decode_only;
-    bool direct = false;
 
 public:
-    TAESD(bool decode_only = true, SDVersion version = VERSION_SD1, bool direct = false)
-        : decode_only(decode_only),
-          direct(direct) {
+    TAESD(bool decode_only = true, SDVersion version = VERSION_SD1)
+        : decode_only(decode_only) {
         int z_channels = 4;
         if (sd_version_is_dit(version)) {
             z_channels = 16;
         }
-        blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyDecoder(z_channels, direct));
+        blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyDecoder(z_channels));
 
         if (!decode_only) {
-            blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyEncoder(z_channels, direct));
+            blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyEncoder(z_channels));
         }
     }
 
@@ -201,19 +194,27 @@ public:
 struct TinyAutoEncoder : public GGMLRunner {
     TAESD taesd;
     bool decode_only = false;
-    bool direct = false;
 
     TinyAutoEncoder(ggml_backend_t backend,
                     const String2GGMLType& tensor_types,
                     const std::string prefix,
                     bool decoder_only = true,
-                    SDVersion version = VERSION_SD1,
-                    bool direct       = false)
+                    SDVersion version = VERSION_SD1)
         : decode_only(decoder_only),
-          taesd(decoder_only, version, direct),
-          direct(direct),
+          taesd(decoder_only, version),
           GGMLRunner(backend) {
         taesd.init(params_ctx, tensor_types, prefix);
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        taesd.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {
