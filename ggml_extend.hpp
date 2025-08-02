@@ -707,15 +707,15 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d(struct ggml_context* ctx,
 }
 
 __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d_direct(struct ggml_context* ctx,
-                                                      struct ggml_tensor* x,
-                                                      struct ggml_tensor* w,
-                                                      struct ggml_tensor* b,
-                                                      int s0 = 1,
-                                                      int s1 = 1,
-                                                      int p0 = 0,
-                                                      int p1 = 0,
-                                                      int d0 = 1,
-                                                      int d1 = 1) {
+                                                             struct ggml_tensor* x,
+                                                             struct ggml_tensor* w,
+                                                             struct ggml_tensor* b,
+                                                             int s0 = 1,
+                                                             int s1 = 1,
+                                                             int p0 = 0,
+                                                             int p1 = 0,
+                                                             int d0 = 1,
+                                                             int d1 = 1) {
     x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
     if (b != NULL) {
         b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);

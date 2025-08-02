@@ -399,7 +399,7 @@ public:
                                                                     vae_decode_only,
                                                                     false,
                                                                     version);
-                if (sd_ctx_params->vae_conv_direct){
+                if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the vae model");
                     first_stage_model->enable_conv2d_direct();
                 }
@@ -411,7 +411,7 @@ public:
                                                                     "decoder.layers",
                                                                     vae_decode_only,
                                                                     version);
-                if (sd_ctx_params->vae_conv_direct){
+                if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the tae model");
                     tae_first_stage->enable_conv2d_direct();
                 }
