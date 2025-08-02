@@ -145,6 +145,8 @@ typedef struct {
     bool keep_control_net_on_cpu;
     bool keep_vae_on_cpu;
     bool diffusion_flash_attn;
+    bool diffusion_conv_direct;
+    bool vae_conv_direct;
     bool chroma_use_dit_mask;
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
@@ -249,7 +251,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
-                                        int n_threads);
+                                        int n_threads,
+                                        bool direct);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor);
