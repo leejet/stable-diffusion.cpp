@@ -332,7 +332,7 @@ arguments:
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate
-  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)
+  --schedule {discrete, karras, exponential, ays, gits, simple, sgm_uniform} Denoiser sigma schedule (default: discrete)
   --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
@@ -347,6 +347,7 @@ arguments:
   --chroma-disable-dit-mask          disable dit mask for chroma
   --chroma-enable-t5-mask            enable t5 mask for chroma
   --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma
+  --timestep-shift N                 shift timestep, default: -1 off, recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant
   -v, --verbose                      print extra info
 ```
 
