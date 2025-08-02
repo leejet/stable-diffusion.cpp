@@ -1644,8 +1644,13 @@ SDVersion ModelLoader::get_sd_version() {
     bool is_xl   = false;
     bool is_flux = false;
 
+    bool maybe_unet_is_tiny = false;
+
 #define found_family (is_xl || is_flux)
     for (auto& tensor_storage : tensor_storages) {
+        if (tensor_storage.name == "model.diffusion_model.up_blocks.0.attentions.1.transformer_blocks.0.norm2.bias") {
+            maybe_unet_is_tiny = true;
+        }    
         if (!found_family) {
             if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
                 is_flux = true;
@@ -1721,6 +1726,9 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (is_ip2p) {
             return VERSION_SD1_PIX2PIX;
+        }
+        if (maybe_unet_is_tiny && tensor_storages.size() > 800 && tensor_storages.size() < 805) {
+            return VERSION_SD1_TINY_UNET;
         }
         return VERSION_SD1;
     } else if (token_embedding_weight.ne[0] == 1024) {
