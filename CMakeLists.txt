@@ -119,8 +119,10 @@ endif()
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
-# see https://github.com/ggerganov/ggml/pull/682
-add_definitions(-DGGML_MAX_NAME=128)
+if (NOT SD_USE_SYSTEM_GGML)
+    # see https://github.com/ggerganov/ggml/pull/682
+    add_definitions(-DGGML_MAX_NAME=128)
+endif()
 
 # deps
 # Only add ggml if it hasn't been added yet
