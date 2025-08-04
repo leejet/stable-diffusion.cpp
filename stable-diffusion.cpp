@@ -859,8 +859,8 @@ public:
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
                         ggml_tensor* denoise_mask             = nullptr,
-                        int shifted_timestep                 = -1) {
-        
+                        int shifted_timestep                  = -1) {
+
         if (shifted_timestep > 0 && !sd_version_is_sdxl(version)) {
             LOG_WARN("Timestep shifting is only supported for SDXL models. Ignoring --timestep-shift.");
             shifted_timestep = -1;
