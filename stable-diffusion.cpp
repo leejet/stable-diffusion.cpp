@@ -39,7 +39,7 @@ const char* model_version_to_str[] = {
     "Flux Fill"};
 
 const char* sampling_methods_str[] = {
-    "Euler A",
+    "default",
     "Euler",
     "Heun",
     "DPM2",
@@ -50,7 +50,8 @@ const char* sampling_methods_str[] = {
     "iPNDM_v",
     "LCM",
     "DDIM \"trailing\"",
-    "TCD"};
+    "TCD",
+    "Euler A"};
 
 /*================================================== Helper Functions ================================================*/
 
@@ -1251,7 +1252,7 @@ enum rng_type_t str_to_rng_type(const char* str) {
 }
 
 const char* sample_method_to_str[] = {
-    "euler_a",
+    "default",
     "euler",
     "heun",
     "dpm2",
@@ -1263,6 +1264,7 @@ const char* sample_method_to_str[] = {
     "lcm",
     "ddim_trailing",
     "tcd",
+    "euler_a",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -1399,7 +1401,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->ref_images_count            = 0;
     sd_img_gen_params->width                       = 512;
     sd_img_gen_params->height                      = 512;
-    sd_img_gen_params->sample_method               = EULER_A;
+    sd_img_gen_params->sample_method               = SAMPLE_METHOD_DEFAULT;
     sd_img_gen_params->sample_steps                = 20;
     sd_img_gen_params->eta                         = 0.f;
     sd_img_gen_params->strength                    = 0.75f;
@@ -1522,6 +1524,18 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
         sd_ctx->sd = NULL;
     }
     free(sd_ctx);
+}
+
+SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx)
+{
+    if (sd_ctx != NULL && sd_ctx->sd != NULL) {
+        SDVersion version = sd_ctx->sd->version;
+        if (sd_version_is_dit(version))
+            return EULER;
+        else
+            return EULER_A;
+    }
+    return SAMPLE_METHOD_COUNT;
 }
 
 sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
@@ -2076,6 +2090,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
     }
 
+    enum sample_method_t sample_method = sd_img_gen_params->sample_method;
+    if (sample_method == SAMPLE_METHOD_DEFAULT) {
+        sample_method = sd_get_default_sample_method (sd_ctx);
+    }
+
     sd_image_t* result_images = generate_image_internal(sd_ctx,
                                                         work_ctx,
                                                         init_latent,
@@ -2086,7 +2105,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->eta,
                                                         width,
                                                         height,
-                                                        sd_img_gen_params->sample_method,
+                                                        sample_method,
                                                         sigmas,
                                                         seed,
                                                         sd_img_gen_params->batch_count,
