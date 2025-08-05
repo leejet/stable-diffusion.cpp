@@ -142,30 +142,6 @@ public:
     }
 };
 
-class RMSNorm : public UnaryBlock {
-protected:
-    int64_t hidden_size;
-    float eps;
-
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F32;
-        params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
-    }
-
-public:
-    RMSNorm(int64_t hidden_size,
-            float eps = 1e-06f)
-        : hidden_size(hidden_size),
-          eps(eps) {}
-
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
-        struct ggml_tensor* w = params["weight"];
-        x                     = ggml_rms_norm(ctx, x, eps);
-        x                     = ggml_mul(ctx, x, w);
-        return x;
-    }
-};
-
 class SelfAttention : public GGMLBlock {
 public:
     int64_t num_heads;

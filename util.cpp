@@ -290,7 +290,7 @@ std::string path_join(const std::string& p1, const std::string& p2) {
     return p1 + "/" + p2;
 }
 
-std::vector<std::string> splitString(const std::string& str, char delimiter) {
+std::vector<std::string> split_string(const std::string& str, char delimiter) {
     std::vector<std::string> result;
     size_t start = 0;
     size_t end   = str.find(delimiter);

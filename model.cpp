@@ -1179,10 +1179,10 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 
         if (n_dims == 5) {
             n_dims = 4;
-            ne[0] = ne[0]*ne[1];
-            ne[1] = ne[2];
-            ne[2] = ne[3];
-            ne[3] = ne[4];
+            ne[0]  = ne[0] * ne[1];
+            ne[1]  = ne[2];
+            ne[2]  = ne[3];
+            ne[3]  = ne[4];
         }
 
         // ggml_n_dims returns 1 for scalars
@@ -2146,7 +2146,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
 
 std::vector<std::pair<std::string, ggml_type>> parse_tensor_type_rules(const std::string& tensor_type_rules) {
     std::vector<std::pair<std::string, ggml_type>> result;
-    for (const auto& item : splitString(tensor_type_rules, ',')) {
+    for (const auto& item : split_string(tensor_type_rules, ',')) {
         if (item.size() == 0)
             continue;
         std::string::size_type pos = item.find('=');

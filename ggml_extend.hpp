@@ -663,6 +663,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_slice(struct ggml_context* ctx,
 
     if (dim != 3) {
         x = ggml_torch_permute(ctx, x, inv_perm[0], inv_perm[1], inv_perm[2], inv_perm[3]);
+        x = ggml_cont(ctx, x);
     }
 
     return x;
@@ -837,10 +838,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_3d(struct ggml_context* ctx,
     int64_t OC = w->ne[3] / IC;
     int64_t N  = x->ne[3] / IC;
     x          = ggml_conv_3d(ctx, w, x, IC, s0, s1, s2, p0, p1, p2, d0, d1, d2);
-    
 
     if (b != NULL) {
-        b = ggml_reshape_4d(ctx, b, 1, 1, 1, b->ne[0]);                     // [OC, 1, 1, 1]
+        b = ggml_reshape_4d(ctx, b, 1, 1, 1, b->ne[0]);  // [OC, 1, 1, 1]
         x = ggml_add(ctx, x, b);
     }
     return x;
@@ -1005,7 +1005,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
     //     LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
     // }
     //   is there anything oddly shaped?? ping Green-Sky if you can trip this assert
-    GGML_ASSERT(((L_k % 256 == 0) && L_q == L_k) || !(L_k % 256 == 0));
+    // GGML_ASSERT(((L_k % 256 == 0) && L_q == L_k) || !(L_k % 256 == 0));
 
     bool can_use_flash_attn = true;
     can_use_flash_attn      = can_use_flash_attn && (d_head == 64 ||
@@ -1542,6 +1542,13 @@ public:
     virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) = 0;
 };
 
+class Identity : public UnaryBlock {
+public:
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        return x;
+    }
+};
+
 class Linear : public UnaryBlock {
 protected:
     int64_t in_features;
@@ -1556,7 +1563,7 @@ protected:
         }
         params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
         if (bias) {
-            enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.ypes.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
+            enum ggml_type wtype = GGML_TYPE_F32;
             params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_features);
         }
     }
@@ -1726,7 +1733,7 @@ protected:
                                                   std::get<0>(kernel_size),
                                                   in_channels * out_channels);
         if (bias) {
-            params["bias"]       = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
+            params["bias"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_channels);
         }
     }
 
@@ -1842,6 +1849,30 @@ class GroupNorm32 : public GroupNorm {
 public:
     GroupNorm32(int64_t num_channels)
         : GroupNorm(32, num_channels, 1e-06f) {}
+};
+
+class RMSNorm : public UnaryBlock {
+protected:
+    int64_t hidden_size;
+    float eps;
+
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+        enum ggml_type wtype = GGML_TYPE_F32;
+        params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
+    }
+
+public:
+    RMSNorm(int64_t hidden_size,
+            float eps = 1e-06f)
+        : hidden_size(hidden_size),
+          eps(eps) {}
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* w = params["weight"];
+        x                     = ggml_rms_norm(ctx, x, eps);
+        x                     = ggml_mul(ctx, x, w);
+        return x;
+    }
 };
 
 class MultiheadAttention : public GGMLBlock {

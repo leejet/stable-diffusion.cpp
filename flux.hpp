@@ -5,6 +5,7 @@
 
 #include "ggml_extend.hpp"
 #include "model.h"
+#include "rope.hpp"
 
 #define FLUX_GRAPH_SIZE 10240
 
@@ -611,178 +612,10 @@ namespace Flux {
 
     struct Flux : public GGMLBlock {
     public:
-        std::vector<float> linspace(float start, float end, int num) {
-            std::vector<float> result(num);
-            float step = (end - start) / (num - 1);
-            for (int i = 0; i < num; ++i) {
-                result[i] = start + i * step;
-            }
-            return result;
-        }
-
-        std::vector<std::vector<float>> transpose(const std::vector<std::vector<float>>& mat) {
-            int rows = mat.size();
-            int cols = mat[0].size();
-            std::vector<std::vector<float>> transposed(cols, std::vector<float>(rows));
-            for (int i = 0; i < rows; ++i) {
-                for (int j = 0; j < cols; ++j) {
-                    transposed[j][i] = mat[i][j];
-                }
-            }
-            return transposed;
-        }
-
-        std::vector<float> flatten(const std::vector<std::vector<float>>& vec) {
-            std::vector<float> flat_vec;
-            for (const auto& sub_vec : vec) {
-                flat_vec.insert(flat_vec.end(), sub_vec.begin(), sub_vec.end());
-            }
-            return flat_vec;
-        }
-
-        std::vector<std::vector<float>> rope(const std::vector<float>& pos, int dim, int theta) {
-            assert(dim % 2 == 0);
-            int half_dim = dim / 2;
-
-            std::vector<float> scale = linspace(0, (dim * 1.0f - 2) / dim, half_dim);
-
-            std::vector<float> omega(half_dim);
-            for (int i = 0; i < half_dim; ++i) {
-                omega[i] = 1.0 / std::pow(theta, scale[i]);
-            }
-
-            int pos_size = pos.size();
-            std::vector<std::vector<float>> out(pos_size, std::vector<float>(half_dim));
-            for (int i = 0; i < pos_size; ++i) {
-                for (int j = 0; j < half_dim; ++j) {
-                    out[i][j] = pos[i] * omega[j];
-                }
-            }
-
-            std::vector<std::vector<float>> result(pos_size, std::vector<float>(half_dim * 4));
-            for (int i = 0; i < pos_size; ++i) {
-                for (int j = 0; j < half_dim; ++j) {
-                    result[i][4 * j]     = std::cos(out[i][j]);
-                    result[i][4 * j + 1] = -std::sin(out[i][j]);
-                    result[i][4 * j + 2] = std::sin(out[i][j]);
-                    result[i][4 * j + 3] = std::cos(out[i][j]);
-                }
-            }
-
-            return result;
-        }
-
-        // Generate IDs for image patches and text
-        std::vector<std::vector<float>> gen_txt_ids(int bs, int context_len) {
-            return std::vector<std::vector<float>>(bs * context_len, std::vector<float>(3, 0.0));
-        }
-
-        std::vector<std::vector<float>> gen_img_ids(int h, int w, int patch_size, int bs, int index = 0, int h_offset = 0, int w_offset = 0) {
-            int h_len = (h + (patch_size / 2)) / patch_size;
-            int w_len = (w + (patch_size / 2)) / patch_size;
-
-            std::vector<std::vector<float>> img_ids(h_len * w_len, std::vector<float>(3, 0.0));
-
-            std::vector<float> row_ids = linspace(h_offset, h_len - 1 + h_offset, h_len);
-            std::vector<float> col_ids = linspace(w_offset, w_len - 1 + w_offset, w_len);
-
-            for (int i = 0; i < h_len; ++i) {
-                for (int j = 0; j < w_len; ++j) {
-                    img_ids[i * w_len + j][0] = index;
-                    img_ids[i * w_len + j][1] = row_ids[i];
-                    img_ids[i * w_len + j][2] = col_ids[j];
-                }
-            }
-
-            std::vector<std::vector<float>> img_ids_repeated(bs * img_ids.size(), std::vector<float>(3));
-            for (int i = 0; i < bs; ++i) {
-                for (int j = 0; j < img_ids.size(); ++j) {
-                    img_ids_repeated[i * img_ids.size() + j] = img_ids[j];
-                }
-            }
-            return img_ids_repeated;
-        }
-
-        std::vector<std::vector<float>> concat_ids(const std::vector<std::vector<float>>& a,
-                                                   const std::vector<std::vector<float>>& b,
-                                                   int bs) {
-            size_t a_len = a.size() / bs;
-            size_t b_len = b.size() / bs;
-            std::vector<std::vector<float>> ids(a.size() + b.size(), std::vector<float>(3));
-            for (int i = 0; i < bs; ++i) {
-                for (int j = 0; j < a_len; ++j) {
-                    ids[i * (a_len + b_len) + j] = a[i * a_len + j];
-                }
-                for (int j = 0; j < b_len; ++j) {
-                    ids[i * (a_len + b_len) + a_len + j] = b[i * b_len + j];
-                }
-            }
-            return ids;
-        }
-
-        std::vector<std::vector<float>> gen_ids(int h, int w, int patch_size, int bs, int context_len, std::vector<ggml_tensor*> ref_latents) {
-            auto txt_ids = gen_txt_ids(bs, context_len);
-            auto img_ids = gen_img_ids(h, w, patch_size, bs);
-
-            auto ids               = concat_ids(txt_ids, img_ids, bs);
-            uint64_t curr_h_offset = 0;
-            uint64_t curr_w_offset = 0;
-            for (ggml_tensor* ref : ref_latents) {
-                uint64_t h_offset = 0;
-                uint64_t w_offset = 0;
-                if (ref->ne[1] + curr_h_offset > ref->ne[0] + curr_w_offset) {
-                    w_offset = curr_w_offset;
-                } else {
-                    h_offset = curr_h_offset;
-                }
-
-                auto ref_ids = gen_img_ids(ref->ne[1], ref->ne[0], patch_size, bs, 1, h_offset, w_offset);
-                ids          = concat_ids(ids, ref_ids, bs);
-
-                curr_h_offset = std::max(curr_h_offset, ref->ne[1] + h_offset);
-                curr_w_offset = std::max(curr_w_offset, ref->ne[0] + w_offset);
-            }
-            return ids;
-        }
-
-        // Generate positional embeddings
-        std::vector<float> gen_pe(int h, int w, int patch_size, int bs, int context_len, std::vector<ggml_tensor*> ref_latents, int theta, const std::vector<int>& axes_dim) {
-            std::vector<std::vector<float>> ids       = gen_ids(h, w, patch_size, bs, context_len, ref_latents);
-            std::vector<std::vector<float>> trans_ids = transpose(ids);
-            size_t pos_len                            = ids.size();
-            int num_axes                              = axes_dim.size();
-            for (int i = 0; i < pos_len; i++) {
-                // std::cout << trans_ids[0][i] << " " << trans_ids[1][i] << " " << trans_ids[2][i] << std::endl;
-            }
-
-            int emb_dim = 0;
-            for (int d : axes_dim)
-                emb_dim += d / 2;
-
-            std::vector<std::vector<float>> emb(bs * pos_len, std::vector<float>(emb_dim * 2 * 2, 0.0));
-            int offset = 0;
-            for (int i = 0; i < num_axes; ++i) {
-                std::vector<std::vector<float>> rope_emb = rope(trans_ids[i], axes_dim[i], theta);  // [bs*pos_len, axes_dim[i]/2 * 2 * 2]
-                for (int b = 0; b < bs; ++b) {
-                    for (int j = 0; j < pos_len; ++j) {
-                        for (int k = 0; k < rope_emb[0].size(); ++k) {
-                            emb[b * pos_len + j][offset + k] = rope_emb[j][k];
-                        }
-                    }
-                }
-                offset += rope_emb[0].size();
-            }
-
-            return flatten(emb);
-        }
-
-    public:
         FluxParams params;
         Flux() {}
         Flux(FluxParams params)
             : params(params) {
-            int64_t pe_dim = params.hidden_size / params.num_heads;
-
             blocks["img_in"] = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, params.hidden_size, true));
             if (params.is_chroma) {
                 blocks["distilled_guidance_layer"] = std::shared_ptr<GGMLBlock>(new ChromaApproximator(params.in_channels, params.hidden_size));
@@ -1150,7 +983,14 @@ namespace Flux {
                 ref_latents[i] = to_backend(ref_latents[i]);
             }
 
-            pe_vec      = flux.gen_pe(x->ne[1], x->ne[0], 2, x->ne[3], context->ne[1], ref_latents, flux_params.theta, flux_params.axes_dim);
+            pe_vec      = Rope::gen_flux_pe(x->ne[1],
+                                            x->ne[0],
+                                            2,
+                                            x->ne[3],
+                                            context->ne[1],
+                                            ref_latents,
+                                            flux_params.theta,
+                                            flux_params.axes_dim);
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
