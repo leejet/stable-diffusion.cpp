@@ -203,7 +203,11 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
-    printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
+    printf("  -r, --ref-image [PATH] or [PATH,N] reference image for Flux Kontext models (can be used multiple times).\n"
+           "                                     PATH is the path to the reference image.\n"
+           "                                     Optionally, you can specify an integer identifier N (default = 1) after a comma to set the index of reference image.\n"
+           "                                     Reference indices are only supported by some fine-tunes of Flux Kontext with proper multi-reference support.\n"
+           "                                     Reference images with the same index will be stitched together and seen as one image.\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
@@ -229,7 +233,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
+    printf("  --schedule {discrete, karras, exponential, ays, gits}\n" 
+           "                                     Denoiser sigma schedule (default: discrete)\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");

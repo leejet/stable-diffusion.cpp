@@ -306,7 +306,11 @@ arguments:
   -i, --init-img [IMAGE]             path to the input image, required by img2img
   --mask [MASK]                      path to the mask image, required by img2img with mask
   --control-image [IMAGE]            path to image condition, control net
-  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times)
+  -r, --ref-image [PATH] or [PATH,N] reference image for Flux Kontext models (can be used multiple times).
+                                     PATH is the path to the reference image.
+                                     Optionally, you can specify an integer identifier N (default = 1) after a comma to set the index of reference image.
+                                     Reference indices are only supported by some fine-tunes of Flux Kontext with proper multi-reference support.
+                                     Reference images with the same index will be stitched together and seen as one image.
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
@@ -332,7 +336,8 @@ arguments:
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate
-  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)
+  --schedule {discrete, karras, exponential, ays, gits}
+                                     Denoiser sigma schedule (default: discrete)
   --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
