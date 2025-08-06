@@ -64,6 +64,7 @@ struct SDParams {
     std::string mask_path;
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
+    std::vector<int> ref_image_indices;
 
     std::string prompt;
     std::string negative_prompt;
@@ -137,8 +138,9 @@ void print_params(SDParams params) {
     printf("    mask_img:          %s\n", params.mask_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
     printf("    ref_images_paths:\n");
+    int n = 0;
     for (auto& path : params.ref_image_paths) {
-        printf("        %s\n", path.c_str());
+        printf("        %s (index: %d)\n", path.c_str(), params.ref_image_indices[n++]);
     };
     printf("    clip on cpu:       %s\n", params.clip_on_cpu ? "true" : "false");
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
@@ -563,7 +565,28 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         if (++index >= argc) {
             return -1;
         }
-        params.ref_image_paths.push_back(argv[index]);
+
+        std::string arg  = argv[index];
+        size_t comma_pos = arg.find(',');
+
+        if (comma_pos != std::string::npos) {
+            std::string path    = arg.substr(0, comma_pos);
+            std::string num_str = arg.substr(comma_pos + 1);
+
+            try {
+                int num = std::stoi(num_str);
+                params.ref_image_paths.push_back(path);
+                params.ref_image_indices.push_back(num);
+            } catch (const std::invalid_argument& e) {
+                fprintf(stderr, "Error: invalid id: \"%s\" for ref image %s", num_str.c_str(), path.c_str());
+                return -1;
+            }
+        } else {
+            params.ref_image_paths.push_back(arg);
+            // default index is 1 (0 is the output index)
+            params.ref_image_indices.push_back(1);
+        }
+
         return 1;
     };
 
@@ -803,7 +826,7 @@ int main(int argc, const char* argv[]) {
     uint8_t* input_image_buffer   = NULL;
     uint8_t* control_image_buffer = NULL;
     uint8_t* mask_image_buffer    = NULL;
-    std::vector<sd_image_t> ref_images;
+    std::vector<sd_ref_image_t> ref_images;
 
     if (params.input_path.size() > 0) {
         vae_decode_only = false;
@@ -855,8 +878,11 @@ int main(int argc, const char* argv[]) {
             free(input_image_buffer);
             input_image_buffer = resized_image_buffer;
         }
-    } else if (params.ref_image_paths.size() > 0) {
+    }
+
+    if (params.ref_image_paths.size() > 0) {
         vae_decode_only = false;
+        int n           = 0;
         for (auto& path : params.ref_image_paths) {
             int c                 = 0;
             int width             = 0;
@@ -881,10 +907,11 @@ int main(int argc, const char* argv[]) {
                 free(image_buffer);
                 return 1;
             }
-            ref_images.push_back({(uint32_t)width,
-                                  (uint32_t)height,
-                                  3,
-                                  image_buffer});
+            ref_images.push_back({{(uint32_t)width,
+                                   (uint32_t)height,
+                                   3,
+                                   image_buffer},
+                                  params.ref_image_indices[n++]});
         }
     }
 

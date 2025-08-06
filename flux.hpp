@@ -719,34 +719,45 @@ namespace Flux {
             }
             return ids;
         }
-
-        std::vector<std::vector<float>> gen_ids(int h, int w, int patch_size, int bs, int context_len, std::vector<ggml_tensor*> ref_latents) {
+        std::vector<std::vector<float>> gen_ids(int h, int w, int patch_size, int bs, int context_len, std::vector<std::pair<ggml_tensor*, int>> ref_latents) {
             auto txt_ids = gen_txt_ids(bs, context_len);
             auto img_ids = gen_img_ids(h, w, patch_size, bs);
+            auto ids     = concat_ids(txt_ids, img_ids, bs);
 
-            auto ids               = concat_ids(txt_ids, img_ids, bs);
-            uint64_t curr_h_offset = 0;
-            uint64_t curr_w_offset = 0;
-            for (ggml_tensor* ref : ref_latents) {
+            std::vector<uint64_t> curr_h_offsets(ref_latents.size(), 0);
+            std::vector<uint64_t> curr_w_offsets(ref_latents.size(), 0);
+
+            for (const auto& ref_pair : ref_latents) {
+                ggml_tensor* ref = ref_pair.first;
+                const int ref_index    = ref_pair.second;
+
+                // Ensure there are enough entries in the offsets vectors
+                if (ref_index >= curr_h_offsets.size()) {
+                    curr_h_offsets.resize(ref_index + 1, 0);
+                    curr_w_offsets.resize(ref_index + 1, 0);
+                }
+                
                 uint64_t h_offset = 0;
                 uint64_t w_offset = 0;
-                if (ref->ne[1] + curr_h_offset > ref->ne[0] + curr_w_offset) {
-                    w_offset = curr_w_offset;
+                
+                if (ref->ne[1] + curr_h_offsets[ref_index] > ref->ne[0] + curr_w_offsets[ref_index]) {
+                    w_offset = curr_w_offsets[ref_index];
                 } else {
-                    h_offset = curr_h_offset;
+                    h_offset = curr_h_offsets[ref_index];
                 }
 
-                auto ref_ids = gen_img_ids(ref->ne[1], ref->ne[0], patch_size, bs, 1, h_offset, w_offset);
+                auto ref_ids = gen_img_ids(ref->ne[1], ref->ne[0], patch_size, bs, ref_index, h_offset, w_offset);
                 ids          = concat_ids(ids, ref_ids, bs);
 
-                curr_h_offset = std::max(curr_h_offset, ref->ne[1] + h_offset);
-                curr_w_offset = std::max(curr_w_offset, ref->ne[0] + w_offset);
+                curr_h_offsets[ref_index] = std::max(curr_h_offsets[ref_index], ref->ne[1] + h_offset);
+                curr_w_offsets[ref_index] = std::max(curr_w_offsets[ref_index], ref->ne[0] + w_offset);
             }
+
             return ids;
         }
 
         // Generate positional embeddings
-        std::vector<float> gen_pe(int h, int w, int patch_size, int bs, int context_len, std::vector<ggml_tensor*> ref_latents, int theta, const std::vector<int>& axes_dim) {
+        std::vector<float> gen_pe(int h, int w, int patch_size, int bs, int context_len, std::vector<std::pair<struct ggml_tensor*, int>> ref_latents, int theta, const std::vector<int>& axes_dim) {
             std::vector<std::vector<float>> ids       = gen_ids(h, w, patch_size, bs, context_len, ref_latents);
             std::vector<std::vector<float>> trans_ids = transpose(ids);
             size_t pos_len                            = ids.size();
@@ -982,9 +993,9 @@ namespace Flux {
                                     struct ggml_tensor* y,
                                     struct ggml_tensor* guidance,
                                     struct ggml_tensor* pe,
-                                    struct ggml_tensor* mod_index_arange  = NULL,
-                                    std::vector<ggml_tensor*> ref_latents = {},
-                                    std::vector<int> skip_layers          = {}) {
+                                    struct ggml_tensor* mod_index_arange                         = NULL,
+                                    std::vector<std::pair<struct ggml_tensor*, int>> ref_latents = {},
+                                    std::vector<int> skip_layers                                 = {}) {
             // Forward pass of DiT.
             // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
             // timestep: (N,) tensor of diffusion timesteps
@@ -1018,7 +1029,8 @@ namespace Flux {
             }
 
             if (ref_latents.size() > 0) {
-                for (ggml_tensor* ref : ref_latents) {
+                for (auto& ref_pair : ref_latents) {
+                    struct ggml_tensor* ref = ref_pair.first;
                     ref = process_img(ctx, ref);
                     img = ggml_concat(ctx, img, ref, 1);
                 }
@@ -1116,8 +1128,8 @@ namespace Flux {
                                         struct ggml_tensor* c_concat,
                                         struct ggml_tensor* y,
                                         struct ggml_tensor* guidance,
-                                        std::vector<ggml_tensor*> ref_latents = {},
-                                        std::vector<int> skip_layers          = {}) {
+                                        std::vector<std::pair<struct ggml_tensor*, int>> ref_latents = {},
+                                        std::vector<int> skip_layers                                 = {}) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
 
@@ -1147,7 +1159,7 @@ namespace Flux {
                 guidance = to_backend(guidance);
             }
             for (int i = 0; i < ref_latents.size(); i++) {
-                ref_latents[i] = to_backend(ref_latents[i]);
+                ref_latents[i].first = to_backend(ref_latents[i].first);
             }
 
             pe_vec      = flux.gen_pe(x->ne[1], x->ne[0], 2, x->ne[3], context->ne[1], ref_latents, flux_params.theta, flux_params.axes_dim);
@@ -1183,10 +1195,10 @@ namespace Flux {
                      struct ggml_tensor* c_concat,
                      struct ggml_tensor* y,
                      struct ggml_tensor* guidance,
-                     std::vector<ggml_tensor*> ref_latents = {},
-                     struct ggml_tensor** output           = NULL,
-                     struct ggml_context* output_ctx       = NULL,
-                     std::vector<int> skip_layers          = std::vector<int>()) {
+                     std::vector<std::pair<struct ggml_tensor*, int>> ref_latents = {},
+                     struct ggml_tensor** output                                  = NULL,
+                     struct ggml_context* output_ctx                              = NULL,
+                     std::vector<int> skip_layers                                 = std::vector<int>()) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]

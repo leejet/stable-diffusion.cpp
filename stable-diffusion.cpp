@@ -863,7 +863,7 @@ public:
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         SDCondition id_cond,
-                        std::vector<ggml_tensor*> ref_latents = {},
+                        std::vector<std::pair<struct ggml_tensor*,int>> ref_latents = {},
                         ggml_tensor* denoise_mask             = nullptr) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
@@ -1543,7 +1543,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     float style_ratio,
                                     bool normalize_input,
                                     std::string input_id_images_path,
-                                    std::vector<ggml_tensor*> ref_latents,
+                                    std::vector<std::pair<struct ggml_tensor*,int>> ref_latents,
                                     ggml_tensor* concat_latent = NULL,
                                     ggml_tensor* denoise_mask  = NULL) {
     if (seed < 0) {
@@ -1771,7 +1771,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         if (concat_latent == NULL) {
             concat_latent = empty_latent;
         }
-        cond.c_concat = ref_latents[0];
+        cond.c_concat = ref_latents[0].first;
     }
     SDCondition img_cond;
     if (uncond.c_crossattn != NULL &&
@@ -2041,15 +2041,15 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         LOG_INFO("EDIT mode");
     }
 
-    std::vector<struct ggml_tensor*> ref_latents;
+    std::vector<std::pair<struct ggml_tensor*,int>> ref_latents;
     for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
         ggml_tensor* img = ggml_new_tensor_4d(work_ctx,
                                               GGML_TYPE_F32,
-                                              sd_img_gen_params->ref_images[i].width,
-                                              sd_img_gen_params->ref_images[i].height,
+                                              sd_img_gen_params->ref_images[i].image.width,
+                                              sd_img_gen_params->ref_images[i].image.height,
                                               3,
                                               1);
-        sd_image_to_tensor(sd_img_gen_params->ref_images[i].data, img);
+        sd_image_to_tensor(sd_img_gen_params->ref_images[i].image.data, img);
 
         ggml_tensor* latent = NULL;
         if (sd_ctx->sd->use_tiny_autoencoder) {
@@ -2068,7 +2068,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
             ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, img);
             latent               = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
         }
-        ref_latents.push_back(latent);
+        ref_latents.push_back({latent, sd_img_gen_params->ref_images[i].index});
     }
 
     if (sd_img_gen_params->init_image.data != NULL || sd_img_gen_params->ref_images_count > 0) {
