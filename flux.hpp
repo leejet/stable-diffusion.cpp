@@ -724,33 +724,32 @@ namespace Flux {
             auto img_ids = gen_img_ids(h, w, patch_size, bs);
             auto ids     = concat_ids(txt_ids, img_ids, bs);
 
-            std::vector<uint64_t> curr_h_offsets(ref_latents.size(), 0);
-            std::vector<uint64_t> curr_w_offsets(ref_latents.size(), 0);
+            std::unordered_map<int, std::pair<uint64_t, uint64_t>> offsets;
 
             for (const auto& ref_pair : ref_latents) {
-                ggml_tensor* ref = ref_pair.first;
-                const int ref_index    = ref_pair.second;
+                ggml_tensor* ref    = ref_pair.first;
+                const int ref_index = ref_pair.second;
 
-                // Ensure there are enough entries in the offsets vectors
-                if (ref_index >= curr_h_offsets.size()) {
-                    curr_h_offsets.resize(ref_index + 1, 0);
-                    curr_w_offsets.resize(ref_index + 1, 0);
+                if (offsets.find(ref_index) == offsets.end()) {
+                    offsets[ref_index] = {0, 0};
                 }
-                
-                uint64_t h_offset = 0;
-                uint64_t w_offset = 0;
-                
-                if (ref->ne[1] + curr_h_offsets[ref_index] > ref->ne[0] + curr_w_offsets[ref_index]) {
-                    w_offset = curr_w_offsets[ref_index];
+
+                auto& [h_offset, w_offset] = offsets[ref_index];
+
+                uint64_t curr_h = 0;
+                uint64_t curr_w = 0;
+                if (ref->ne[1] + h_offset > ref->ne[0] + w_offset) {
+                    curr_w = w_offset;
                 } else {
-                    h_offset = curr_h_offsets[ref_index];
+                    curr_h = h_offset;
                 }
 
-                auto ref_ids = gen_img_ids(ref->ne[1], ref->ne[0], patch_size, bs, ref_index, h_offset, w_offset);
+                auto ref_ids = gen_img_ids(ref->ne[1], ref->ne[0], patch_size, bs, ref_index, curr_h, curr_w);
                 ids          = concat_ids(ids, ref_ids, bs);
 
-                curr_h_offsets[ref_index] = std::max(curr_h_offsets[ref_index], ref->ne[1] + h_offset);
-                curr_w_offsets[ref_index] = std::max(curr_w_offsets[ref_index], ref->ne[0] + w_offset);
+                // Update offsets
+                h_offset = std::max(h_offset, ref->ne[1] + curr_h);
+                w_offset = std::max(w_offset, ref->ne[0] + curr_w);
             }
 
             return ids;
@@ -1031,8 +1030,8 @@ namespace Flux {
             if (ref_latents.size() > 0) {
                 for (auto& ref_pair : ref_latents) {
                     struct ggml_tensor* ref = ref_pair.first;
-                    ref = process_img(ctx, ref);
-                    img = ggml_concat(ctx, img, ref, 1);
+                    ref                     = process_img(ctx, ref);
+                    img                     = ggml_concat(ctx, img, ref, 1);
                 }
             }
 
