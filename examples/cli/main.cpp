@@ -65,6 +65,7 @@ struct SDParams {
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
     std::vector<int> ref_image_indices;
+    bool increase_ref_index = false;
 
     std::string prompt;
     std::string negative_prompt;
@@ -208,6 +209,7 @@ void print_usage(int argc, const char* argv[]) {
            "                                     Optionally, you can specify an integer identifier N (default = 1) after a comma to set the index of reference image.\n"
            "                                     Reference indices are only supported by some fine-tunes of Flux Kontext with proper multi-reference support.\n"
            "                                     Reference images with the same index will be stitched together and seen as one image.\n");
+    printf("  --increase-ref-index               Automatically increase the indices of references images based on the order they are listed (starting with 1). Will overwrite any manually set indices\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
@@ -444,6 +446,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--color", "", true, &params.color},
         {"", "--chroma-disable-dit-mask", "", false, &params.chroma_use_dit_mask},
         {"", "--chroma-enable-t5-mask", "", true, &params.chroma_use_t5_mask},
+        {"", "--increase-ref-index", "", false, &params.increase_ref_index},
     };
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
@@ -610,6 +613,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     if (!parse_options(argc, argv, options)) {
         print_usage(argc, argv);
         exit(1);
+    }
+
+    if(params.increase_ref_index){
+        for(int i=0;i<params.ref_image_indices.size();i++){
+            params.ref_image_indices[i]=i+1;
+        }
     }
 
     if (params.n_threads <= 0) {

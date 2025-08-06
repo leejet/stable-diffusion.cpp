@@ -311,6 +311,7 @@ arguments:
                                      Optionally, you can specify an integer identifier N (default = 1) after a comma to set the index of reference image.
                                      Reference indices are only supported by some fine-tunes of Flux Kontext with proper multi-reference support.
                                      Reference images with the same index will be stitched together and seen as one image.
+  --increase-ref-index               Automatically increase the indices of references images based on the order they are listed (starting with 1). Will overwrite any manually set indices
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
