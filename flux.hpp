@@ -725,6 +725,7 @@ namespace Flux {
             auto ids     = concat_ids(txt_ids, img_ids, bs);
 
             std::unordered_map<int, std::pair<uint64_t, uint64_t>> offsets;
+            offsets[0] = {h, w};
 
             for (const auto& ref_pair : ref_latents) {
                 ggml_tensor* ref    = ref_pair.first;
