@@ -732,10 +732,11 @@ namespace Flux {
                 const int ref_index = ref_pair.second;
 
                 if (offsets.find(ref_index) == offsets.end()) {
-                    offsets[ref_index] = {0, 0};
+                    offsets[ref_index] = std::make_pair(0, 0);
                 }
 
-                auto& [h_offset, w_offset] = offsets[ref_index];
+                uint64_t h_offset = offsets[ref_index].first;
+                uint64_t w_offset = offsets[ref_index].second;
 
                 uint64_t curr_h = 0;
                 uint64_t curr_w = 0;
@@ -749,8 +750,8 @@ namespace Flux {
                 ids          = concat_ids(ids, ref_ids, bs);
 
                 // Update offsets
-                h_offset = std::max(h_offset, ref->ne[1] + curr_h);
-                w_offset = std::max(w_offset, ref->ne[0] + curr_w);
+                offsets[ref_index].first  = std::max(h_offset, ref->ne[1] + curr_h);
+                offsets[ref_index].second = std::max(w_offset, ref->ne[0] + curr_w);
             }
 
             return ids;
