@@ -57,7 +57,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     std::vector<std::string> readed_embeddings;
 
     FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
-                                      std::map<std::string, enum ggml_type>& tensor_types,
+                                      const String2GGMLType& tensor_types,
                                       const std::string& embd_dir,
                                       SDVersion version = VERSION_SD1,
                                       PMVersion pv      = PM_VERSION_1,
@@ -618,7 +618,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 struct FrozenCLIPVisionEmbedder : public GGMLRunner {
     CLIPVisionModelProjection vision_model;
 
-    FrozenCLIPVisionEmbedder(ggml_backend_t backend, std::map<std::string, enum ggml_type>& tensor_types)
+    FrozenCLIPVisionEmbedder(ggml_backend_t backend, const String2GGMLType& tensor_types = {})
         : vision_model(OPEN_CLIP_VIT_H_14, true), GGMLRunner(backend) {
         vision_model.init(params_ctx, tensor_types, "cond_stage_model.transformer");
     }
@@ -663,8 +663,8 @@ struct SD3CLIPEmbedder : public Conditioner {
     std::shared_ptr<T5Runner> t5;
 
     SD3CLIPEmbedder(ggml_backend_t backend,
-                    std::map<std::string, enum ggml_type>& tensor_types,
-                    int clip_skip = -1)
+                    const String2GGMLType& tensor_types = {},
+                    int clip_skip                       = -1)
         : clip_g_tokenizer(0) {
         clip_l = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
         clip_g = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
@@ -1010,8 +1010,8 @@ struct FluxCLIPEmbedder : public Conditioner {
     size_t chunk_len = 256;
 
     FluxCLIPEmbedder(ggml_backend_t backend,
-                     std::map<std::string, enum ggml_type>& tensor_types,
-                     int clip_skip = -1) {
+                     const String2GGMLType& tensor_types = {},
+                     int clip_skip                       = -1) {
         clip_l = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true);
         t5     = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
         set_clip_skip(clip_skip);
@@ -1231,10 +1231,10 @@ struct PixArtCLIPEmbedder : public Conditioner {
     int mask_pad     = 1;
 
     PixArtCLIPEmbedder(ggml_backend_t backend,
-                       std::map<std::string, enum ggml_type>& tensor_types,
-                       int clip_skip = -1,
-                       bool use_mask = false,
-                       int mask_pad  = 1)
+                       const String2GGMLType& tensor_types = {},
+                       int clip_skip                       = -1,
+                       bool use_mask                       = false,
+                       int mask_pad                        = 1)
         : use_mask(use_mask), mask_pad(mask_pad) {
         t5 = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
     }

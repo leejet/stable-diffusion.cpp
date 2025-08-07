@@ -374,6 +374,10 @@ public:
                                                               model_loader.tensor_storages_types,
                                                               version,
                                                               sd_ctx_params->diffusion_flash_attn);
+                if (sd_ctx_params->diffusion_conv_direct) {
+                    LOG_INFO("Using Conv2d direct in the diffusion model");
+                    std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.enable_conv2d_direct();
+                }
             }
 
             cond_stage_model->alloc_params_buffer();
@@ -395,6 +399,10 @@ public:
                                                                     vae_decode_only,
                                                                     false,
                                                                     version);
+                if (sd_ctx_params->vae_conv_direct) {
+                    LOG_INFO("Using Conv2d direct in the vae model");
+                    first_stage_model->enable_conv2d_direct();
+                }
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else {
@@ -403,6 +411,10 @@ public:
                                                                     "decoder.layers",
                                                                     vae_decode_only,
                                                                     version);
+                if (sd_ctx_params->vae_conv_direct) {
+                    LOG_INFO("Using Conv2d direct in the tae model");
+                    tae_first_stage->enable_conv2d_direct();
+                }
             }
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
 
@@ -415,6 +427,10 @@ public:
                     controlnet_backend = backend;
                 }
                 control_net = std::make_shared<ControlNet>(controlnet_backend, model_loader.tensor_storages_types, version);
+                if (sd_ctx_params->diffusion_conv_direct) {
+                    LOG_INFO("Using Conv2d direct in the control net");
+                    control_net->enable_conv2d_direct();
+                }
             }
 
             if (strstr(SAFE_STR(sd_ctx_params->stacked_id_embed_dir), "v2")) {
@@ -1883,6 +1899,15 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
 sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     int width  = sd_img_gen_params->width;
     int height = sd_img_gen_params->height;
+    if (sd_version_is_dit(sd_ctx->sd->version)) {
+        if (width % 16 || height % 16) {
+            LOG_ERROR("Image dimensions must be must be a multiple of 16 on each axis for %s models. (Got %dx%d)", model_version_to_str[sd_ctx->sd->version], width, height);
+            return NULL;
+        }
+    } else if (width % 64 || height % 64) {
+        LOG_ERROR("Image dimensions must be must be a multiple of 64 on each axis for %s models. (Got %dx%d)", model_version_to_str[sd_ctx->sd->version], width, height);
+        return NULL;
+    }
     LOG_DEBUG("generate_image %dx%d", width, height);
     if (sd_ctx == NULL || sd_img_gen_params == NULL) {
         return NULL;

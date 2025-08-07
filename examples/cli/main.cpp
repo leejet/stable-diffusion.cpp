@@ -97,6 +97,8 @@ struct SDParams {
     bool clip_on_cpu              = false;
     bool vae_on_cpu               = false;
     bool diffusion_flash_attn     = false;
+    bool diffusion_conv_direct    = false;
+    bool vae_conv_direct          = false;
     bool canny_preprocess         = false;
     bool color                    = false;
     int upscale_repeats           = 1;
@@ -142,6 +144,8 @@ void print_params(SDParams params) {
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
     printf("    vae decoder on cpu:%s\n", params.vae_on_cpu ? "true" : "false");
     printf("    diffusion flash attention:%s\n", params.diffusion_flash_attn ? "true" : "false");
+    printf("    diffusion Conv2d direct:%s\n", params.diffusion_conv_direct ? "true" : "false");
+    printf("    vae Conv2d direct:%s\n", params.vae_conv_direct ? "true" : "false");
     printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
@@ -231,6 +235,10 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --clip-on-cpu                      keep clip in cpu (for low vram)\n");
     printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
     printf("                                     Might lower quality, since it implies converting k and v to f16.\n");
+    printf("                                     This might crash if it is not supported by the backend.\n");
+    printf("  --diffusion-conv-direct            use Conv2d direct in the diffusion model");
+    printf("                                     This might crash if it is not supported by the backend.\n");
+    printf("  --vae-conv-direct                  use Conv2d direct in the vae model (should improve the performance)");
     printf("                                     This might crash if it is not supported by the backend.\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
@@ -422,6 +430,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--clip-on-cpu", "", true, &params.clip_on_cpu},
         {"", "--vae-on-cpu", "", true, &params.vae_on_cpu},
         {"", "--diffusion-fa", "", true, &params.diffusion_flash_attn},
+        {"", "--diffusion-conv-direct", "", true, &params.diffusion_conv_direct},
+        {"", "--vae-conv-direct", "", true, &params.vae_conv_direct},
         {"", "--canny", "", true, &params.canny_preprocess},
         {"-v", "--verbos", "", true, &params.verbose},
         {"", "--color", "", true, &params.color},
@@ -596,13 +606,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         exit(1);
     }
 
-    if (params.width <= 0 || params.width % 64 != 0) {
-        fprintf(stderr, "error: the width must be a multiple of 64\n");
+    if (params.width <= 0) {
+        fprintf(stderr, "error: the width must be greater than 0\n");
         exit(1);
     }
 
-    if (params.height <= 0 || params.height % 64 != 0) {
-        fprintf(stderr, "error: the height must be a multiple of 64\n");
+    if (params.height <= 0) {
+        fprintf(stderr, "error: the height must be greater than 0\n");
         exit(1);
     }
 
@@ -677,10 +687,24 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(sd_rng_type_name(params.rng_type)) + ", ";
     parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.sample_method));
-    if (params.schedule == KARRAS) {
-        parameter_string += " karras";
+    if (params.schedule != DEFAULT) {
+        parameter_string += " " + std::string(sd_schedule_name(params.schedule));
     }
     parameter_string += ", ";
+    for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path}) {
+        if (!te.empty()) {
+            parameter_string += "TE: " + sd_basename(te) + ", ";
+        }
+    }
+    if (!params.diffusion_model_path.empty()) {
+        parameter_string += "Unet: " + sd_basename(params.diffusion_model_path) + ", ";
+    }
+    if (!params.vae_path.empty()) {
+        parameter_string += "VAE: " + sd_basename(params.vae_path) + ", ";
+    }
+    if (params.clip_skip != -1) {
+        parameter_string += "Clip skip: " + std::to_string(params.clip_skip) + ", ";
+    }
     parameter_string += "Version: stable-diffusion.cpp";
     return parameter_string;
 }
@@ -887,6 +911,8 @@ int main(int argc, const char* argv[]) {
         params.control_net_cpu,
         params.vae_on_cpu,
         params.diffusion_flash_attn,
+        params.diffusion_conv_direct,
+        params.vae_conv_direct,
         params.chroma_use_dit_mask,
         params.chroma_use_t5_mask,
         params.chroma_t5_mask_pad,
@@ -998,7 +1024,8 @@ int main(int argc, const char* argv[]) {
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (params.esrgan_path.size() > 0 && params.upscale_repeats > 0) {
         upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
-                                                        params.n_threads);
+                                                        params.n_threads,
+                                                        params.diffusion_conv_direct);
 
         if (upscaler_ctx == NULL) {
             printf("new_upscaler_ctx failed\n");

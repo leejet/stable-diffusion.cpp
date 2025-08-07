@@ -196,7 +196,7 @@ struct TinyAutoEncoder : public GGMLRunner {
     bool decode_only = false;
 
     TinyAutoEncoder(ggml_backend_t backend,
-                    std::map<std::string, enum ggml_type>& tensor_types,
+                    const String2GGMLType& tensor_types,
                     const std::string prefix,
                     bool decoder_only = true,
                     SDVersion version = VERSION_SD1)
@@ -204,6 +204,17 @@ struct TinyAutoEncoder : public GGMLRunner {
           taesd(decoder_only, version),
           GGMLRunner(backend) {
         taesd.init(params_ctx, tensor_types, prefix);
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        taesd.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {

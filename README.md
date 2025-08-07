@@ -341,6 +341,10 @@ arguments:
   --diffusion-fa                     use flash attention in the diffusion model (for low vram)
                                      Might lower quality, since it implies converting k and v to f16.
                                      This might crash if it is not supported by the backend.
+  --diffusion-conv-direct            use Conv2d direct in the diffusion model
+                                     This might crash if it is not supported by the backend.
+  --vae-conv-direct                  use Conv2d direct in the vae model (should improve the performance)
+                                     This might crash if it is not supported by the backend.
   --control-net-cpu                  keep controlnet in cpu (for low vram)
   --canny                            apply canny preprocessor (edge detection)
   --color                            colors the logging tags according to level
@@ -409,6 +413,8 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 - [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
 - [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
 - [Local Diffusion](https://github.com/rmatif/Local-Diffusion)
+- [sd.cpp-webui](https://github.com/daniandtheweb/sd.cpp-webui)
+- [LocalAI](https://github.com/mudler/LocalAI)
 
 ## Contributors
 

@@ -35,8 +35,8 @@ namespace Flux {
         int64_t hidden_size;
         float eps;
 
-        void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, const std::string prefix = "") {
-            ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "scale") != tensor_types.end()) ? tensor_types[prefix + "scale"] : GGML_TYPE_F32;
+        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+            ggml_type wtype = GGML_TYPE_F32;
             params["scale"] = ggml_new_tensor_1d(ctx, wtype, hidden_size);
         }
 
@@ -1039,8 +1039,6 @@ namespace Flux {
     };
 
     struct FluxRunner : public GGMLRunner {
-        static std::map<std::string, enum ggml_type> empty_tensor_types;
-
     public:
         FluxParams flux_params;
         Flux flux;
@@ -1050,11 +1048,11 @@ namespace Flux {
         bool use_mask = false;
 
         FluxRunner(ggml_backend_t backend,
-                   std::map<std::string, enum ggml_type>& tensor_types = empty_tensor_types,
-                   const std::string prefix                            = "",
-                   SDVersion version                                   = VERSION_FLUX,
-                   bool flash_attn                                     = false,
-                   bool use_mask                                       = false)
+                   const String2GGMLType& tensor_types = {},
+                   const std::string prefix            = "",
+                   SDVersion version                   = VERSION_FLUX,
+                   bool flash_attn                     = false,
+                   bool use_mask                       = false)
             : GGMLRunner(backend), use_mask(use_mask) {
             flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
