@@ -1,4 +1,4 @@
-set(TARGET sd)
+set(TARGET sd-cli)
 
 add_executable(${TARGET} main.cpp)
 install(TARGETS ${TARGET} RUNTIME)
