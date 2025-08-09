@@ -10,6 +10,7 @@
 #include "stable-diffusion.h"
 #include "util.h"
 #include "vocab.hpp"
+#include "vocab_umt5.hpp"
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -1157,6 +1158,10 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
         std::string dtype    = tensor_info["dtype"];
         nlohmann::json shape = tensor_info["shape"];
 
+        if (dtype == "U8") {
+            continue;
+        }
+
         size_t begin = tensor_info["data_offsets"][0].get<size_t>();
         size_t end   = tensor_info["data_offsets"][1].get<size_t>();
 
@@ -1853,6 +1858,11 @@ std::string ModelLoader::load_merges() {
 
 std::string ModelLoader::load_t5_tokenizer_json() {
     std::string json_str(reinterpret_cast<const char*>(t5_tokenizer_json_str), sizeof(t5_tokenizer_json_str));
+    return json_str;
+}
+
+std::string ModelLoader::load_umt5_tokenizer_json() {
+    std::string json_str(reinterpret_cast<const char*>(umt5_tokenizer_json_str), sizeof(umt5_tokenizer_json_str));
     return json_str;
 }
 

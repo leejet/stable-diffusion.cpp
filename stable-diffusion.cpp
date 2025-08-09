@@ -344,11 +344,11 @@ public:
                     }
                 }
                 if (is_chroma) {
-                    cond_stage_model = std::make_shared<PixArtCLIPEmbedder>(clip_backend,
-                                                                            model_loader.tensor_storages_types,
-                                                                            -1,
-                                                                            sd_ctx_params->chroma_use_t5_mask,
-                                                                            sd_ctx_params->chroma_t5_mask_pad);
+                    cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
+                                                                        model_loader.tensor_storages_types,
+                                                                        -1,
+                                                                        sd_ctx_params->chroma_use_t5_mask,
+                                                                        sd_ctx_params->chroma_t5_mask_pad);
                 } else {
                     cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
                 }

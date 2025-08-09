@@ -249,4 +249,4 @@ struct Rope {
     }
 };  // struct Rope
 
-#endif __ROPE_HPP__
+#endif  // __ROPE_HPP__

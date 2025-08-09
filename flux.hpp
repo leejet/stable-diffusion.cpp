@@ -896,7 +896,7 @@ namespace Flux {
             }
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
-                if (tensor_name.find("model.diffusion_model.") == std::string::npos)
+                if (!starts_with(tensor_name, prefix))
                     continue;
                 if (tensor_name.find("guidance_in.in_layer.weight") != std::string::npos) {
                     // not schnell
