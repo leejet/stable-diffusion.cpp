@@ -179,9 +179,9 @@ public:
 
         auto it = encoder.find(utf8_to_utf32("img</w>"));
         if (it != encoder.end()) {
-            LOG_DEBUG(" trigger word img already in vocab");
+            LOG_DEBUG("trigger word img already in vocab");
         } else {
-            LOG_DEBUG(" trigger word img not in vocab yet");
+            LOG_DEBUG("trigger word img not in vocab yet");
         }
 
         int rank = 0;
@@ -733,7 +733,7 @@ public:
             if (text_projection != NULL) {
                 pooled = ggml_nn_linear(ctx, pooled, text_projection, NULL);
             } else {
-                LOG_DEBUG("Missing text_projection matrix, assuming identity...");
+                LOG_DEBUG("identity projection");
             }
             return pooled;  // [hidden_size, 1, 1]
         }

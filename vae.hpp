@@ -520,7 +520,18 @@ public:
     }
 };
 
-struct AutoEncoderKL : public GGMLRunner {
+struct VAE : public GGMLRunner {
+    VAE(ggml_backend_t backend)
+        : GGMLRunner(backend) {}
+    virtual void compute(const int n_threads,
+                         struct ggml_tensor* z,
+                         bool decode_graph,
+                         struct ggml_tensor** output,
+                         struct ggml_context* output_ctx)                                                         = 0;
+    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) = 0;
+};
+
+struct AutoEncoderKL : public VAE {
     bool decode_only = true;
     AutoencodingEngine ae;
 
@@ -530,7 +541,7 @@ struct AutoEncoderKL : public GGMLRunner {
                   bool decode_only       = false,
                   bool use_video_decoder = false,
                   SDVersion version      = VERSION_SD1)
-        : decode_only(decode_only), ae(decode_only, use_video_decoder, version), GGMLRunner(backend) {
+        : decode_only(decode_only), ae(decode_only, use_video_decoder, version), VAE(backend) {
         ae.init(params_ctx, tensor_types, prefix);
     }
 

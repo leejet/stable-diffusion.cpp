@@ -323,17 +323,27 @@ __STATIC_INLINE__ uint8_t* sd_tensor_to_image(struct ggml_tensor* input) {
     return image_data;
 }
 
-__STATIC_INLINE__ uint8_t* sd_tensor_to_mul_image(struct ggml_tensor* input, int idx) {
-    int64_t width    = input->ne[0];
-    int64_t height   = input->ne[1];
-    int64_t channels = input->ne[2];
+__STATIC_INLINE__ uint8_t* sd_tensor_to_image(struct ggml_tensor* input, int idx, bool video = false) {
+    int64_t width  = input->ne[0];
+    int64_t height = input->ne[1];
+    int64_t channels;
+    if (video) {
+        channels = input->ne[3];
+    } else {
+        channels = input->ne[2];
+    }
     GGML_ASSERT(channels == 3 && input->type == GGML_TYPE_F32);
     uint8_t* image_data = (uint8_t*)malloc(width * height * channels);
-    for (int iy = 0; iy < height; iy++) {
-        for (int ix = 0; ix < width; ix++) {
-            for (int k = 0; k < channels; k++) {
-                float value                                               = ggml_tensor_get_f32(input, ix, iy, k, idx);
-                *(image_data + iy * width * channels + ix * channels + k) = (uint8_t)(value * 255.0f);
+    for (int ih = 0; ih < height; ih++) {
+        for (int iw = 0; iw < width; iw++) {
+            for (int ic = 0; ic < channels; ic++) {
+                float value;
+                if (video) {
+                    value = ggml_tensor_get_f32(input, iw, ih, idx, ic);
+                } else {
+                    value = ggml_tensor_get_f32(input, iw, ih, ic, idx);
+                }
+                *(image_data + ih * width * channels + iw * channels + ic) = (uint8_t)(value * 255.0f);
             }
         }
     }

@@ -21,12 +21,12 @@ struct Conditioner {
                                               int clip_skip,
                                               int width,
                                               int height,
-                                              int adm_in_channels        = -1,
-                                              bool force_zero_embeddings = false)                                             = 0;
-    virtual void alloc_params_buffer()                                                                                        = 0;
-    virtual void free_params_buffer()                                                                                         = 0;
-    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors)                                       = 0;
-    virtual size_t get_params_buffer_size()                                                                                   = 0;
+                                              int adm_in_channels  = -1,
+                                              bool zero_out_masked = false)                                             = 0;
+    virtual void alloc_params_buffer()                                                                                  = 0;
+    virtual void free_params_buffer()                                                                                   = 0;
+    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors)                                 = 0;
+    virtual size_t get_params_buffer_size()                                                                             = 0;
     virtual std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
                                                                                           int n_threads,
                                                                                           const std::string& text,
@@ -34,10 +34,10 @@ struct Conditioner {
                                                                                           int width,
                                                                                           int height,
                                                                                           int num_input_imgs,
-                                                                                          int adm_in_channels        = -1,
-                                                                                          bool force_zero_embeddings = false) = 0;
+                                                                                          int adm_in_channels  = -1,
+                                                                                          bool zero_out_masked = false) = 0;
     virtual std::string remove_trigger_from_prompt(ggml_context* work_ctx,
-                                                   const std::string& prompt)                                                 = 0;
+                                                   const std::string& prompt)                                           = 0;
 };
 
 // ldm.modules.encoders.modules.FrozenCLIPEmbedder
@@ -409,8 +409,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                              int clip_skip,
                                              int width,
                                              int height,
-                                             int adm_in_channels        = -1,
-                                             bool force_zero_embeddings = false) {
+                                             int adm_in_channels  = -1,
+                                             bool zero_out_masked = false) {
         set_clip_skip(clip_skip);
         int64_t t0                               = ggml_time_ms();
         struct ggml_tensor* hidden_states        = NULL;  // [N, n_token, hidden_size]
@@ -499,7 +499,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 float new_mean = ggml_tensor_mean(result);
                 ggml_tensor_scale(result, (original_mean / new_mean));
             }
-            if (force_zero_embeddings) {
+            if (zero_out_masked) {
                 float* vec = (float*)result->data;
                 for (int i = 0; i < ggml_nelements(result); i++) {
                     vec[i] = 0;
@@ -562,8 +562,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                        int width,
                                        int height,
                                        int num_input_imgs,
-                                       int adm_in_channels        = -1,
-                                       bool force_zero_embeddings = false) {
+                                       int adm_in_channels  = -1,
+                                       bool zero_out_masked = false) {
         auto image_tokens = convert_token_to_id(trigger_word);
         // if(image_tokens.size() == 1){
         //     printf(" image token id is: %d \n", image_tokens[0]);
@@ -584,7 +584,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         // for(int i = 0; i < clsm.size(); ++i)
         //    printf("%d ", clsm[i]?1:0);
         // printf("\n");
-        auto cond = get_learned_condition_common(work_ctx, n_threads, tokens, weights, clip_skip, width, height, adm_in_channels, force_zero_embeddings);
+        auto cond = get_learned_condition_common(work_ctx, n_threads, tokens, weights, clip_skip, width, height, adm_in_channels, zero_out_masked);
         return std::make_tuple(cond, clsm);
     }
 
@@ -606,12 +606,12 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                       int clip_skip,
                                       int width,
                                       int height,
-                                      int adm_in_channels        = -1,
-                                      bool force_zero_embeddings = false) {
+                                      int adm_in_channels  = -1,
+                                      bool zero_out_masked = false) {
         auto tokens_and_weights     = tokenize(text, true);
         std::vector<int>& tokens    = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
-        return get_learned_condition_common(work_ctx, n_threads, tokens, weights, clip_skip, width, height, adm_in_channels, force_zero_embeddings);
+        return get_learned_condition_common(work_ctx, n_threads, tokens, weights, clip_skip, width, height, adm_in_channels, zero_out_masked);
     }
 };
 
@@ -773,7 +773,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                                              int n_threads,
                                              std::vector<std::pair<std::vector<int>, std::vector<float>>> token_and_weights,
                                              int clip_skip,
-                                             bool force_zero_embeddings = false) {
+                                             bool zero_out_masked = false) {
         set_clip_skip(clip_skip);
         auto& clip_l_tokens  = token_and_weights[0].first;
         auto& clip_l_weights = token_and_weights[0].second;
@@ -952,7 +952,7 @@ struct SD3CLIPEmbedder : public Conditioner {
 
             int64_t t1 = ggml_time_ms();
             LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
-            if (force_zero_embeddings) {
+            if (zero_out_masked) {
                 float* vec = (float*)chunk_hidden_states->data;
                 for (int i = 0; i < ggml_nelements(chunk_hidden_states); i++) {
                     vec[i] = 0;
@@ -978,10 +978,10 @@ struct SD3CLIPEmbedder : public Conditioner {
                                       int clip_skip,
                                       int width,
                                       int height,
-                                      int adm_in_channels        = -1,
-                                      bool force_zero_embeddings = false) {
+                                      int adm_in_channels  = -1,
+                                      bool zero_out_masked = false) {
         auto tokens_and_weights = tokenize(text, 77, true);
-        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, force_zero_embeddings);
+        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
     }
 
     std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
@@ -991,8 +991,8 @@ struct SD3CLIPEmbedder : public Conditioner {
                                                                                   int width,
                                                                                   int height,
                                                                                   int num_input_imgs,
-                                                                                  int adm_in_channels        = -1,
-                                                                                  bool force_zero_embeddings = false) {
+                                                                                  int adm_in_channels  = -1,
+                                                                                  bool zero_out_masked = false) {
         GGML_ASSERT(0 && "Not implemented yet!");
     }
 
@@ -1101,7 +1101,7 @@ struct FluxCLIPEmbedder : public Conditioner {
                                              int n_threads,
                                              std::vector<std::pair<std::vector<int>, std::vector<float>>> token_and_weights,
                                              int clip_skip,
-                                             bool force_zero_embeddings = false) {
+                                             bool zero_out_masked = false) {
         set_clip_skip(clip_skip);
         auto& clip_l_tokens  = token_and_weights[0].first;
         auto& clip_l_weights = token_and_weights[0].second;
@@ -1173,7 +1173,7 @@ struct FluxCLIPEmbedder : public Conditioner {
 
             int64_t t1 = ggml_time_ms();
             LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
-            if (force_zero_embeddings) {
+            if (zero_out_masked) {
                 float* vec = (float*)chunk_hidden_states->data;
                 for (int i = 0; i < ggml_nelements(chunk_hidden_states); i++) {
                     vec[i] = 0;
@@ -1199,10 +1199,10 @@ struct FluxCLIPEmbedder : public Conditioner {
                                       int clip_skip,
                                       int width,
                                       int height,
-                                      int adm_in_channels        = -1,
-                                      bool force_zero_embeddings = false) {
+                                      int adm_in_channels  = -1,
+                                      bool zero_out_masked = false) {
         auto tokens_and_weights = tokenize(text, chunk_len, true);
-        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, force_zero_embeddings);
+        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
     }
 
     std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
@@ -1212,8 +1212,8 @@ struct FluxCLIPEmbedder : public Conditioner {
                                                                                   int width,
                                                                                   int height,
                                                                                   int num_input_imgs,
-                                                                                  int adm_in_channels        = -1,
-                                                                                  bool force_zero_embeddings = false) {
+                                                                                  int adm_in_channels  = -1,
+                                                                                  bool zero_out_masked = false) {
         GGML_ASSERT(0 && "Not implemented yet!");
     }
 
@@ -1229,6 +1229,7 @@ struct T5CLIPEmbedder : public Conditioner {
     size_t chunk_len = 512;
     bool use_mask    = false;
     int mask_pad     = 1;
+    bool is_umt5     = false;
 
     T5CLIPEmbedder(ggml_backend_t backend,
                    const String2GGMLType& tensor_types = {},
@@ -1318,16 +1319,16 @@ struct T5CLIPEmbedder : public Conditioner {
                                              int n_threads,
                                              std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> token_and_weights,
                                              int clip_skip,
-                                             bool force_zero_embeddings = false) {
+                                             bool zero_out_masked = false) {
         auto& t5_tokens        = std::get<0>(token_and_weights);
         auto& t5_weights       = std::get<1>(token_and_weights);
         auto& t5_attn_mask_vec = std::get<2>(token_and_weights);
 
         int64_t t0                              = ggml_time_ms();
-        struct ggml_tensor* hidden_states       = NULL;                                               // [N, n_token, 4096]
-        struct ggml_tensor* chunk_hidden_states = NULL;                                               // [n_token, 4096]
-        struct ggml_tensor* pooled              = NULL;                                               // [768,]
-        struct ggml_tensor* t5_attn_mask        = vector_to_ggml_tensor(work_ctx, t5_attn_mask_vec);  // [768,]
+        struct ggml_tensor* hidden_states       = NULL;  // [N, n_token, 4096]
+        struct ggml_tensor* chunk_hidden_states = NULL;  // [n_token, 4096]
+        struct ggml_tensor* pooled              = NULL;
+        struct ggml_tensor* t5_attn_mask        = vector_to_ggml_tensor(work_ctx, t5_attn_mask_vec);  // [n_token]
 
         std::vector<float> hidden_states_vec;
 
@@ -1368,10 +1369,16 @@ struct T5CLIPEmbedder : public Conditioner {
 
             int64_t t1 = ggml_time_ms();
             LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
-            if (force_zero_embeddings) {
-                float* vec = (float*)chunk_hidden_states->data;
-                for (int i = 0; i < ggml_nelements(chunk_hidden_states); i++) {
-                    vec[i] = 0;
+            if (zero_out_masked) {
+                auto tensor = chunk_hidden_states;
+                for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
+                    for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
+                        for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
+                            if (chunk_mask[i1] < 0.f) {
+                                ggml_tensor_set_f32(tensor, 0.f, i0, i1, i2);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1380,16 +1387,12 @@ struct T5CLIPEmbedder : public Conditioner {
                                      ((float*)chunk_hidden_states->data) + ggml_nelements(chunk_hidden_states));
         }
 
-        if (hidden_states_vec.size() > 0) {
-            hidden_states = vector_to_ggml_tensor(work_ctx, hidden_states_vec);
-            hidden_states = ggml_reshape_2d(work_ctx,
-                                            hidden_states,
-                                            chunk_hidden_states->ne[0],
-                                            ggml_nelements(hidden_states) / chunk_hidden_states->ne[0]);
-        } else {
-            hidden_states = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 4096, 256);
-            ggml_set_f32(hidden_states, 0.f);
-        }
+        GGML_ASSERT(hidden_states_vec.size() > 0);
+        hidden_states = vector_to_ggml_tensor(work_ctx, hidden_states_vec);
+        hidden_states = ggml_reshape_2d(work_ctx,
+                                        hidden_states,
+                                        chunk_hidden_states->ne[0],
+                                        ggml_nelements(hidden_states) / chunk_hidden_states->ne[0]);
 
         modify_mask_to_attend_padding(t5_attn_mask, ggml_nelements(t5_attn_mask), mask_pad);
 
@@ -1402,10 +1405,10 @@ struct T5CLIPEmbedder : public Conditioner {
                                       int clip_skip,
                                       int width,
                                       int height,
-                                      int adm_in_channels        = -1,
-                                      bool force_zero_embeddings = false) {
+                                      int adm_in_channels  = -1,
+                                      bool zero_out_masked = false) {
         auto tokens_and_weights = tokenize(text, chunk_len, true);
-        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, force_zero_embeddings);
+        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
     }
 
     std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
@@ -1415,8 +1418,8 @@ struct T5CLIPEmbedder : public Conditioner {
                                                                                   int width,
                                                                                   int height,
                                                                                   int num_input_imgs,
-                                                                                  int adm_in_channels        = -1,
-                                                                                  bool force_zero_embeddings = false) {
+                                                                                  int adm_in_channels  = -1,
+                                                                                  bool zero_out_masked = false) {
         GGML_ASSERT(0 && "Not implemented yet!");
     }
 

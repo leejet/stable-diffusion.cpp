@@ -1055,7 +1055,11 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
 
         // LOG_DEBUG("%s", name.c_str());
 
-        TensorStorage tensor_storage(prefix + name, dummy->type, dummy->ne, ggml_n_dims(dummy), file_index, offset);
+        if (!starts_with(name, prefix)) {
+            name = prefix + name;
+        }
+
+        TensorStorage tensor_storage(name, dummy->type, dummy->ne, ggml_n_dims(dummy), file_index, offset);
 
         GGML_ASSERT(ggml_nbytes(dummy) == tensor_storage.nbytes());
 
@@ -1195,7 +1199,11 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
             n_dims = 1;
         }
 
-        TensorStorage tensor_storage(prefix + name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
+        if (!starts_with(name, prefix)) {
+            name = prefix + name;
+        }
+
+        TensorStorage tensor_storage(name, type, ne, n_dims, file_index, ST_HEADER_SIZE_LEN + header_size_ + begin);
         tensor_storage.reverse_ne();
 
         size_t tensor_data_size = end - begin;
@@ -1580,7 +1588,11 @@ bool ModelLoader::parse_data_pkl(uint8_t* buffer,
                         reader.tensor_storage.file_index = file_index;
                         // if(strcmp(prefix.c_str(), "scarlett") == 0)
                         // printf(" ZIP got tensor %s \n ", reader.tensor_storage.name.c_str());
-                        reader.tensor_storage.name = prefix + reader.tensor_storage.name;
+                        std::string name = reader.tensor_storage.name;
+                        if (!starts_with(name, prefix)) {
+                            name = prefix + name;
+                        }
+                        reader.tensor_storage.name = name;
                         tensor_storages.push_back(reader.tensor_storage);
                         add_preprocess_tensor_storage_types(tensor_storages_types, reader.tensor_storage.name, reader.tensor_storage.type);
 
@@ -1654,10 +1666,10 @@ SDVersion ModelLoader::get_sd_version() {
 
     bool is_xl   = false;
     bool is_flux = false;
+    bool is_wan  = false;
 
-#define found_family (is_xl || is_flux)
     for (auto& tensor_storage : tensor_storages) {
-        if (!found_family) {
+        if (!(is_xl || is_flux)) {
             if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
                 is_flux = true;
                 if (input_block_checked) {
@@ -1666,6 +1678,9 @@ SDVersion ModelLoader::get_sd_version() {
             }
             if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
                 return VERSION_SD3;
+            }
+            if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
+                return VERSION_WAN2;
             }
             if (tensor_storage.name.find("model.diffusion_model.input_blocks.") != std::string::npos || tensor_storage.name.find("unet.down_blocks.") != std::string::npos) {
                 is_unet = true;
@@ -1701,7 +1716,7 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name == "model.diffusion_model.input_blocks.0.0.weight" || tensor_storage.name == "model.diffusion_model.img_in.weight" || tensor_storage.name == "unet.conv_in.weight") {
             input_block_weight  = tensor_storage;
             input_block_checked = true;
-            if (found_family) {
+            if (is_xl || is_flux) {
                 break;
             }
         }

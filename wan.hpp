@@ -7,6 +7,7 @@
 #include "flux.hpp"
 #include "ggml_extend.hpp"
 #include "rope.hpp"
+#include "vae.hpp"
 
 namespace WAN {
 
@@ -522,7 +523,6 @@ namespace WAN {
             for (int i = 0; i < dims.size() - 1; i++) {
                 in_dim  = dims[i];
                 out_dim = dims[i + 1];
-                LOG_DEBUG("in_dim %u out_dim %u", in_dim, out_dim);
                 if (i == 1 || i == 2 || i == 3) {
                     in_dim = in_dim / 2;
                 }
@@ -726,7 +726,7 @@ namespace WAN {
         }
     };
 
-    struct WanVAERunner : public GGMLRunner {
+    struct WanVAERunner : public VAE {
         bool decode_only = true;
         WanVAE ae;
 
@@ -734,7 +734,7 @@ namespace WAN {
                      const String2GGMLType& tensor_types = {},
                      const std::string prefix            = "",
                      bool decode_only                    = false)
-            : decode_only(decode_only), ae(decode_only), GGMLRunner(backend) {
+            : decode_only(decode_only), ae(decode_only), VAE(backend) {
             ae.init(params_ctx, tensor_types, prefix);
         }
 
@@ -1217,13 +1217,13 @@ namespace WAN {
         int64_t axes_dim_sum      = 128;
     };
 
-    class WanModel : public GGMLBlock {
+    class Wan : public GGMLBlock {
     protected:
         WanParams params;
 
     public:
-        WanModel() {}
-        WanModel(WanParams params)
+        Wan() {}
+        Wan(WanParams params)
             : params(params) {
             // patch_embedding
             blocks["patch_embedding"] = std::shared_ptr<GGMLBlock>(new Conv3d(params.in_dim, params.dim, params.patch_size, params.patch_size));
@@ -1418,14 +1418,15 @@ namespace WAN {
     struct WanRunner : public GGMLRunner {
     public:
         WanParams wan_params;
-        WanModel wan;
+        Wan wan;
         std::vector<float> pe_vec;
         SDVersion version;
 
         WanRunner(ggml_backend_t backend,
                   const String2GGMLType& tensor_types = {},
                   const std::string prefix            = "",
-                  SDVersion version                   = VERSION_WAN_2_1)
+                  SDVersion version                   = VERSION_WAN2,
+                  bool flash_attn                     = false)
             : GGMLRunner(backend) {
             wan_params.num_layers = 0;
             for (auto pair : tensor_types) {
@@ -1476,7 +1477,7 @@ namespace WAN {
                 GGML_ABORT("invalid num_layers(%d) of wan", wan_params.num_layers);
             }
 
-            wan = WanModel(wan_params);
+            wan = Wan(wan_params);
             wan.init(params_ctx, tensor_types, prefix);
         }
 

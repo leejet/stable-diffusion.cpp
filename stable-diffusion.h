@@ -157,7 +157,6 @@ typedef struct {
 typedef struct {
     float txt_cfg;
     float img_cfg;
-    float min_cfg;
     float distilled_guidance;
     sd_slg_params_t slg;
 } sd_guidance_params_t;
@@ -187,18 +186,19 @@ typedef struct {
 } sd_img_gen_params_t;
 
 typedef struct {
+    const char* prompt;
+    const char* negative_prompt;
+    int clip_skip;
+    sd_guidance_params_t guidance;
     sd_image_t init_image;
     int width;
     int height;
-    sd_guidance_params_t guidance;
     enum sample_method_t sample_method;
     int sample_steps;
+    float eta;
     float strength;
     int64_t seed;
     int video_frames;
-    int motion_bucket_id;
-    int fps;
-    float augmentation_level;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;

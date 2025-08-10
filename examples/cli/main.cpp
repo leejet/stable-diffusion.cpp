@@ -24,10 +24,13 @@
 #define STB_IMAGE_RESIZE_STATIC
 #include "stb_image_resize.h"
 
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#endif  // _WIN32
+
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
-
-#include "t5.hpp"
 
 const char* modes_str[] = {
     "img_gen",
@@ -69,7 +72,6 @@ struct SDParams {
 
     std::string prompt;
     std::string negative_prompt;
-    float min_cfg       = 1.0f;
     float cfg_scale     = 7.0f;
     float img_cfg_scale = INFINITY;
     float guidance      = 3.5f;
@@ -80,10 +82,7 @@ struct SDParams {
     int height          = 512;
     int batch_count     = 1;
 
-    int video_frames         = 6;
-    int motion_bucket_id     = 127;
-    int fps                  = 6;
-    float augmentation_level = 0.f;
+    int video_frames = 1;
 
     sample_method_t sample_method = EULER_A;
     schedule_t schedule           = DEFAULT;
@@ -147,7 +146,6 @@ void print_params(SDParams params) {
     printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
-    printf("    min_cfg:           %.2f\n", params.min_cfg);
     printf("    cfg_scale:         %.2f\n", params.cfg_scale);
     printf("    img_cfg_scale:     %.2f\n", params.img_cfg_scale);
     printf("    slg_scale:         %.2f\n", params.slg_scale);
@@ -243,6 +241,42 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -v, --verbose                      print extra info\n");
 }
 
+#if defined(_WIN32)
+static std::string utf16_to_utf8(const std::wstring& wstr) {
+    if (wstr.empty())
+        return {};
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(),
+                                          nullptr, 0, nullptr, nullptr);
+    if (size_needed <= 0)
+        throw std::runtime_error("UTF-16 to UTF-8 conversion failed");
+
+    std::string utf8(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(),
+                        (char*)utf8.data(), size_needed, nullptr, nullptr);
+    return utf8;
+}
+
+static std::string argv_to_utf8(int index, const char** argv) {
+    int argc;
+    wchar_t** argv_w = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv_w)
+        throw std::runtime_error("Failed to parse command line");
+
+    std::string result;
+    if (index < argc) {
+        result = utf16_to_utf8(argv_w[index]);
+    }
+    LocalFree(argv_w);
+    return result;
+}
+
+#else  // Linux / macOS
+static std::string argv_to_utf8(int index, const char** argv) {
+    return std::string(argv[index]);
+}
+
+#endif
+
 struct StringOption {
     std::string short_name;
     std::string long_name;
@@ -299,7 +333,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
                     invalid_arg = true;
                     break;
                 }
-                *option.target = std::string(argv[i]);
+                *option.target = argv_to_utf8(i, argv);
             }
         }
         if (invalid_arg) {
@@ -746,17 +780,9 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 
 int main(int argc, const char* argv[]) {
     SDParams params;
-    // params.verbose = true;
-    // sd_set_log_callback(sd_log_cb, (void*)&params);
-
-    // T5Embedder::load_from_file_and_test(argv[1]);
-    // return 0;
-
     parse_args(argc, argv, params);
-
     sd_guidance_params_t guidance_params = {params.cfg_scale,
                                             params.img_cfg_scale,
-                                            params.min_cfg,
                                             params.guidance,
                                             {
                                                 params.skip_layers.data(),
@@ -789,11 +815,6 @@ int main(int argc, const char* argv[]) {
                    params.output_path.c_str());
             return 0;
         }
-    }
-
-    if (params.mode == VID_GEN) {
-        fprintf(stderr, "SVD support is broken, do not use it!!!\n");
-        return 1;
     }
 
     bool vae_decode_only          = true;
@@ -992,18 +1013,19 @@ int main(int argc, const char* argv[]) {
         expected_num_results = params.batch_count;
     } else if (params.mode == VID_GEN) {
         sd_vid_gen_params_t vid_gen_params = {
+            params.prompt.c_str(),
+            params.negative_prompt.c_str(),
+            params.clip_skip,
+            guidance_params,
             input_image,
             params.width,
             params.height,
-            guidance_params,
             params.sample_method,
             params.sample_steps,
+            params.eta,
             params.strength,
             params.seed,
             params.video_frames,
-            params.motion_bucket_id,
-            params.fps,
-            params.augmentation_level,
         };
 
         results              = generate_video(sd_ctx, &vid_gen_params);
