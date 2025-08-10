@@ -1092,7 +1092,6 @@ public:
 
         sample_k_diffusion(method, denoise, work_ctx, x, sigmas, rng, eta);
 
-        LOG_DEBUG("sigmas[sigmas.size() - 1] %f", sigmas[sigmas.size() - 1]);
         x = denoiser->inverse_noise_scaling(sigmas[sigmas.size() - 1], x);
 
         if (control_net) {

@@ -1011,43 +1011,37 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
     float scale = (1.0f / sqrt((float)d_head));
 
     int kv_pad = 0;
-    // if (flash_attn) {
-    //     LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
-    // }
-    //   is there anything oddly shaped?? ping Green-Sky if you can trip this assert
-    // GGML_ASSERT(((L_k % 256 == 0) && L_q == L_k) || !(L_k % 256 == 0));
+    if (flash_attn) {
+        // LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
+        bool can_use_flash_attn = true;
+        can_use_flash_attn      = can_use_flash_attn && (d_head == 64 ||
+                                                    d_head == 80 ||
+                                                    d_head == 96 ||
+                                                    d_head == 112 ||
+                                                    d_head == 128 ||
+                                                    d_head == 256);
+        if (can_use_flash_attn && L_k % 256 != 0) {
+            // TODO(Green-Sky): might be worth just padding by default
+            if (L_k == 77 || L_k == 1560 || L_k == 4208 || L_k == 3952) {
+                kv_pad = GGML_PAD(L_k, 256) - L_k;
+            } else {
+                can_use_flash_attn = false;
+            }
+        }
 
-    bool can_use_flash_attn = true;
-    can_use_flash_attn      = can_use_flash_attn && (d_head == 64 ||
-                                                d_head == 80 ||
-                                                d_head == 96 ||
-                                                d_head == 112 ||
-                                                d_head == 128 ||
-                                                d_head == 256);
-#if 0
-    can_use_flash_attn      = can_use_flash_attn && L_k % 256 == 0;
-#else
-    if (can_use_flash_attn && L_k % 256 != 0) {
-        // TODO(Green-Sky): might be worth just padding by default
-        if (L_k == 77 || L_k == 4208 || L_k == 3952) {
-            kv_pad = GGML_PAD(L_k, 256) - L_k;
-        } else {
-            can_use_flash_attn = false;
+        if (mask != nullptr) {
+            // TODO(Green-Sky): figure out if we can bend t5 to work too
+            can_use_flash_attn = can_use_flash_attn && mask->ne[2] == 1;
+            can_use_flash_attn = can_use_flash_attn && mask->ne[3] == 1;
+        }
+
+        if (!can_use_flash_attn) {
+            flash_attn = false;
         }
     }
-#endif
-
-    if (mask != nullptr) {
-        // TODO(Green-Sky): figure out if we can bend t5 to work too
-        can_use_flash_attn = can_use_flash_attn && mask->ne[2] == 1;
-        can_use_flash_attn = can_use_flash_attn && mask->ne[3] == 1;
-    }
-
-    // TODO(Green-Sky): more pad or disable for funny tensor shapes
 
     ggml_tensor* kqv = nullptr;
-    // GGML_ASSERT((flash_attn && can_use_flash_attn) || !flash_attn);
-    if (can_use_flash_attn && flash_attn) {
+    if (flash_attn) {
         // LOG_DEBUG(" uses flash attention");
         if (kv_pad != 0) {
             // LOG_DEBUG(" padding k and v dim1 by %d", kv_pad);

@@ -939,7 +939,7 @@ namespace WAN {
             k      = norm_k->forward(ctx, k);
             auto v = v_proj->forward(ctx, context);  // [N, n_context, dim]
 
-            x = ggml_nn_attention_ext(ctx, q, k, v, num_heads);  // [N, n_token, dim]
+            x = ggml_nn_attention_ext(ctx, q, k, v, num_heads, NULL, false, false, flash_attn);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
@@ -1003,8 +1003,8 @@ namespace WAN {
             k_img      = norm_k_img->forward(ctx, k_img);
             auto v_img = v_img_proj->forward(ctx, context_img);  // [N, context_img_len, dim]
 
-            auto img_x = ggml_nn_attention_ext(ctx, q, k_img, v_img, num_heads);  // [N, n_token, dim]
-            x          = ggml_nn_attention_ext(ctx, q, k, v, num_heads);          // [N, n_token, dim]
+            auto img_x = ggml_nn_attention_ext(ctx, q, k_img, v_img, num_heads, NULL, false, false, flash_attn);  // [N, n_token, dim]
+            x          = ggml_nn_attention_ext(ctx, q, k, v, num_heads, NULL, false, false, flash_attn);          // [N, n_token, dim]
 
             x = ggml_add(ctx, x, img_x);
 
@@ -1033,16 +1033,16 @@ namespace WAN {
                           bool flash_attn      = false)
             : dim(dim) {
             blocks["norm1"]     = std::shared_ptr<GGMLBlock>(new LayerNorm(dim, eps, false));
-            blocks["self_attn"] = std::shared_ptr<GGMLBlock>(new WanSelfAttention(dim, num_heads, qk_norm, eps));
+            blocks["self_attn"] = std::shared_ptr<GGMLBlock>(new WanSelfAttention(dim, num_heads, qk_norm, eps, flash_attn));
             if (cross_attn_norm) {
                 blocks["norm3"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim, eps, true));
             } else {
                 blocks["norm3"] = std::shared_ptr<GGMLBlock>(new Identity());
             }
             if (t2v_cross_attn) {
-                blocks["cross_attn"] = std::shared_ptr<GGMLBlock>(new WanT2VCrossAttention(dim, num_heads, qk_norm, eps));
+                blocks["cross_attn"] = std::shared_ptr<GGMLBlock>(new WanT2VCrossAttention(dim, num_heads, qk_norm, eps, flash_attn));
             } else {
-                blocks["cross_attn"] = std::shared_ptr<GGMLBlock>(new WanI2VCrossAttention(dim, num_heads, qk_norm, eps));
+                blocks["cross_attn"] = std::shared_ptr<GGMLBlock>(new WanI2VCrossAttention(dim, num_heads, qk_norm, eps, flash_attn));
             }
 
             blocks["norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim, eps, false));
@@ -1215,6 +1215,7 @@ namespace WAN {
         // wan2.1 1.3B: 1536/12, wan2.1/2.2 14B: 5120/40, wan2.2 5B: 3074/24
         std::vector<int> axes_dim = {44, 42, 42};
         int64_t axes_dim_sum      = 128;
+        bool flash_attn           = false;
     };
 
     class Wan : public GGMLBlock {
@@ -1249,7 +1250,8 @@ namespace WAN {
                                                                                                          params.num_heads,
                                                                                                          params.qk_norm,
                                                                                                          params.cross_attn_norm,
-                                                                                                         params.eps));
+                                                                                                         params.eps,
+                                                                                                         params.flash_attn));
                 blocks["blocks." + std::to_string(i)] = block;
             }
 
@@ -1428,6 +1430,7 @@ namespace WAN {
                   SDVersion version                   = VERSION_WAN2,
                   bool flash_attn                     = false)
             : GGMLRunner(backend) {
+            wan_params.flash_attn = flash_attn;
             wan_params.num_layers = 0;
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
