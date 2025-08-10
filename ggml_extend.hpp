@@ -608,6 +608,14 @@ __STATIC_INLINE__ void ggml_tensor_scale_output(struct ggml_tensor* src) {
     }
 }
 
+__STATIC_INLINE__ struct ggml_tensor* ggml_nn_cont(struct ggml_context* ctx,
+                                                   struct ggml_tensor* x) {
+    if (ggml_is_contiguous(x)) {
+        return x;
+    }
+    return ggml_cont(ctx, x);
+}
+
 // torch like permute
 __STATIC_INLINE__ struct ggml_tensor* ggml_torch_permute(struct ggml_context* ctx,
                                                          struct ggml_tensor* x,
@@ -799,7 +807,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_linear(struct ggml_context* ctx,
                                                      struct ggml_tensor* b) {
     x = ggml_mul_mat(ctx, w, x);
     if (b != NULL) {
-        x = ggml_add(ctx, x, b);
+        x = ggml_add_inplace(ctx, x, b);
     }
     return x;
 }
@@ -822,7 +830,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d(struct ggml_context* ctx,
     if (b != NULL) {
         b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
         // b = ggml_repeat(ctx, b, x);
-        x = ggml_add(ctx, x, b);
+        x = ggml_add_inplace(ctx, x, b);
     }
     return x;
 }
@@ -851,43 +859,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_3d(struct ggml_context* ctx,
 
     if (b != NULL) {
         b = ggml_reshape_4d(ctx, b, 1, 1, 1, b->ne[0]);  // [OC, 1, 1, 1]
-        x = ggml_add(ctx, x, b);
+        x = ggml_add_inplace(ctx, x, b);
     }
     return x;
-}
-
-// w: [OC，IC, KD, 1 * 1]
-// x: [N, IC, IH, IW]
-// b: [OC,]
-// result: [N, OC, OH, OW]
-__STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_3d_nx1x1_bak(struct ggml_context* ctx,
-                                                                struct ggml_tensor* x,
-                                                                struct ggml_tensor* w,
-                                                                struct ggml_tensor* b,
-                                                                int s2 = 1,
-                                                                int p2 = 1,
-                                                                int d2 = 1) {
-    GGML_ASSERT(w->ne[0] == 1);
-    // timesteps = x.shape[0]
-    // x = rearrange(x, "(b t) c h w -> b c t h w", t=timesteps)
-    // x = conv3d(x)
-    // return rearrange(x, "b c t h w -> (b t) c h w")
-    int64_t T = x->ne[3];
-    int64_t B = x->ne[3] / T;
-    int64_t C = x->ne[2];
-    int64_t H = x->ne[1];
-    int64_t W = x->ne[0];
-
-    x = ggml_reshape_4d(ctx, x, W * H, C, T, B);           // (b t) c h w -> b t c (h w)
-    x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
-    x = ggml_conv_2d(ctx, w, x, 1, s2, 0, p2, 1, d2);      // [B, OC, T, OH * OW]
-    if (b != NULL) {
-        b = ggml_reshape_4d(ctx, b, 1, 1, b->ne[0], 1);
-        x = ggml_add(ctx, x, b);
-    }
-    x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
-    x = ggml_reshape_4d(ctx, x, W, H, C, T * B);           // b t c (h w) -> (b t) c h w
-    return x;                                              // [B*T, OC, OH, OW]
 }
 
 // w: [OC，IC, KD, 1 * 1]
@@ -991,13 +965,13 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         C      = q->ne[0];
         N      = q->ne[2];
         d_head = C / n_head;
-        q      = ggml_reshape_4d(ctx, q, d_head, n_head, L_q, N);   // [N, L_q, n_head, d_head]
-        q      = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));  // [N, n_head, L_q, d_head]
-        q      = ggml_reshape_3d(ctx, q, d_head, L_q, n_head * N);  // [N * n_head, L_q, d_head]
+        q      = ggml_reshape_4d(ctx, q, d_head, n_head, L_q, N);      // [N, L_q, n_head, d_head]
+        q      = ggml_nn_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));  // [N, n_head, L_q, d_head]
+        q      = ggml_reshape_3d(ctx, q, d_head, L_q, n_head * N);     // [N * n_head, L_q, d_head]
 
-        k = ggml_reshape_4d(ctx, k, d_head, n_head, L_k, N);   // [N, L_k, n_head, d_head]
-        k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
-        k = ggml_reshape_3d(ctx, k, d_head, L_k, n_head * N);  // [N * n_head, L_k, d_head]
+        k = ggml_reshape_4d(ctx, k, d_head, n_head, L_k, N);      // [N, L_k, n_head, d_head]
+        k = ggml_nn_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
+        k = ggml_reshape_3d(ctx, k, d_head, L_k, n_head * N);     // [N * n_head, L_k, d_head]
 
         v = ggml_reshape_4d(ctx, v, d_head, n_head, L_k, N);  // [N, L_k, n_head, d_head]
     } else {
@@ -1047,14 +1021,14 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
             // LOG_DEBUG(" padding k and v dim1 by %d", kv_pad);
             k = ggml_pad(ctx, k, 0, kv_pad, 0, 0);
         }
-        k = ggml_cast(ctx, k, GGML_TYPE_F16);
+        // k = ggml_cast(ctx, k, GGML_TYPE_F16);
 
-        v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
-        v = ggml_reshape_3d(ctx, v, d_head, L_k, n_head * N);  // [N * n_head, L_k, d_head]
+        v = ggml_nn_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
+        v = ggml_reshape_3d(ctx, v, d_head, L_k, n_head * N);     // [N * n_head, L_k, d_head]
         if (kv_pad != 0) {
             v = ggml_pad(ctx, v, 0, kv_pad, 0, 0);
         }
-        v = ggml_cast(ctx, v, GGML_TYPE_F16);
+        // v = ggml_cast(ctx, v, GGML_TYPE_F16);
 
         if (mask != nullptr) {
             mask = ggml_transpose(ctx, mask);
@@ -1074,8 +1048,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         // kqv = ggml_view_3d(ctx, kqv, d_head, n_head, L_k, kqv->nb[1], kqv->nb[2], 0);
         kqv = ggml_view_3d(ctx, kqv, d_head, n_head, L_q, kqv->nb[1], kqv->nb[2], 0);
     } else {
-        v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_head, d_head, L_k]
-        v = ggml_reshape_3d(ctx, v, L_k, d_head, n_head * N);  // [N * n_head, d_head, L_k]
+        v = ggml_nn_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_head, d_head, L_k]
+        v = ggml_reshape_3d(ctx, v, L_k, d_head, n_head * N);     // [N * n_head, d_head, L_k]
 
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
         kq      = ggml_scale_inplace(ctx, kq, scale);
@@ -1093,7 +1067,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         kqv = ggml_permute(ctx, kqv, 0, 2, 1, 3);                 // [N, L_q, n_head, d_head]
     }
 
-    kqv = ggml_cont(ctx, kqv);
+    kqv = ggml_nn_cont(ctx, kqv);
     kqv = ggml_reshape_3d(ctx, kqv, d_head * n_head, L_q, N);  // [N, L_q, C]
 
     return kqv;
@@ -1106,9 +1080,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_layer_norm(struct ggml_context* ct
                                                          float eps = EPS) {
     x = ggml_norm(ctx, x, eps);
     if (w != NULL) {
-        x = ggml_mul(ctx, x, w);
+        x = ggml_mul_inplace(ctx, x, w);
         if (b != NULL) {
-            x = ggml_add(ctx, x, b);
+            x = ggml_add_inplace(ctx, x, b);
         }
     }
     return x;
@@ -1127,9 +1101,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_group_norm(struct ggml_context* ct
     const float eps = 1e-6f;  // default eps parameter
     x               = ggml_group_norm(ctx, x, num_groups, eps);
     if (w != NULL && b != NULL) {
-        x = ggml_mul(ctx, x, w);
+        x = ggml_mul_inplace(ctx, x, w);
         // b = ggml_repeat(ctx, b, x);
-        x = ggml_add(ctx, x, b);
+        x = ggml_add_inplace(ctx, x, b);
     }
     return x;
 }
@@ -1874,7 +1848,7 @@ public:
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         x                     = ggml_rms_norm(ctx, x, eps);
-        x                     = ggml_mul(ctx, x, w);
+        x                     = ggml_mul_inplace(ctx, x, w);
         return x;
     }
 };

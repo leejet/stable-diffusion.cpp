@@ -882,8 +882,6 @@ public:
         float img_cfg_scale = guidance.img_cfg;
         float slg_scale     = guidance.slg.scale;
 
-        LOG_DEBUG("cfg_scale %.2f", cfg_scale);
-
         if (img_cfg_scale != cfg_scale && !sd_version_is_inpaint_or_unet_edit(version)) {
             LOG_WARN("2-conditioning CFG is not supported with this model, disabling it for better performance...");
             img_cfg_scale = cfg_scale;
@@ -1215,7 +1213,6 @@ public:
 
         int64_t t0 = ggml_time_ms();
         if (!use_tiny_autoencoder) {
-            LOG_DEBUG("scale_factor %.2f", scale_factor);
             process_latent_out(x);
             if (vae_tiling && !decode_video) {
                 // split latent in 32x32 tiles and compute in several steps

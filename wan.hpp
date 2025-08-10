@@ -99,10 +99,10 @@ namespace WAN {
             // assert N == 1
 
             struct ggml_tensor* w = params["gamma"];
-            auto h                = ggml_cont(ctx, ggml_torch_permute(ctx, x, 3, 0, 1, 2));  // [ID, IH, IW, N*IC]
+            auto h                = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 3, 0, 1, 2));  // [ID, IH, IW, N*IC]
             h                     = ggml_rms_norm(ctx, h, 1e-12);
             h                     = ggml_mul(ctx, h, w);
-            h                     = ggml_cont(ctx, ggml_torch_permute(ctx, h, 1, 2, 3, 0));
+            h                     = ggml_nn_cont(ctx, ggml_torch_permute(ctx, h, 1, 2, 3, 0));
 
             return h;
         }
@@ -175,9 +175,9 @@ namespace WAN {
                         }
                         feat_cache[idx] = cache_x;
                         feat_idx += 1;
-                        x = ggml_reshape_4d(ctx, x, w * h, t, c, 2);                 // (2, c, t, h*w)
-                        x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 3, 1, 2));  // (c, t, 2, h*w)
-                        x = ggml_reshape_4d(ctx, x, w, h, 2 * t, c);                 // (c, t*2, h, w)
+                        x = ggml_reshape_4d(ctx, x, w * h, t, c, 2);                    // (2, c, t, h*w)
+                        x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 3, 1, 2));  // (c, t, 2, h*w)
+                        x = ggml_reshape_4d(ctx, x, w, h, 2 * t, c);                    // (c, t*2, h, w)
                     }
                 }
             }
@@ -186,7 +186,7 @@ namespace WAN {
             if (mode != "none") {
                 auto resample_1 = std::dynamic_pointer_cast<Conv2d>(blocks["resample.1"]);
 
-                x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 1, 3, 2));  // (t, c, h, w)
+                x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 1, 3, 2));  // (t, c, h, w)
                 if (mode == "upsample2d") {
                     x = ggml_upscale(ctx, x, 2, GGML_SCALE_MODE_NEAREST);
                 } else if (mode == "upsample3d") {
@@ -197,7 +197,7 @@ namespace WAN {
                     x = ggml_pad(ctx, x, 1, 1, 0, 0);
                 }
                 x = resample_1->forward(ctx, x);
-                x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
+                x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
             }
 
             if (mode == "downsample3d") {
@@ -318,7 +318,7 @@ namespace WAN {
 
             x = norm->forward(ctx, x);
 
-            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 1, 3, 2));  // (t, c, h, w)
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 1, 3, 2));  // (t, c, h, w)
 
             const int64_t n = x->ne[3];
             const int64_t c = x->ne[2];
@@ -329,24 +329,24 @@ namespace WAN {
             auto qkv_vec = split_image_qkv(ctx, qkv);
 
             auto q = qkv_vec[0];
-            q      = ggml_cont(ctx, ggml_torch_permute(ctx, q, 2, 0, 1, 3));  // [t, h, w, c]
-            q      = ggml_reshape_3d(ctx, q, c, h * w, n);                    // [t, h * w, c]
+            q      = ggml_nn_cont(ctx, ggml_torch_permute(ctx, q, 2, 0, 1, 3));  // [t, h, w, c]
+            q      = ggml_reshape_3d(ctx, q, c, h * w, n);                       // [t, h * w, c]
 
             auto k = qkv_vec[1];
-            k      = ggml_cont(ctx, ggml_torch_permute(ctx, k, 2, 0, 1, 3));  // [t, h, w, c]
-            k      = ggml_reshape_3d(ctx, k, c, h * w, n);                    // [t, h * w, c]
+            k      = ggml_nn_cont(ctx, ggml_torch_permute(ctx, k, 2, 0, 1, 3));  // [t, h, w, c]
+            k      = ggml_reshape_3d(ctx, k, c, h * w, n);                       // [t, h * w, c]
 
             auto v = qkv_vec[2];
             v      = ggml_reshape_3d(ctx, v, h * w, c, n);  // [t, c, h * w]
 
             x = ggml_nn_attention(ctx, q, k, v, false);  // [t, h * w, c]
 
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [t, c, h * w]
-            x = ggml_reshape_4d(ctx, x, w, h, c, n);               // [t, c, h, w]
+            x = ggml_nn_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [t, c, h * w]
+            x = ggml_reshape_4d(ctx, x, w, h, c, n);                  // [t, c, h, w]
 
             x = proj->forward(ctx, x);
 
-            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
 
             x = ggml_add(ctx, x, identity);
             return x;
@@ -987,11 +987,11 @@ namespace WAN {
             int64_t dim             = x->ne[2];
             int64_t context_txt_len = context->ne[1] - context_img_len;
 
-            context          = ggml_cont(ctx, ggml_torch_permute(ctx, context, 0, 2, 1, 3));  // [context_img_len + context_txt_len, N, dim]
+            context          = ggml_nn_cont(ctx, ggml_torch_permute(ctx, context, 0, 2, 1, 3));  // [context_img_len + context_txt_len, N, dim]
             auto context_img = ggml_view_3d(ctx, context, dim, N, context_img_len, context->nb[1], context->nb[2], 0);
             auto context_txt = ggml_view_3d(ctx, context, dim, N, context_txt_len, context->nb[1], context->nb[2], context_txt_len * context->nb[2]);
-            context_img      = ggml_cont(ctx, ggml_torch_permute(ctx, context_img, 0, 2, 1, 3));  // [N, context_img_len, dim]
-            context_txt      = ggml_cont(ctx, ggml_torch_permute(ctx, context_txt, 0, 2, 1, 3));  // [N, context_txt_len, dim]
+            context_img      = ggml_nn_cont(ctx, ggml_torch_permute(ctx, context_img, 0, 2, 1, 3));  // [N, context_img_len, dim]
+            context_txt      = ggml_nn_cont(ctx, ggml_torch_permute(ctx, context_txt, 0, 2, 1, 3));  // [N, context_txt_len, dim]
 
             auto q = q_proj->forward(ctx, x);
             q      = norm_q->forward(ctx, q);
@@ -1294,13 +1294,13 @@ namespace WAN {
             GGML_ASSERT(C * pt * ph * pw == x->ne[0]);
 
             x = ggml_reshape_4d(ctx, x, C, pw * ph * pt, w_len * h_len * t_len, N);  // [N, t_len*h_len*w_len, pt*ph*pw, C]
-            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 1, 2, 0, 3));              // [N, C, t_len*h_len*w_len, pt*ph*pw]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 1, 2, 0, 3));           // [N, C, t_len*h_len*w_len, pt*ph*pw]
             x = ggml_reshape_4d(ctx, x, pw, ph * pt, w_len, h_len * t_len * C * N);  // [N*C*t_len*h_len, w_len, pt*ph, pw]
-            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));              // [N*C*t_len*h_len, pt*ph, w_len, pw]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));           // [N*C*t_len*h_len, pt*ph, w_len, pw]
             x = ggml_reshape_4d(ctx, x, pw * w_len, ph, pt, h_len * t_len * C * N);  // [N*C*t_len*h_len, pt, ph, w_len*pw]
-            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));              // [N*C*t_len*h_len, ph, pt, w_len*pw]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));           // [N*C*t_len*h_len, ph, pt, w_len*pw]
             x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph * h_len, t_len * C * N);  // [N*C*t_len, h_len*ph, pt, w_len*pw]
-            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));              // [N*C*t_len, pt, h_len*ph, w_len*pw]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));           // [N*C*t_len, pt, h_len*ph, w_len*pw]
             x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt * t_len, C * N);  // [N*C*t_len, h_len*ph, pt, w_len*pw]
             return x;
         }
@@ -1331,7 +1331,7 @@ namespace WAN {
             // patch_embedding
             x = patch_embedding->forward(ctx, x);                                          // [N*dim, t_len, h_len, w_len]
             x = ggml_reshape_3d(ctx, x, x->ne[0] * x->ne[1] * x->ne[2], x->ne[3] / N, N);  // [N, dim, t_len*h_len*w_len]
-            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 1, 0, 2, 3));                    // [N, t_len*h_len*w_len, dim]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 1, 0, 2, 3));                 // [N, t_len*h_len*w_len, dim]
 
             // time_embedding
             auto e = ggml_nn_timestep_embedding(ctx, timestep, params.freq_dim);
