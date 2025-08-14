@@ -678,12 +678,10 @@ public:
     int32_t n_head            = 12;
     int32_t n_layer           = 12;    // num_hidden_layers
     int32_t projection_dim    = 1280;  // only for OPEN_CLIP_VIT_BIGG_14
-    int32_t clip_skip         = -1;
     bool with_final_ln        = true;
 
     CLIPTextModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                  bool with_final_ln  = true,
-                  int clip_skip_value = -1)
+                  bool with_final_ln  = true)
         : version(version), with_final_ln(with_final_ln) {
         if (version == OPEN_CLIP_VIT_H_14) {
             hidden_size       = 1024;
@@ -696,18 +694,10 @@ public:
             n_head            = 20;
             n_layer           = 32;
         }
-        set_clip_skip(clip_skip_value);
 
         blocks["embeddings"]       = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token));
         blocks["encoder"]          = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
         blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
-    }
-
-    void set_clip_skip(int skip) {
-        if (skip <= 0) {
-            skip = -1;
-        }
-        clip_skip = skip;
     }
 
     struct ggml_tensor* get_token_embed_weight() {
@@ -720,7 +710,8 @@ public:
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* tkn_embeddings,
                                 size_t max_token_idx = 0,
-                                bool return_pooled   = false) {
+                                bool return_pooled   = false,
+                                int clip_skip        = -1) {
         // input_ids: [N, n_token]
         auto embeddings       = std::dynamic_pointer_cast<CLIPEmbeddings>(blocks["embeddings"]);
         auto encoder          = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
@@ -888,18 +879,13 @@ struct CLIPTextModelRunner : public GGMLRunner {
                         const String2GGMLType& tensor_types,
                         const std::string prefix,
                         CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                        bool with_final_ln  = true,
-                        int clip_skip_value = -1)
-        : GGMLRunner(backend, offload_params_to_cpu), model(version, with_final_ln, clip_skip_value) {
+                        bool with_final_ln  = true)
+        : GGMLRunner(backend, offload_params_to_cpu), model(version, with_final_ln) {
         model.init(params_ctx, tensor_types, prefix);
     }
 
     std::string get_desc() {
         return "clip";
-    }
-
-    void set_clip_skip(int clip_skip) {
-        model.set_clip_skip(clip_skip);
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -911,7 +897,8 @@ struct CLIPTextModelRunner : public GGMLRunner {
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* embeddings,
                                 size_t max_token_idx = 0,
-                                bool return_pooled   = false) {
+                                bool return_pooled   = false,
+                                int clip_skip        = -1) {
         size_t N       = input_ids->ne[1];
         size_t n_token = input_ids->ne[0];
         if (input_ids->ne[0] > model.n_token) {
@@ -919,14 +906,15 @@ struct CLIPTextModelRunner : public GGMLRunner {
             input_ids = ggml_reshape_2d(ctx, input_ids, model.n_token, input_ids->ne[0] / model.n_token);
         }
 
-        return model.forward(ctx, backend, input_ids, embeddings, max_token_idx, return_pooled);
+        return model.forward(ctx, backend, input_ids, embeddings, max_token_idx, return_pooled, clip_skip);
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
                                     int num_custom_embeddings    = 0,
                                     void* custom_embeddings_data = NULL,
                                     size_t max_token_idx         = 0,
-                                    bool return_pooled           = false) {
+                                    bool return_pooled           = false,
+                                    int clip_skip                = -1) {
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
         input_ids = to_backend(input_ids);
@@ -945,7 +933,7 @@ struct CLIPTextModelRunner : public GGMLRunner {
             embeddings = ggml_concat(compute_ctx, token_embed_weight, custom_embeddings, 1);
         }
 
-        struct ggml_tensor* hidden_states = forward(compute_ctx, runtime_backend, input_ids, embeddings, max_token_idx, return_pooled);
+        struct ggml_tensor* hidden_states = forward(compute_ctx, runtime_backend, input_ids, embeddings, max_token_idx, return_pooled, clip_skip);
 
         ggml_build_forward_expand(gf, hidden_states);
 
@@ -958,10 +946,11 @@ struct CLIPTextModelRunner : public GGMLRunner {
                  void* custom_embeddings_data,
                  size_t max_token_idx,
                  bool return_pooled,
+                 int clip_skip,
                  ggml_tensor** output,
                  ggml_context* output_ctx = NULL) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled);
+            return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled, clip_skip);
         };
         GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
     }
