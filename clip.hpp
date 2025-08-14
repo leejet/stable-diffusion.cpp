@@ -548,9 +548,15 @@ protected:
     int64_t embed_dim;
     int64_t vocab_size;
     int64_t num_positions;
+    bool force_clip_f32;
 
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
         enum ggml_type token_wtype    = GGML_TYPE_F32;
+        if (!force_clip_f32) {
+            auto tensor_type = tensor_types.find(prefix + "token_embedding.weight");
+            if (tensor_type != tensor_types.end())
+                token_wtype = tensor_type->second;
+        }
         enum ggml_type position_wtype = GGML_TYPE_F32;
 
         params["token_embedding.weight"]    = ggml_new_tensor_2d(ctx, token_wtype, embed_dim, vocab_size);
@@ -560,10 +566,12 @@ protected:
 public:
     CLIPEmbeddings(int64_t embed_dim,
                    int64_t vocab_size    = 49408,
-                   int64_t num_positions = 77)
+                   int64_t num_positions = 77,
+                   bool force_clip_f32   = false)
         : embed_dim(embed_dim),
           vocab_size(vocab_size),
-          num_positions(num_positions) {
+          num_positions(num_positions),
+          force_clip_f32(force_clip_f32) {
     }
 
     struct ggml_tensor* get_token_embed_weight() {
@@ -681,7 +689,8 @@ public:
     bool with_final_ln        = true;
 
     CLIPTextModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                  bool with_final_ln  = true)
+                  bool with_final_ln  = true,
+                  bool force_clip_f32 = false)
         : version(version), with_final_ln(with_final_ln) {
         if (version == OPEN_CLIP_VIT_H_14) {
             hidden_size       = 1024;
@@ -695,7 +704,7 @@ public:
             n_layer           = 32;
         }
 
-        blocks["embeddings"]       = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token));
+        blocks["embeddings"]       = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token, force_clip_f32));
         blocks["encoder"]          = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
         blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
     }
@@ -879,8 +888,9 @@ struct CLIPTextModelRunner : public GGMLRunner {
                         const String2GGMLType& tensor_types,
                         const std::string prefix,
                         CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                        bool with_final_ln  = true)
-        : GGMLRunner(backend, offload_params_to_cpu), model(version, with_final_ln) {
+                        bool with_final_ln  = true,
+                        bool force_clip_f32 = false)
+        : GGMLRunner(backend, offload_params_to_cpu), model(version, with_final_ln, force_clip_f32) {
         model.init(params_ctx, tensor_types, prefix);
     }
 
