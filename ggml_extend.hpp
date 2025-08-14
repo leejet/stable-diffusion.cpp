@@ -988,19 +988,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
     if (flash_attn) {
         // LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         bool can_use_flash_attn = true;
-        can_use_flash_attn      = can_use_flash_attn && (d_head == 64 ||
-                                                    d_head == 80 ||
-                                                    d_head == 96 ||
-                                                    d_head == 112 ||
-                                                    d_head == 128 ||
-                                                    d_head == 256);
         if (can_use_flash_attn && L_k % 256 != 0) {
-            // TODO(Green-Sky): might be worth just padding by default
-            if (L_k == 77 || L_k == 1560 || L_k == 4208 || L_k == 3952) {
-                kv_pad = GGML_PAD(L_k, 256) - L_k;
-            } else {
-                can_use_flash_attn = false;
-            }
+            kv_pad = GGML_PAD(L_k, 256) - L_k;
         }
 
         if (mask != nullptr) {
@@ -1021,14 +1010,14 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
             // LOG_DEBUG(" padding k and v dim1 by %d", kv_pad);
             k = ggml_pad(ctx, k, 0, kv_pad, 0, 0);
         }
-        // k = ggml_cast(ctx, k, GGML_TYPE_F16);
+        k = ggml_cast(ctx, k, GGML_TYPE_F16);
 
         v = ggml_nn_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
         v = ggml_reshape_3d(ctx, v, d_head, L_k, n_head * N);     // [N * n_head, L_k, d_head]
         if (kv_pad != 0) {
             v = ggml_pad(ctx, v, 0, kv_pad, 0, 0);
         }
-        // v = ggml_cast(ctx, v, GGML_TYPE_F16);
+        v = ggml_cast(ctx, v, GGML_TYPE_F16);
 
         if (mask != nullptr) {
             mask = ggml_transpose(ctx, mask);

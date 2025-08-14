@@ -10,6 +10,7 @@
 #include <vector>
 
 // #include "preprocessing.hpp"
+#include "avi_writer.h"
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -83,6 +84,7 @@ struct SDParams {
     int batch_count     = 1;
 
     int video_frames = 1;
+    int fps          = 24;
 
     sample_method_t sample_method = EULER_A;
     schedule_t schedule           = DEFAULT;
@@ -166,6 +168,8 @@ void print_params(SDParams params) {
     printf("    chroma_use_dit_mask:   %s\n", params.chroma_use_dit_mask ? "true" : "false");
     printf("    chroma_use_t5_mask:    %s\n", params.chroma_use_t5_mask ? "true" : "false");
     printf("    chroma_t5_mask_pad:    %d\n", params.chroma_t5_mask_pad);
+    printf("    video_frames:          %d\n", params.video_frames);
+    printf("    fps:          %d\n", params.fps);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -224,7 +228,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
     printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
-    printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
+    printf("  --clip-skip N                      ignore last_dot_pos layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
     printf("  --vae-on-cpu                       keep vae in cpu (for low vram)\n");
@@ -238,6 +242,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --chroma-disable-dit-mask          disable dit mask for chroma\n");
     printf("  --chroma-enable-t5-mask            enable t5 mask for chroma\n");
     printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
+    printf("  --video-frames                     video frames (default: 1)\n");
+    printf("  --fps                              fps (default: 24)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -435,6 +441,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--clip-skip", "", &params.clip_skip},
         {"-b", "--batch-count", "", &params.batch_count},
         {"", "--chroma-t5-mask-pad", "", &params.chroma_t5_mask_pad},
+        {"", "--video-frames", "", &params.video_frames},
+        {"", "--fps", "", &params.fps},
     };
 
     options.float_options = {
@@ -654,6 +662,16 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     if (params.mode != CONVERT && params.tensor_type_rules.size() > 0) {
         fprintf(stderr, "warning: --tensor-type-rules is currently supported only for conversion\n");
+    }
+
+    if (params.mode == VID_GEN && params.video_frames <= 0) {
+        fprintf(stderr, "warning: --video-frames must be at least 1\n");
+        exit(1);
+    }
+
+    if (params.mode == VID_GEN && params.fps <= 0) {
+        fprintf(stderr, "warning: --fps must be at least 1\n");
+        exit(1);
     }
 
     if (params.upscale_repeats < 1) {
@@ -983,7 +1001,7 @@ int main(int argc, const char* argv[]) {
                              mask_image_buffer};
 
     sd_image_t* results;
-    int expected_num_results = 1;
+    int num_results = 1;
     if (params.mode == IMG_GEN) {
         sd_img_gen_params_t img_gen_params = {
             params.prompt.c_str(),
@@ -1009,8 +1027,8 @@ int main(int argc, const char* argv[]) {
             params.input_id_images_path.c_str(),
         };
 
-        results              = generate_image(sd_ctx, &img_gen_params);
-        expected_num_results = params.batch_count;
+        results     = generate_image(sd_ctx, &img_gen_params);
+        num_results = params.batch_count;
     } else if (params.mode == VID_GEN) {
         sd_vid_gen_params_t vid_gen_params = {
             params.prompt.c_str(),
@@ -1028,8 +1046,7 @@ int main(int argc, const char* argv[]) {
             params.video_frames,
         };
 
-        results              = generate_video(sd_ctx, &vid_gen_params);
-        expected_num_results = params.video_frames;
+        results = generate_video(sd_ctx, &vid_gen_params, &num_results);
     }
 
     if (results == NULL) {
@@ -1065,45 +1082,59 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    std::string dummy_name, ext, lc_ext;
+    std::string base_path;
+    std::string file_ext;
+    std::string file_ext_lower;
     bool is_jpg;
-    size_t last      = params.output_path.find_last_of(".");
-    size_t last_path = std::min(params.output_path.find_last_of("/"),
-                                params.output_path.find_last_of("\\"));
-    if (last != std::string::npos  // filename has extension
-        && (last_path == std::string::npos || last > last_path)) {
-        dummy_name = params.output_path.substr(0, last);
-        ext = lc_ext = params.output_path.substr(last);
-        std::transform(ext.begin(), ext.end(), lc_ext.begin(), ::tolower);
-        is_jpg = lc_ext == ".jpg" || lc_ext == ".jpeg" || lc_ext == ".jpe";
+    size_t last_dot_pos   = params.output_path.find_last_of(".");
+    size_t last_slash_pos = std::min(params.output_path.find_last_of("/"),
+                                     params.output_path.find_last_of("\\"));
+    if (last_dot_pos != std::string::npos && (last_slash_pos == std::string::npos || last_dot_pos > last_slash_pos)) {  // filename has extension
+        base_path = params.output_path.substr(0, last_dot_pos);
+        file_ext = file_ext_lower = params.output_path.substr(last_dot_pos);
+        std::transform(file_ext.begin(), file_ext.end(), file_ext_lower.begin(), ::tolower);
+        is_jpg = (file_ext_lower == ".jpg" || file_ext_lower == ".jpeg" || file_ext_lower == ".jpe");
     } else {
-        dummy_name = params.output_path;
-        ext = lc_ext = "";
-        is_jpg       = false;
+        base_path = params.output_path;
+        file_ext = file_ext_lower = "";
+        is_jpg                    = false;
     }
-    // appending ".png" to absent or unknown extension
-    if (!is_jpg && lc_ext != ".png") {
-        dummy_name += ext;
-        ext = ".png";
+
+    if (params.mode == VID_GEN && num_results > 1) {
+        std::string vid_output_path = params.output_path;
+        if (file_ext_lower == ".png") {
+            vid_output_path = base_path + ".avi";
+        }
+        create_mjpg_avi_from_sd_images(vid_output_path.c_str(), results, num_results, params.fps);
+        printf("save result MJPG AVI video to '%s'\n", vid_output_path.c_str());
+    } else {
+        // appending ".png" to absent or unknown extension
+        if (!is_jpg && file_ext_lower != ".png") {
+            base_path += file_ext;
+            file_ext = ".png";
+        }
+        for (int i = 0; i < num_results; i++) {
+            if (results[i].data == NULL) {
+                continue;
+            }
+            std::string final_image_path = i > 0 ? base_path + "_" + std::to_string(i + 1) + file_ext : base_path + file_ext;
+            if (is_jpg) {
+                stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                               results[i].data, 90, get_image_params(params, params.seed + i).c_str());
+                printf("save result JPEG image to '%s'\n", final_image_path.c_str());
+            } else {
+                stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                               results[i].data, 0, get_image_params(params, params.seed + i).c_str());
+                printf("save result PNG image to '%s'\n", final_image_path.c_str());
+            }
+        }
     }
-    for (int i = 0; i < expected_num_results; i++) {
-        if (results[i].data == NULL) {
-            continue;
-        }
-        std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1) + ext : dummy_name + ext;
-        if (is_jpg) {
-            stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                           results[i].data, 90, get_image_params(params, params.seed + i).c_str());
-            printf("save result JPEG image to '%s'\n", final_image_path.c_str());
-        } else {
-            stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                           results[i].data, 0, get_image_params(params, params.seed + i).c_str());
-            printf("save result PNG image to '%s'\n", final_image_path.c_str());
-        }
+
+    free(results);
+    for (int i = 0; i < num_results; i++) {
         free(results[i].data);
         results[i].data = NULL;
     }
-    free(results);
     free_sd_ctx(sd_ctx);
     free(control_image_buffer);
     free(input_image_buffer);

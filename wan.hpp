@@ -14,6 +14,8 @@ namespace WAN {
     constexpr int CACHE_T        = 2;
     constexpr int WAN_GRAPH_SIZE = 10240;
 
+#define Rep ((struct ggml_tensor*)1)
+
     class CausalConv3d : public GGMLBlock {
     protected:
         int64_t in_channels;
@@ -68,7 +70,7 @@ namespace WAN {
             int lp2 = 2 * std::get<0>(padding);
             int rp2 = 0;
 
-            if (cache_x != NULL && std::get<0>(padding) > 0) {
+            if (cache_x != NULL && lp2 > 0) {
                 x = ggml_concat(ctx, cache_x, x, 2);
                 lp2 -= (int)cache_x->ne[2];
             }
@@ -145,8 +147,6 @@ namespace WAN {
             int64_t h = x->ne[1];
             int64_t w = x->ne[0];
 
-            struct ggml_tensor* Rep = (struct ggml_tensor*)1;
-
             if (mode == "upsample3d") {
                 if (feat_cache.size() > 0) {
                     int idx = feat_idx;
@@ -164,8 +164,8 @@ namespace WAN {
                                                   cache_x,
                                                   2);
                         }
-                        if (cache_x->ne[1] < 2 && feat_cache[idx] != NULL && feat_cache[idx] == Rep) {
-                            cache_x = ggml_pad_ext(ctx, cache_x, 0, 0, 1, 1, (int)cache_x->ne[2], 0, 0, 0);
+                        if (cache_x->ne[2] < 2 && feat_cache[idx] != NULL && feat_cache[idx] == Rep) {
+                            cache_x = ggml_pad_ext(ctx, cache_x, 0, 0, 0, 0, (int)cache_x->ne[2], 0, 0, 0);
                             // aka cache_x = torch.cat([torch.zeros_like(cache_x).to(cache_x.device),cache_x],dim=2)
                         }
                         if (feat_cache[idx] == Rep) {
@@ -629,7 +629,7 @@ namespace WAN {
     };
 
     class WanVAE : public GGMLBlock {
-    protected:
+    public:
         bool decode_only                      = true;
         int64_t dim                           = 96;
         int64_t z_dim                         = 16;
@@ -724,11 +724,47 @@ namespace WAN {
             clear_cache();
             return out;
         }
+
+        struct ggml_tensor* decode_partial(struct ggml_context* ctx,
+                                           struct ggml_tensor* z,
+                                           int64_t i,
+                                           int64_t b = 1) {
+            // z: [b*c, t, h, w]
+            GGML_ASSERT(b == 1);
+
+            auto decoder = std::dynamic_pointer_cast<Decoder3d>(blocks["decoder"]);
+            auto conv2   = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv2"]);
+
+            auto x    = conv2->forward(ctx, z);
+            auto in   = ggml_slice(ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
+            _conv_idx = 0;
+            auto out  = decoder->forward(ctx, in, b, _feat_map, _conv_idx);
+            return out;
+        }
+    };
+
+    struct FeatCache {
+        std::vector<float> data;
+        std::vector<int64_t> shape;
+        bool is_rep = false;
+
+        FeatCache() = default;
+
+        FeatCache(ggml_backend_t backend, ggml_tensor* tensor) {
+            shape = {tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]};
+            data.resize(shape[0] * shape[1] * shape[2] * shape[3]);
+            ggml_backend_tensor_get_and_sync(backend, tensor, (void*)data.data(), 0, ggml_nbytes(tensor));
+        }
+
+        ggml_tensor* to_ggml_tensor(ggml_context* ctx) {
+            return ggml_new_tensor_4d(ctx, GGML_TYPE_F32, shape[0], shape[1], shape[2], shape[3]);
+        }
     };
 
     struct WanVAERunner : public VAE {
         bool decode_only = true;
         WanVAE ae;
+        std::vector<FeatCache> _feat_vec_map;
 
         WanVAERunner(ggml_backend_t backend,
                      const String2GGMLType& tensor_types = {},
@@ -736,6 +772,11 @@ namespace WAN {
                      bool decode_only                    = false)
             : decode_only(decode_only), ae(decode_only), VAE(backend) {
             ae.init(params_ctx, tensor_types, prefix);
+            rest_feat_vec_map();
+        }
+
+        void rest_feat_vec_map() {
+            _feat_vec_map = std::vector<FeatCache>(ae._conv_num, FeatCache());
         }
 
         std::string get_desc() {
@@ -747,11 +788,43 @@ namespace WAN {
         }
 
         struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
-            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, 20480, false);
+            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, 10240 * z->ne[2], false);
 
             z = to_backend(z);
 
             struct ggml_tensor* out = decode_graph ? ae.decode(compute_ctx, z) : ae.encode(compute_ctx, z);
+
+            ggml_build_forward_expand(gf, out);
+
+            return gf;
+        }
+
+        struct ggml_cgraph* build_graph_partial(struct ggml_tensor* z, bool decode_graph, int64_t i) {
+            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, 20480, false);
+
+            ae.clear_cache();
+
+            for (int64_t feat_idx = 0; feat_idx < _feat_vec_map.size(); feat_idx++) {
+                FeatCache& feat_cache_vec = _feat_vec_map[feat_idx];
+                if (feat_cache_vec.is_rep) {
+                    ae._feat_map[feat_idx] = Rep;
+                } else if (feat_cache_vec.data.size() > 0) {
+                    ggml_tensor* feat_cache = feat_cache_vec.to_ggml_tensor(compute_ctx);
+                    set_backend_tensor_data(feat_cache, feat_cache_vec.data.data());
+                    ae._feat_map[feat_idx] = feat_cache;
+                }
+            }
+
+            z = to_backend(z);
+
+            struct ggml_tensor* out = decode_graph ? ae.decode_partial(compute_ctx, z, i) : ae.encode(compute_ctx, z);
+
+            for (int64_t feat_idx = 0; feat_idx < ae._feat_map.size(); feat_idx++) {
+                ggml_tensor* feat_cache = ae._feat_map[feat_idx];
+                if (feat_cache != NULL && feat_cache != Rep) {
+                    ggml_build_forward_expand(gf, feat_cache);
+                }
+            }
 
             ggml_build_forward_expand(gf, out);
 
@@ -763,17 +836,83 @@ namespace WAN {
                      bool decode_graph,
                      struct ggml_tensor** output,
                      struct ggml_context* output_ctx = NULL) {
-            auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(z, decode_graph);
-            };
-            // ggml_set_f32(z, 0.5f);
-            // print_ggml_tensor(z);
-            GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+            if (true) {
+                auto get_graph = [&]() -> struct ggml_cgraph* {
+                    return build_graph(z, decode_graph);
+                };
+                GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+            } else {  // broken
+                ae.clear_cache();
+                int64_t t      = z->ne[2];
+                int64_t i      = 0;
+                auto get_graph = [&]() -> struct ggml_cgraph* {
+                    return build_graph_partial(z, decode_graph, i);
+                };
+                struct ggml_tensor* out = NULL;
+                GGMLRunner::compute(get_graph, n_threads, false, &out, output_ctx);
+                for (int64_t feat_idx = 0; feat_idx < _feat_vec_map.size(); feat_idx++) {
+                    ggml_tensor* feat_cache = ae._feat_map[feat_idx];
+                    if (feat_cache == Rep) {
+                        FeatCache feat_cache_vec;
+                        feat_cache_vec.is_rep   = true;
+                        _feat_vec_map[feat_idx] = feat_cache_vec;
+                    } else if (feat_cache != NULL) {
+                        _feat_vec_map[feat_idx] = FeatCache(backend, feat_cache);
+                    }
+                }
+                GGMLRunner::free_compute_buffer();
+                if (t == 1) {
+                    *output = out;
+                    ae.clear_cache();
+                    return;
+                }
+
+                *output = ggml_new_tensor_4d(output_ctx, GGML_TYPE_F32, out->ne[0], out->ne[1], (t - 1) * 4 + 1, out->ne[3]);
+
+                auto copy_to_output = [&]() {
+                    for (int64_t i3 = 0; i3 < out->ne[3]; i3++) {
+                        for (int64_t i2 = 0; i2 < out->ne[2]; i2++) {
+                            for (int64_t i1 = 0; i1 < out->ne[1]; i1++) {
+                                for (int64_t i0 = 0; i0 < out->ne[0]; i0++) {
+                                    float value    = ggml_tensor_get_f32(out, i0, i1, i2, i3);
+                                    int64_t offset = (i == 0) ? 0 : (1 + (i - 1) * 4);
+                                    ggml_tensor_set_f32(*output, value, i0, i1, offset + i2, i3);
+                                }
+                            }
+                        }
+                    }
+                };
+
+                copy_to_output();
+
+                out = ggml_new_tensor_4d(output_ctx, GGML_TYPE_F32, out->ne[0], out->ne[1], 4, out->ne[3]);
+
+                for (i = 1; i < t; i++) {
+                    GGMLRunner::compute(get_graph, n_threads, false, &out);
+
+                    for (int64_t feat_idx = 0; feat_idx < _feat_vec_map.size(); feat_idx++) {
+                        ggml_tensor* feat_cache = ae._feat_map[feat_idx];
+                        if (feat_cache == Rep) {
+                            FeatCache feat_cache_vec;
+                            feat_cache_vec.is_rep   = true;
+                            _feat_vec_map[feat_idx] = feat_cache_vec;
+                        } else if (feat_cache != NULL) {
+                            _feat_vec_map[feat_idx] = FeatCache(backend, feat_cache);
+                        }
+                    }
+
+                    ae.clear_cache();
+
+                    GGMLRunner::free_compute_buffer();
+
+                    copy_to_output();
+                }
+            }
         }
 
         void test() {
             struct ggml_init_params params;
-            params.mem_size   = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
+            params.mem_size   = static_cast<size_t>(1000 * 1024 * 1024);  // 10 MB
             params.mem_buffer = NULL;
             params.no_alloc   = false;
 
@@ -785,9 +924,9 @@ namespace WAN {
                 // cpu f16, pass
                 // cuda f16, pass
                 // cuda f32, pass
-                auto z = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 1, 16);
-                z      = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
-                // ggml_set_f32(z, 0.5f);
+                auto z = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 104, 60, 2, 16);
+                ggml_set_f32(z, 0.5f);
+                z = load_tensor_from_file(work_ctx, "wan_vae_video_z.bin");
                 print_ggml_tensor(z);
                 struct ggml_tensor* out = NULL;
 
@@ -803,7 +942,7 @@ namespace WAN {
         static void load_from_file_and_test(const std::string& file_path) {
             ggml_backend_t backend = ggml_backend_cuda_init(0);
             // ggml_backend_t backend            = ggml_backend_cpu_init();
-            ggml_type model_data_type         = GGML_TYPE_F32;
+            ggml_type model_data_type         = GGML_TYPE_F16;
             std::shared_ptr<WanVAERunner> vae = std::shared_ptr<WanVAERunner>(new WanVAERunner(backend));
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
@@ -1588,8 +1727,8 @@ namespace WAN {
         }
 
         static void load_from_file_and_test(const std::string& file_path) {
-            ggml_backend_t backend = ggml_backend_cuda_init(0);
-            // ggml_backend_t backend    = ggml_backend_cpu_init();
+            // ggml_backend_t backend = ggml_backend_cuda_init(0);
+            ggml_backend_t backend    = ggml_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_Q8_0;
             LOG_INFO("loading from '%s'", file_path.c_str());
 

@@ -1191,16 +1191,20 @@ public:
     }
 
     ggml_tensor* decode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode_video = false) {
-        int64_t W = x->ne[0] * 8;
-        int64_t H = x->ne[1] * 8;
-        int64_t C = 3;
-        ggml_tensor* result;
+        int64_t W           = x->ne[0] * 8;
+        int64_t H           = x->ne[1] * 8;
+        int64_t C           = 3;
+        ggml_tensor* result = NULL;
         if (decode_video) {
+            int T = x->ne[2];
+            if (sd_version_is_wan(version)) {
+                T = ((T - 1) * 4) + 1;
+            }
             result = ggml_new_tensor_4d(work_ctx,
                                         GGML_TYPE_F32,
                                         W,
                                         H,
-                                        x->ne[2],
+                                        T,
                                         3);
         } else {
             result = ggml_new_tensor_4d(work_ctx,
@@ -1214,6 +1218,7 @@ public:
         int64_t t0 = ggml_time_ms();
         if (!use_tiny_autoencoder) {
             process_latent_out(x);
+            // x = load_tensor_from_file(work_ctx, "wan_vae_video_z.bin");
             if (vae_tiling && !decode_video) {
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
@@ -1221,7 +1226,7 @@ public:
                 };
                 sd_tiling(x, result, 8, 32, 0.5f, on_tiling);
             } else {
-                first_stage_model->compute(n_threads, x, true, &result, NULL);
+                first_stage_model->compute(n_threads, x, true, &result, work_ctx);
             }
             first_stage_model->free_compute_buffer();
             ggml_tensor_scale_output(result);
@@ -1882,18 +1887,20 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
                                   int frames = 1,
                                   bool video = false) {
     int C = 4;
+    int T = frames;
     if (sd_version_is_sd3(sd_ctx->sd->version)) {
         C = 16;
     } else if (sd_version_is_flux(sd_ctx->sd->version)) {
         C = 16;
     } else if (sd_version_is_wan(sd_ctx->sd->version)) {
         C = 16;
+        T = ((T - 1) / 4) + 1;
     }
     int W = width / 8;
     int H = height / 8;
     ggml_tensor* init_latent;
     if (video) {
-        init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, frames, C);
+        init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, T, C);
     } else {
         init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
     }
@@ -2131,7 +2138,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     return result_images;
 }
 
-SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params) {
+SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, int* num_frames_out) {
     if (sd_ctx == NULL || sd_vid_gen_params == NULL) {
         return NULL;
     }
@@ -2142,13 +2149,14 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     int width  = sd_vid_gen_params->width;
     int height = sd_vid_gen_params->height;
     int frames = sd_vid_gen_params->video_frames;
+    frames     = (frames - 1) / 4 * 4 + 1;
     LOG_INFO("img2vid %dx%dx%d", width, height, frames);
 
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sd_vid_gen_params->sample_steps);
 
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(100 * 1024) * 1024;  // 50 MB
-    params.mem_size += width * height * frames * 3 * sizeof(float);
+    params.mem_size = static_cast<size_t>(100 * 1024) * 1024;  // 100 MB
+    params.mem_size += width * height * frames * 3 * sizeof(float) * 2;
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);
@@ -2204,12 +2212,13 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     int W = width / 8;
     int H = height / 8;
-    int T = frames;
+    int T = init_latent->ne[2];
     int C = 16;
 
     struct ggml_tensor* final_latent;
     // Sample
     {
+        LOG_DEBUG("sample %dx%dx%d", W, H, T);
         int64_t sampling_start    = ggml_time_ms();
         struct ggml_tensor* x_t   = init_latent;
         struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, T, C);
@@ -2247,15 +2256,16 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         sd_ctx->sd->first_stage_model->free_params_buffer();
     }
 
-    sd_image_t* result_images = (sd_image_t*)calloc(T, sizeof(sd_image_t));
+    sd_image_t* result_images = (sd_image_t*)calloc(vid->ne[2], sizeof(sd_image_t));
     if (result_images == NULL) {
         ggml_free(work_ctx);
         return NULL;
     }
+    *num_frames_out = vid->ne[2];
 
-    for (size_t i = 0; i < T; i++) {
-        result_images[i].width   = final_latent->ne[0] * 8;
-        result_images[i].height  = final_latent->ne[1] * 8;
+    for (size_t i = 0; i < vid->ne[2]; i++) {
+        result_images[i].width   = vid->ne[0];
+        result_images[i].height  = vid->ne[1];
         result_images[i].channel = 3;
         result_images[i].data    = sd_tensor_to_image(vid, i, true);
     }
