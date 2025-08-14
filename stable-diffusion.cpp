@@ -2322,6 +2322,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     if (sd_img_gen_params->ref_images_count > 0) {
         LOG_INFO("EDIT mode");
     }
+    else if (sd_ctx->sd->version == VERSION_SD1_PIX2PIX || sd_ctx->sd->version == VERSION_SDXL_PIX2PIX) {
+        LOG_ERROR("This model needs at least one reference image");
+        return NULL;
+    }
 
     std::vector<ggml_tensor*> ref_latents;
     for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
