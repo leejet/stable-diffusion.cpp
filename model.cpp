@@ -1038,7 +1038,22 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
 
     gguf_context* ctx_gguf_ = NULL;
     ggml_context* ctx_meta_ = NULL;
-    ctx_gguf_               = gguf_init_from_file(file_path.c_str(), {true, &ctx_meta_});
+
+    auto on_tensor_shape_read = [](const int64_t* ne, uint32_t n_dims, struct gguf_tensor_shape* shape) -> bool {
+        for (int i = 0; i < GGML_MAX_DIMS; i++) {
+            if (i < n_dims) {
+                shape->ne[i] = ne[i];
+            } else {
+                shape->ne[i] = 1;
+            }
+        }
+        for (int i = GGML_MAX_DIMS; i < n_dims; i++) {
+            shape->ne[GGML_MAX_DIMS - 1] *= ne[i]; // stack to last dim;
+        }
+        return true;
+    };
+
+    ctx_gguf_               = gguf_init_from_file_ext(file_path.c_str(), {true, &ctx_meta_}, on_tensor_shape_read);
     if (!ctx_gguf_) {
         LOG_ERROR("failed to open '%s'", file_path.c_str());
         return false;
