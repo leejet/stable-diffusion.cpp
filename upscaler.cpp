@@ -14,7 +14,8 @@ struct UpscalerGGML {
         : n_threads(n_threads) {
     }
 
-    bool load_from_file(const std::string& esrgan_path) {
+    bool load_from_file(const std::string& esrgan_path,
+                        bool offload_params_to_cpu) {
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
@@ -46,7 +47,7 @@ struct UpscalerGGML {
             backend = ggml_backend_cpu_init();
         }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
-        esrgan_upscaler = std::make_shared<ESRGAN>(backend, model_loader.tensor_storages_types);
+        esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, model_loader.tensor_storages_types);
         if (!esrgan_upscaler->load_from_file(esrgan_path)) {
             return false;
         }
@@ -104,6 +105,7 @@ struct upscaler_ctx_t {
 };
 
 upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
+                                 bool offload_params_to_cpu,
                                  int n_threads) {
     upscaler_ctx_t* upscaler_ctx = (upscaler_ctx_t*)malloc(sizeof(upscaler_ctx_t));
     if (upscaler_ctx == NULL) {
@@ -116,7 +118,7 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
         return NULL;
     }
 
-    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path)) {
+    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu)) {
         delete upscaler_ctx->upscaler;
         upscaler_ctx->upscaler = NULL;
         free(upscaler_ctx);

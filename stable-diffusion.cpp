@@ -104,9 +104,10 @@ public:
     std::shared_ptr<PhotoMakerIDEmbed> pmid_id_embeds;
 
     std::string taesd_path;
-    bool use_tiny_autoencoder = false;
-    bool vae_tiling           = false;
-    bool stacked_id           = false;
+    bool use_tiny_autoencoder  = false;
+    bool vae_tiling            = false;
+    bool offload_params_to_cpu = false;
+    bool stacked_id            = false;
 
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
@@ -180,6 +181,7 @@ public:
         taesd_path              = SAFE_STR(sd_ctx_params->taesd_path);
         use_tiny_autoencoder    = taesd_path.size() > 0;
         vae_tiling              = sd_ctx_params->vae_tiling;
+        offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
 
         if (sd_ctx_params->rng_type == STD_DEFAULT_RNG) {
             rng = std::make_shared<STDDefaultRNG>();
@@ -327,8 +329,12 @@ public:
                 if (sd_ctx_params->diffusion_flash_attn) {
                     LOG_WARN("flash attention in this diffusion model is currently unsupported!");
                 }
-                cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
-                diffusion_model  = std::make_shared<MMDiTModel>(backend, model_loader.tensor_storages_types);
+                cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
+                                                                     offload_params_to_cpu,
+                                                                     model_loader.tensor_storages_types);
+                diffusion_model  = std::make_shared<MMDiTModel>(backend,
+                                                               offload_params_to_cpu,
+                                                               model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : model_loader.tensor_storages_types) {
@@ -339,43 +345,52 @@ public:
                 }
                 if (is_chroma) {
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
+                                                                        offload_params_to_cpu,
                                                                         model_loader.tensor_storages_types,
                                                                         -1,
                                                                         sd_ctx_params->chroma_use_t5_mask,
                                                                         sd_ctx_params->chroma_t5_mask_pad);
                 } else {
-                    cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend, model_loader.tensor_storages_types);
+                    cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend,
+                                                                          offload_params_to_cpu,
+                                                                          model_loader.tensor_storages_types);
                 }
                 diffusion_model = std::make_shared<FluxModel>(backend,
+                                                              offload_params_to_cpu,
                                                               model_loader.tensor_storages_types,
                                                               version,
                                                               sd_ctx_params->diffusion_flash_attn,
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
+                                                                    offload_params_to_cpu,
                                                                     model_loader.tensor_storages_types,
                                                                     -1,
                                                                     true,
                                                                     1,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
+                                                             offload_params_to_cpu,
                                                              model_loader.tensor_storages_types,
                                                              version,
                                                              sd_ctx_params->diffusion_flash_attn);
             } else {  // SD1.x SD2.x SDXL
                 if (strstr(SAFE_STR(sd_ctx_params->stacked_id_embed_dir), "v2")) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
+                                                                                           offload_params_to_cpu,
                                                                                            model_loader.tensor_storages_types,
                                                                                            SAFE_STR(sd_ctx_params->embedding_dir),
                                                                                            version,
                                                                                            PM_VERSION_2);
                 } else {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
+                                                                                           offload_params_to_cpu,
                                                                                            model_loader.tensor_storages_types,
                                                                                            SAFE_STR(sd_ctx_params->embedding_dir),
                                                                                            version);
                 }
                 diffusion_model = std::make_shared<UNetModel>(backend,
+                                                              offload_params_to_cpu,
                                                               model_loader.tensor_storages_types,
                                                               version,
                                                               sd_ctx_params->diffusion_flash_attn);
@@ -396,6 +411,7 @@ public:
 
             if (sd_version_is_wan(version)) {
                 first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
+                                                                        offload_params_to_cpu,
                                                                         model_loader.tensor_storages_types,
                                                                         "first_stage_model",
                                                                         vae_decode_only);
@@ -403,6 +419,7 @@ public:
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else if (!use_tiny_autoencoder) {
                 first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend,
+                                                                    offload_params_to_cpu,
                                                                     model_loader.tensor_storages_types,
                                                                     "first_stage_model",
                                                                     vae_decode_only,
@@ -412,6 +429,7 @@ public:
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else {
                 tae_first_stage = std::make_shared<TinyAutoEncoder>(vae_backend,
+                                                                    offload_params_to_cpu,
                                                                     model_loader.tensor_storages_types,
                                                                     "decoder.layers",
                                                                     vae_decode_only,
@@ -427,14 +445,26 @@ public:
                 } else {
                     controlnet_backend = backend;
                 }
-                control_net = std::make_shared<ControlNet>(controlnet_backend, model_loader.tensor_storages_types, version);
+                control_net = std::make_shared<ControlNet>(controlnet_backend,
+                                                           offload_params_to_cpu,
+                                                           model_loader.tensor_storages_types,
+                                                           version);
             }
 
             if (strstr(SAFE_STR(sd_ctx_params->stacked_id_embed_dir), "v2")) {
-                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_loader.tensor_storages_types, "pmid", version, PM_VERSION_2);
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend,
+                                                                   offload_params_to_cpu,
+                                                                   model_loader.tensor_storages_types,
+                                                                   "pmid",
+                                                                   version,
+                                                                   PM_VERSION_2);
                 LOG_INFO("using PhotoMaker Version 2");
             } else {
-                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend, model_loader.tensor_storages_types, "pmid", version);
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend,
+                                                                   offload_params_to_cpu,
+                                                                   model_loader.tensor_storages_types,
+                                                                   "pmid",
+                                                                   version);
             }
             if (strlen(SAFE_STR(sd_ctx_params->stacked_id_embed_dir)) > 0) {
                 pmid_lora = std::make_shared<LoraModel>(backend, sd_ctx_params->stacked_id_embed_dir, "");
@@ -489,7 +519,7 @@ public:
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
         }
-        bool success = model_loader.load_tensors(tensors, backend, ignore_tensors);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
@@ -1354,6 +1384,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->wtype                   = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                = CUDA_RNG;
     sd_ctx_params->schedule                = DEFAULT;
+    sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
     sd_ctx_params->keep_vae_on_cpu         = false;
@@ -1388,6 +1419,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "wtype: %s\n"
              "rng_type: %s\n"
              "schedule: %s\n"
+             "offload_params_to_cpu: %s\n"
              "keep_clip_on_cpu: %s\n"
              "keep_control_net_on_cpu: %s\n"
              "keep_vae_on_cpu: %s\n"
@@ -1413,6 +1445,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_type_name(sd_ctx_params->wtype),
              sd_rng_type_name(sd_ctx_params->rng_type),
              sd_schedule_name(sd_ctx_params->schedule),
+             BOOL_STR(sd_ctx_params->offload_params_to_cpu),
              BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
              BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
              BOOL_STR(sd_ctx_params->keep_vae_on_cpu),

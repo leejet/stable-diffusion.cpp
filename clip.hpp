@@ -868,12 +868,13 @@ struct CLIPTextModelRunner : public GGMLRunner {
     CLIPTextModel model;
 
     CLIPTextModelRunner(ggml_backend_t backend,
+                        bool offload_params_to_cpu,
                         const String2GGMLType& tensor_types,
                         const std::string prefix,
                         CLIPVersion version = OPENAI_CLIP_VIT_L_14,
                         bool with_final_ln  = true,
                         int clip_skip_value = -1)
-        : GGMLRunner(backend), model(version, with_final_ln, clip_skip_value) {
+        : GGMLRunner(backend, offload_params_to_cpu), model(version, with_final_ln, clip_skip_value) {
         model.init(params_ctx, tensor_types, prefix);
     }
 

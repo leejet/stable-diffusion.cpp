@@ -521,8 +521,8 @@ public:
 };
 
 struct VAE : public GGMLRunner {
-    VAE(ggml_backend_t backend)
-        : GGMLRunner(backend) {}
+    VAE(ggml_backend_t backend, bool offload_params_to_cpu)
+        : GGMLRunner(backend, offload_params_to_cpu) {}
     virtual void compute(const int n_threads,
                          struct ggml_tensor* z,
                          bool decode_graph,
@@ -536,12 +536,13 @@ struct AutoEncoderKL : public VAE {
     AutoencodingEngine ae;
 
     AutoEncoderKL(ggml_backend_t backend,
+                  bool offload_params_to_cpu,
                   const String2GGMLType& tensor_types,
                   const std::string prefix,
                   bool decode_only       = false,
                   bool use_video_decoder = false,
                   SDVersion version      = VERSION_SD1)
-        : decode_only(decode_only), ae(decode_only, use_video_decoder, version), VAE(backend) {
+        : decode_only(decode_only), ae(decode_only, use_video_decoder, version), VAE(backend, offload_params_to_cpu) {
         ae.init(params_ctx, tensor_types, prefix);
     }
 

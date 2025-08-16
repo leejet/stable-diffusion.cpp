@@ -1048,12 +1048,12 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
             }
         }
         for (int i = GGML_MAX_DIMS; i < n_dims; i++) {
-            shape->ne[GGML_MAX_DIMS - 1] *= ne[i]; // stack to last dim;
+            shape->ne[GGML_MAX_DIMS - 1] *= ne[i];  // stack to last dim;
         }
         return true;
     };
 
-    ctx_gguf_               = gguf_init_from_file_ext(file_path.c_str(), {true, &ctx_meta_}, on_tensor_shape_read);
+    ctx_gguf_ = gguf_init_from_file_ext(file_path.c_str(), {true, &ctx_meta_}, on_tensor_shape_read);
     if (!ctx_gguf_) {
         LOG_ERROR("failed to open '%s'", file_path.c_str());
         return false;
@@ -1917,7 +1917,7 @@ std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& v
     return res;
 }
 
-bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend_t backend) {
+bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
     std::vector<TensorStorage> processed_tensor_storages;
     for (auto& tensor_storage : tensor_storages) {
         // LOG_DEBUG("%s", name.c_str());
@@ -2115,7 +2115,6 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
 }
 
 bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
-                               ggml_backend_t backend,
                                std::set<std::string> ignore_tensors) {
     std::set<std::string> tensor_names_in_file;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
@@ -2155,7 +2154,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb, backend);
+    bool success = load_tensors(on_new_tensor_cb);
     if (!success) {
         LOG_ERROR("load tensors from file failed");
         return false;
@@ -2299,7 +2298,7 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb, backend);
+    bool success = load_tensors(on_new_tensor_cb);
     ggml_backend_free(backend);
     LOG_INFO("load tensors done");
     LOG_INFO("trying to save tensors to %s", file_path.c_str());

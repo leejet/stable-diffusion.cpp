@@ -1230,15 +1230,19 @@ struct GGMLRunner {
 protected:
     typedef std::function<struct ggml_cgraph*()> get_graph_cb_t;
 
-    struct ggml_context* params_ctx     = NULL;
-    ggml_backend_buffer_t params_buffer = NULL;
+    ggml_backend_t params_backend  = NULL;
+    ggml_backend_t runtime_backend = NULL;
+
+    struct ggml_context* params_ctx             = NULL;
+    ggml_backend_buffer_t params_buffer         = NULL;
+    struct ggml_context* offload_ctx            = NULL;
+    ggml_backend_buffer_t runtime_params_buffer = NULL;
+    bool params_on_runtime_backend              = false;
 
     struct ggml_context* compute_ctx    = NULL;
     struct ggml_gallocr* compute_allocr = NULL;
 
     std::map<struct ggml_tensor*, const void*> backend_tensor_data_map;
-
-    ggml_backend_t backend = NULL;
 
     void alloc_params_ctx() {
         struct ggml_init_params params;
@@ -1248,12 +1252,20 @@ protected:
 
         params_ctx = ggml_init(params);
         GGML_ASSERT(params_ctx != NULL);
+        if (params_backend != runtime_backend) {
+            offload_ctx = ggml_init(params);
+            GGML_ASSERT(offload_ctx != NULL);
+        }
     }
 
     void free_params_ctx() {
         if (params_ctx != NULL) {
             ggml_free(params_ctx);
             params_ctx = NULL;
+        }
+        if (offload_ctx != NULL) {
+            ggml_free(offload_ctx);
+            offload_ctx = NULL;
         }
     }
 
@@ -1281,7 +1293,7 @@ protected:
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_graph();
         backend_tensor_data_map.clear();
-        compute_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+        compute_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(runtime_backend));
 
         if (!ggml_gallocr_reserve(compute_allocr, gf)) {
             // failed to allocate the compute buffer
@@ -1295,7 +1307,7 @@ protected:
         LOG_DEBUG("%s compute buffer size: %.2f MB(%s)",
                   get_desc().c_str(),
                   compute_buffer_size / 1024.0 / 1024.0,
-                  ggml_backend_is_cpu(backend) ? "RAM" : "VRAM");
+                  ggml_backend_is_cpu(runtime_backend) ? "RAM" : "VRAM");
         return true;
     }
 
@@ -1310,12 +1322,96 @@ protected:
         backend_tensor_data_map.clear();
     }
 
+    bool offload_params_to_runtime_backend() {
+        if (params_backend == runtime_backend) {
+            return true;
+        }
+        if (params_on_runtime_backend) {
+            return true;
+        }
+        GGML_ASSERT(runtime_params_buffer == NULL);
+        int64_t t0         = ggml_time_ms();
+        size_t num_tensors = ggml_tensor_num(offload_ctx);
+        if (num_tensors == 0) {
+            for (ggml_tensor* t = ggml_get_first_tensor(params_ctx); t != NULL; t = ggml_get_next_tensor(params_ctx, t)) {
+                GGML_ASSERT(t->view_src == NULL);
+                ggml_dup_tensor(offload_ctx, t);
+            }
+        }
+        num_tensors = ggml_tensor_num(offload_ctx);
+        GGML_ASSERT(num_tensors == ggml_tensor_num(params_ctx));
+
+        runtime_params_buffer = ggml_backend_alloc_ctx_tensors(offload_ctx, runtime_backend);
+
+        if (runtime_params_buffer == NULL) {
+            LOG_ERROR("%s alloc runtime params backend buffer failed, num_tensors = %i",
+                      get_desc().c_str(),
+                      num_tensors);
+            return false;
+        }
+
+        ggml_tensor* t         = ggml_get_first_tensor(params_ctx);
+        ggml_tensor* offload_t = ggml_get_first_tensor(offload_ctx);
+
+        while (t != NULL && offload_t != NULL) {
+            ggml_backend_tensor_copy(t, offload_t);
+            std::swap(t->buffer, offload_t->buffer);
+            std::swap(t->data, offload_t->data);
+
+            t         = ggml_get_next_tensor(params_ctx, t);
+            offload_t = ggml_get_next_tensor(offload_ctx, offload_t);
+        }
+
+        int64_t t1 = ggml_time_ms();
+
+        size_t params_buffer_size = ggml_backend_buffer_get_size(runtime_params_buffer);
+        LOG_INFO("%s offload params (%6.2f MB, %i tensors) to runtime backend (%s), taking %.2fs",
+                 get_desc().c_str(),
+                 params_buffer_size / (1024.f * 1024.f),
+                 num_tensors,
+                 ggml_backend_name(runtime_backend),
+                 (t1 - t0) * 1.0f / 1000);
+
+        params_on_runtime_backend = true;
+
+        return true;
+    }
+
+    void offload_params_to_params_backend() {
+        if (!params_on_runtime_backend) {
+            return;
+        }
+        ggml_tensor* t         = ggml_get_first_tensor(params_ctx);
+        ggml_tensor* offload_t = ggml_get_first_tensor(offload_ctx);
+
+        while (t != NULL && offload_t != NULL) {
+            t->buffer         = offload_t->buffer;
+            t->data           = offload_t->data;
+            offload_t->buffer = NULL;
+            offload_t->data   = NULL;
+
+            t         = ggml_get_next_tensor(params_ctx, t);
+            offload_t = ggml_get_next_tensor(offload_ctx, offload_t);
+        }
+
+        if (runtime_params_buffer != NULL) {
+            ggml_backend_buffer_free(runtime_params_buffer);
+            runtime_params_buffer = NULL;
+        }
+        params_on_runtime_backend = false;
+    }
+
 public:
     virtual std::string get_desc() = 0;
 
-    GGMLRunner(ggml_backend_t backend)
-        : backend(backend) {
+    GGMLRunner(ggml_backend_t backend, bool offload_params_to_cpu = false)
+        : runtime_backend(backend) {
         alloc_params_ctx();
+        if (!ggml_backend_is_cpu(runtime_backend) && offload_params_to_cpu) {
+            params_backend = ggml_backend_cpu_init();
+        } else {
+            params_backend = runtime_backend;
+        }
     }
 
     virtual ~GGMLRunner() {
@@ -1323,6 +1419,9 @@ public:
         free_compute_buffer();
         free_params_ctx();
         free_compute_ctx();
+        if (params_backend != runtime_backend) {
+            ggml_backend_free(params_backend);
+        }
     }
 
     void reset_compute_ctx() {
@@ -1332,7 +1431,7 @@ public:
 
     bool alloc_params_buffer() {
         size_t num_tensors = ggml_tensor_num(params_ctx);
-        params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, backend);
+        params_buffer      = ggml_backend_alloc_ctx_tensors(params_ctx, params_backend);
         if (params_buffer == NULL) {
             LOG_ERROR("%s alloc params backend buffer failed, num_tensors = %i",
                       get_desc().c_str(),
@@ -1342,14 +1441,9 @@ public:
         size_t params_buffer_size = ggml_backend_buffer_get_size(params_buffer);
         LOG_DEBUG("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)",
                   get_desc().c_str(),
-                  params_buffer_size / (1024.0 * 1024.0),
-                  ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
+                  params_buffer_size / (1024.f * 1024.f),
+                  ggml_backend_is_cpu(params_backend) ? "RAM" : "VRAM",
                   num_tensors);
-        // printf("%s params backend buffer size = % 6.2f MB(%s) (%i tensors)\n",
-        //           get_desc().c_str(),
-        //           params_buffer_size / (1024.0 * 1024.0),
-        //           ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
-        //           num_tensors);
         return true;
     }
 
@@ -1372,6 +1466,7 @@ public:
             ggml_gallocr_free(compute_allocr);
             compute_allocr = NULL;
         }
+        offload_params_to_params_backend();
     }
 
     // do copy after alloc graph
@@ -1385,7 +1480,7 @@ public:
             return NULL;
         }
         // it's performing a compute, check if backend isn't cpu
-        if (!ggml_backend_is_cpu(backend) && (tensor->buffer == NULL || ggml_backend_buffer_is_host(tensor->buffer))) {
+        if (!ggml_backend_is_cpu(runtime_backend) && (tensor->buffer == NULL || ggml_backend_buffer_is_host(tensor->buffer))) {
             // pass input tensors to gpu memory
             auto backend_tensor = ggml_dup_tensor(compute_ctx, tensor);
 
@@ -1401,16 +1496,20 @@ public:
                  bool free_compute_buffer_immediately = true,
                  struct ggml_tensor** output          = NULL,
                  struct ggml_context* output_ctx      = NULL) {
+        if (!offload_params_to_runtime_backend()) {
+            LOG_ERROR("%s offload params to runtime backend failed", get_desc().c_str());
+            return;
+        }
         alloc_compute_buffer(get_graph);
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_graph();
         GGML_ASSERT(ggml_gallocr_alloc_graph(compute_allocr, gf));
         cpy_data_to_backend_tensor();
-        if (ggml_backend_is_cpu(backend)) {
-            ggml_backend_cpu_set_n_threads(backend, n_threads);
+        if (ggml_backend_is_cpu(runtime_backend)) {
+            ggml_backend_cpu_set_n_threads(runtime_backend, n_threads);
         }
 
-        ggml_backend_graph_compute(backend, gf);
+        ggml_backend_graph_compute(runtime_backend, gf);
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
@@ -1420,7 +1519,7 @@ public:
                 *output = ggml_dup_tensor(output_ctx, result);
             }
             if (*output != NULL) {
-                ggml_backend_tensor_get_and_sync(backend, result, (*output)->data, 0, ggml_nbytes(*output));
+                ggml_backend_tensor_get_and_sync(runtime_backend, result, (*output)->data, 0, ggml_nbytes(*output));
             }
         }
 

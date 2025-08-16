@@ -881,12 +881,13 @@ namespace Flux {
         bool use_mask = false;
 
         FluxRunner(ggml_backend_t backend,
+                   bool offload_params_to_cpu,
                    const String2GGMLType& tensor_types = {},
                    const std::string prefix            = "",
                    SDVersion version                   = VERSION_FLUX,
                    bool flash_attn                     = false,
                    bool use_mask                       = false)
-            : GGMLRunner(backend), use_mask(use_mask) {
+            : GGMLRunner(backend, offload_params_to_cpu), use_mask(use_mask) {
             flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
@@ -1085,7 +1086,7 @@ namespace Flux {
             // ggml_backend_t backend    = ggml_backend_cuda_init(0);
             ggml_backend_t backend           = ggml_backend_cpu_init();
             ggml_type model_data_type        = GGML_TYPE_Q8_0;
-            std::shared_ptr<FluxRunner> flux = std::shared_ptr<FluxRunner>(new FluxRunner(backend));
+            std::shared_ptr<FluxRunner> flux = std::shared_ptr<FluxRunner>(new FluxRunner(backend, false));
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -1099,7 +1100,7 @@ namespace Flux {
                     return;
                 }
 
-                bool success = model_loader.load_tensors(tensors, backend);
+                bool success = model_loader.load_tensors(tensors);
 
                 if (!success) {
                     LOG_ERROR("load tensors from model loader failed");

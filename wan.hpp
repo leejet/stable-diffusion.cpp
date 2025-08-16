@@ -767,10 +767,11 @@ namespace WAN {
         std::vector<FeatCache> _feat_vec_map;
 
         WanVAERunner(ggml_backend_t backend,
+                     bool offload_params_to_cpu,
                      const String2GGMLType& tensor_types = {},
                      const std::string prefix            = "",
                      bool decode_only                    = false)
-            : decode_only(decode_only), ae(decode_only), VAE(backend) {
+            : decode_only(decode_only), ae(decode_only), VAE(backend, offload_params_to_cpu) {
             ae.init(params_ctx, tensor_types, prefix);
             rest_feat_vec_map();
         }
@@ -857,7 +858,7 @@ namespace WAN {
                         feat_cache_vec.is_rep   = true;
                         _feat_vec_map[feat_idx] = feat_cache_vec;
                     } else if (feat_cache != NULL) {
-                        _feat_vec_map[feat_idx] = FeatCache(backend, feat_cache);
+                        _feat_vec_map[feat_idx] = FeatCache(runtime_backend, feat_cache);
                     }
                 }
                 GGMLRunner::free_compute_buffer();
@@ -897,7 +898,7 @@ namespace WAN {
                             feat_cache_vec.is_rep   = true;
                             _feat_vec_map[feat_idx] = feat_cache_vec;
                         } else if (feat_cache != NULL) {
-                            _feat_vec_map[feat_idx] = FeatCache(backend, feat_cache);
+                            _feat_vec_map[feat_idx] = FeatCache(runtime_backend, feat_cache);
                         }
                     }
 
@@ -943,7 +944,7 @@ namespace WAN {
             ggml_backend_t backend = ggml_backend_cuda_init(0);
             // ggml_backend_t backend            = ggml_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
-            std::shared_ptr<WanVAERunner> vae = std::shared_ptr<WanVAERunner>(new WanVAERunner(backend));
+            std::shared_ptr<WanVAERunner> vae = std::shared_ptr<WanVAERunner>(new WanVAERunner(backend, false));
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -957,7 +958,7 @@ namespace WAN {
                     return;
                 }
 
-                bool success = model_loader.load_tensors(tensors, backend);
+                bool success = model_loader.load_tensors(tensors);
 
                 if (!success) {
                     LOG_ERROR("load tensors from model loader failed");
@@ -1564,11 +1565,12 @@ namespace WAN {
         SDVersion version;
 
         WanRunner(ggml_backend_t backend,
+                  bool offload_params_to_cpu,
                   const String2GGMLType& tensor_types = {},
                   const std::string prefix            = "",
                   SDVersion version                   = VERSION_WAN2,
                   bool flash_attn                     = false)
-            : GGMLRunner(backend) {
+            : GGMLRunner(backend, offload_params_to_cpu) {
             wan_params.flash_attn = flash_attn;
             wan_params.num_layers = 0;
             for (auto pair : tensor_types) {
@@ -1747,6 +1749,7 @@ namespace WAN {
             }
 
             std::shared_ptr<WanRunner> wan = std::shared_ptr<WanRunner>(new WanRunner(backend,
+                                                                                      false,
                                                                                       tensor_types,
                                                                                       "model.diffusion_model"));
 
@@ -1754,7 +1757,7 @@ namespace WAN {
             std::map<std::string, ggml_tensor*> tensors;
             wan->get_param_tensors(tensors, "model.diffusion_model");
 
-            bool success = model_loader.load_tensors(tensors, backend);
+            bool success = model_loader.load_tensors(tensors);
 
             if (!success) {
                 LOG_ERROR("load tensors from model loader failed");

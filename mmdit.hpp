@@ -846,9 +846,10 @@ struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
     MMDiTRunner(ggml_backend_t backend,
+                bool offload_params_to_cpu,
                 const String2GGMLType& tensor_types = {},
                 const std::string prefix            = "")
-        : GGMLRunner(backend), mmdit(tensor_types) {
+        : GGMLRunner(backend, offload_params_to_cpu), mmdit(tensor_types) {
         mmdit.init(params_ctx, tensor_types, prefix);
     }
 
@@ -946,7 +947,7 @@ struct MMDiTRunner : public GGMLRunner {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
         ggml_backend_t backend             = ggml_backend_cpu_init();
         ggml_type model_data_type          = GGML_TYPE_F16;
-        std::shared_ptr<MMDiTRunner> mmdit = std::shared_ptr<MMDiTRunner>(new MMDiTRunner(backend));
+        std::shared_ptr<MMDiTRunner> mmdit = std::shared_ptr<MMDiTRunner>(new MMDiTRunner(backend, false));
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -960,7 +961,7 @@ struct MMDiTRunner : public GGMLRunner {
                 return;
             }
 
-            bool success = model_loader.load_tensors(tensors, backend);
+            bool success = model_loader.load_tensors(tensors);
 
             if (!success) {
                 LOG_ERROR("load tensors from model loader failed");

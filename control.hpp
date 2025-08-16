@@ -317,9 +317,10 @@ struct ControlNet : public GGMLRunner {
     bool guided_hint_cached         = false;
 
     ControlNet(ggml_backend_t backend,
+               bool offload_params_to_cpu,
                const String2GGMLType& tensor_types = {},
                SDVersion version                   = VERSION_SD1)
-        : GGMLRunner(backend), control_net(version) {
+        : GGMLRunner(backend, offload_params_to_cpu), control_net(version) {
         control_net.init(params_ctx, tensor_types, "");
     }
 
@@ -346,7 +347,7 @@ struct ControlNet : public GGMLRunner {
             control_buffer_size += ggml_nbytes(controls[i]);
         }
 
-        control_buffer = ggml_backend_alloc_ctx_tensors(control_ctx, backend);
+        control_buffer = ggml_backend_alloc_ctx_tensors(control_ctx, runtime_backend);
 
         LOG_DEBUG("control buffer size %.2fMB", control_buffer_size * 1.f / 1024.f / 1024.f);
     }
@@ -443,7 +444,7 @@ struct ControlNet : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(tensors, backend, ignore_tensors);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors);
 
         if (!success) {
             LOG_ERROR("load control net tensors from model loader failed");

@@ -624,12 +624,13 @@ public:
 
 public:
     PhotoMakerIDEncoder(ggml_backend_t backend,
+                        bool offload_params_to_cpu,
                         const String2GGMLType& tensor_types,
                         const std::string prefix,
                         SDVersion version = VERSION_SDXL,
                         PMVersion pm_v    = PM_VERSION_1,
                         float sty         = 20.f)
-        : GGMLRunner(backend),
+        : GGMLRunner(backend, offload_params_to_cpu),
           version(version),
           pm_version(pm_v),
           style_strength(sty) {
@@ -785,10 +786,11 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
     bool applied     = false;
 
     PhotoMakerIDEmbed(ggml_backend_t backend,
+                      bool offload_params_to_cpu,
                       ModelLoader* ml,
                       const std::string& file_path = "",
                       const std::string& prefix    = "")
-        : file_path(file_path), GGMLRunner(backend), model_loader(ml) {
+        : file_path(file_path), GGMLRunner(backend, offload_params_to_cpu), model_loader(ml) {
         if (!model_loader->init_from_file(file_path, prefix)) {
             load_failed = true;
         }
@@ -828,11 +830,11 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
             return true;
         };
 
-        model_loader->load_tensors(on_new_tensor_cb, backend);
+        model_loader->load_tensors(on_new_tensor_cb);
         alloc_params_buffer();
 
         dry_run = false;
-        model_loader->load_tensors(on_new_tensor_cb, backend);
+        model_loader->load_tensors(on_new_tensor_cb);
 
         LOG_DEBUG("finished loading PhotoMaker ID Embeds ");
         return true;

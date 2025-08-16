@@ -57,6 +57,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     std::vector<std::string> readed_embeddings;
 
     FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
+                                      bool offload_params_to_cpu,
                                       const String2GGMLType& tensor_types,
                                       const std::string& embd_dir,
                                       SDVersion version = VERSION_SD1,
@@ -64,12 +65,12 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                       int clip_skip     = -1)
         : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407), embd_dir(embd_dir) {
         if (sd_version_is_sd1(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14);
+            text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14);
         } else if (sd_version_is_sd2(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14);
+            text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14);
         } else if (sd_version_is_sdxl(version)) {
-            text_model  = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
-            text_model2 = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
+            text_model  = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
+            text_model2 = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
         }
         set_clip_skip(clip_skip);
     }
@@ -154,7 +155,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             }
             return true;
         };
-        model_loader.load_tensors(on_load, NULL);
+        model_loader.load_tensors(on_load);
         readed_embeddings.push_back(embd_name);
         if (embd) {
             int64_t hidden_size = text_model->model.hidden_size;
@@ -618,8 +619,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 struct FrozenCLIPVisionEmbedder : public GGMLRunner {
     CLIPVisionModelProjection vision_model;
 
-    FrozenCLIPVisionEmbedder(ggml_backend_t backend, const String2GGMLType& tensor_types = {})
-        : vision_model(OPEN_CLIP_VIT_H_14, true), GGMLRunner(backend) {
+    FrozenCLIPVisionEmbedder(ggml_backend_t backend,
+                             bool offload_params_to_cpu,
+                             const String2GGMLType& tensor_types = {})
+        : vision_model(OPEN_CLIP_VIT_H_14, true), GGMLRunner(backend, offload_params_to_cpu) {
         vision_model.init(params_ctx, tensor_types, "cond_stage_model.transformer");
     }
 
@@ -663,12 +666,13 @@ struct SD3CLIPEmbedder : public Conditioner {
     std::shared_ptr<T5Runner> t5;
 
     SD3CLIPEmbedder(ggml_backend_t backend,
+                    bool offload_params_to_cpu,
                     const String2GGMLType& tensor_types = {},
                     int clip_skip                       = -1)
         : clip_g_tokenizer(0) {
-        clip_l = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
-        clip_g = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
-        t5     = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
+        clip_l = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
+        clip_g = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
+        t5     = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.t5xxl.transformer");
         set_clip_skip(clip_skip);
     }
 
@@ -1010,10 +1014,11 @@ struct FluxCLIPEmbedder : public Conditioner {
     size_t chunk_len = 256;
 
     FluxCLIPEmbedder(ggml_backend_t backend,
+                     bool offload_params_to_cpu,
                      const String2GGMLType& tensor_types = {},
                      int clip_skip                       = -1) {
-        clip_l = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true);
-        t5     = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
+        clip_l = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true);
+        t5     = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.t5xxl.transformer");
         set_clip_skip(clip_skip);
     }
 
@@ -1232,13 +1237,14 @@ struct T5CLIPEmbedder : public Conditioner {
     bool is_umt5     = false;
 
     T5CLIPEmbedder(ggml_backend_t backend,
+                   bool offload_params_to_cpu,
                    const String2GGMLType& tensor_types = {},
                    int clip_skip                       = -1,
                    bool use_mask                       = false,
                    int mask_pad                        = 1,
                    bool is_umt5                        = false)
         : use_mask(use_mask), mask_pad(mask_pad), t5_tokenizer(is_umt5) {
-        t5 = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer", is_umt5);
+        t5 = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.t5xxl.transformer", is_umt5);
     }
 
     void set_clip_skip(int clip_skip) {

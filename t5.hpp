@@ -756,10 +756,11 @@ struct T5Runner : public GGMLRunner {
     std::vector<int> relative_position_bucket_vec;
 
     T5Runner(ggml_backend_t backend,
+             bool offload_params_to_cpu,
              const String2GGMLType& tensor_types,
              const std::string prefix,
              bool is_umt5 = false)
-        : GGMLRunner(backend) {
+        : GGMLRunner(backend, offload_params_to_cpu) {
         if (is_umt5) {
             params.vocab_size         = 256384;
             params.relative_attention = false;
@@ -900,10 +901,11 @@ struct T5Embedder {
     T5Runner model;
 
     T5Embedder(ggml_backend_t backend,
+               bool offload_params_to_cpu,
                const String2GGMLType& tensor_types = {},
                const std::string prefix            = "",
                bool is_umt5                        = false)
-        : model(backend, tensor_types, prefix, is_umt5), tokenizer(is_umt5) {
+        : model(backend, offload_params_to_cpu, tensor_types, prefix, is_umt5), tokenizer(is_umt5) {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -1012,13 +1014,13 @@ struct T5Embedder {
             }
         }
 
-        std::shared_ptr<T5Embedder> t5 = std::shared_ptr<T5Embedder>(new T5Embedder(backend, tensor_types, "", true));
+        std::shared_ptr<T5Embedder> t5 = std::shared_ptr<T5Embedder>(new T5Embedder(backend, false, tensor_types, "", true));
 
         t5->alloc_params_buffer();
         std::map<std::string, ggml_tensor*> tensors;
         t5->get_param_tensors(tensors, "");
 
-        bool success = model_loader.load_tensors(tensors, backend);
+        bool success = model_loader.load_tensors(tensors);
 
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");

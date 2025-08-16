@@ -92,6 +92,7 @@ struct LoraModel : public GGMLRunner {
 
     float multiplier = 1.0f;
     std::map<std::string, struct ggml_tensor*> lora_tensors;
+    std::map<ggml_tensor*, ggml_tensor*> original_weight_to_final_weight;
     std::string file_path;
     ModelLoader model_loader;
     bool load_failed                = false;
@@ -103,7 +104,7 @@ struct LoraModel : public GGMLRunner {
     LoraModel(ggml_backend_t backend,
               const std::string& file_path = "",
               const std::string prefix     = "")
-        : file_path(file_path), GGMLRunner(backend) {
+        : file_path(file_path), GGMLRunner(backend, false) {
         if (!model_loader.init_from_file(file_path, prefix)) {
             load_failed = true;
         }
@@ -151,11 +152,11 @@ struct LoraModel : public GGMLRunner {
             return true;
         };
 
-        model_loader.load_tensors(on_new_tensor_cb, backend);
+        model_loader.load_tensors(on_new_tensor_cb);
         alloc_params_buffer();
         // exit(0);
         dry_run = false;
-        model_loader.load_tensors(on_new_tensor_cb, backend);
+        model_loader.load_tensors(on_new_tensor_cb);
 
         LOG_DEBUG("lora type: \"%s\"/\"%s\"", lora_downs[type].c_str(), lora_ups[type].c_str());
 
@@ -790,6 +791,11 @@ struct LoraModel : public GGMLRunner {
                     updown = ggml_merge_lora(compute_ctx, lora_down, lora_up, lora_mid);
                 }
                 scale_value *= multiplier;
+                ggml_tensor* original_weight = weight;
+                if (!ggml_backend_is_cpu(runtime_backend) && ggml_backend_buffer_is_host(weight->buffer)) {
+                    weight = ggml_dup_tensor(compute_ctx, weight);
+                    set_backend_tensor_data(weight, original_weight->data);
+                }
                 updown = ggml_reshape(compute_ctx, updown, weight);
                 GGML_ASSERT(ggml_nelements(updown) == ggml_nelements(weight));
                 updown = ggml_scale_inplace(compute_ctx, updown, scale_value);
@@ -805,6 +811,9 @@ struct LoraModel : public GGMLRunner {
                 }
                 // final_weight = ggml_add_inplace(compute_ctx, weight, updown);  // apply directly
                 ggml_build_forward_expand(gf, final_weight);
+                if (!ggml_backend_is_cpu(runtime_backend) && ggml_backend_buffer_is_host(original_weight->buffer)) {
+                    original_weight_to_final_weight[original_weight] = final_weight;
+                }
                 break;
             }
         }
@@ -839,7 +848,14 @@ struct LoraModel : public GGMLRunner {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_lora_graph(model_tensors, version);
         };
-        GGMLRunner::compute(get_graph, n_threads, true);
+        GGMLRunner::compute(get_graph, n_threads, false);
+        for (auto item : original_weight_to_final_weight) {
+            ggml_tensor* original_weight = item.first;
+            ggml_tensor* final_weight    = item.second;
+
+            ggml_backend_tensor_copy(final_weight, original_weight);
+        }
+        GGMLRunner::free_compute_buffer();
     }
 };
 

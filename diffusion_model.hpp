@@ -33,10 +33,11 @@ struct UNetModel : public DiffusionModel {
     UNetModelRunner unet;
 
     UNetModel(ggml_backend_t backend,
+              bool offload_params_to_cpu,
               const String2GGMLType& tensor_types = {},
               SDVersion version                   = VERSION_SD1,
               bool flash_attn                     = false)
-        : unet(backend, tensor_types, "model.diffusion_model", version, flash_attn) {
+        : unet(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, flash_attn) {
     }
 
     void alloc_params_buffer() {
@@ -86,8 +87,9 @@ struct MMDiTModel : public DiffusionModel {
     MMDiTRunner mmdit;
 
     MMDiTModel(ggml_backend_t backend,
+               bool offload_params_to_cpu,
                const String2GGMLType& tensor_types = {})
-        : mmdit(backend, tensor_types, "model.diffusion_model") {
+        : mmdit(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model") {
     }
 
     void alloc_params_buffer() {
@@ -136,11 +138,12 @@ struct FluxModel : public DiffusionModel {
     Flux::FluxRunner flux;
 
     FluxModel(ggml_backend_t backend,
+              bool offload_params_to_cpu,
               const String2GGMLType& tensor_types = {},
               SDVersion version                   = VERSION_FLUX,
               bool flash_attn                     = false,
               bool use_mask                       = false)
-        : flux(backend, tensor_types, "model.diffusion_model", version, flash_attn, use_mask) {
+        : flux(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, flash_attn, use_mask) {
     }
 
     void alloc_params_buffer() {
@@ -189,10 +192,11 @@ struct WanModel : public DiffusionModel {
     WAN::WanRunner wan;
 
     WanModel(ggml_backend_t backend,
+             bool offload_params_to_cpu,
              const String2GGMLType& tensor_types = {},
              SDVersion version                   = VERSION_FLUX,
              bool flash_attn                     = false)
-        : wan(backend, tensor_types, "model.diffusion_model", version, flash_attn) {
+        : wan(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, flash_attn) {
     }
 
     void alloc_params_buffer() {

@@ -130,6 +130,7 @@ typedef struct {
     enum sd_type_t wtype;
     enum rng_type_t rng_type;
     enum schedule_t schedule;
+    bool offload_params_to_cpu;
     bool keep_clip_on_cpu;
     bool keep_control_net_on_cpu;
     bool keep_vae_on_cpu;
@@ -236,10 +237,13 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
+                                        bool offload_params_to_cpu,
                                         int n_threads);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
-SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor);
+SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
+                          sd_image_t input_image,
+                          uint32_t upscale_factor);
 
 SD_API bool convert(const char* input_path,
                     const char* vae_path,

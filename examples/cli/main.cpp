@@ -95,6 +95,7 @@ struct SDParams {
     int64_t seed                  = 42;
     bool verbose                  = false;
     bool vae_tiling               = false;
+    bool offload_params_to_cpu    = false;
     bool control_net_cpu          = false;
     bool normalize_input          = false;
     bool clip_on_cpu              = false;
@@ -141,8 +142,9 @@ void print_params(SDParams params) {
     for (auto& path : params.ref_image_paths) {
         printf("        %s\n", path.c_str());
     };
-    printf("    clip on cpu:       %s\n", params.clip_on_cpu ? "true" : "false");
-    printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
+    printf("    offload_params_to_cpu:        %s\n", params.offload_params_to_cpu ? "true" : "false");
+    printf("    clip_on_cpu:       %s\n", params.clip_on_cpu ? "true" : "false");
+    printf("    control_net_cpu:    %s\n", params.control_net_cpu ? "true" : "false");
     printf("    vae decoder on cpu:%s\n", params.vae_on_cpu ? "true" : "false");
     printf("    diffusion flash attention:%s\n", params.diffusion_flash_attn ? "true" : "false");
     printf("    strength(control): %.2f\n", params.control_strength);
@@ -461,6 +463,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     options.bool_options = {
         {"", "--vae-tiling", "", true, &params.vae_tiling},
+        {"", "--offload-to-cpu", "", true, &params.offload_params_to_cpu},
         {"", "--control-net-cpu", "", true, &params.control_net_cpu},
         {"", "--normalize-input", "", true, &params.normalize_input},
         {"", "--clip-on-cpu", "", true, &params.clip_on_cpu},
@@ -943,6 +946,7 @@ int main(int argc, const char* argv[]) {
         params.wtype,
         params.rng_type,
         params.schedule,
+        params.offload_params_to_cpu,
         params.clip_on_cpu,
         params.control_net_cpu,
         params.vae_on_cpu,
@@ -1058,6 +1062,7 @@ int main(int argc, const char* argv[]) {
     int upscale_factor = 4;  // unused for RealESRGAN_x4plus_anime_6B.pth
     if (params.esrgan_path.size() > 0 && params.upscale_repeats > 0) {
         upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
+                                                        params.offload_params_to_cpu,
                                                         params.n_threads);
 
         if (upscaler_ctx == NULL) {
