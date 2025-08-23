@@ -875,9 +875,10 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
                                                 d_head == 112 ||
                                                 d_head == 128 ||
                                                 d_head == 256);
-#if 0
+#if 1
     can_use_flash_attn      = can_use_flash_attn && L_k % 256 == 0;
 #else
+	// this causes issues, see https://github.com/leejet/stable-diffusion.cpp/issues/756
     if (can_use_flash_attn && L_k % 256 != 0) {
         // TODO(Green-Sky): might be worth just padding by default
         if (L_k == 77 || L_k == 4208 || L_k == 3952) {
