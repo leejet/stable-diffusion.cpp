@@ -603,6 +603,8 @@ std::string convert_tensor_name(std::string name) {
         } else {
             new_name = name;
         }
+    } else if (ends_with(name, ".diff") || ends_with(name, ".diff_b")) {
+        new_name = "lora." + name;
     } else if (contains(name, "lora_up") || contains(name, "lora_down") ||
                contains(name, "lora.up") || contains(name, "lora.down") ||
                contains(name, "lora_linear")) {

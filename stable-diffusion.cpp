@@ -2409,7 +2409,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     }
     ggml_free(work_ctx);
 
-    LOG_INFO("img2vid completed in %.2fs", (t5 - t0) * 1.0f / 1000);
+    LOG_INFO("generate_video completed in %.2fs", (t5 - t0) * 1.0f / 1000);
 
     return result_images;
 }
