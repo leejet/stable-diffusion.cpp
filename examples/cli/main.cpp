@@ -877,6 +877,40 @@ int main(int argc, const char* argv[]) {
 
         // Resize input image ...
         if (params.height != height || params.width != width) {
+            float dst_aspect = (float)params.width / (float)params.height;
+            float src_aspect = (float)width / (float)height;
+
+            int crop_x = 0, crop_y = 0;
+            int crop_w = width, crop_h = height;
+
+            if (src_aspect > dst_aspect) {
+                crop_w = (int)(height * dst_aspect);
+                crop_x = (width - crop_w) / 2;
+            } else if (src_aspect < dst_aspect) {
+                crop_h = (int)(width / dst_aspect);
+                crop_y = (height - crop_h) / 2;
+            }
+
+            if (crop_x != 0 || crop_y != 0) {
+                printf("crop input image from %dx%d to %dx%d\n", width, height, crop_w, crop_h);
+                uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * 3);
+                if (cropped_image_buffer == NULL) {
+                    fprintf(stderr, "error: allocate memory for crop\n");
+                    free(input_image_buffer);
+                    return 1;
+                }
+                for (int row = 0; row < crop_h; row++) {
+                    uint8_t* src = input_image_buffer + ((crop_y + row) * width + crop_x) * 3;
+                    uint8_t* dst = cropped_image_buffer + (row * crop_w) * 3;
+                    memcpy(dst, src, crop_w * 3);
+                }
+
+                width  = crop_w;
+                height = crop_h;
+                free(input_image_buffer);
+                input_image_buffer = cropped_image_buffer;
+            }
+
             printf("resize input image from %dx%d to %dx%d\n", width, height, params.width, params.height);
             int resized_height = params.height;
             int resized_width  = params.width;
