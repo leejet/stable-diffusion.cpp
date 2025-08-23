@@ -89,6 +89,7 @@ const char* unused_tensors[] = {
     "posterior_mean_coef1",
     "posterior_mean_coef2",
     "cond_stage_model.transformer.text_model.embeddings.position_ids",
+    "cond_stage_model.transformer.vision_model.embeddings.position_ids",
     "cond_stage_model.model.logit_scale",
     "cond_stage_model.model.text_projection",
     "conditioner.embedders.0.transformer.text_model.embeddings.position_ids",
@@ -142,6 +143,11 @@ std::unordered_map<std::string, std::string> open_clip_to_hk_clip_resblock = {
     {"mlp.c_proj.weight", "mlp.fc2.weight"},
 };
 
+std::unordered_map<std::string, std::string> cond_model_name_map = {
+    {"transformer.vision_model.pre_layrnorm.weight", "transformer.vision_model.pre_layernorm.weight"},
+    {"transformer.vision_model.pre_layrnorm.bias", "transformer.vision_model.pre_layernorm.bias"},
+};
+
 std::unordered_map<std::string, std::string> vae_decoder_name_map = {
     {"first_stage_model.decoder.mid.attn_1.to_k.bias", "first_stage_model.decoder.mid.attn_1.k.bias"},
     {"first_stage_model.decoder.mid.attn_1.to_k.weight", "first_stage_model.decoder.mid.attn_1.k.weight"},
@@ -180,7 +186,7 @@ std::unordered_map<std::string, std::string> pmid_v2_name_map = {
      "pmid.qformer_perceiver.token_proj.fc2.weight"},
 };
 
-std::string convert_open_clip_to_hf_clip(const std::string& name) {
+std::string convert_cond_model_name(const std::string& name) {
     std::string new_name = name;
     std::string prefix;
     if (contains(new_name, ".enc.")) {
@@ -267,6 +273,10 @@ std::string convert_open_clip_to_hf_clip(const std::string& name) {
 
     if (open_clip_to_hf_clip_model.find(new_name) != open_clip_to_hf_clip_model.end()) {
         new_name = open_clip_to_hf_clip_model[new_name];
+    }
+
+    if (cond_model_name_map.find(new_name) != cond_model_name_map.end()) {
+        new_name = cond_model_name_map[new_name];
     }
 
     std::string open_clip_resblock_prefix = "model.transformer.resblocks.";
@@ -564,7 +574,7 @@ std::string convert_tensor_name(std::string name) {
     // }
     std::string new_name = name;
     if (starts_with(name, "cond_stage_model.") || starts_with(name, "conditioner.embedders.") || starts_with(name, "text_encoders.") || ends_with(name, ".vision_model.visual_projection.weight")) {
-        new_name = convert_open_clip_to_hf_clip(name);
+        new_name = convert_cond_model_name(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
         new_name = convert_vae_decoder_name(name);
     } else if (starts_with(name, "pmid.qformer_perceiver")) {

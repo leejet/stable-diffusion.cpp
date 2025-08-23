@@ -1124,12 +1124,12 @@ namespace WAN {
 
             int64_t N               = x->ne[2];
             int64_t n_token         = x->ne[1];
-            int64_t dim             = x->ne[2];
+            int64_t dim             = x->ne[0];
             int64_t context_txt_len = context->ne[1] - context_img_len;
 
             context          = ggml_nn_cont(ctx, ggml_torch_permute(ctx, context, 0, 2, 1, 3));  // [context_img_len + context_txt_len, N, dim]
             auto context_img = ggml_view_3d(ctx, context, dim, N, context_img_len, context->nb[1], context->nb[2], 0);
-            auto context_txt = ggml_view_3d(ctx, context, dim, N, context_txt_len, context->nb[1], context->nb[2], context_txt_len * context->nb[2]);
+            auto context_txt = ggml_view_3d(ctx, context, dim, N, context_txt_len, context->nb[1], context->nb[2], context_img_len * context->nb[2]);
             context_img      = ggml_nn_cont(ctx, ggml_torch_permute(ctx, context_img, 0, 2, 1, 3));  // [N, context_img_len, dim]
             context_txt      = ggml_nn_cont(ctx, ggml_torch_permute(ctx, context_txt, 0, 2, 1, 3));  // [N, context_txt_len, dim]
 
@@ -1478,6 +1478,7 @@ namespace WAN {
             e      = time_embedding_0->forward(ctx, e);
             e      = ggml_silu_inplace(ctx, e);
             e      = time_embedding_2->forward(ctx, e);  // [N, dim]
+
             // time_projection
             auto e0 = ggml_silu(ctx, e);
             e0      = time_projection_1->forward(ctx, e0);
@@ -1559,6 +1560,7 @@ namespace WAN {
 
     struct WanRunner : public GGMLRunner {
     public:
+        std::string desc = "wan";
         WanParams wan_params;
         Wan wan;
         std::vector<float> pe_vec;
@@ -1594,7 +1596,7 @@ namespace WAN {
             }
 
             if (wan_params.num_layers == 30) {
-                LOG_INFO("Wan2.1-T2V-1.3B");
+                desc                 = "Wan2.1-T2V-1.3B";
                 wan_params.dim       = 1536;
                 wan_params.eps       = 1e-06;
                 wan_params.ffn_dim   = 8960;
@@ -1605,15 +1607,16 @@ namespace WAN {
                 wan_params.text_len  = 512;
             } else if (wan_params.num_layers == 40) {
                 if (wan_params.model_type == "t2v") {
-                    LOG_INFO("Wan2.1-T2V-14B");
+                    desc              = "Wan2.1-T2V-14B";
+                    wan_params.in_dim = 16;
                 } else {
-                    LOG_INFO("Wan2.1-I2V-14B");
+                    desc              = "Wan2.1-I2V-14B";
+                    wan_params.in_dim = 36;
                 }
                 wan_params.dim       = 5120;
                 wan_params.eps       = 1e-06;
                 wan_params.ffn_dim   = 13824;
                 wan_params.freq_dim  = 256;
-                wan_params.in_dim    = 16;
                 wan_params.num_heads = 40;
                 wan_params.out_dim   = 16;
                 wan_params.text_len  = 512;
@@ -1621,12 +1624,14 @@ namespace WAN {
                 GGML_ABORT("invalid num_layers(%d) of wan", wan_params.num_layers);
             }
 
+            LOG_INFO("%s", desc.c_str());
+
             wan = Wan(wan_params);
             wan.init(params_ctx, tensor_types, prefix);
         }
 
         std::string get_desc() {
-            return "wan";
+            return desc;
         }
 
         void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -1637,6 +1642,7 @@ namespace WAN {
                                         struct ggml_tensor* timesteps,
                                         struct ggml_tensor* context,
                                         struct ggml_tensor* clip_fea        = NULL,
+                                        struct ggml_tensor* c_concat        = NULL,
                                         struct ggml_tensor* time_dim_concat = NULL) {
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, WAN_GRAPH_SIZE, false);
 
@@ -1644,6 +1650,7 @@ namespace WAN {
             timesteps       = to_backend(timesteps);
             context         = to_backend(context);
             clip_fea        = to_backend(clip_fea);
+            c_concat        = to_backend(c_concat);
             time_dim_concat = to_backend(time_dim_concat);
 
             pe_vec      = Rope::gen_wan_pe(x->ne[2],
@@ -1663,6 +1670,10 @@ namespace WAN {
             // pe->data = NULL;
             set_backend_tensor_data(pe, pe_vec.data());
 
+            if (c_concat != NULL) {
+                x = ggml_concat(compute_ctx, x, c_concat, 3);
+            }
+
             struct ggml_tensor* out = wan.forward(compute_ctx,
                                                   x,
                                                   timesteps,
@@ -1681,11 +1692,12 @@ namespace WAN {
                      struct ggml_tensor* timesteps,
                      struct ggml_tensor* context,
                      struct ggml_tensor* clip_fea        = NULL,
+                     struct ggml_tensor* c_concat        = NULL,
                      struct ggml_tensor* time_dim_concat = NULL,
                      struct ggml_tensor** output         = NULL,
                      struct ggml_context* output_ctx     = NULL) {
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, clip_fea, time_dim_concat);
+                return build_graph(x, timesteps, context, clip_fea, c_concat, time_dim_concat);
             };
 
             GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -1720,7 +1732,7 @@ namespace WAN {
                 struct ggml_tensor* out = NULL;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, NULL, NULL, &out, work_ctx);
+                compute(8, x, timesteps, context, NULL, NULL, NULL, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

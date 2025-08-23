@@ -851,16 +851,21 @@ public:
         blocks["visual_projection"] = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, projection_dim, transpose_proj_w));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                struct ggml_tensor* pixel_values,
+                                bool return_pooled = true) {
         // pixel_values: [N, num_channels, image_size, image_size]
-        // return: [N, projection_dim]
+        // return: [N, projection_dim] if return_pooled else [N, n_token, hidden_size]
         auto vision_model      = std::dynamic_pointer_cast<CLIPVisionModel>(blocks["vision_model"]);
         auto visual_projection = std::dynamic_pointer_cast<CLIPProjection>(blocks["visual_projection"]);
 
-        auto x = vision_model->forward(ctx, pixel_values);  // [N, hidden_size]
-        x      = visual_projection->forward(ctx, x);        // [N, projection_dim]
+        auto x = vision_model->forward(ctx, pixel_values, return_pooled);  // [N, hidden_size] or [N, n_token, hidden_size]
 
-        return x;  // [N, projection_dim]
+        if (return_pooled) {
+            x = visual_projection->forward(ctx, x);  // [N, projection_dim]
+        }
+
+        return x;
     }
 };
 

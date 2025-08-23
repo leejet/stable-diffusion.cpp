@@ -589,7 +589,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_tensor_concat(struct ggml_context* ct
 }
 
 // convert values from [0, 1] to [-1, 1]
-__STATIC_INLINE__ void ggml_tensor_scale_input(struct ggml_tensor* src) {
+__STATIC_INLINE__ void process_vae_input_tensor(struct ggml_tensor* src) {
     int64_t nelements = ggml_nelements(src);
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
@@ -599,7 +599,7 @@ __STATIC_INLINE__ void ggml_tensor_scale_input(struct ggml_tensor* src) {
 }
 
 // convert values from [-1, 1] to [0, 1]
-__STATIC_INLINE__ void ggml_tensor_scale_output(struct ggml_tensor* src) {
+__STATIC_INLINE__ void process_vae_output_tensor(struct ggml_tensor* src) {
     int64_t nelements = ggml_nelements(src);
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {

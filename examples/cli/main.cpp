@@ -53,6 +53,7 @@ struct SDParams {
     std::string model_path;
     std::string clip_l_path;
     std::string clip_g_path;
+    std::string clip_vision_path;
     std::string t5xxl_path;
     std::string diffusion_model_path;
     std::string vae_path;
@@ -123,6 +124,7 @@ void print_params(SDParams params) {
     printf("    wtype:             %s\n", params.wtype < SD_TYPE_COUNT ? sd_type_name(params.wtype) : "unspecified");
     printf("    clip_l_path:       %s\n", params.clip_l_path.c_str());
     printf("    clip_g_path:       %s\n", params.clip_g_path.c_str());
+    printf("    clip_vision_path:  %s\n", params.clip_vision_path.c_str());
     printf("    t5xxl_path:        %s\n", params.t5xxl_path.c_str());
     printf("    diffusion_model_path:   %s\n", params.diffusion_model_path.c_str());
     printf("    vae_path:          %s\n", params.vae_path.c_str());
@@ -186,6 +188,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
     printf("  --clip_l                           path to the clip-l text encoder\n");
     printf("  --clip_g                           path to the clip-g text encoder\n");
+    printf("  --clip_vision                      path to the clip-vision encoder\n");
     printf("  --t5xxl                            path to the t5xxl text encoder\n");
     printf("  --vae [VAE]                        path to vae\n");
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
@@ -414,6 +417,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-m", "--model", "", &params.model_path},
         {"", "--clip_l", "", &params.clip_l_path},
         {"", "--clip_g", "", &params.clip_g_path},
+        {"", "--clip_vision", "", &params.clip_vision_path},
         {"", "--t5xxl", "", &params.t5xxl_path},
         {"", "--diffusion-model", "", &params.diffusion_model_path},
         {"", "--vae", "", &params.vae_path},
@@ -927,10 +931,15 @@ int main(int argc, const char* argv[]) {
         }
     }
 
+    if (params.mode == VID_GEN) {
+        vae_decode_only = false;
+    }
+
     sd_ctx_params_t sd_ctx_params = {
         params.model_path.c_str(),
         params.clip_l_path.c_str(),
         params.clip_g_path.c_str(),
+        params.clip_vision_path.c_str(),
         params.t5xxl_path.c_str(),
         params.diffusion_model_path.c_str(),
         params.vae_path.c_str(),

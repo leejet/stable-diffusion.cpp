@@ -622,7 +622,7 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
     FrozenCLIPVisionEmbedder(ggml_backend_t backend,
                              bool offload_params_to_cpu,
                              const String2GGMLType& tensor_types = {})
-        : vision_model(OPEN_CLIP_VIT_H_14, true), GGMLRunner(backend, offload_params_to_cpu) {
+        : vision_model(OPEN_CLIP_VIT_H_14), GGMLRunner(backend, offload_params_to_cpu) {
         vision_model.init(params_ctx, tensor_types, "cond_stage_model.transformer");
     }
 
@@ -634,12 +634,12 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
         vision_model.get_param_tensors(tensors, "cond_stage_model.transformer");
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_tensor* pixel_values) {
+    struct ggml_cgraph* build_graph(struct ggml_tensor* pixel_values, bool return_pooled) {
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
         pixel_values = to_backend(pixel_values);
 
-        struct ggml_tensor* hidden_states = vision_model.forward(compute_ctx, pixel_values);
+        struct ggml_tensor* hidden_states = vision_model.forward(compute_ctx, pixel_values, return_pooled);
 
         ggml_build_forward_expand(gf, hidden_states);
 
@@ -648,10 +648,11 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
 
     void compute(const int n_threads,
                  ggml_tensor* pixel_values,
+                 bool return_pooled,
                  ggml_tensor** output,
                  ggml_context* output_ctx) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(pixel_values);
+            return build_graph(pixel_values, return_pooled);
         };
         GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
     }

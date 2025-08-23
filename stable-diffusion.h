@@ -115,6 +115,7 @@ typedef struct {
     const char* model_path;
     const char* clip_l_path;
     const char* clip_g_path;
+    const char* clip_vision_path;
     const char* t5xxl_path;
     const char* diffusion_model_path;
     const char* vae_path;

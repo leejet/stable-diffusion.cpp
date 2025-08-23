@@ -7,6 +7,7 @@
 #include "wan.hpp"
 
 struct DiffusionModel {
+    virtual std::string get_desc()                                                      = 0;
     virtual void compute(int n_threads,
                          struct ggml_tensor* x,
                          struct ggml_tensor* timesteps,
@@ -38,6 +39,10 @@ struct UNetModel : public DiffusionModel {
               SDVersion version                   = VERSION_SD1,
               bool flash_attn                     = false)
         : unet(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, flash_attn) {
+    }
+
+    std::string get_desc() {
+        return unet.get_desc();
     }
 
     void alloc_params_buffer() {
@@ -90,6 +95,10 @@ struct MMDiTModel : public DiffusionModel {
                bool offload_params_to_cpu,
                const String2GGMLType& tensor_types = {})
         : mmdit(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model") {
+    }
+
+    std::string get_desc() {
+        return mmdit.get_desc();
     }
 
     void alloc_params_buffer() {
@@ -146,6 +155,10 @@ struct FluxModel : public DiffusionModel {
         : flux(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, flash_attn, use_mask) {
     }
 
+    std::string get_desc() {
+        return flux.get_desc();
+    }
+
     void alloc_params_buffer() {
         flux.alloc_params_buffer();
     }
@@ -199,6 +212,10 @@ struct WanModel : public DiffusionModel {
         : wan(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, flash_attn) {
     }
 
+    std::string get_desc() {
+        return wan.get_desc();
+    }
+
     void alloc_params_buffer() {
         wan.alloc_params_buffer();
     }
@@ -237,7 +254,7 @@ struct WanModel : public DiffusionModel {
                  struct ggml_tensor** output               = NULL,
                  struct ggml_context* output_ctx           = NULL,
                  std::vector<int> skip_layers              = std::vector<int>()) {
-        return wan.compute(n_threads, x, timesteps, context, NULL, NULL, output, output_ctx);
+        return wan.compute(n_threads, x, timesteps, context, y, c_concat, NULL, output, output_ctx);
     }
 };
 
