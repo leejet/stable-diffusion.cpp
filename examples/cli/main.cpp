@@ -85,7 +85,7 @@ struct SDParams {
     int batch_count     = 1;
 
     int video_frames = 1;
-    int fps          = 24;
+    int fps          = 16;
 
     sample_method_t sample_method = EULER_A;
     schedule_t schedule           = DEFAULT;
