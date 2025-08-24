@@ -168,6 +168,7 @@ struct LoraModel : public GGMLRunner {
         auto out = ggml_reshape_1d(ctx, a, ggml_nelements(a));
         out      = ggml_get_rows(ctx, out, zero_index);
         out      = ggml_reshape(ctx, out, a);
+        // auto out = ggml_cast(ctx, a, GGML_TYPE_F32);
         return out;
     }
 
@@ -245,6 +246,8 @@ struct LoraModel : public GGMLRunner {
         zero_index = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, 1);
         set_backend_tensor_data(zero_index, zero_index_vec.data());
         ggml_build_forward_expand(gf, zero_index);
+
+        original_tensor_to_final_tensor.clear();
 
         std::set<std::string> applied_lora_tensors;
         for (auto it : model_tensors) {
@@ -812,7 +815,7 @@ struct LoraModel : public GGMLRunner {
                 }
                 scale_value *= multiplier;
                 ggml_tensor* original_tensor = model_tensor;
-                if (!ggml_backend_is_cpu(runtime_backend) && ggml_backend_buffer_is_host(model_tensor->buffer)) {
+                if (!ggml_backend_is_cpu(runtime_backend) && ggml_backend_buffer_is_host(original_tensor->buffer)) {
                     model_tensor = ggml_dup_tensor(compute_ctx, model_tensor);
                     set_backend_tensor_data(model_tensor, original_tensor->data);
                 }

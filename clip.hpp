@@ -774,7 +774,10 @@ public:
         blocks["post_layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values, bool return_pooled = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                struct ggml_tensor* pixel_values,
+                                bool return_pooled = true,
+                                int clip_skip = -1) {
         // pixel_values: [N, num_channels, image_size, image_size]
         auto embeddings     = std::dynamic_pointer_cast<CLIPVisionEmbeddings>(blocks["embeddings"]);
         auto pre_layernorm  = std::dynamic_pointer_cast<LayerNorm>(blocks["pre_layernorm"]);
@@ -783,7 +786,8 @@ public:
 
         auto x = embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
         x      = pre_layernorm->forward(ctx, x);
-        x      = encoder->forward(ctx, x, -1, false);
+        LOG_DEBUG("clip_vison skip %d", clip_skip);
+        x      = encoder->forward(ctx, x, clip_skip, false);
         // print_ggml_tensor(x, true, "ClipVisionModel x: ");
         auto last_hidden_state = x;
         x                      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
@@ -853,13 +857,14 @@ public:
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 struct ggml_tensor* pixel_values,
-                                bool return_pooled = true) {
+                                bool return_pooled = true,
+                                int clip_skip = -1) {
         // pixel_values: [N, num_channels, image_size, image_size]
         // return: [N, projection_dim] if return_pooled else [N, n_token, hidden_size]
         auto vision_model      = std::dynamic_pointer_cast<CLIPVisionModel>(blocks["vision_model"]);
         auto visual_projection = std::dynamic_pointer_cast<CLIPProjection>(blocks["visual_projection"]);
 
-        auto x = vision_model->forward(ctx, pixel_values, return_pooled);  // [N, hidden_size] or [N, n_token, hidden_size]
+        auto x = vision_model->forward(ctx, pixel_values, return_pooled, clip_skip);  // [N, hidden_size] or [N, n_token, hidden_size]
 
         if (return_pooled) {
             x = visual_projection->forward(ctx, x);  // [N, projection_dim]

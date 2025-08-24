@@ -830,6 +830,7 @@ public:
     ggml_tensor* get_clip_vision_output(ggml_context* work_ctx,
                                         sd_image_t init_image,
                                         bool return_pooled   = true,
+                                        int clip_skip = -1,
                                         bool zero_out_masked = false) {
         ggml_tensor* output = NULL;
         if (zero_out_masked) {
@@ -857,7 +858,7 @@ public:
             resized_image.data = NULL;
 
             // print_ggml_tensor(pixel_values);
-            clip_vision->compute(n_threads, pixel_values, return_pooled, &output, work_ctx);
+            clip_vision->compute(n_threads, pixel_values, return_pooled, clip_skip, &output, work_ctx);
             // print_ggml_tensor(c_crossattn);
         }
         return output;
@@ -873,7 +874,7 @@ public:
                                   bool zero_out_masked     = false) {
         // c_crossattn
         int64_t t0                      = ggml_time_ms();
-        struct ggml_tensor* c_crossattn = get_clip_vision_output(work_ctx, init_image, true, zero_out_masked);
+        struct ggml_tensor* c_crossattn = get_clip_vision_output(work_ctx, init_image, true, -1, zero_out_masked);
 
         // c_concat
         struct ggml_tensor* c_concat = NULL;
@@ -2250,15 +2251,18 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     int64_t t0 = ggml_time_ms();
 
+    // Apply lora
+    prompt = sd_ctx->sd->apply_loras_from_prompt(prompt);
+
     ggml_tensor* clip_vision_output = NULL;
     ggml_tensor* concat_latent      = NULL;
     if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B") {
         LOG_INFO("IMG2VID");
 
         if (sd_vid_gen_params->init_image.data) {
-            clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false);
+            clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, -2);
         } else {
-            clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, true);
+            clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, -2, true);
         }
 
         int64_t t1 = ggml_time_ms();
@@ -2312,8 +2316,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     ggml_tensor* init_latent = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
     int sample_steps         = sigmas.size() - 1;
-    // Apply lora
-    prompt = sd_ctx->sd->apply_loras_from_prompt(prompt);
 
     // Get learned condition
     bool zero_out_masked = true;
