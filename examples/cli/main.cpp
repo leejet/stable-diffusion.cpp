@@ -88,7 +88,7 @@ struct SDParams {
     int fps          = 16;
 
     sample_method_t sample_method = EULER_A;
-    schedule_t schedule           = DEFAULT;
+    scheduler_t scheduler         = DEFAULT;
     int sample_steps              = 20;
     float strength                = 0.75f;
     float control_strength        = 0.9f;
@@ -161,7 +161,7 @@ void print_params(SDParams params) {
     printf("    width:             %d\n", params.width);
     printf("    height:            %d\n", params.height);
     printf("    sample_method:     %s\n", sd_sample_method_name(params.sample_method));
-    printf("    schedule:          %s\n", sd_schedule_name(params.schedule));
+    printf("    scheduler:          %s\n", sd_schedule_name(params.scheduler));
     printf("    sample_steps:      %d\n", params.sample_steps);
     printf("    strength(img2img): %.2f\n", params.strength);
     printf("    rng:               %s\n", sd_rng_type_name(params.rng_type));
@@ -232,7 +232,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
+    printf("  --scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)\n");
     printf("  --clip-skip N                      ignore last_dot_pos layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
@@ -535,10 +535,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg = argv[index];
-        params.schedule = str_to_schedule(arg);
-        if (params.schedule == SCHEDULE_COUNT) {
-            fprintf(stderr, "error: invalid schedule %s\n",
+        const char* arg  = argv[index];
+        params.scheduler = str_to_schedule(arg);
+        if (params.scheduler == SCHEDULE_COUNT) {
+            fprintf(stderr, "error: invalid scheduler %s\n",
                     arg);
             return -1;
         }
@@ -614,7 +614,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--rng", "", on_rng_arg},
         {"-s", "--seed", "", on_seed_arg},
         {"", "--sampling-method", "", on_sample_method_arg},
-        {"", "--schedule", "", on_schedule_arg},
+        {"", "--scheduler", "", on_schedule_arg},
         {"", "--skip-layers", "", on_skip_layers_arg},
         {"-r", "--ref-image", "", on_ref_image_arg},
         {"-h", "--help", "", on_help_arg},
@@ -738,8 +738,8 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(sd_rng_type_name(params.rng_type)) + ", ";
     parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.sample_method));
-    if (params.schedule != DEFAULT) {
-        parameter_string += " " + std::string(sd_schedule_name(params.schedule));
+    if (params.scheduler != DEFAULT) {
+        parameter_string += " " + std::string(sd_schedule_name(params.scheduler));
     }
     parameter_string += ", ";
     for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path}) {
@@ -816,6 +816,13 @@ int main(int argc, const char* argv[]) {
                                                 params.skip_layer_end,
                                                 params.slg_scale,
                                             }};
+    sd_sample_params_t sample_params     = {
+            guidance_params,
+            params.scheduler,
+            params.sample_method,
+            params.sample_steps,
+            params.eta,
+    };
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
 
@@ -988,7 +995,6 @@ int main(int argc, const char* argv[]) {
         params.n_threads,
         params.wtype,
         params.rng_type,
-        params.schedule,
         params.offload_params_to_cpu,
         params.clip_on_cpu,
         params.control_net_cpu,
@@ -1054,16 +1060,13 @@ int main(int argc, const char* argv[]) {
             params.prompt.c_str(),
             params.negative_prompt.c_str(),
             params.clip_skip,
-            guidance_params,
             input_image,
             ref_images.data(),
             (int)ref_images.size(),
             mask_image,
             params.width,
             params.height,
-            params.sample_method,
-            params.sample_steps,
-            params.eta,
+            sample_params,
             params.strength,
             params.seed,
             params.batch_count,
@@ -1081,13 +1084,10 @@ int main(int argc, const char* argv[]) {
             params.prompt.c_str(),
             params.negative_prompt.c_str(),
             params.clip_skip,
-            guidance_params,
             input_image,
             params.width,
             params.height,
-            params.sample_method,
-            params.sample_steps,
-            params.eta,
+            sample_params,
             params.strength,
             params.seed,
             params.video_frames,

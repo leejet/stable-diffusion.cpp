@@ -661,39 +661,6 @@ public:
             LOG_INFO("running in eps-prediction mode");
         }
 
-        if (sd_ctx_params->schedule != DEFAULT) {
-            switch (sd_ctx_params->schedule) {
-                case DISCRETE:
-                    LOG_INFO("running with discrete schedule");
-                    denoiser->schedule = std::make_shared<DiscreteSchedule>();
-                    break;
-                case KARRAS:
-                    LOG_INFO("running with Karras schedule");
-                    denoiser->schedule = std::make_shared<KarrasSchedule>();
-                    break;
-                case EXPONENTIAL:
-                    LOG_INFO("running exponential schedule");
-                    denoiser->schedule = std::make_shared<ExponentialSchedule>();
-                    break;
-                case AYS:
-                    LOG_INFO("Running with Align-Your-Steps schedule");
-                    denoiser->schedule          = std::make_shared<AYSSchedule>();
-                    denoiser->schedule->version = version;
-                    break;
-                case GITS:
-                    LOG_INFO("Running with GITS schedule");
-                    denoiser->schedule          = std::make_shared<GITSSchedule>();
-                    denoiser->schedule->version = version;
-                    break;
-                case DEFAULT:
-                    // Don't touch anything.
-                    break;
-                default:
-                    LOG_ERROR("Unknown schedule %i", sd_ctx_params->schedule);
-                    abort();
-            }
-        }
-
         auto comp_vis_denoiser = std::dynamic_pointer_cast<CompVisDenoiser>(denoiser);
         if (comp_vis_denoiser) {
             for (int i = 0; i < TIMESTEPS; i++) {
@@ -705,6 +672,39 @@ public:
         LOG_DEBUG("finished loaded file");
         ggml_free(ctx);
         return true;
+    }
+
+    void init_scheduler(scheduler_t scheduler) {
+        switch (scheduler) {
+            case DISCRETE:
+                LOG_INFO("running with discrete scheduler");
+                denoiser->scheduler = std::make_shared<DiscreteSchedule>();
+                break;
+            case KARRAS:
+                LOG_INFO("running with Karras scheduler");
+                denoiser->scheduler = std::make_shared<KarrasSchedule>();
+                break;
+            case EXPONENTIAL:
+                LOG_INFO("running exponential scheduler");
+                denoiser->scheduler = std::make_shared<ExponentialSchedule>();
+                break;
+            case AYS:
+                LOG_INFO("Running with Align-Your-Steps scheduler");
+                denoiser->scheduler          = std::make_shared<AYSSchedule>();
+                denoiser->scheduler->version = version;
+                break;
+            case GITS:
+                LOG_INFO("Running with GITS scheduler");
+                denoiser->scheduler          = std::make_shared<GITSSchedule>();
+                denoiser->scheduler->version = version;
+                break;
+            case DEFAULT:
+                // Don't touch anything.
+                break;
+            default:
+                LOG_ERROR("Unknown scheduler %i", scheduler);
+                abort();
+        }
     }
 
     bool is_using_v_parameterization_for_sd2(ggml_context* work_ctx, bool is_inpaint = false) {
@@ -830,7 +830,7 @@ public:
     ggml_tensor* get_clip_vision_output(ggml_context* work_ctx,
                                         sd_image_t init_image,
                                         bool return_pooled   = true,
-                                        int clip_skip = -1,
+                                        int clip_skip        = -1,
                                         bool zero_out_masked = false) {
         ggml_tensor* output = NULL;
         if (zero_out_masked) {
@@ -954,7 +954,7 @@ public:
         copy_ggml_tensor(x, init_latent);
         x = denoiser->noise_scaling(sigmas[0], noise, x);
 
-        struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, noise);
+        struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x);
 
         bool has_unconditioned = img_cfg_scale != 1.0 && uncond.c_crossattn != NULL;
         bool has_img_cond      = cfg_scale != img_cfg_scale && img_cond.c_crossattn != NULL;
@@ -1399,17 +1399,17 @@ const char* schedule_to_str[] = {
     "gits",
 };
 
-const char* sd_schedule_name(enum schedule_t schedule) {
-    if (schedule < SCHEDULE_COUNT) {
-        return schedule_to_str[schedule];
+const char* sd_schedule_name(enum scheduler_t scheduler) {
+    if (scheduler < SCHEDULE_COUNT) {
+        return schedule_to_str[scheduler];
     }
     return NONE_STR;
 }
 
-enum schedule_t str_to_schedule(const char* str) {
+enum scheduler_t str_to_schedule(const char* str) {
     for (int i = 0; i < SCHEDULE_COUNT; i++) {
         if (!strcmp(str, schedule_to_str[i])) {
-            return (enum schedule_t)i;
+            return (enum scheduler_t)i;
         }
     }
     return SCHEDULE_COUNT;
@@ -1423,7 +1423,6 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->n_threads               = get_num_physical_cores();
     sd_ctx_params->wtype                   = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                = CUDA_RNG;
-    sd_ctx_params->schedule                = DEFAULT;
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
@@ -1459,7 +1458,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "n_threads: %d\n"
              "wtype: %s\n"
              "rng_type: %s\n"
-             "schedule: %s\n"
              "offload_params_to_cpu: %s\n"
              "keep_clip_on_cpu: %s\n"
              "keep_control_net_on_cpu: %s\n"
@@ -1486,7 +1484,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_ctx_params->n_threads,
              sd_type_name(sd_ctx_params->wtype),
              sd_rng_type_name(sd_ctx_params->rng_type),
-             sd_schedule_name(sd_ctx_params->schedule),
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
              BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
              BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
@@ -1499,28 +1496,65 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
     return buf;
 }
 
+void sd_sample_params_init(sd_sample_params_t* sample_params) {
+    sample_params->guidance.txt_cfg            = 7.0f;
+    sample_params->guidance.img_cfg            = INFINITY;
+    sample_params->guidance.distilled_guidance = 3.5f;
+    sample_params->guidance.slg.layer_count    = 0;
+    sample_params->guidance.slg.layer_start    = 0.01f;
+    sample_params->guidance.slg.layer_end      = 0.2f;
+    sample_params->guidance.slg.scale          = 0.f;
+    sample_params->scheduler                   = DEFAULT;
+    sample_params->sample_method               = EULER_A;
+    sample_params->sample_steps                = 20;
+}
+
+char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
+    char* buf = (char*)malloc(4096);
+    if (!buf)
+        return NULL;
+    buf[0] = '\0';
+
+    snprintf(buf + strlen(buf), 4096 - strlen(buf),
+             "(txt_cfg: %.2f, "
+             "img_cfg: %.2f, "
+             "distilled_guidance: %.2f, "
+             "slg.layer_count: %zu, "
+             "slg.layer_start: %.2f, "
+             "slg.layer_end: %.2f, "
+             "slg.scale: %.2f, "
+             "scheduler: %s, "
+             "sample_method: %s, "
+             "sample_steps: %d, "
+             "eta: %.2f)",
+             sample_params->guidance.txt_cfg,
+             sample_params->guidance.img_cfg,
+             sample_params->guidance.distilled_guidance,
+             sample_params->guidance.slg.layer_count,
+             sample_params->guidance.slg.layer_start,
+             sample_params->guidance.slg.layer_end,
+             sample_params->guidance.slg.scale,
+             sd_schedule_name(sample_params->scheduler),
+             sd_sample_method_name(sample_params->sample_method),
+             sample_params->sample_steps,
+             sample_params->eta);
+
+    return buf;
+}
+
 void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     memset((void*)sd_img_gen_params, 0, sizeof(sd_img_gen_params_t));
-    sd_img_gen_params->clip_skip                   = -1;
-    sd_img_gen_params->guidance.txt_cfg            = 7.0f;
-    sd_img_gen_params->guidance.img_cfg            = INFINITY;
-    sd_img_gen_params->guidance.distilled_guidance = 3.5f;
-    sd_img_gen_params->guidance.slg.layer_count    = 0;
-    sd_img_gen_params->guidance.slg.layer_start    = 0.01f;
-    sd_img_gen_params->guidance.slg.layer_end      = 0.2f;
-    sd_img_gen_params->guidance.slg.scale          = 0.f;
-    sd_img_gen_params->ref_images_count            = 0;
-    sd_img_gen_params->width                       = 512;
-    sd_img_gen_params->height                      = 512;
-    sd_img_gen_params->sample_method               = EULER_A;
-    sd_img_gen_params->sample_steps                = 20;
-    sd_img_gen_params->eta                         = 0.f;
-    sd_img_gen_params->strength                    = 0.75f;
-    sd_img_gen_params->seed                        = -1;
-    sd_img_gen_params->batch_count                 = 1;
-    sd_img_gen_params->control_strength            = 0.9f;
-    sd_img_gen_params->style_strength              = 20.f;
-    sd_img_gen_params->normalize_input             = false;
+    sd_img_gen_params->clip_skip = -1;
+    sd_sample_params_init(&sd_img_gen_params->sample_params);
+    sd_img_gen_params->ref_images_count = 0;
+    sd_img_gen_params->width            = 512;
+    sd_img_gen_params->height           = 512;
+    sd_img_gen_params->strength         = 0.75f;
+    sd_img_gen_params->seed             = -1;
+    sd_img_gen_params->batch_count      = 1;
+    sd_img_gen_params->control_strength = 0.9f;
+    sd_img_gen_params->style_strength   = 20.f;
+    sd_img_gen_params->normalize_input  = false;
 }
 
 char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
@@ -1529,22 +1563,15 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
         return NULL;
     buf[0] = '\0';
 
+    char* sample_params_str = sd_sample_params_to_str(&sd_img_gen_params->sample_params);
+
     snprintf(buf + strlen(buf), 4096 - strlen(buf),
              "prompt: %s\n"
              "negative_prompt: %s\n"
              "clip_skip: %d\n"
-             "txt_cfg: %.2f\n"
-             "img_cfg: %.2f\n"
-             "distilled_guidance: %.2f\n"
-             "slg.layer_count: %zu\n"
-             "slg.layer_start: %.2f\n"
-             "slg.layer_end: %.2f\n"
-             "slg.scale: %.2f\n"
              "width: %d\n"
              "height: %d\n"
-             "sample_method: %s\n"
-             "sample_steps: %d\n"
-             "eta: %.2f\n"
+             "sample_params: %.2f\n"
              "strength: %.2f\n"
              "seed: %" PRId64
              "\n"
@@ -1557,18 +1584,9 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              SAFE_STR(sd_img_gen_params->prompt),
              SAFE_STR(sd_img_gen_params->negative_prompt),
              sd_img_gen_params->clip_skip,
-             sd_img_gen_params->guidance.txt_cfg,
-             sd_img_gen_params->guidance.img_cfg,
-             sd_img_gen_params->guidance.distilled_guidance,
-             sd_img_gen_params->guidance.slg.layer_count,
-             sd_img_gen_params->guidance.slg.layer_start,
-             sd_img_gen_params->guidance.slg.layer_end,
-             sd_img_gen_params->guidance.slg.scale,
              sd_img_gen_params->width,
              sd_img_gen_params->height,
-             sd_sample_method_name(sd_img_gen_params->sample_method),
-             sd_img_gen_params->sample_steps,
-             sd_img_gen_params->eta,
+             SAFE_STR(sample_params_str),
              sd_img_gen_params->strength,
              sd_img_gen_params->seed,
              sd_img_gen_params->batch_count,
@@ -1577,26 +1595,18 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->style_strength,
              BOOL_STR(sd_img_gen_params->normalize_input),
              SAFE_STR(sd_img_gen_params->input_id_images_path));
-
+    free(sample_params_str);
     return buf;
 }
 
 void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     memset((void*)sd_vid_gen_params, 0, sizeof(sd_vid_gen_params_t));
-    sd_vid_gen_params->guidance.txt_cfg            = 7.0f;
-    sd_vid_gen_params->guidance.img_cfg            = INFINITY;
-    sd_vid_gen_params->guidance.distilled_guidance = 3.5f;
-    sd_vid_gen_params->guidance.slg.layer_count    = 0;
-    sd_vid_gen_params->guidance.slg.layer_start    = 0.01f;
-    sd_vid_gen_params->guidance.slg.layer_end      = 0.2f;
-    sd_vid_gen_params->guidance.slg.scale          = 0.f;
-    sd_vid_gen_params->width                       = 512;
-    sd_vid_gen_params->height                      = 512;
-    sd_vid_gen_params->sample_method               = EULER_A;
-    sd_vid_gen_params->sample_steps                = 20;
-    sd_vid_gen_params->strength                    = 0.75f;
-    sd_vid_gen_params->seed                        = -1;
-    sd_vid_gen_params->video_frames                = 6;
+    sd_sample_params_init(&sd_vid_gen_params->sample_params);
+    sd_vid_gen_params->width        = 512;
+    sd_vid_gen_params->height       = 512;
+    sd_vid_gen_params->strength     = 0.75f;
+    sd_vid_gen_params->seed         = -1;
+    sd_vid_gen_params->video_frames = 6;
 }
 
 struct sd_ctx_t {
@@ -2043,22 +2053,25 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     }
     sd_ctx->sd->rng->manual_seed(seed);
 
+    int sample_steps = sd_img_gen_params->sample_params.sample_steps;
+
     size_t t0 = ggml_time_ms();
+
+    sd_ctx->sd->init_scheduler(sd_img_gen_params->sample_params.scheduler);
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
 
     ggml_tensor* init_latent   = NULL;
     ggml_tensor* concat_latent = NULL;
     ggml_tensor* denoise_mask  = NULL;
-    std::vector<float> sigmas  = sd_ctx->sd->denoiser->get_sigmas(sd_img_gen_params->sample_steps);
-
     if (sd_img_gen_params->init_image.data) {
         LOG_INFO("IMG2IMG");
 
-        size_t t_enc = static_cast<size_t>(sd_img_gen_params->sample_steps * sd_img_gen_params->strength);
-        if (t_enc == sd_img_gen_params->sample_steps)
+        size_t t_enc = static_cast<size_t>(sample_steps * sd_img_gen_params->strength);
+        if (t_enc == sample_steps)
             t_enc--;
         LOG_INFO("target t_enc is %zu steps", t_enc);
         std::vector<float> sigma_sched;
-        sigma_sched.assign(sigmas.begin() + sd_img_gen_params->sample_steps - t_enc - 1, sigmas.end());
+        sigma_sched.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
         sigmas = sigma_sched;
 
         ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
@@ -2189,11 +2202,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         SAFE_STR(sd_img_gen_params->prompt),
                                                         SAFE_STR(sd_img_gen_params->negative_prompt),
                                                         sd_img_gen_params->clip_skip,
-                                                        sd_img_gen_params->guidance,
-                                                        sd_img_gen_params->eta,
+                                                        sd_img_gen_params->sample_params.guidance,
+                                                        sd_img_gen_params->sample_params.eta,
                                                         width,
                                                         height,
-                                                        sd_img_gen_params->sample_method,
+                                                        sd_img_gen_params->sample_params.sample_method,
                                                         sigmas,
                                                         seed,
                                                         sd_img_gen_params->batch_count,
@@ -2221,13 +2234,16 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     std::string prompt          = SAFE_STR(sd_vid_gen_params->prompt);
     std::string negative_prompt = SAFE_STR(sd_vid_gen_params->negative_prompt);
 
-    int width  = sd_vid_gen_params->width;
-    int height = sd_vid_gen_params->height;
-    int frames = sd_vid_gen_params->video_frames;
-    frames     = (frames - 1) / 4 * 4 + 1;
+    int width        = sd_vid_gen_params->width;
+    int height       = sd_vid_gen_params->height;
+    int frames       = sd_vid_gen_params->video_frames;
+    frames           = (frames - 1) / 4 * 4 + 1;
+    int sample_steps = sd_vid_gen_params->sample_params.sample_steps;
     LOG_INFO("generate_video %dx%dx%d", width, height, frames);
 
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sd_vid_gen_params->sample_steps);
+    sd_ctx->sd->init_scheduler(sd_vid_gen_params->sample_params.scheduler);
+
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(100 * 1024) * 1024;  // 100 MB
@@ -2315,7 +2331,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     }
 
     ggml_tensor* init_latent = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
-    int sample_steps         = sigmas.size() - 1;
+    sample_steps             = sigmas.size() - 1;
 
     // Get learned condition
     bool zero_out_masked = true;
@@ -2331,7 +2347,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     cond.c_concat        = concat_latent;
     cond.c_vector        = clip_vision_output;
     SDCondition uncond;
-    if (sd_vid_gen_params->guidance.txt_cfg != 1.0) {
+    if (sd_vid_gen_params->sample_params.guidance.txt_cfg != 1.0) {
         uncond          = sd_ctx->sd->cond_stage_model->get_learned_condition(work_ctx,
                                                                               sd_ctx->sd->n_threads,
                                                                               negative_prompt,
@@ -2372,9 +2388,9 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           {},
                                           NULL,
                                           0,
-                                          sd_vid_gen_params->guidance,
-                                          sd_vid_gen_params->eta,
-                                          sd_vid_gen_params->sample_method,
+                                          sd_vid_gen_params->sample_params.guidance,
+                                          sd_vid_gen_params->sample_params.eta,
+                                          sd_vid_gen_params->sample_params.sample_method,
                                           sigmas,
                                           -1,
                                           {});

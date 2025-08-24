@@ -777,7 +777,7 @@ public:
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 struct ggml_tensor* pixel_values,
                                 bool return_pooled = true,
-                                int clip_skip = -1) {
+                                int clip_skip      = -1) {
         // pixel_values: [N, num_channels, image_size, image_size]
         auto embeddings     = std::dynamic_pointer_cast<CLIPVisionEmbeddings>(blocks["embeddings"]);
         auto pre_layernorm  = std::dynamic_pointer_cast<LayerNorm>(blocks["pre_layernorm"]);
@@ -786,7 +786,6 @@ public:
 
         auto x = embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
         x      = pre_layernorm->forward(ctx, x);
-        LOG_DEBUG("clip_vison skip %d", clip_skip);
         x      = encoder->forward(ctx, x, clip_skip, false);
         // print_ggml_tensor(x, true, "ClipVisionModel x: ");
         auto last_hidden_state = x;
@@ -858,7 +857,7 @@ public:
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 struct ggml_tensor* pixel_values,
                                 bool return_pooled = true,
-                                int clip_skip = -1) {
+                                int clip_skip      = -1) {
         // pixel_values: [N, num_channels, image_size, image_size]
         // return: [N, projection_dim] if return_pooled else [N, n_token, hidden_size]
         auto vision_model      = std::dynamic_pointer_cast<CLIPVisionModel>(blocks["vision_model"]);

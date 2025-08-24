@@ -941,8 +941,8 @@ namespace WAN {
         };
 
         static void load_from_file_and_test(const std::string& file_path) {
-            ggml_backend_t backend = ggml_backend_cuda_init(0);
-            // ggml_backend_t backend            = ggml_backend_cpu_init();
+            // ggml_backend_t backend = ggml_backend_cuda_init(0);
+            ggml_backend_t backend            = ggml_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
             std::shared_ptr<WanVAERunner> vae = std::shared_ptr<WanVAERunner>(new WanVAERunner(backend, false));
             {
@@ -1099,6 +1099,8 @@ namespace WAN {
 
             if (qk_norm) {
                 blocks["norm_k_img"] = std::shared_ptr<GGMLBlock>(new RMSNorm(dim, eps));
+            } else {
+                blocks["norm_k_img"] = std::shared_ptr<GGMLBlock>(new Identity());
             }
         }
 
@@ -1705,7 +1707,7 @@ namespace WAN {
 
         void test() {
             struct ggml_init_params params;
-            params.mem_size   = static_cast<size_t>(20 * 1024 * 1024);  // 20 MB
+            params.mem_size   = static_cast<size_t>(200 * 1024 * 1024);  // 200 MB
             params.mem_buffer = NULL;
             params.no_alloc   = false;
 
@@ -1719,20 +1721,22 @@ namespace WAN {
                 // auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 104, 60, 1, 16);
                 // ggml_set_f32(x, 0.01f);
                 auto x = load_tensor_from_file(work_ctx, "wan_dit_x.bin");
-                // print_ggml_tensor(x);
+                print_ggml_tensor(x);
 
-                std::vector<float> timesteps_vec(1, 999.f);
+                std::vector<float> timesteps_vec(1, 1000.f);
                 auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
 
                 // auto context = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 4096, 512, 1);
                 // ggml_set_f32(context, 0.01f);
                 auto context = load_tensor_from_file(work_ctx, "wan_dit_context.bin");
-                // print_ggml_tensor(context);
+                print_ggml_tensor(context);
+                auto clip_fea = load_tensor_from_file(work_ctx, "wan_dit_clip_fea.bin");
+                print_ggml_tensor(clip_fea);
 
                 struct ggml_tensor* out = NULL;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, NULL, NULL, NULL, &out, work_ctx);
+                compute(8, x, timesteps, context, clip_fea, NULL, NULL, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
@@ -1754,7 +1758,7 @@ namespace WAN {
 
             auto tensor_types = model_loader.tensor_storages_types;
             for (auto& item : tensor_types) {
-                LOG_DEBUG("%s %u", item.first.c_str(), item.second);
+                // LOG_DEBUG("%s %u", item.first.c_str(), item.second);
                 if (ends_with(item.first, "weight")) {
                     item.second = model_data_type;
                 }
@@ -1763,7 +1767,9 @@ namespace WAN {
             std::shared_ptr<WanRunner> wan = std::shared_ptr<WanRunner>(new WanRunner(backend,
                                                                                       false,
                                                                                       tensor_types,
-                                                                                      "model.diffusion_model"));
+                                                                                      "model.diffusion_model",
+                                                                                      VERSION_WAN2,
+                                                                                      true));
 
             wan->alloc_params_buffer();
             std::map<std::string, ggml_tensor*> tensors;

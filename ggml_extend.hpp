@@ -235,6 +235,8 @@ __STATIC_INLINE__ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const st
     file.read(reinterpret_cast<char*>(&length), sizeof(length));
     file.read(reinterpret_cast<char*>(&ttype), sizeof(ttype));
 
+    LOG_DEBUG("load_tensor_from_file %d %d %d", n_dims, length, ttype);
+
     if (file.eof()) {
         LOG_ERROR("incomplete file '%s'", file_path.c_str());
         return NULL;
