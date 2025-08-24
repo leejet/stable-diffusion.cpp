@@ -56,6 +56,7 @@ struct SDParams {
     std::string clip_vision_path;
     std::string t5xxl_path;
     std::string diffusion_model_path;
+    std::string high_noise_diffusion_model_path;
     std::string vae_path;
     std::string taesd_path;
     std::string esrgan_path;
@@ -74,49 +75,50 @@ struct SDParams {
 
     std::string prompt;
     std::string negative_prompt;
-    float cfg_scale     = 7.0f;
-    float img_cfg_scale = INFINITY;
-    float guidance      = 3.5f;
-    float eta           = 0.f;
-    float style_ratio   = 20.f;
-    int clip_skip       = -1;  // <= 0 represents unspecified
-    int width           = 512;
-    int height          = 512;
-    int batch_count     = 1;
+    float style_ratio = 20.f;
+    int clip_skip     = -1;  // <= 0 represents unspecified
+    int width         = 512;
+    int height        = 512;
+    int batch_count   = 1;
+
+    std::vector<int> skip_layers = {7, 8, 9};
+    sd_sample_params_t sample_params;
+
+    std::vector<int> high_noise_skip_layers = {7, 8, 9};
+    sd_sample_params_t high_noise_sample_params;
 
     int video_frames = 1;
     int fps          = 16;
 
-    sample_method_t sample_method = EULER_A;
-    scheduler_t scheduler         = DEFAULT;
-    int sample_steps              = 20;
-    float strength                = 0.75f;
-    float control_strength        = 0.9f;
-    rng_type_t rng_type           = CUDA_RNG;
-    int64_t seed                  = 42;
-    bool verbose                  = false;
-    bool vae_tiling               = false;
-    bool offload_params_to_cpu    = false;
-    bool control_net_cpu          = false;
-    bool normalize_input          = false;
-    bool clip_on_cpu              = false;
-    bool vae_on_cpu               = false;
-    bool diffusion_flash_attn     = false;
-    bool canny_preprocess         = false;
-    bool color                    = false;
-    int upscale_repeats           = 1;
-
-    std::vector<int> skip_layers = {7, 8, 9};
-    float slg_scale              = 0.f;
-    float skip_layer_start       = 0.01f;
-    float skip_layer_end         = 0.2f;
+    float strength             = 0.75f;
+    float control_strength     = 0.9f;
+    rng_type_t rng_type        = CUDA_RNG;
+    int64_t seed               = 42;
+    bool verbose               = false;
+    bool vae_tiling            = false;
+    bool offload_params_to_cpu = false;
+    bool control_net_cpu       = false;
+    bool normalize_input       = false;
+    bool clip_on_cpu           = false;
+    bool vae_on_cpu            = false;
+    bool diffusion_flash_attn  = false;
+    bool canny_preprocess      = false;
+    bool color                 = false;
+    int upscale_repeats        = 1;
 
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
+
+    SDParams() {
+        sd_sample_params_init(&sample_params);
+        sd_sample_params_init(&high_noise_sample_params);
+    }
 };
 
 void print_params(SDParams params) {
+    char* sample_params_str            = sd_sample_params_to_str(&params.sample_params);
+    char* high_noise_sample_params_str = sd_sample_params_to_str(&params.high_noise_sample_params);
     printf("Option: \n");
     printf("    n_threads:         %d\n", params.n_threads);
     printf("    mode:              %s\n", modes_str[params.mode]);
@@ -127,6 +129,7 @@ void print_params(SDParams params) {
     printf("    clip_vision_path:  %s\n", params.clip_vision_path.c_str());
     printf("    t5xxl_path:        %s\n", params.t5xxl_path.c_str());
     printf("    diffusion_model_path:   %s\n", params.diffusion_model_path.c_str());
+    printf("    high_noise_diffusion_model_path:   %s\n", params.high_noise_diffusion_model_path.c_str());
     printf("    vae_path:          %s\n", params.vae_path.c_str());
     printf("    taesd_path:        %s\n", params.taesd_path.c_str());
     printf("    esrgan_path:       %s\n", params.esrgan_path.c_str());
@@ -152,17 +155,11 @@ void print_params(SDParams params) {
     printf("    strength(control): %.2f\n", params.control_strength);
     printf("    prompt:            %s\n", params.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.negative_prompt.c_str());
-    printf("    cfg_scale:         %.2f\n", params.cfg_scale);
-    printf("    img_cfg_scale:     %.2f\n", params.img_cfg_scale);
-    printf("    slg_scale:         %.2f\n", params.slg_scale);
-    printf("    guidance:          %.2f\n", params.guidance);
-    printf("    eta:               %.2f\n", params.eta);
     printf("    clip_skip:         %d\n", params.clip_skip);
     printf("    width:             %d\n", params.width);
     printf("    height:            %d\n", params.height);
-    printf("    sample_method:     %s\n", sd_sample_method_name(params.sample_method));
-    printf("    scheduler:          %s\n", sd_schedule_name(params.scheduler));
-    printf("    sample_steps:      %d\n", params.sample_steps);
+    printf("    sample_params:                %s\n", SAFE_STR(sample_params_str));
+    printf("    high_noise_sample_params:     %s\n", SAFE_STR(high_noise_sample_params_str));
     printf("    strength(img2img): %.2f\n", params.strength);
     printf("    rng:               %s\n", sd_rng_type_name(params.rng_type));
     printf("    seed:              %ld\n", params.seed);
@@ -174,6 +171,8 @@ void print_params(SDParams params) {
     printf("    chroma_t5_mask_pad:    %d\n", params.chroma_t5_mask_pad);
     printf("    video_frames:          %d\n", params.video_frames);
     printf("    fps:          %d\n", params.fps);
+    free(sample_params_str);
+    free(high_noise_sample_params_str);
 }
 
 void print_usage(int argc, const char* argv[]) {
@@ -186,6 +185,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
     printf("  -m, --model [MODEL]                path to full model\n");
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
+    printf("  --high-noise-diffusion-model       path to the standalone high noise diffusion model\n");
     printf("  --clip_l                           path to the clip-l text encoder\n");
     printf("  --clip_g                           path to the clip-g text encoder\n");
     printf("  --clip_vision                      path to the clip-vision encoder\n");
@@ -219,6 +219,23 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
     printf("  --skip-layer-start START           SLG enabling point: (default: 0.01)\n");
     printf("  --skip-layer-end END               SLG disabling point: (default: 0.2)\n");
+    printf("  --scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)\n");
+    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
+    printf("                                     sampling method (default: \"euler_a\")\n");
+    printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
+    printf("  --high-noise-cfg-scale SCALE       (high noise) unconditional guidance scale: (default: 7.0)\n");
+    printf("  --high-noise-img-cfg-scale SCALE   (high noise) image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)\n");
+    printf("  --high-noise-guidance SCALE        (high noise) distilled guidance scale for models with guidance input (default: 3.5)\n");
+    printf("  --high-noise-slg-scale SCALE       (high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
+    printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
+    printf("  --high-noise-eta SCALE             (high noise) eta in DDIM, only for DDIM and TCD: (default: 0)\n");
+    printf("  --high-noise-skip-layers LAYERS    (high noise) Layers to skip for SLG steps: (default: [7,8,9])\n");
+    printf("  --high-noise-skip-layer-start      (high noise) SLG enabling point: (default: 0.01)\n");
+    printf("  --high-noise-skip-layer-end END    (high noise) SLG disabling point: (default: 0.2)\n");
+    printf("  --high-noise-scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)\n");
+    printf("  --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
+    printf("                                     (high noise) sampling method (default: \"euler_a\")\n");
+    printf("  --high-noise-steps  STEPS          (high noise) number of sample steps (default: 20)\n");
     printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
     printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)\n");
@@ -226,13 +243,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
     printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
-    printf("                                     sampling method (default: \"euler_a\")\n");
-    printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)\n");
     printf("  --clip-skip N                      ignore last_dot_pos layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
@@ -420,6 +433,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--clip_vision", "", &params.clip_vision_path},
         {"", "--t5xxl", "", &params.t5xxl_path},
         {"", "--diffusion-model", "", &params.diffusion_model_path},
+        {"", "--high-noise-diffusion-model", "", &params.high_noise_diffusion_model_path},
         {"", "--vae", "", &params.vae_path},
         {"", "--taesd", "", &params.taesd_path},
         {"", "--control-net", "", &params.control_net_path},
@@ -443,7 +457,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--upscale-repeats", "", &params.upscale_repeats},
         {"-H", "--height", "", &params.height},
         {"-W", "--width", "", &params.width},
-        {"", "--steps", "", &params.sample_steps},
+        {"", "--steps", "", &params.sample_params.sample_steps},
+        {"", "--high-noise-steps", "", &params.high_noise_sample_params.sample_steps},
         {"", "--clip-skip", "", &params.clip_skip},
         {"-b", "--batch-count", "", &params.batch_count},
         {"", "--chroma-t5-mask-pad", "", &params.chroma_t5_mask_pad},
@@ -452,17 +467,23 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     };
 
     options.float_options = {
-        {"", "--cfg-scale", "", &params.cfg_scale},
-        {"", "--img-cfg-scale", "", &params.img_cfg_scale},
-        {"", "--guidance", "", &params.guidance},
-        {"", "--eta", "", &params.eta},
+        {"", "--cfg-scale", "", &params.sample_params.guidance.txt_cfg},
+        {"", "--img-cfg-scale", "", &params.sample_params.guidance.img_cfg},
+        {"", "--guidance", "", &params.sample_params.guidance.distilled_guidance},
+        {"", "--slg-scale", "", &params.sample_params.guidance.slg.scale},
+        {"", "--skip-layer-start", "", &params.sample_params.guidance.slg.layer_start},
+        {"", "--skip-layer-end", "", &params.sample_params.guidance.slg.layer_end},
+        {"", "--eta", "", &params.sample_params.eta},
+        {"", "--high-noise-cfg-scale", "", &params.high_noise_sample_params.guidance.txt_cfg},
+        {"", "--high-noise-img-cfg-scale", "", &params.high_noise_sample_params.guidance.img_cfg},
+        {"", "--high-noise-guidance", "", &params.high_noise_sample_params.guidance.distilled_guidance},
+        {"", "--high-noise-slg-scale", "", &params.high_noise_sample_params.guidance.slg.scale},
+        {"", "--high-noise-skip-layer-start", "", &params.high_noise_sample_params.guidance.slg.layer_start},
+        {"", "--high-noise-skip-layer-end", "", &params.high_noise_sample_params.guidance.slg.layer_end},
+        {"", "--high-noise-eta", "", &params.high_noise_sample_params.eta},
         {"", "--strength", "", &params.strength},
         {"", "--style-ratio", "", &params.style_ratio},
         {"", "--control-strength", "", &params.control_strength},
-        {"", "--slg-scale", "", &params.slg_scale},
-        {"", "--skip-layer-start", "", &params.skip_layer_start},
-        {"", "--skip-layer-end", "", &params.skip_layer_end},
-
     };
 
     options.bool_options = {
@@ -535,10 +556,24 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg  = argv[index];
-        params.scheduler = str_to_schedule(arg);
-        if (params.scheduler == SCHEDULE_COUNT) {
+        const char* arg                = argv[index];
+        params.sample_params.scheduler = str_to_schedule(arg);
+        if (params.sample_params.scheduler == SCHEDULE_COUNT) {
             fprintf(stderr, "error: invalid scheduler %s\n",
+                    arg);
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_high_noise_schedule_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg                           = argv[index];
+        params.high_noise_sample_params.scheduler = str_to_schedule(arg);
+        if (params.high_noise_sample_params.scheduler == SCHEDULE_COUNT) {
+            fprintf(stderr, "error: invalid high noise scheduler %s\n",
                     arg);
             return -1;
         }
@@ -549,10 +584,24 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg      = argv[index];
-        params.sample_method = str_to_sample_method(arg);
-        if (params.sample_method == SAMPLE_METHOD_COUNT) {
+        const char* arg                    = argv[index];
+        params.sample_params.sample_method = str_to_sample_method(arg);
+        if (params.sample_params.sample_method == SAMPLE_METHOD_COUNT) {
             fprintf(stderr, "error: invalid sample method %s\n",
+                    arg);
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_high_noise_sample_method_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg                               = argv[index];
+        params.high_noise_sample_params.sample_method = str_to_sample_method(arg);
+        if (params.high_noise_sample_params.sample_method == SAMPLE_METHOD_COUNT) {
+            fprintf(stderr, "error: invalid high noise sample method %s\n",
                     arg);
             return -1;
         }
@@ -600,6 +649,33 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_high_noise_skip_layers_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        std::string layers_str = argv[index];
+        if (layers_str[0] != '[' || layers_str[layers_str.size() - 1] != ']') {
+            return -1;
+        }
+
+        layers_str = layers_str.substr(1, layers_str.size() - 2);
+
+        std::regex regex("[, ]+");
+        std::sregex_token_iterator iter(layers_str.begin(), layers_str.end(), regex, -1);
+        std::sregex_token_iterator end;
+        std::vector<std::string> tokens(iter, end);
+        std::vector<int> layers;
+        for (const auto& token : tokens) {
+            try {
+                layers.push_back(std::stoi(token));
+            } catch (const std::invalid_argument& e) {
+                return -1;
+            }
+        }
+        params.high_noise_skip_layers = layers;
+        return 1;
+    };
+
     auto on_ref_image_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
@@ -616,6 +692,9 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--sampling-method", "", on_sample_method_arg},
         {"", "--scheduler", "", on_schedule_arg},
         {"", "--skip-layers", "", on_skip_layers_arg},
+        {"", "--high-noise-sampling-method", "", on_high_noise_sample_method_arg},
+        {"", "--high-noise-scheduler", "", on_high_noise_schedule_arg},
+        {"", "--high-noise-skip-layers", "", on_high_noise_skip_layers_arg},
         {"-r", "--ref-image", "", on_ref_image_arg},
         {"-h", "--help", "", on_help_arg},
     };
@@ -657,8 +736,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         exit(1);
     }
 
-    if (params.sample_steps <= 0) {
+    if (params.sample_params.sample_steps <= 0) {
         fprintf(stderr, "error: the sample_steps must be greater than 0\n");
+        exit(1);
+    }
+
+    if (params.high_noise_sample_params.sample_steps <= 0) {
+        fprintf(stderr, "error: the high_noise_sample_steps must be greater than 0\n");
         exit(1);
     }
 
@@ -697,8 +781,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         }
     }
 
-    if (!isfinite(params.img_cfg_scale)) {
-        params.img_cfg_scale = params.cfg_scale;
+    if (!isfinite(params.sample_params.guidance.img_cfg)) {
+        params.sample_params.guidance.img_cfg = params.sample_params.guidance.txt_cfg;
+    }
+
+    if (!isfinite(params.high_noise_sample_params.guidance.img_cfg)) {
+        params.high_noise_sample_params.guidance.img_cfg = params.high_noise_sample_params.guidance.txt_cfg;
     }
 }
 
@@ -719,27 +807,27 @@ std::string get_image_params(SDParams params, int64_t seed) {
     if (params.negative_prompt.size() != 0) {
         parameter_string += "Negative prompt: " + params.negative_prompt + "\n";
     }
-    parameter_string += "Steps: " + std::to_string(params.sample_steps) + ", ";
-    parameter_string += "CFG scale: " + std::to_string(params.cfg_scale) + ", ";
-    if (params.slg_scale != 0 && params.skip_layers.size() != 0) {
-        parameter_string += "SLG scale: " + std::to_string(params.cfg_scale) + ", ";
+    parameter_string += "Steps: " + std::to_string(params.sample_params.sample_steps) + ", ";
+    parameter_string += "CFG scale: " + std::to_string(params.sample_params.guidance.txt_cfg) + ", ";
+    if (params.sample_params.guidance.slg.scale != 0 && params.skip_layers.size() != 0) {
+        parameter_string += "SLG scale: " + std::to_string(params.sample_params.guidance.txt_cfg) + ", ";
         parameter_string += "Skip layers: [";
         for (const auto& layer : params.skip_layers) {
             parameter_string += std::to_string(layer) + ", ";
         }
         parameter_string += "], ";
-        parameter_string += "Skip layer start: " + std::to_string(params.skip_layer_start) + ", ";
-        parameter_string += "Skip layer end: " + std::to_string(params.skip_layer_end) + ", ";
+        parameter_string += "Skip layer start: " + std::to_string(params.sample_params.guidance.slg.layer_start) + ", ";
+        parameter_string += "Skip layer end: " + std::to_string(params.sample_params.guidance.slg.layer_end) + ", ";
     }
-    parameter_string += "Guidance: " + std::to_string(params.guidance) + ", ";
-    parameter_string += "Eta: " + std::to_string(params.eta) + ", ";
+    parameter_string += "Guidance: " + std::to_string(params.sample_params.guidance.distilled_guidance) + ", ";
+    parameter_string += "Eta: " + std::to_string(params.sample_params.eta) + ", ";
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(sd_rng_type_name(params.rng_type)) + ", ";
-    parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.sample_method));
-    if (params.scheduler != DEFAULT) {
-        parameter_string += " " + std::string(sd_schedule_name(params.scheduler));
+    parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.sample_params.sample_method));
+    if (params.sample_params.scheduler != DEFAULT) {
+        parameter_string += " " + std::string(sd_schedule_name(params.sample_params.scheduler));
     }
     parameter_string += ", ";
     for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path}) {
@@ -806,23 +894,10 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 int main(int argc, const char* argv[]) {
     SDParams params;
     parse_args(argc, argv, params);
-    sd_guidance_params_t guidance_params = {params.cfg_scale,
-                                            params.img_cfg_scale,
-                                            params.guidance,
-                                            {
-                                                params.skip_layers.data(),
-                                                params.skip_layers.size(),
-                                                params.skip_layer_start,
-                                                params.skip_layer_end,
-                                                params.slg_scale,
-                                            }};
-    sd_sample_params_t sample_params     = {
-            guidance_params,
-            params.scheduler,
-            params.sample_method,
-            params.sample_steps,
-            params.eta,
-    };
+    params.sample_params.guidance.slg.layers                 = params.skip_layers.data();
+    params.sample_params.guidance.slg.layer_count            = params.skip_layers.size();
+    params.high_noise_sample_params.guidance.slg.layers      = params.high_noise_skip_layers.data();
+    params.high_noise_sample_params.guidance.slg.layer_count = params.high_noise_skip_layers.size();
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
 
@@ -983,6 +1058,7 @@ int main(int argc, const char* argv[]) {
         params.clip_vision_path.c_str(),
         params.t5xxl_path.c_str(),
         params.diffusion_model_path.c_str(),
+        params.high_noise_diffusion_model_path.c_str(),
         params.vae_path.c_str(),
         params.taesd_path.c_str(),
         params.control_net_path.c_str(),
@@ -1066,7 +1142,7 @@ int main(int argc, const char* argv[]) {
             mask_image,
             params.width,
             params.height,
-            sample_params,
+            params.sample_params,
             params.strength,
             params.seed,
             params.batch_count,
@@ -1087,7 +1163,8 @@ int main(int argc, const char* argv[]) {
             input_image,
             params.width,
             params.height,
-            sample_params,
+            params.sample_params,
+            params.high_noise_sample_params,
             params.strength,
             params.seed,
             params.video_frames,

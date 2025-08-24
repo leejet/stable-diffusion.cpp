@@ -202,14 +202,16 @@ struct FluxModel : public DiffusionModel {
 };
 
 struct WanModel : public DiffusionModel {
+    std::string prefix;
     WAN::WanRunner wan;
 
     WanModel(ggml_backend_t backend,
              bool offload_params_to_cpu,
              const String2GGMLType& tensor_types = {},
-             SDVersion version                   = VERSION_FLUX,
+             const std::string prefix            = "model.diffusion_model",
+             SDVersion version                   = VERSION_WAN2,
              bool flash_attn                     = false)
-        : wan(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, flash_attn) {
+        : prefix(prefix), wan(backend, offload_params_to_cpu, tensor_types, prefix, version, flash_attn) {
     }
 
     std::string get_desc() {
@@ -229,7 +231,7 @@ struct WanModel : public DiffusionModel {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
-        wan.get_param_tensors(tensors, "model.diffusion_model");
+        wan.get_param_tensors(tensors, prefix);
     }
 
     size_t get_params_buffer_size() {

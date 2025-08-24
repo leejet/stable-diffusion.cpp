@@ -118,6 +118,7 @@ typedef struct {
     const char* clip_vision_path;
     const char* t5xxl_path;
     const char* diffusion_model_path;
+    const char* high_noise_diffusion_model_path;
     const char* vae_path;
     const char* taesd_path;
     const char* control_net_path;
@@ -199,6 +200,7 @@ typedef struct {
     int width;
     int height;
     sd_sample_params_t sample_params;
+    sd_sample_params_t high_noise_sample_params;
     float strength;
     int64_t seed;
     int video_frames;
@@ -228,6 +230,9 @@ SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
 
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
+
+SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
+SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
 
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);

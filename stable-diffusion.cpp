@@ -96,6 +96,7 @@ public:
     std::shared_ptr<Conditioner> cond_stage_model;
     std::shared_ptr<FrozenCLIPVisionEmbedder> clip_vision;  // for svd or wan2.1 i2v
     std::shared_ptr<DiffusionModel> diffusion_model;
+    std::shared_ptr<DiffusionModel> high_noise_diffusion_model;
     std::shared_ptr<VAE> first_stage_model;
     std::shared_ptr<TinyAutoEncoder> tae_first_stage;
     std::shared_ptr<ControlNet> control_net;
@@ -204,6 +205,13 @@ public:
             LOG_INFO("loading diffusion model from '%s'", sd_ctx_params->diffusion_model_path);
             if (!model_loader.init_from_file(sd_ctx_params->diffusion_model_path, "model.diffusion_model.")) {
                 LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->diffusion_model_path);
+            }
+        }
+
+        if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
+            LOG_INFO("loading high noise diffusion model from '%s'", sd_ctx_params->high_noise_diffusion_model_path);
+            if (!model_loader.init_from_file(sd_ctx_params->high_noise_diffusion_model_path, "model.high_noise_diffusion_model.")) {
+                LOG_WARN("loading diffusion model from '%s' failed", sd_ctx_params->high_noise_diffusion_model_path);
             }
         }
 
@@ -380,8 +388,17 @@ public:
                 diffusion_model  = std::make_shared<WanModel>(backend,
                                                              offload_params_to_cpu,
                                                              model_loader.tensor_storages_types,
+                                                             "model.diffusion_model",
                                                              version,
                                                              sd_ctx_params->diffusion_flash_attn);
+                if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
+                    high_noise_diffusion_model = std::make_shared<WanModel>(backend,
+                                                                            offload_params_to_cpu,
+                                                                            model_loader.tensor_storages_types,
+                                                                            "model.high_noise_diffusion_model",
+                                                                            version,
+                                                                            sd_ctx_params->diffusion_flash_attn);
+                }
                 if (diffusion_model->get_desc() == "Wan2.1-I2V-14B") {
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
                                                                              offload_params_to_cpu,
@@ -416,6 +433,11 @@ public:
 
             diffusion_model->alloc_params_buffer();
             diffusion_model->get_param_tensors(tensors);
+
+            if (high_noise_diffusion_model) {
+                high_noise_diffusion_model->alloc_params_buffer();
+                high_noise_diffusion_model->get_param_tensors(tensors);
+            }
 
             if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
                 LOG_INFO("VAE Autoencoder: Using CPU backend");
@@ -546,7 +568,10 @@ public:
         {
             size_t clip_params_mem_size = cond_stage_model->get_params_buffer_size();
             size_t unet_params_mem_size = diffusion_model->get_params_buffer_size();
-            size_t vae_params_mem_size  = 0;
+            if (high_noise_diffusion_model) {
+                unet_params_mem_size += high_noise_diffusion_model->get_params_buffer_size();
+            }
+            size_t vae_params_mem_size = 0;
             if (!use_tiny_autoencoder) {
                 vae_params_mem_size = first_stage_model->get_params_buffer_size();
             } else {
@@ -923,6 +948,8 @@ public:
     }
 
     ggml_tensor* sample(ggml_context* work_ctx,
+                        std::shared_ptr<DiffusionModel> work_diffusion_model,
+                        bool inverse_noise_scaling,
                         ggml_tensor* init_latent,
                         ggml_tensor* noise,
                         SDCondition cond,
@@ -952,7 +979,10 @@ public:
         size_t steps          = sigmas.size() - 1;
         struct ggml_tensor* x = ggml_dup_tensor(work_ctx, init_latent);
         copy_ggml_tensor(x, init_latent);
-        x = denoiser->noise_scaling(sigmas[0], noise, x);
+
+        if (noise) {
+            x = denoiser->noise_scaling(sigmas[0], noise, x);
+        }
 
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x);
 
@@ -1015,31 +1045,31 @@ public:
 
             if (start_merge_step == -1 || step <= start_merge_step) {
                 // cond
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         cond.c_crossattn,
-                                         cond.c_concat,
-                                         cond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_cond);
+                work_diffusion_model->compute(n_threads,
+                                              noised_input,
+                                              timesteps,
+                                              cond.c_crossattn,
+                                              cond.c_concat,
+                                              cond.c_vector,
+                                              guidance_tensor,
+                                              ref_latents,
+                                              -1,
+                                              controls,
+                                              control_strength,
+                                              &out_cond);
             } else {
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         id_cond.c_crossattn,
-                                         cond.c_concat,
-                                         id_cond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_cond);
+                work_diffusion_model->compute(n_threads,
+                                              noised_input,
+                                              timesteps,
+                                              id_cond.c_crossattn,
+                                              cond.c_concat,
+                                              id_cond.c_vector,
+                                              guidance_tensor,
+                                              ref_latents,
+                                              -1,
+                                              controls,
+                                              control_strength,
+                                              &out_cond);
             }
 
             float* negative_data = NULL;
@@ -1049,35 +1079,35 @@ public:
                     control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector);
                     controls = control_net->controls;
                 }
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         uncond.c_crossattn,
-                                         uncond.c_concat,
-                                         uncond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_uncond);
+                work_diffusion_model->compute(n_threads,
+                                              noised_input,
+                                              timesteps,
+                                              uncond.c_crossattn,
+                                              uncond.c_concat,
+                                              uncond.c_vector,
+                                              guidance_tensor,
+                                              ref_latents,
+                                              -1,
+                                              controls,
+                                              control_strength,
+                                              &out_uncond);
                 negative_data = (float*)out_uncond->data;
             }
 
             float* img_cond_data = NULL;
             if (has_img_cond) {
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         img_cond.c_crossattn,
-                                         img_cond.c_concat,
-                                         img_cond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_img_cond);
+                work_diffusion_model->compute(n_threads,
+                                              noised_input,
+                                              timesteps,
+                                              img_cond.c_crossattn,
+                                              img_cond.c_concat,
+                                              img_cond.c_vector,
+                                              guidance_tensor,
+                                              ref_latents,
+                                              -1,
+                                              controls,
+                                              control_strength,
+                                              &out_img_cond);
                 img_cond_data = (float*)out_img_cond->data;
             }
 
@@ -1087,20 +1117,20 @@ public:
             if (is_skiplayer_step) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
                 // skip layer (same as conditionned)
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         cond.c_crossattn,
-                                         cond.c_concat,
-                                         cond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_skip,
-                                         NULL,
-                                         skip_layers);
+                work_diffusion_model->compute(n_threads,
+                                              noised_input,
+                                              timesteps,
+                                              cond.c_crossattn,
+                                              cond.c_concat,
+                                              cond.c_vector,
+                                              guidance_tensor,
+                                              ref_latents,
+                                              -1,
+                                              controls,
+                                              control_strength,
+                                              &out_skip,
+                                              NULL,
+                                              skip_layers);
                 skip_layer_data = (float*)out_skip->data;
             }
             float* vec_denoised  = (float*)denoised->data;
@@ -1152,13 +1182,15 @@ public:
 
         sample_k_diffusion(method, denoise, work_ctx, x, sigmas, rng, eta);
 
-        x = denoiser->inverse_noise_scaling(sigmas[sigmas.size() - 1], x);
+        if (inverse_noise_scaling) {
+            x = denoiser->inverse_noise_scaling(sigmas[sigmas.size() - 1], x);
+        }
 
         if (control_net) {
             control_net->free_control_ctx();
             control_net->free_compute_buffer();
         }
-        diffusion_model->free_compute_buffer();
+        work_diffusion_model->free_compute_buffer();
         return x;
     }
 
@@ -1446,6 +1478,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "clip_vision_path: %s\n"
              "t5xxl_path: %s\n"
              "diffusion_model_path: %s\n"
+             "high_noise_diffusion_model_path: %s\n"
              "vae_path: %s\n"
              "taesd_path: %s\n"
              "control_net_path: %s\n"
@@ -1472,6 +1505,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->clip_vision_path),
              SAFE_STR(sd_ctx_params->t5xxl_path),
              SAFE_STR(sd_ctx_params->diffusion_model_path),
+             SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path),
              SAFE_STR(sd_ctx_params->vae_path),
              SAFE_STR(sd_ctx_params->taesd_path),
              SAFE_STR(sd_ctx_params->control_net_path),
@@ -1602,6 +1636,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
 void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     memset((void*)sd_vid_gen_params, 0, sizeof(sd_vid_gen_params_t));
     sd_sample_params_init(&sd_vid_gen_params->sample_params);
+    sd_sample_params_init(&sd_vid_gen_params->high_noise_sample_params);
     sd_vid_gen_params->width        = 512;
     sd_vid_gen_params->height       = 512;
     sd_vid_gen_params->strength     = 0.75f;
@@ -1902,6 +1937,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         }
 
         struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx,
+                                                     sd_ctx->sd->diffusion_model,
+                                                     true,
                                                      x_t,
                                                      noise,
                                                      cond,
@@ -2243,7 +2280,13 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     sd_ctx->sd->init_scheduler(sd_vid_gen_params->sample_params.scheduler);
 
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
+    int high_noise_sample_steps = 0;
+    if (sd_ctx->sd->high_noise_diffusion_model) {
+        sd_ctx->sd->init_scheduler(sd_vid_gen_params->high_noise_sample_params.scheduler);
+        high_noise_sample_steps = sd_vid_gen_params->high_noise_sample_params.sample_steps;
+    }
+
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps + high_noise_sample_steps);
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(100 * 1024) * 1024;  // 100 MB
@@ -2331,7 +2374,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     }
 
     ggml_tensor* init_latent = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
-    sample_steps             = sigmas.size() - 1;
 
     // Get learned condition
     bool zero_out_masked = true;
@@ -2347,7 +2389,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     cond.c_concat        = concat_latent;
     cond.c_vector        = clip_vision_output;
     SDCondition uncond;
-    if (sd_vid_gen_params->sample_params.guidance.txt_cfg != 1.0) {
+    if (sd_vid_gen_params->sample_params.guidance.txt_cfg != 1.0 || sd_vid_gen_params->high_noise_sample_params.guidance.txt_cfg != 1.0) {
         uncond          = sd_ctx->sd->cond_stage_model->get_learned_condition(work_ctx,
                                                                               sd_ctx->sd->n_threads,
                                                                               negative_prompt,
@@ -2372,15 +2414,50 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     int C = 16;
 
     struct ggml_tensor* final_latent;
+    struct ggml_tensor* x_t   = init_latent;
+    struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, T, C);
+    ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
+    // High Noise Sample
+    if (high_noise_sample_steps > 0) {
+        LOG_DEBUG("sample(high noise) %dx%dx%d", W, H, T);
+        int64_t sampling_start = ggml_time_ms();
+
+        std::vector<float> high_noise_sigmas = std::vector<float>(sigmas.begin(), sigmas.begin() + high_noise_sample_steps + 1);
+        sigmas                               = std::vector<float>(sigmas.begin() + high_noise_sample_steps, sigmas.end());
+
+        x_t = sd_ctx->sd->sample(work_ctx,
+                                 sd_ctx->sd->high_noise_diffusion_model,
+                                 false,
+                                 x_t,
+                                 noise,
+                                 cond,
+                                 uncond,
+                                 {},
+                                 NULL,
+                                 0,
+                                 sd_vid_gen_params->high_noise_sample_params.guidance,
+                                 sd_vid_gen_params->high_noise_sample_params.eta,
+                                 sd_vid_gen_params->high_noise_sample_params.sample_method,
+                                 high_noise_sigmas,
+                                 -1,
+                                 {});
+
+        int64_t sampling_end = ggml_time_ms();
+        LOG_INFO("sampling(high noise) completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+        if (sd_ctx->sd->free_params_immediately) {
+            sd_ctx->sd->high_noise_diffusion_model->free_params_buffer();
+        }
+        noise = NULL;
+    }
+
     // Sample
     {
         LOG_DEBUG("sample %dx%dx%d", W, H, T);
-        int64_t sampling_start    = ggml_time_ms();
-        struct ggml_tensor* x_t   = init_latent;
-        struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, T, C);
-        ggml_tensor_set_f32_randn(noise, sd_ctx->sd->rng);
+        int64_t sampling_start = ggml_time_ms();
 
         final_latent = sd_ctx->sd->sample(work_ctx,
+                                          sd_ctx->sd->diffusion_model,
+                                          true,
                                           x_t,
                                           noise,
                                           cond,
@@ -2397,10 +2474,9 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
-    }
-
-    if (sd_ctx->sd->free_params_immediately) {
-        sd_ctx->sd->diffusion_model->free_params_buffer();
+        if (sd_ctx->sd->free_params_immediately) {
+            sd_ctx->sd->diffusion_model->free_params_buffer();
+        }
     }
 
     int64_t t4 = ggml_time_ms();

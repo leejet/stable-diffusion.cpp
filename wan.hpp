@@ -1579,7 +1579,7 @@ namespace WAN {
             wan_params.num_layers = 0;
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
-                if (tensor_name.find("model.diffusion_model.") == std::string::npos)
+                if (tensor_name.find(prefix) == std::string::npos)
                     continue;
                 size_t pos = tensor_name.find("blocks.");
                 if (pos != std::string::npos) {
