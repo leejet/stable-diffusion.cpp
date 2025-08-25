@@ -38,7 +38,7 @@ const char* model_version_to_str[] = {
     "Flux",
     "Flux Fill",
     "Wan 2.x",
-};
+    "Wan 2.2 I2V"};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -2315,18 +2315,22 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     ggml_tensor* clip_vision_output = NULL;
     ggml_tensor* concat_latent      = NULL;
-    if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B") {
+    if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
+        sd_ctx->sd->diffusion_model->get_desc() == "Wan2.2-I2V-14B") {
         LOG_INFO("IMG2VID");
 
-        if (sd_vid_gen_params->init_image.data) {
-            clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, -2);
-        } else {
-            clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, -2, true);
+        if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B") {
+            if (sd_vid_gen_params->init_image.data) {
+                clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, -2);
+            } else {
+                clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, -2, true);
+            }
+
+            int64_t t1 = ggml_time_ms();
+            LOG_INFO("get_clip_vision_output completed, taking %" PRId64 " ms", t1 - t0);
         }
 
-        int64_t t1 = ggml_time_ms();
-        LOG_INFO("get_clip_vision_output completed, taking %" PRId64 " ms", t1 - t0);
-
+        int64_t t1            = ggml_time_ms();
         ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, frames, 3);
         for (int i3 = 0; i3 < init_img->ne[3]; i3++) {  // channels
             for (int i2 = 0; i2 < init_img->ne[2]; i2++) {

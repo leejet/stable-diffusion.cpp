@@ -1609,8 +1609,13 @@ namespace WAN {
                 wan_params.text_len  = 512;
             } else if (wan_params.num_layers == 40) {
                 if (wan_params.model_type == "t2v") {
-                    desc              = "Wan2.1-T2V-14B";
-                    wan_params.in_dim = 16;
+                    if (version == VERSION_WAN2_2_I2V) {
+                        desc              = "Wan2.2-I2V-14B";
+                        wan_params.in_dim = 36;
+                    } else {
+                        desc              = "Wan2.x-T2V-14B";
+                        wan_params.in_dim = 16;
+                    }
                 } else {
                     desc              = "Wan2.1-I2V-14B";
                     wan_params.in_dim = 36;

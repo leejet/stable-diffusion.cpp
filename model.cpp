@@ -1691,9 +1691,11 @@ SDVersion ModelLoader::get_sd_version() {
     bool has_multiple_encoders = false;
     bool is_unet               = false;
 
-    bool is_xl   = false;
-    bool is_flux = false;
-    bool is_wan  = false;
+    bool is_xl                       = false;
+    bool is_flux                     = false;
+    bool is_wan                      = false;
+    int64_t patch_embedding_channels = 0;
+    bool has_img_emb                 = false;
 
     for (auto& tensor_storage : tensor_storages) {
         if (!(is_xl || is_flux)) {
@@ -1707,7 +1709,13 @@ SDVersion ModelLoader::get_sd_version() {
                 return VERSION_SD3;
             }
             if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
-                return VERSION_WAN2;
+                is_wan = true;
+            }
+            if (tensor_storage.name.find("model.diffusion_model.patch_embedding.weight") != std::string::npos) {
+                patch_embedding_channels = tensor_storage.ne[3];
+            }
+            if (tensor_storage.name.find("model.diffusion_model.img_emb") != std::string::npos) {
+                has_img_emb = true;
             }
             if (tensor_storage.name.find("model.diffusion_model.input_blocks.") != std::string::npos || tensor_storage.name.find("unet.down_blocks.") != std::string::npos) {
                 is_unet = true;
@@ -1747,6 +1755,13 @@ SDVersion ModelLoader::get_sd_version() {
                 break;
             }
         }
+    }
+    if (is_wan) {
+        LOG_DEBUG("patch_embedding_channels %d", patch_embedding_channels);
+        if (patch_embedding_channels == 184320 && !has_img_emb) {
+            return VERSION_WAN2_2_I2V;
+        }
+        return VERSION_WAN2;
     }
     bool is_inpaint = input_block_weight.ne[2] == 9;
     bool is_ip2p    = input_block_weight.ne[2] == 8;
