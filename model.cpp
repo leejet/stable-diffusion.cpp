@@ -1761,6 +1761,9 @@ SDVersion ModelLoader::get_sd_version() {
         if (patch_embedding_channels == 184320 && !has_img_emb) {
             return VERSION_WAN2_2_I2V;
         }
+        if (patch_embedding_channels == 147456 && !has_img_emb) {
+            return VERSION_WAN2_2_TI2V;
+        }
         return VERSION_WAN2;
     }
     bool is_inpaint = input_block_weight.ne[2] == 9;

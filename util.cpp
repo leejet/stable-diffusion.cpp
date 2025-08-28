@@ -72,6 +72,17 @@ std::string format(const char* fmt, ...) {
     return std::string(buf.data(), size);
 }
 
+int round_up_to(int value, int base) {
+    if (base <= 0) {
+        return value;
+    }
+    if (value % base == 0) {
+        return value;
+    } else {
+        return ((value / base) + 1) * base;
+    }
+}
+
 #ifdef _WIN32  // code for windows
 #include <windows.h>
 

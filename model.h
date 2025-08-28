@@ -33,6 +33,7 @@ enum SDVersion {
     VERSION_FLUX_FILL,
     VERSION_WAN2,
     VERSION_WAN2_2_I2V,
+    VERSION_WAN2_2_TI2V,
     VERSION_COUNT,
 };
 
@@ -72,7 +73,7 @@ static inline bool sd_version_is_flux(SDVersion version) {
 }
 
 static inline bool sd_version_is_wan(SDVersion version) {
-    if (version == VERSION_WAN2 || VERSION_WAN2_2_I2V) {
+    if (version == VERSION_WAN2 || VERSION_WAN2_2_I2V || VERSION_WAN2_2_TI2V) {
         return true;
     }
     return false;

@@ -38,7 +38,9 @@ const char* model_version_to_str[] = {
     "Flux",
     "Flux Fill",
     "Wan 2.x",
-    "Wan 2.2 I2V"};
+    "Wan 2.2 I2V",
+    "Wan 2.2 TI2V",
+};
 
 const char* sampling_methods_str[] = {
     "Euler A",
@@ -451,7 +453,8 @@ public:
                                                                         offload_params_to_cpu,
                                                                         model_loader.tensor_storages_types,
                                                                         "first_stage_model",
-                                                                        vae_decode_only);
+                                                                        vae_decode_only,
+                                                                        version);
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else if (!use_tiny_autoencoder) {
@@ -947,6 +950,40 @@ public:
         return {c_crossattn, y, c_concat};
     }
 
+    std::vector<float> process_timesteps(const std::vector<float>& timesteps,
+                                         ggml_tensor* init_latent,
+                                         ggml_tensor* denoise_mask) {
+        if (diffusion_model->get_desc() == "Wan2.2-TI2V-5B") {
+            auto new_timesteps = std::vector<float>(init_latent->ne[2], timesteps[0]);
+
+            if (denoise_mask != NULL) {
+                float value = ggml_tensor_get_f32(denoise_mask, 0, 0, 0, 0);
+                if (value == 0.f) {
+                    new_timesteps[0] = 0.f;
+                }
+            }
+            return new_timesteps;
+        } else {
+            return timesteps;
+        }
+    }
+
+    // a = a * mask + b * (1 - mask)
+    void apply_mask(ggml_tensor* a, ggml_tensor* b, ggml_tensor* mask) {
+        for (int64_t i0 = 0; i0 < a->ne[0]; i0++) {
+            for (int64_t i1 = 0; i1 < a->ne[1]; i1++) {
+                for (int64_t i2 = 0; i2 < a->ne[2]; i2++) {
+                    for (int64_t i3 = 0; i3 < a->ne[3]; i3++) {
+                        float a_value    = ggml_tensor_get_f32(a, i0, i1, i2, i3);
+                        float b_value    = ggml_tensor_get_f32(b, i0, i1, i2, i3);
+                        float mask_value = ggml_tensor_get_f32(mask, i0 % mask->ne[0], i1 % mask->ne[1], i2 % mask->ne[2], i3 % mask->ne[3]);
+                        ggml_tensor_set_f32(a, a_value * mask_value + b_value * (1 - mask_value), i0, i1, i2, i3);
+                    }
+                }
+            }
+        }
+    }
+
     ggml_tensor* sample(ggml_context* work_ctx,
                         std::shared_ptr<DiffusionModel> work_diffusion_model,
                         bool inverse_noise_scaling,
@@ -1026,6 +1063,7 @@ public:
 
             float t = denoiser->sigma_to_t(sigma);
             std::vector<float> timesteps_vec(1, t);  // [N, ]
+            timesteps_vec  = process_timesteps(timesteps_vec, init_latent, denoise_mask);
             auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
             std::vector<float> guidance_vec(1, guidance.distilled_guidance);
             auto guidance_tensor = vector_to_ggml_tensor(work_ctx, guidance_vec);
@@ -1033,6 +1071,10 @@ public:
             copy_ggml_tensor(noised_input, input);
             // noised_input = noised_input * c_in
             ggml_tensor_scale(noised_input, c_in);
+
+            if (denoise_mask != nullptr && version == VERSION_WAN2_2_TI2V) {
+                apply_mask(noised_input, init_latent, denoise_mask);
+            }
 
             std::vector<struct ggml_tensor*> controls;
 
@@ -1165,16 +1207,7 @@ public:
                 // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
             if (denoise_mask != nullptr) {
-                for (int64_t x = 0; x < denoised->ne[0]; x++) {
-                    for (int64_t y = 0; y < denoised->ne[1]; y++) {
-                        float mask = ggml_tensor_get_f32(denoise_mask, x, y);
-                        for (int64_t k = 0; k < denoised->ne[2]; k++) {
-                            float init = ggml_tensor_get_f32(init_latent, x, y, k);
-                            float den  = ggml_tensor_get_f32(denoised, x, y, k);
-                            ggml_tensor_set_f32(denoised, init + mask * (den - init), x, y, k);
-                        }
-                    }
-                }
+                apply_mask(denoised, init_latent, denoise_mask);
             }
 
             return denoised;
@@ -1244,11 +1277,26 @@ public:
 
     void process_latent_in(ggml_tensor* latent) {
         if (sd_version_is_wan(version)) {
-            GGML_ASSERT(latent->ne[3] == 16);
+            GGML_ASSERT(latent->ne[3] == 16 || latent->ne[3] == 48);
             std::vector<float> latents_mean_vec = {-0.7571f, -0.7089f, -0.9113f, 0.1075f, -0.1745f, 0.9653f, -0.1517f, 1.5508f,
                                                    0.4134f, -0.0715f, 0.5517f, -0.3632f, -0.1922f, -0.9497f, 0.2503f, -0.2921f};
             std::vector<float> latents_std_vec  = {2.8184f, 1.4541f, 2.3275f, 2.6558f, 1.2196f, 1.7708f, 2.6052f, 2.0743f,
                                                    3.2687f, 2.1526f, 2.8652f, 1.5579f, 1.6382f, 1.1253f, 2.8251f, 1.9160f};
+            if (latent->ne[3] == 48) {
+                latents_mean_vec = {-0.2289f, -0.0052f, -0.1323f, -0.2339f, -0.2799f, 0.0174f, 0.1838f, 0.1557f,
+                                    -0.1382f, 0.0542f, 0.2813f, 0.0891f, 0.1570f, -0.0098f, 0.0375f, -0.1825f,
+                                    -0.2246f, -0.1207f, -0.0698f, 0.5109f, 0.2665f, -0.2108f, -0.2158f, 0.2502f,
+                                    -0.2055f, -0.0322f, 0.1109f, 0.1567f, -0.0729f, 0.0899f, -0.2799f, -0.1230f,
+                                    -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
+                                    0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
+                latents_std_vec  = {
+                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+            }
             for (int i = 0; i < latent->ne[3]; i++) {
                 float mean = latents_mean_vec[i];
                 float std_ = latents_std_vec[i];
@@ -1269,11 +1317,26 @@ public:
 
     void process_latent_out(ggml_tensor* latent) {
         if (sd_version_is_wan(version)) {
-            GGML_ASSERT(latent->ne[3] == 16);
+            GGML_ASSERT(latent->ne[3] == 16 || latent->ne[3] == 48);
             std::vector<float> latents_mean_vec = {-0.7571f, -0.7089f, -0.9113f, 0.1075f, -0.1745f, 0.9653f, -0.1517f, 1.5508f,
                                                    0.4134f, -0.0715f, 0.5517f, -0.3632f, -0.1922f, -0.9497f, 0.2503f, -0.2921f};
             std::vector<float> latents_std_vec  = {2.8184f, 1.4541f, 2.3275f, 2.6558f, 1.2196f, 1.7708f, 2.6052f, 2.0743f,
                                                    3.2687f, 2.1526f, 2.8652f, 1.5579f, 1.6382f, 1.1253f, 2.8251f, 1.9160f};
+            if (latent->ne[3] == 48) {
+                latents_mean_vec = {-0.2289f, -0.0052f, -0.1323f, -0.2339f, -0.2799f, 0.0174f, 0.1838f, 0.1557f,
+                                    -0.1382f, 0.0542f, 0.2813f, 0.0891f, 0.1570f, -0.0098f, 0.0375f, -0.1825f,
+                                    -0.2246f, -0.1207f, -0.0698f, 0.5109f, 0.2665f, -0.2108f, -0.2158f, 0.2502f,
+                                    -0.2055f, -0.0322f, 0.1109f, 0.1567f, -0.0729f, 0.0899f, -0.2799f, -0.1230f,
+                                    -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
+                                    0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
+                latents_std_vec  = {
+                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+            }
             for (int i = 0; i < latent->ne[3]; i++) {
                 float mean = latents_mean_vec[i];
                 float std_ = latents_std_vec[i];
@@ -1301,6 +1364,10 @@ public:
             int T = x->ne[2];
             if (sd_version_is_wan(version)) {
                 T = ((T - 1) * 4) + 1;
+                if (version == VERSION_WAN2_2_TI2V) {
+                    W = x->ne[0] * 16;
+                    H = x->ne[1] * 16;
+                }
             }
             result = ggml_new_tensor_4d(work_ctx,
                                         GGML_TYPE_F32,
@@ -1320,7 +1387,7 @@ public:
         int64_t t0 = ggml_time_ms();
         if (!use_tiny_autoencoder) {
             process_latent_out(x);
-            // x = load_tensor_from_file(work_ctx, "wan_vae_video_z.bin");
+            // x = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
             if (vae_tiling && !decode_video) {
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
@@ -2010,6 +2077,8 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
                                   bool video = false) {
     int C = 4;
     int T = frames;
+    int W = width / 8;
+    int H = height / 8;
     if (sd_version_is_sd3(sd_ctx->sd->version)) {
         C = 16;
     } else if (sd_version_is_flux(sd_ctx->sd->version)) {
@@ -2017,9 +2086,12 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
     } else if (sd_version_is_wan(sd_ctx->sd->version)) {
         C = 16;
         T = ((T - 1) / 4) + 1;
+        if (sd_ctx->sd->version == VERSION_WAN2_2_TI2V) {
+            C = 48;
+            W = width / 16;
+            H = height / 16;
+        }
     }
-    int W = width / 8;
-    int H = height / 8;
     ggml_tensor* init_latent;
     if (video) {
         init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, T, C);
@@ -2313,8 +2385,10 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     // Apply lora
     prompt = sd_ctx->sd->apply_loras_from_prompt(prompt);
 
+    ggml_tensor* init_latent        = NULL;
     ggml_tensor* clip_vision_output = NULL;
     ggml_tensor* concat_latent      = NULL;
+    ggml_tensor* denoise_mask       = NULL;
     if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
         sd_ctx->sd->diffusion_model->get_desc() == "Wan2.2-I2V-14B") {
         LOG_INFO("IMG2VID");
@@ -2375,9 +2449,45 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         }
 
         concat_latent = ggml_tensor_concat(work_ctx, concat_mask, concat_latent, 3);  // [b*(c+4), t, h/8, w/8]
+    } else if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.2-TI2V-5B" && sd_vid_gen_params->init_image.data) {
+        LOG_INFO("IMG2VID");
+
+        int64_t t1            = ggml_time_ms();
+        ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+        sd_image_to_tensor(sd_vid_gen_params->init_image.data, init_img);
+        init_img = ggml_reshape_4d(work_ctx, init_img, width, height, 1, 3);
+
+        auto init_image_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);  // [b*c, 1, h/16, w/16]
+
+        init_latent  = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
+        denoise_mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2], 1);
+        ggml_set_f32(denoise_mask, 1.f);
+
+        sd_ctx->sd->process_latent_out(init_latent);
+
+        for (int i3 = 0; i3 < init_image_latent->ne[3]; i3++) {
+            for (int i2 = 0; i2 < init_image_latent->ne[2]; i2++) {
+                for (int i1 = 0; i1 < init_image_latent->ne[1]; i1++) {
+                    for (int i0 = 0; i0 < init_image_latent->ne[0]; i0++) {
+                        float value = ggml_tensor_get_f32(init_image_latent, i0, i1, i2, i3);
+                        ggml_tensor_set_f32(init_latent, value, i0, i1, i2, i3);
+                        if (i3 == 0) {
+                            ggml_tensor_set_f32(denoise_mask, 0.f, i0, i1, i2, i3);
+                        }
+                    }
+                }
+            }
+        }
+
+        sd_ctx->sd->process_latent_in(init_latent);
+
+        int64_t t2 = ggml_time_ms();
+        LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);
     }
 
-    ggml_tensor* init_latent = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
+    if (init_latent == NULL) {
+        init_latent = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
+    }
 
     // Get learned condition
     bool zero_out_masked = true;
@@ -2417,6 +2527,12 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     int T = init_latent->ne[2];
     int C = 16;
 
+    if (sd_ctx->sd->version == VERSION_WAN2_2_TI2V) {
+        W = width / 16;
+        H = height / 16;
+        C = 48;
+    }
+
     struct ggml_tensor* final_latent;
     struct ggml_tensor* x_t   = init_latent;
     struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, T, C);
@@ -2444,7 +2560,9 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                  sd_vid_gen_params->high_noise_sample_params.sample_method,
                                  high_noise_sigmas,
                                  -1,
-                                 {});
+                                 {},
+                                 {},
+                                 denoise_mask);
 
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling(high noise) completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
@@ -2474,7 +2592,9 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           sd_vid_gen_params->sample_params.sample_method,
                                           sigmas,
                                           -1,
-                                          {});
+                                          {},
+                                          {},
+                                          denoise_mask);
 
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);

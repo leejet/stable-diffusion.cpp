@@ -116,13 +116,21 @@ namespace WAN {
         std::string mode;
 
     public:
-        Resample(int64_t dim, const std::string& mode)
+        Resample(int64_t dim, const std::string& mode, bool wan2_2 = false)
             : dim(dim), mode(mode) {
             if (mode == "upsample2d") {
-                blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim / 2, {3, 3}, {1, 1}, {1, 1}));
+                if (wan2_2) {
+                    blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim, {3, 3}, {1, 1}, {1, 1}));
+                } else {
+                    blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim / 2, {3, 3}, {1, 1}, {1, 1}));
+                }
             } else if (mode == "upsample3d") {
-                blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim / 2, {3, 3}, {1, 1}, {1, 1}));
-                blocks["time_conv"]  = std::shared_ptr<GGMLBlock>(new CausalConv3d(dim, dim * 2, {3, 1, 1}, {1, 1, 1}, {1, 0, 0}));
+                if (wan2_2) {
+                    blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim, {3, 3}, {1, 1}, {1, 1}));
+                } else {
+                    blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim / 2, {3, 3}, {1, 1}, {1, 1}));
+                }
+                blocks["time_conv"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(dim, dim * 2, {3, 1, 1}, {1, 1, 1}, {1, 0, 0}));
             } else if (mode == "downsample2d") {
                 blocks["resample.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(dim, dim, {3, 3}, {2, 2}));
             } else if (mode == "downsample3d") {
@@ -225,6 +233,104 @@ namespace WAN {
         }
     };
 
+    class AvgDown3D : public GGMLBlock {
+    protected:
+        int64_t in_channels;
+        int64_t out_channels;
+        int64_t factor_t;
+        int64_t factor_s;
+        int64_t factor;
+        int64_t group_size;
+
+    public:
+        AvgDown3D(int64_t in_channels, int64_t out_channels, int64_t factor_t, int64_t factor_s = 1)
+            : in_channels(in_channels), out_channels(out_channels), factor_t(factor_t), factor_s(factor_s) {
+            factor = factor_t * factor_s * factor_s;
+            GGML_ASSERT(in_channels * factor % out_channels == 0);
+            group_size = in_channels * factor / out_channels;
+        }
+        struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    struct ggml_tensor* x,
+                                    int64_t B = 1) {
+            // x: [B*IC, T, H, W]
+            // return: [B*OC, T/factor_t, H/factor_s, W/factor_s]
+            GGML_ASSERT(B == 1);
+            int64_t C = x->ne[3];
+            int64_t T = x->ne[2];
+            int64_t H = x->ne[1];
+            int64_t W = x->ne[0];
+
+            int64_t pad_t = (factor_t - T % factor_t) % factor_t;
+
+            x = ggml_pad_ext(ctx, x, 0, 0, 0, 0, pad_t, 0, 0, 0);
+            T = x->ne[2];
+
+            x = ggml_reshape_4d(ctx, x, W * H, factor_t, T / factor_t, C);                                                  // [C, T/factor_t, factor_t, H*W]
+            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));                                                     // [C, factor_t, T/factor_t, H*W]
+            x = ggml_reshape_4d(ctx, x, W, factor_s, (H / factor_s) * (T / factor_t), factor_t * C);                        // [C*factor_t, T/factor_t*H/factor_s, factor_s, W]
+            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));                                                     // [C*factor_t, factor_s, T/factor_t*H/factor_s, W]
+            x = ggml_reshape_4d(ctx, x, factor_s, W / factor_s, (H / factor_s) * (T / factor_t), factor_s * factor_t * C);  // [C*factor_t*factor_s, T/factor_t*H/factor_s, W/factor_s, factor_s]
+            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 1, 2, 0, 3));                                                     // [C*factor_t*factor_s, factor_s, T/factor_t*H/factor_s, W/factor_s]
+            x = ggml_reshape_3d(ctx, x, (W / factor_s) * (H / factor_s) * (T / factor_t), group_size, out_channels);        // [out_channels, group_size, T/factor_t*H/factor_s*W/factor_s]
+
+            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 1, 0, 2, 3));  // [out_channels, T/factor_t*H/factor_s*W/factor_s, group_size]
+            x = ggml_mean(ctx, x);                                       // [out_channels, T/factor_t*H/factor_s*W/factor_s, 1]
+            x = ggml_reshape_4d(ctx, x, W / factor_s, H / factor_s, T / factor_t, out_channels);
+            return x;
+        }
+    };
+
+    class DupUp3D : public GGMLBlock {
+    protected:
+        int64_t in_channels;
+        int64_t out_channels;
+        int64_t factor_t;
+        int64_t factor_s;
+        int64_t factor;
+        int64_t repeats;
+
+    public:
+        DupUp3D(int64_t in_channels, int64_t out_channels, int64_t factor_t, int64_t factor_s = 1)
+            : in_channels(in_channels), out_channels(out_channels), factor_t(factor_t), factor_s(factor_s) {
+            factor = factor_t * factor_s * factor_s;
+            GGML_ASSERT(out_channels * factor % in_channels == 0);
+            repeats = out_channels * factor / in_channels;
+        }
+        struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    struct ggml_tensor* x,
+                                    bool first_chunk = false,
+                                    int64_t B        = 1) {
+            // x: [B*IC, T, H, W]
+            // return: [B*OC, T/factor_t, H/factor_s, W/factor_s]
+            GGML_ASSERT(B == 1);
+            int64_t C = x->ne[3];
+            int64_t T = x->ne[2];
+            int64_t H = x->ne[1];
+            int64_t W = x->ne[0];
+
+            auto x_ = x;
+            for (int64_t i = 1; i < repeats; i++) {
+                x = ggml_concat(ctx, x, x_, 2);
+            }
+
+            C = out_channels;
+
+            x = ggml_reshape_4d(ctx, x, W, H * T, factor_s, factor_s * factor_t * C);  // [C*factor_t*factor_s, factor_s, T*H, W]
+            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 2, 0, 1, 3));                // [C*factor_t*factor_s, T*H, W, factor_s]
+            x = ggml_reshape_4d(ctx, x, factor_s * W, H * T, factor_s, factor_t * C);  // [C*factor_t, factor_s, T*H, W*factor_s]
+            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));                // [C*factor_t, T*H, factor_s, W*factor_s]
+            x = ggml_reshape_4d(ctx, x, factor_s * W * factor_s * H, T, factor_t, C);  // [C, factor_t, T, H*factor_s*W*factor_s]
+            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));                // [C, T, factor_t, H*factor_s*W*factor_s]
+            x = ggml_reshape_4d(ctx, x, factor_s * W, factor_s * H, factor_t * T, C);  // [C, T*factor_t, H*factor_s, W*factor_s]
+
+            if (first_chunk) {
+                x = ggml_slice(ctx, x, 2, factor_t - 1, x->ne[2]);
+            }
+
+            return x;
+        }
+    };
+
     class ResidualBlock : public GGMLBlock {
     protected:
         int64_t in_dim;
@@ -293,6 +399,126 @@ namespace WAN {
         }
     };
 
+    class Down_ResidualBlock : public GGMLBlock {
+    protected:
+        int mult;
+        bool down_flag;
+
+    public:
+        Down_ResidualBlock(int64_t in_dim,
+                           int64_t out_dim,
+                           int mult,
+                           bool temperal_downsample = false,
+                           bool down_flag           = false)
+            : mult(mult), down_flag(down_flag) {
+            blocks["avg_shortcut"] = std::shared_ptr<GGMLBlock>(new AvgDown3D(in_dim, out_dim, temperal_downsample ? 2 : 1, down_flag ? 2 : 1));
+
+            int i = 0;
+            for (; i < mult; i++) {
+                blocks["downsamples." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new ResidualBlock(in_dim, out_dim));
+                in_dim                                     = out_dim;
+            }
+            if (down_flag) {
+                std::string mode                           = temperal_downsample ? "downsample3d" : "downsample2d";
+                blocks["downsamples." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode, true));
+                i++;
+            }
+        }
+
+        struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    struct ggml_tensor* x,
+                                    int64_t b,
+                                    std::vector<struct ggml_tensor*>& feat_cache,
+                                    int& feat_idx) {
+            // x: [b*c, t, h, w]
+            GGML_ASSERT(b == 1);
+            struct ggml_tensor* x_copy = x;
+
+            auto avg_shortcut = std::dynamic_pointer_cast<AvgDown3D>(blocks["avg_shortcut"]);
+
+            int i = 0;
+            for (; i < mult; i++) {
+                std::string block_name = "downsamples." + std::to_string(i);
+                auto block             = std::dynamic_pointer_cast<ResidualBlock>(blocks[block_name]);
+
+                x = block->forward(ctx, x, b, feat_cache, feat_idx);
+            }
+
+            if (down_flag) {
+                std::string block_name = "downsamples." + std::to_string(i);
+                auto block             = std::dynamic_pointer_cast<Resample>(blocks[block_name]);
+                x                      = block->forward(ctx, x, b, feat_cache, feat_idx);
+            }
+
+            auto shortcut = avg_shortcut->forward(ctx, x_copy, b);
+
+            x = ggml_add(ctx, x, shortcut);
+
+            return x;
+        }
+    };
+
+    class Up_ResidualBlock : public GGMLBlock {
+    protected:
+        int mult;
+        bool up_flag;
+
+    public:
+        Up_ResidualBlock(int64_t in_dim,
+                         int64_t out_dim,
+                         int mult,
+                         bool temperal_upsample = false,
+                         bool up_flag           = false)
+            : mult(mult), up_flag(up_flag) {
+            if (up_flag) {
+                blocks["avg_shortcut"] = std::shared_ptr<GGMLBlock>(new DupUp3D(in_dim, out_dim, temperal_upsample ? 2 : 1, up_flag ? 2 : 1));
+            }
+
+            int i = 0;
+            for (; i < mult; i++) {
+                blocks["upsamples." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new ResidualBlock(in_dim, out_dim));
+                in_dim                                   = out_dim;
+            }
+            if (up_flag) {
+                std::string mode                         = temperal_upsample ? "upsample3d" : "upsample2d";
+                blocks["upsamples." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode, true));
+                i++;
+            }
+        }
+
+        struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    struct ggml_tensor* x,
+                                    int64_t b,
+                                    std::vector<struct ggml_tensor*>& feat_cache,
+                                    int& feat_idx,
+                                    bool first_chunk = false) {
+            // x: [b*c, t, h, w]
+            GGML_ASSERT(b == 1);
+            struct ggml_tensor* x_copy = x;
+
+            int i = 0;
+            for (; i < mult; i++) {
+                std::string block_name = "upsamples." + std::to_string(i);
+                auto block             = std::dynamic_pointer_cast<ResidualBlock>(blocks[block_name]);
+
+                x = block->forward(ctx, x, b, feat_cache, feat_idx);
+            }
+
+            if (up_flag) {
+                std::string block_name = "upsamples." + std::to_string(i);
+                auto block             = std::dynamic_pointer_cast<Resample>(blocks[block_name]);
+                x                      = block->forward(ctx, x, b, feat_cache, feat_idx);
+
+                auto avg_shortcut = std::dynamic_pointer_cast<DupUp3D>(blocks["avg_shortcut"]);
+                auto shortcut     = avg_shortcut->forward(ctx, x_copy, first_chunk, b);
+
+                x = ggml_add(ctx, x, shortcut);
+            }
+
+            return x;
+        }
+    };
+
     class AttentionBlock : public GGMLBlock {
     protected:
         int64_t dim;
@@ -355,6 +581,7 @@ namespace WAN {
 
     class Encoder3d : public GGMLBlock {
     protected:
+        bool wan2_2;
         int64_t dim;
         int64_t z_dim;
         std::vector<int> dim_mult;
@@ -366,15 +593,25 @@ namespace WAN {
                   int64_t z_dim                         = 4,
                   std::vector<int> dim_mult             = {1, 2, 4, 4},
                   int num_res_blocks                    = 2,
-                  std::vector<bool> temperal_downsample = {false, true, true})
-            : dim(dim), z_dim(z_dim), dim_mult(dim_mult), num_res_blocks(num_res_blocks), temperal_downsample(temperal_downsample) {
+                  std::vector<bool> temperal_downsample = {false, true, true},
+                  bool wan2_2                           = false)
+            : dim(dim),
+              z_dim(z_dim),
+              dim_mult(dim_mult),
+              num_res_blocks(num_res_blocks),
+              temperal_downsample(temperal_downsample),
+              wan2_2(wan2_2) {
             // attn_scales is always []
             std::vector<int64_t> dims = {dim};
             for (int u : dim_mult) {
                 dims.push_back(dim * u);
             }
 
-            blocks["conv1"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(3, dims[0], {3, 3, 3}, {1, 1, 1}, {1, 1, 1}));
+            if (wan2_2) {
+                blocks["conv1"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(12, dims[0], {3, 3, 3}, {1, 1, 1}, {1, 1, 1}));
+            } else {
+                blocks["conv1"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(3, dims[0], {3, 3, 3}, {1, 1, 1}, {1, 1, 1}));
+            }
 
             int index = 0;
             int64_t in_dim;
@@ -382,16 +619,27 @@ namespace WAN {
             for (int i = 0; i < dims.size() - 1; i++) {
                 in_dim  = dims[i];
                 out_dim = dims[i + 1];
-                for (int j = 0; j < num_res_blocks; j++) {
-                    auto block                                       = std::shared_ptr<GGMLBlock>(new ResidualBlock(in_dim, out_dim));
-                    blocks["downsamples." + std::to_string(index++)] = block;
-                    in_dim                                           = out_dim;
-                }
+                if (wan2_2) {
+                    bool t_down_flag = i < temperal_downsample.size() ? temperal_downsample[i] : false;
+                    auto block       = std::shared_ptr<GGMLBlock>(new Down_ResidualBlock(in_dim,
+                                                                                         out_dim,
+                                                                                         num_res_blocks,
+                                                                                         t_down_flag,
+                                                                                         i != dim_mult.size() - 1));
 
-                if (i != dim_mult.size() - 1) {
-                    std::string mode                                 = temperal_downsample[i] ? "downsample3d" : "downsample2d";
-                    auto block                                       = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode));
                     blocks["downsamples." + std::to_string(index++)] = block;
+                } else {
+                    for (int j = 0; j < num_res_blocks; j++) {
+                        auto block                                       = std::shared_ptr<GGMLBlock>(new ResidualBlock(in_dim, out_dim));
+                        blocks["downsamples." + std::to_string(index++)] = block;
+                        in_dim                                           = out_dim;
+                    }
+
+                    if (i != dim_mult.size() - 1) {
+                        std::string mode                                 = temperal_downsample[i] ? "downsample3d" : "downsample2d";
+                        auto block                                       = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode));
+                        blocks["downsamples." + std::to_string(index++)] = block;
+                    }
                 }
             }
 
@@ -444,16 +692,22 @@ namespace WAN {
             }
             int index = 0;
             for (int i = 0; i < dims.size() - 1; i++) {
-                for (int j = 0; j < num_res_blocks; j++) {
-                    auto layer = std::dynamic_pointer_cast<ResidualBlock>(blocks["downsamples." + std::to_string(index++)]);
+                if (wan2_2) {
+                    auto layer = std::dynamic_pointer_cast<Down_ResidualBlock>(blocks["downsamples." + std::to_string(index++)]);
 
                     x = layer->forward(ctx, x, b, feat_cache, feat_idx);
-                }
+                } else {
+                    for (int j = 0; j < num_res_blocks; j++) {
+                        auto layer = std::dynamic_pointer_cast<ResidualBlock>(blocks["downsamples." + std::to_string(index++)]);
 
-                if (i != dim_mult.size() - 1) {
-                    auto layer = std::dynamic_pointer_cast<Resample>(blocks["downsamples." + std::to_string(index++)]);
+                        x = layer->forward(ctx, x, b, feat_cache, feat_idx);
+                    }
 
-                    x = layer->forward(ctx, x, b, feat_cache, feat_idx);
+                    if (i != dim_mult.size() - 1) {
+                        auto layer = std::dynamic_pointer_cast<Resample>(blocks["downsamples." + std::to_string(index++)]);
+
+                        x = layer->forward(ctx, x, b, feat_cache, feat_idx);
+                    }
                 }
             }
 
@@ -489,6 +743,7 @@ namespace WAN {
 
     class Decoder3d : public GGMLBlock {
     protected:
+        bool wan2_2;
         int64_t dim;
         int64_t z_dim;
         std::vector<int> dim_mult;
@@ -500,8 +755,14 @@ namespace WAN {
                   int64_t z_dim                       = 4,
                   std::vector<int> dim_mult           = {1, 2, 4, 4},
                   int num_res_blocks                  = 2,
-                  std::vector<bool> temperal_upsample = {true, true, false})
-            : dim(dim), z_dim(z_dim), dim_mult(dim_mult), num_res_blocks(num_res_blocks), temperal_upsample(temperal_upsample) {
+                  std::vector<bool> temperal_upsample = {true, true, false},
+                  bool wan2_2                         = false)
+            : dim(dim),
+              z_dim(z_dim),
+              dim_mult(dim_mult),
+              num_res_blocks(num_res_blocks),
+              temperal_upsample(temperal_upsample),
+              wan2_2(wan2_2) {
             // attn_scales is always []
             std::vector<int64_t> dims = {dim_mult[dim_mult.size() - 1] * dim};
             for (int i = static_cast<int>(dim_mult.size()) - 1; i >= 0; i--) {
@@ -523,33 +784,50 @@ namespace WAN {
             for (int i = 0; i < dims.size() - 1; i++) {
                 in_dim  = dims[i];
                 out_dim = dims[i + 1];
-                if (i == 1 || i == 2 || i == 3) {
-                    in_dim = in_dim / 2;
-                }
-                for (int j = 0; j < num_res_blocks + 1; j++) {
-                    auto block                                     = std::shared_ptr<GGMLBlock>(new ResidualBlock(in_dim, out_dim));
-                    blocks["upsamples." + std::to_string(index++)] = block;
-                    in_dim                                         = out_dim;
-                }
+                if (wan2_2) {
+                    bool t_up_flag = i < temperal_upsample.size() ? temperal_upsample[i] : false;
+                    auto block     = std::shared_ptr<GGMLBlock>(new Up_ResidualBlock(in_dim,
+                                                                                     out_dim,
+                                                                                     num_res_blocks + 1,
+                                                                                     t_up_flag,
+                                                                                     i != dim_mult.size() - 1));
 
-                if (i != dim_mult.size() - 1) {
-                    std::string mode                               = temperal_upsample[i] ? "upsample3d" : "upsample2d";
-                    auto block                                     = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode));
                     blocks["upsamples." + std::to_string(index++)] = block;
+                } else {
+                    if (i == 1 || i == 2 || i == 3) {
+                        in_dim = in_dim / 2;
+                    }
+                    for (int j = 0; j < num_res_blocks + 1; j++) {
+                        auto block                                     = std::shared_ptr<GGMLBlock>(new ResidualBlock(in_dim, out_dim));
+                        blocks["upsamples." + std::to_string(index++)] = block;
+                        in_dim                                         = out_dim;
+                    }
+
+                    if (i != dim_mult.size() - 1) {
+                        std::string mode                               = temperal_upsample[i] ? "upsample3d" : "upsample2d";
+                        auto block                                     = std::shared_ptr<GGMLBlock>(new Resample(out_dim, mode));
+                        blocks["upsamples." + std::to_string(index++)] = block;
+                    }
                 }
             }
 
             // output blocks
             blocks["head.0"] = std::shared_ptr<GGMLBlock>(new RMS_norm(out_dim));
             // head.1 is nn.SiLU()
-            blocks["head.2"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(out_dim, 3, {3, 3, 3}, {1, 1, 1}, {1, 1, 1}));
+            if (wan2_2) {
+                blocks["head.2"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(out_dim, 12, {3, 3, 3}, {1, 1, 1}, {1, 1, 1}));
+
+            } else {
+                blocks["head.2"] = std::shared_ptr<GGMLBlock>(new CausalConv3d(out_dim, 3, {3, 3, 3}, {1, 1, 1}, {1, 1, 1}));
+            }
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
                                     struct ggml_tensor* x,
                                     int64_t b,
                                     std::vector<struct ggml_tensor*>& feat_cache,
-                                    int& feat_idx) {
+                                    int& feat_idx,
+                                    bool first_chunk = false) {
             // x: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
             auto conv1    = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv1"]);
@@ -590,16 +868,22 @@ namespace WAN {
             }
             int index = 0;
             for (int i = 0; i < dims.size() - 1; i++) {
-                for (int j = 0; j < num_res_blocks + 1; j++) {
-                    auto layer = std::dynamic_pointer_cast<ResidualBlock>(blocks["upsamples." + std::to_string(index++)]);
+                if (wan2_2) {
+                    auto layer = std::dynamic_pointer_cast<Up_ResidualBlock>(blocks["upsamples." + std::to_string(index++)]);
 
-                    x = layer->forward(ctx, x, b, feat_cache, feat_idx);
-                }
+                    x = layer->forward(ctx, x, b, feat_cache, feat_idx, first_chunk);
+                } else {
+                    for (int j = 0; j < num_res_blocks + 1; j++) {
+                        auto layer = std::dynamic_pointer_cast<ResidualBlock>(blocks["upsamples." + std::to_string(index++)]);
 
-                if (i != dim_mult.size() - 1) {
-                    auto layer = std::dynamic_pointer_cast<Resample>(blocks["upsamples." + std::to_string(index++)]);
+                        x = layer->forward(ctx, x, b, feat_cache, feat_idx);
+                    }
 
-                    x = layer->forward(ctx, x, b, feat_cache, feat_idx);
+                    if (i != dim_mult.size() - 1) {
+                        auto layer = std::dynamic_pointer_cast<Resample>(blocks["upsamples." + std::to_string(index++)]);
+
+                        x = layer->forward(ctx, x, b, feat_cache, feat_idx);
+                    }
                 }
             }
 
@@ -630,8 +914,10 @@ namespace WAN {
 
     class WanVAE : public GGMLBlock {
     public:
+        bool wan2_2                           = false;
         bool decode_only                      = true;
         int64_t dim                           = 96;
+        int64_t dec_dim                       = 96;
         int64_t z_dim                         = 16;
         std::vector<int> dim_mult             = {1, 2, 4, 4};
         int num_res_blocks                    = 2;
@@ -653,15 +939,76 @@ namespace WAN {
         }
 
     public:
-        WanVAE(bool decode_only = true)
-            : decode_only(decode_only) {
+        WanVAE(bool decode_only = true, bool wan2_2 = false)
+            : decode_only(decode_only), wan2_2(wan2_2) {
             // attn_scales is always []
+            if (wan2_2) {
+                dim     = 160;
+                dec_dim = 256;
+                z_dim   = 48;
+
+                _conv_num     = 34;
+                _enc_conv_num = 26;
+            }
             if (!decode_only) {
-                blocks["encoder"] = std::shared_ptr<GGMLBlock>(new Encoder3d(dim, z_dim * 2, dim_mult, num_res_blocks, temperal_downsample));
+                blocks["encoder"] = std::shared_ptr<GGMLBlock>(new Encoder3d(dim, z_dim * 2, dim_mult, num_res_blocks, temperal_downsample, wan2_2));
                 blocks["conv1"]   = std::shared_ptr<GGMLBlock>(new CausalConv3d(z_dim * 2, z_dim * 2, {1, 1, 1}));
             }
-            blocks["decoder"] = std::shared_ptr<GGMLBlock>(new Decoder3d(dim, z_dim, dim_mult, num_res_blocks, temperal_upsample));
+            blocks["decoder"] = std::shared_ptr<GGMLBlock>(new Decoder3d(dec_dim, z_dim, dim_mult, num_res_blocks, temperal_upsample, wan2_2));
             blocks["conv2"]   = std::shared_ptr<GGMLBlock>(new CausalConv3d(z_dim, z_dim, {1, 1, 1}));
+        }
+
+        struct ggml_tensor* patchify(struct ggml_context* ctx,
+                                     struct ggml_tensor* x,
+                                     int64_t patch_size,
+                                     int64_t b = 1) {
+            // x: [b*c, f, h*q, w*r]
+            // return: [b*c*r*q, f, h, w]
+            if (patch_size == 1) {
+                return x;
+            }
+            int64_t r = patch_size;
+            int64_t q = patch_size;
+            int64_t c = x->ne[3] / b;
+            int64_t f = x->ne[2];
+            int64_t h = x->ne[1] / q;
+            int64_t w = x->ne[0] / r;
+
+            x = ggml_reshape_4d(ctx, x, r * w, q, h, f * c * b);            // [b*c*f, h, q, w*r]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));  // [b*c*f, q, h, w*r]
+            x = ggml_reshape_4d(ctx, x, r, w, h * q, f * c * b);            // [b*c*f, q*h, w, r]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 1, 2, 0, 3));  // [b*c*f, r, q*h, w]
+            x = ggml_reshape_4d(ctx, x, w * h, q * r, f, c * b);            // [b*c, f, r*q, h*w]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));  // [b*c, r*q, f, h*w]
+            x = ggml_reshape_4d(ctx, x, w, h, f, q * r * c * b);            // [b*c*r*q, f, h, w]
+
+            return x;
+        }
+
+        struct ggml_tensor* unpatchify(struct ggml_context* ctx,
+                                       struct ggml_tensor* x,
+                                       int64_t patch_size,
+                                       int64_t b = 1) {
+            // x: [b*c*r*q, f, h, w]
+            // return: [b*c, f, h*q, w*r]
+            if (patch_size == 1) {
+                return x;
+            }
+            int64_t r = patch_size;
+            int64_t q = patch_size;
+            int64_t c = x->ne[3] / b / q / r;
+            int64_t f = x->ne[2];
+            int64_t h = x->ne[1];
+            int64_t w = x->ne[0];
+
+            x = ggml_reshape_4d(ctx, x, w * h, f, q * r, c * b);            // [b*c, r*q, f, h*w]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));  // [b*c, f, r*q, h*w]
+            x = ggml_reshape_4d(ctx, x, w, h * q, r, f * c * b);            // [b*c*f, r, q*h, w]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 2, 0, 1, 3));  // [b*c*f, q*h, w, r]
+            x = ggml_reshape_4d(ctx, x, r * w, h, q, f * c * b);            // [b*c*f, q, h, w*r]
+            x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));  // [b*c*f, h, q, w*r]
+            x = ggml_reshape_4d(ctx, x, r * w, q * h, f, c * b);            // [b*c, f, h*q, w*r]
+            return x;
         }
 
         struct ggml_tensor* encode(struct ggml_context* ctx,
@@ -672,6 +1019,10 @@ namespace WAN {
             GGML_ASSERT(decode_only == false);
 
             clear_cache();
+
+            if (wan2_2) {
+                x = patchify(ctx, x, 2, b);
+            }
 
             auto encoder = std::dynamic_pointer_cast<Encoder3d>(blocks["encoder"]);
             auto conv1   = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv1"]);
@@ -714,12 +1065,15 @@ namespace WAN {
                 _conv_idx = 0;
                 if (i == 0) {
                     auto in = ggml_slice(ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
-                    out     = decoder->forward(ctx, in, b, _feat_map, _conv_idx);
+                    out     = decoder->forward(ctx, in, b, _feat_map, _conv_idx, true);
                 } else {
                     auto in   = ggml_slice(ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
                     auto out_ = decoder->forward(ctx, in, b, _feat_map, _conv_idx);
                     out       = ggml_concat(ctx, out, out_, 2);
                 }
+            }
+            if (wan2_2) {
+                out = unpatchify(ctx, out, 2, b);
             }
             clear_cache();
             return out;
@@ -770,8 +1124,9 @@ namespace WAN {
                      bool offload_params_to_cpu,
                      const String2GGMLType& tensor_types = {},
                      const std::string prefix            = "",
-                     bool decode_only                    = false)
-            : decode_only(decode_only), ae(decode_only), VAE(backend, offload_params_to_cpu) {
+                     bool decode_only                    = false,
+                     SDVersion version                   = VERSION_WAN2)
+            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(backend, offload_params_to_cpu) {
             ae.init(params_ctx, tensor_types, prefix);
             rest_feat_vec_map();
         }
@@ -927,7 +1282,7 @@ namespace WAN {
                 // cuda f32, pass
                 auto z = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 104, 60, 2, 16);
                 ggml_set_f32(z, 0.5f);
-                z = load_tensor_from_file(work_ctx, "wan_vae_video_z.bin");
+                z = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
                 print_ggml_tensor(z);
                 struct ggml_tensor* out = NULL;
 
@@ -944,7 +1299,7 @@ namespace WAN {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             ggml_backend_t backend            = ggml_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
-            std::shared_ptr<WanVAERunner> vae = std::shared_ptr<WanVAERunner>(new WanVAERunner(backend, false));
+            std::shared_ptr<WanVAERunner> vae = std::shared_ptr<WanVAERunner>(new WanVAERunner(backend, false, {}, "", false, VERSION_WAN2_2_TI2V));
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -1155,6 +1510,34 @@ namespace WAN {
         }
     };
 
+    static struct ggml_tensor* modulate_add(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* e) {
+        // x: [N, n_token, dim]
+        // e: [N, 1, dim] or [N, T, 1, dim]
+        if (ggml_n_dims(e) == 3) {
+            int64_t T = e->ne[2];
+            x         = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / T, T, x->ne[2]);  // [N, T, n_token/T, dim]
+            x         = ggml_add(ctx, x, e);
+            x         = ggml_reshape_3d(ctx, x, x->ne[0], x->ne[1] * x->ne[2], x->ne[3]);  // [N, n_token, dim]
+        } else {
+            x = ggml_add(ctx, x, e);
+        }
+        return x;
+    }
+
+    static struct ggml_tensor* modulate_mul(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* e) {
+        // x: [N, n_token, dim]
+        // e: [N, 1, dim] or [N, T, 1, dim]
+        if (ggml_n_dims(e) == 3) {
+            int64_t T = e->ne[2];
+            x         = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / T, T, x->ne[2]);  // [N, T, n_token/T, dim]
+            x         = ggml_mul(ctx, x, e);
+            x         = ggml_reshape_3d(ctx, x, x->ne[0], x->ne[1] * x->ne[2], x->ne[3]);  // [N, n_token, dim]
+        } else {
+            x = ggml_mul(ctx, x, e);
+        }
+        return x;
+    }
+
     class WanAttentionBlock : public GGMLBlock {
     protected:
         int dim;
@@ -1201,13 +1584,13 @@ namespace WAN {
                                     struct ggml_tensor* context,
                                     int64_t context_img_len = 257) {
             // x: [N, n_token, dim]
-            // e: [N, 6, dim]
+            // e: [N, 6, dim] or [N, T, 6, dim]
             // context: [N, context_img_len + context_txt_len, dim]
             // return [N, n_token, dim]
 
             auto modulation = params["modulation"];
-            e               = ggml_add(ctx, modulation, e);  // [N, 6, dim]
-            auto es         = ggml_chunk(ctx, e, 6, 1);      // ([N, 1, dim], ...)
+            e               = ggml_add(ctx, e, modulation);  // [N, 6, dim] or [N, T, 6, dim]
+            auto es         = ggml_chunk(ctx, e, 6, 1);      // ([N, 1, dim], ...) or [N, T, 1, dim]
 
             auto norm1      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm1"]);
             auto self_attn  = std::dynamic_pointer_cast<WanSelfAttention>(blocks["self_attn"]);
@@ -1219,11 +1602,11 @@ namespace WAN {
 
             // self-attention
             auto y = norm1->forward(ctx, x);
-            y      = ggml_add(ctx, y, ggml_mul(ctx, y, es[1]));
-            y      = ggml_add(ctx, y, es[0]);
+            y      = ggml_add(ctx, y, modulate_mul(ctx, y, es[1]));
+            y      = modulate_add(ctx, y, es[0]);
             y      = self_attn->forward(ctx, y, pe);
 
-            x = ggml_add(ctx, x, ggml_mul(ctx, y, es[2]));
+            x = ggml_add(ctx, x, modulate_mul(ctx, y, es[2]));
 
             // cross-attention
             x = ggml_add(ctx,
@@ -1232,14 +1615,14 @@ namespace WAN {
 
             // ffn
             y = norm2->forward(ctx, x);
-            y = ggml_add(ctx, y, ggml_mul(ctx, y, es[4]));
-            y = ggml_add(ctx, y, es[3]);
+            y = ggml_add(ctx, y, modulate_mul(ctx, y, es[4]));
+            y = modulate_add(ctx, y, es[3]);
 
             y = ffn_0->forward(ctx, y);
             y = ggml_gelu_inplace(ctx, y);
             y = ffn_2->forward(ctx, y);
 
-            x = ggml_add(ctx, x, ggml_mul(ctx, y, es[5]));
+            x = ggml_add(ctx, x, modulate_mul(ctx, y, es[5]));
 
             return x;
         }
@@ -1270,19 +1653,22 @@ namespace WAN {
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* e) {
             // x: [N, n_token, dim]
-            // e: [N, dim]
+            // e: [N, dim] or [N, T, dim]
             // return [N, n_token, out_dim]
 
             auto modulation = params["modulation"];
-            e               = ggml_add(ctx, modulation, ggml_reshape_3d(ctx, e, e->ne[0], 1, e->ne[1]));  // [N, 2, dim]
-            auto es         = ggml_chunk(ctx, e, 2, 1);                                                   // ([N, 1, dim], ...)
+            e               = ggml_reshape_4d(ctx, e, e->ne[0], 1, e->ne[1], e->ne[2]);  // [N, 1, dim] or [N, T, 1, dim]
+            e               = ggml_repeat_4d(ctx, e, e->ne[0], 2, e->ne[2], e->ne[3]);   // [N, 2, dim] or [N, T, 2, dim]
+
+            e       = ggml_add(ctx, e, modulation);  // [N, 2, dim] or [N, T, 2, dim]
+            auto es = ggml_chunk(ctx, e, 2, 1);      // ([N, 1, dim], ...) or ([N, T, 1, dim], ...)
 
             auto norm = std::dynamic_pointer_cast<LayerNorm>(blocks["norm"]);
             auto head = std::dynamic_pointer_cast<Linear>(blocks["head"]);
 
             x = norm->forward(ctx, x);
-            x = ggml_add(ctx, x, ggml_mul(ctx, x, es[1]));
-            x = ggml_add(ctx, x, es[0]);
+            x = ggml_add(ctx, x, modulate_mul(ctx, x, es[1]));
+            x = modulate_add(ctx, x, es[0]);
             x = head->forward(ctx, x);
             return x;
         }
@@ -1443,7 +1829,7 @@ namespace WAN {
             x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));           // [N*C*t_len*h_len, ph, pt, w_len*pw]
             x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph * h_len, t_len * C * N);  // [N*C*t_len, h_len*ph, pt, w_len*pw]
             x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 1, 3));           // [N*C*t_len, pt, h_len*ph, w_len*pw]
-            x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt * t_len, C * N);  // [N*C*t_len, h_len*ph, pt, w_len*pw]
+            x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt * t_len, C * N);  // [N*C, t_len*pt, h_len*ph, w_len*pw]
             return x;
         }
 
@@ -1455,9 +1841,11 @@ namespace WAN {
                                          struct ggml_tensor* clip_fea = NULL,
                                          int64_t N                    = 1) {
             // x: [N*C, T, H, W], C => in_dim
-            // timestep: [N,]
+            // timestep: [N,] or [T]
             // context: [N, L, text_dim]
             // return: [N, t_len*h_len*w_len, out_dim*pt*ph*pw]
+
+            GGML_ASSERT(N == 1);
 
             auto patch_embedding = std::dynamic_pointer_cast<Conv3d>(blocks["patch_embedding"]);
 
@@ -1479,12 +1867,12 @@ namespace WAN {
             auto e = ggml_nn_timestep_embedding(ctx, timestep, params.freq_dim);
             e      = time_embedding_0->forward(ctx, e);
             e      = ggml_silu_inplace(ctx, e);
-            e      = time_embedding_2->forward(ctx, e);  // [N, dim]
+            e      = time_embedding_2->forward(ctx, e);  // [N, dim] or [N, T, dim]
 
             // time_projection
             auto e0 = ggml_silu(ctx, e);
             e0      = time_projection_1->forward(ctx, e0);
-            e0      = ggml_reshape_3d(ctx, e0, e0->ne[0] / 6, 6, e0->ne[1]);  // [N, 6, dim]
+            e0      = ggml_reshape_4d(ctx, e0, e0->ne[0] / 6, 6, e0->ne[1], e0->ne[2]);  //  [N, 6, dim] or [N, T, 6, dim]
 
             context = text_embedding_0->forward(ctx, context);
             context = ggml_gelu(ctx, context);
@@ -1598,15 +1986,27 @@ namespace WAN {
             }
 
             if (wan_params.num_layers == 30) {
-                desc                 = "Wan2.1-T2V-1.3B";
-                wan_params.dim       = 1536;
-                wan_params.eps       = 1e-06;
-                wan_params.ffn_dim   = 8960;
-                wan_params.freq_dim  = 256;
-                wan_params.in_dim    = 16;
-                wan_params.num_heads = 12;
-                wan_params.out_dim   = 16;
-                wan_params.text_len  = 512;
+                if (version == VERSION_WAN2_2_TI2V) {
+                    desc                 = "Wan2.2-TI2V-5B";
+                    wan_params.dim       = 3072;
+                    wan_params.eps       = 1e-06;
+                    wan_params.ffn_dim   = 14336;
+                    wan_params.freq_dim  = 256;
+                    wan_params.in_dim    = 48;
+                    wan_params.num_heads = 24;
+                    wan_params.out_dim   = 48;
+                    wan_params.text_len  = 512;
+                } else {
+                    desc                 = "Wan2.1-T2V-1.3B";
+                    wan_params.dim       = 1536;
+                    wan_params.eps       = 1e-06;
+                    wan_params.ffn_dim   = 8960;
+                    wan_params.freq_dim  = 256;
+                    wan_params.in_dim    = 16;
+                    wan_params.num_heads = 12;
+                    wan_params.out_dim   = 16;
+                    wan_params.text_len  = 512;
+                }
             } else if (wan_params.num_layers == 40) {
                 if (wan_params.model_type == "t2v") {
                     if (version == VERSION_WAN2_2_I2V) {
@@ -1728,20 +2128,21 @@ namespace WAN {
                 auto x = load_tensor_from_file(work_ctx, "wan_dit_x.bin");
                 print_ggml_tensor(x);
 
-                std::vector<float> timesteps_vec(1, 1000.f);
-                auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
+                std::vector<float> timesteps_vec(3, 1000.f);
+                timesteps_vec[0] = 0.f;
+                auto timesteps   = vector_to_ggml_tensor(work_ctx, timesteps_vec);
 
                 // auto context = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 4096, 512, 1);
                 // ggml_set_f32(context, 0.01f);
                 auto context = load_tensor_from_file(work_ctx, "wan_dit_context.bin");
                 print_ggml_tensor(context);
-                auto clip_fea = load_tensor_from_file(work_ctx, "wan_dit_clip_fea.bin");
-                print_ggml_tensor(clip_fea);
+                // auto clip_fea = load_tensor_from_file(work_ctx, "wan_dit_clip_fea.bin");
+                // print_ggml_tensor(clip_fea);
 
                 struct ggml_tensor* out = NULL;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, clip_fea, NULL, NULL, &out, work_ctx);
+                compute(8, x, timesteps, context, NULL, NULL, NULL, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
@@ -1752,7 +2153,7 @@ namespace WAN {
         static void load_from_file_and_test(const std::string& file_path) {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             ggml_backend_t backend    = ggml_backend_cpu_init();
-            ggml_type model_data_type = GGML_TYPE_Q8_0;
+            ggml_type model_data_type = GGML_TYPE_F16;
             LOG_INFO("loading from '%s'", file_path.c_str());
 
             ModelLoader model_loader;
@@ -1773,7 +2174,7 @@ namespace WAN {
                                                                                       false,
                                                                                       tensor_types,
                                                                                       "model.diffusion_model",
-                                                                                      VERSION_WAN2,
+                                                                                      VERSION_WAN2_2_TI2V,
                                                                                       true));
 
             wan->alloc_params_buffer();
