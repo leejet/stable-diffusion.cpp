@@ -1113,14 +1113,18 @@ __STATIC_INLINE__ void ggml_backend_tensor_get_and_sync(ggml_backend_t backend, 
 }
 
 __STATIC_INLINE__ float ggml_backend_tensor_get_f32(ggml_tensor* tensor) {
-    GGML_ASSERT(tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16);
+    GGML_ASSERT(tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16 || tensor->type == GGML_TYPE_I32);
     float value;
     if (tensor->type == GGML_TYPE_F32) {
         ggml_backend_tensor_get(tensor, &value, 0, sizeof(value));
-    } else {  // GGML_TYPE_F16
+    } else if (tensor->type == GGML_TYPE_F16) {
         ggml_fp16_t f16_value;
         ggml_backend_tensor_get(tensor, &f16_value, 0, sizeof(f16_value));
         value = ggml_fp16_to_fp32(f16_value);
+    } else {  // GGML_TYPE_I32
+        int int32_value;
+        ggml_backend_tensor_get(tensor, &int32_value, 0, sizeof(int32_value));
+        value = (float)int32_value;
     }
     return value;
 }

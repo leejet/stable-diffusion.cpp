@@ -771,8 +771,15 @@ public:
         return result < -1;
     }
 
-    void apply_lora(const std::string& lora_name, float multiplier) {
+    void apply_lora(std::string lora_name, float multiplier) {
         int64_t t0                 = ggml_time_ms();
+        std::string high_noise_tag = "|high_noise|";
+        bool is_high_noise         = false;
+        if (starts_with(lora_name, high_noise_tag)) {
+            lora_name     = lora_name.substr(high_noise_tag.size());
+            is_high_noise = true;
+            LOG_DEBUG("high noise lora: %s", lora_name.c_str());
+        }
         std::string st_file_path   = path_join(lora_model_dir, lora_name + ".safetensors");
         std::string ckpt_file_path = path_join(lora_model_dir, lora_name + ".ckpt");
         std::string file_path;
@@ -784,7 +791,7 @@ public:
             LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
             return;
         }
-        LoraModel lora(backend, file_path);
+        LoraModel lora(backend, file_path, is_high_noise ? "model.high_noise_" : "");
         if (!lora.load_from_file()) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
             return;

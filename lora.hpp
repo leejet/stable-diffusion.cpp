@@ -130,7 +130,7 @@ struct LoraModel : public GGMLRunner {
                 // LOG_INFO("skipping LoRA tesnor '%s'", name.c_str());
                 return true;
             }
-            // LOG_INFO("%s", name.c_str());
+            // LOG_INFO("lora_tensor %s", name.c_str());
             for (int i = 0; i < LORA_TYPE_COUNT; i++) {
                 if (name.find(type_fingerprints[i]) != std::string::npos) {
                     type = (lora_t)i;
@@ -781,21 +781,18 @@ struct LoraModel : public GGMLRunner {
 
                         if (lora_tensors.find(lora_up_name) != lora_tensors.end()) {
                             lora_up = to_f32(compute_ctx, lora_tensors[lora_up_name]);
+                            applied_lora_tensors.insert(lora_up_name);
                         }
 
                         if (lora_tensors.find(lora_down_name) != lora_tensors.end()) {
                             lora_down = to_f32(compute_ctx, lora_tensors[lora_down_name]);
+                            applied_lora_tensors.insert(lora_down_name);
                         }
 
                         if (lora_tensors.find(lora_mid_name) != lora_tensors.end()) {
                             lora_mid = to_f32(compute_ctx, lora_tensors[lora_mid_name]);
                             applied_lora_tensors.insert(lora_mid_name);
                         }
-
-                        applied_lora_tensors.insert(lora_up_name);
-                        applied_lora_tensors.insert(lora_down_name);
-                        applied_lora_tensors.insert(alpha_name);
-                        applied_lora_tensors.insert(scale_name);
                     }
 
                     if (lora_up == NULL || lora_down == NULL) {
@@ -806,9 +803,12 @@ struct LoraModel : public GGMLRunner {
                     int64_t rank = lora_down->ne[ggml_n_dims(lora_down) - 1];
                     if (lora_tensors.find(scale_name) != lora_tensors.end()) {
                         scale_value = ggml_backend_tensor_get_f32(lora_tensors[scale_name]);
+                        applied_lora_tensors.insert(scale_name);
                     } else if (lora_tensors.find(alpha_name) != lora_tensors.end()) {
                         float alpha = ggml_backend_tensor_get_f32(lora_tensors[alpha_name]);
                         scale_value = alpha / rank;
+                        // LOG_DEBUG("rank %s %ld %.2f %.2f", alpha_name.c_str(), rank, alpha, scale_value);
+                        applied_lora_tensors.insert(alpha_name);
                     }
 
                     updown = ggml_merge_lora(compute_ctx, lora_down, lora_up, lora_mid);

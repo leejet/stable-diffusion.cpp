@@ -607,7 +607,7 @@ std::string convert_tensor_name(std::string name) {
         new_name = "lora." + name;
     } else if (contains(name, "lora_up") || contains(name, "lora_down") ||
                contains(name, "lora.up") || contains(name, "lora.down") ||
-               contains(name, "lora_linear")) {
+               contains(name, "lora_linear") || ends_with(name, ".alpha")) {
         size_t pos = new_name.find(".processor");
         if (pos != std::string::npos) {
             new_name.replace(pos, strlen(".processor"), "");
@@ -615,7 +615,11 @@ std::string convert_tensor_name(std::string name) {
         // if (starts_with(new_name, "transformer.transformer_blocks") || starts_with(new_name, "transformer.single_transformer_blocks")) {
         //     new_name = "model.diffusion_model." + new_name;
         // }
-        pos = new_name.rfind("lora");
+        if (ends_with(name, ".alpha")) {
+            pos = new_name.rfind("alpha");
+        } else {
+            pos = new_name.rfind("lora");
+        }
         if (pos != std::string::npos) {
             std::string name_without_network_parts = new_name.substr(0, pos - 1);
             std::string network_part               = new_name.substr(pos);
