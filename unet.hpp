@@ -547,6 +547,18 @@ struct UNetModelRunner : public GGMLRunner {
         unet.init(params_ctx, tensor_types, prefix);
     }
 
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        unet.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                LOG_DEBUG("block %s", block->get_desc().c_str());
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
+    }
+
     std::string get_desc() {
         return "unet";
     }

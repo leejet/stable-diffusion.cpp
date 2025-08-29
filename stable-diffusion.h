@@ -136,6 +136,8 @@ typedef struct {
     bool keep_control_net_on_cpu;
     bool keep_vae_on_cpu;
     bool diffusion_flash_attn;
+    bool diffusion_conv_direct;
+    bool vae_conv_direct;
     bool chroma_use_dit_mask;
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
@@ -245,6 +247,7 @@ typedef struct upscaler_ctx_t upscaler_ctx_t;
 
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
                                         bool offload_params_to_cpu,
+                                        bool direct,
                                         int n_threads);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 

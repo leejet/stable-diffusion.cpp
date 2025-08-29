@@ -9,9 +9,12 @@ struct UpscalerGGML {
     std::shared_ptr<ESRGAN> esrgan_upscaler;
     std::string esrgan_path;
     int n_threads;
+    bool direct = false;
 
-    UpscalerGGML(int n_threads)
-        : n_threads(n_threads) {
+    UpscalerGGML(int n_threads,
+                 bool direct = false)
+        : n_threads(n_threads),
+          direct(direct) {
     }
 
     bool load_from_file(const std::string& esrgan_path,
@@ -48,6 +51,9 @@ struct UpscalerGGML {
         }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
         esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, model_loader.tensor_storages_types);
+        if (direct) {
+            esrgan_upscaler->enable_conv2d_direct();
+        }
         if (!esrgan_upscaler->load_from_file(esrgan_path)) {
             return false;
         }
@@ -106,6 +112,7 @@ struct upscaler_ctx_t {
 
 upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
                                  bool offload_params_to_cpu,
+                                 bool direct,
                                  int n_threads) {
     upscaler_ctx_t* upscaler_ctx = (upscaler_ctx_t*)malloc(sizeof(upscaler_ctx_t));
     if (upscaler_ctx == NULL) {
@@ -113,7 +120,7 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
     }
     std::string esrgan_path(esrgan_path_c_str);
 
-    upscaler_ctx->upscaler = new UpscalerGGML(n_threads);
+    upscaler_ctx->upscaler = new UpscalerGGML(n_threads, direct);
     if (upscaler_ctx->upscaler == NULL) {
         return NULL;
     }

@@ -428,6 +428,10 @@ public:
                                                               model_loader.tensor_storages_types,
                                                               version,
                                                               sd_ctx_params->diffusion_flash_attn);
+                if (sd_ctx_params->diffusion_conv_direct) {
+                    LOG_INFO("Using Conv2d direct in the diffusion model");
+                    std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.enable_conv2d_direct();
+                }
             }
 
             cond_stage_model->alloc_params_buffer();
@@ -465,6 +469,10 @@ public:
                                                                     vae_decode_only,
                                                                     false,
                                                                     version);
+                if (sd_ctx_params->vae_conv_direct) {
+                    LOG_INFO("Using Conv2d direct in the vae model");
+                    first_stage_model->enable_conv2d_direct();
+                }
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else {
@@ -474,6 +482,10 @@ public:
                                                                     "decoder.layers",
                                                                     vae_decode_only,
                                                                     version);
+                if (sd_ctx_params->vae_conv_direct) {
+                    LOG_INFO("Using Conv2d direct in the tae model");
+                    tae_first_stage->enable_conv2d_direct();
+                }
             }
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
 
@@ -489,6 +501,10 @@ public:
                                                            offload_params_to_cpu,
                                                            model_loader.tensor_storages_types,
                                                            version);
+                if (sd_ctx_params->diffusion_conv_direct) {
+                    LOG_INFO("Using Conv2d direct in the control net");
+                    control_net->enable_conv2d_direct();
+                }
             }
 
             if (strstr(SAFE_STR(sd_ctx_params->stacked_id_embed_dir), "v2")) {
