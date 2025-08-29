@@ -2028,7 +2028,7 @@ namespace WAN {
                 wan_params.out_dim   = 16;
                 wan_params.text_len  = 512;
             } else {
-                GGML_ABORT("invalid num_layers(%d) of wan", wan_params.num_layers);
+                GGML_ABORT("invalid num_layers(%ld) of wan", wan_params.num_layers);
             }
 
             LOG_INFO("%s", desc.c_str());

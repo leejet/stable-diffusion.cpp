@@ -1679,7 +1679,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "clip_skip: %d\n"
              "width: %d\n"
              "height: %d\n"
-             "sample_params: %.2f\n"
+             "sample_params: %s\n"
              "strength: %.2f\n"
              "seed: %" PRId64
              "\n"

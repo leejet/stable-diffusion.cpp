@@ -8,7 +8,9 @@
 
 #include "stable-diffusion.h"
 
+#ifndef INCLUDE_STB_IMAGE_WRITE_H
 #include "stb_image_write.h"
+#endif
 
 typedef struct {
     uint32_t offset;

@@ -10,7 +10,6 @@
 #include <vector>
 
 // #include "preprocessing.hpp"
-#include "avi_writer.h"
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -24,6 +23,8 @@
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #define STB_IMAGE_RESIZE_STATIC
 #include "stb_image_resize.h"
+
+#include "avi_writer.h"
 
 #if defined(_WIN32)
 #define NOMINMAX
