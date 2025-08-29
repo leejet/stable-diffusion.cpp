@@ -113,10 +113,12 @@ struct SDParams {
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
+    float boundary           = 0.875; 
 
     SDParams() {
         sd_sample_params_init(&sample_params);
         sd_sample_params_init(&high_noise_sample_params);
+        high_noise_sample_params.sample_steps = -1;
     }
 };
 
@@ -243,7 +245,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --high-noise-scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)\n");
     printf("  --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
     printf("                                     (high noise) sampling method (default: \"euler_a\")\n");
-    printf("  --high-noise-steps  STEPS          (high noise) number of sample steps (default: 20)\n");
+    printf("  --high-noise-steps  STEPS          (high noise) number of sample steps (default: -1 = auto)\n");
     printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
     printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)\n");
@@ -274,6 +276,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
     printf("  --video-frames                     video frames (default: 1)\n");
     printf("  --fps                              fps (default: 24)\n");
+    printf("  --moe-boundary BOUNDARY            Timestep boundary for Wan2.2 MoE model. (default: 0.875)"); 
+    printf("                                     Only enabled if `--high-noise-steps` is set to -1");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -507,6 +511,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--strength", "", &params.strength},
         {"", "--style-ratio", "", &params.style_ratio},
         {"", "--control-strength", "", &params.control_strength},
+        {"", "--moe-boundary", "", &params.boundary},
     };
 
     options.bool_options = {
@@ -767,8 +772,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 
     if (params.high_noise_sample_params.sample_steps <= 0) {
-        fprintf(stderr, "error: the high_noise_sample_steps must be greater than 0\n");
-        exit(1);
+        params.high_noise_sample_params.sample_steps = -1;
     }
 
     if (params.strength < 0.f || params.strength > 1.f) {
@@ -1225,6 +1229,7 @@ int main(int argc, const char* argv[]) {
             params.strength,
             params.seed,
             params.video_frames,
+            params.boundary
         };
 
         results = generate_video(sd_ctx, &vid_gen_params, &num_results);
