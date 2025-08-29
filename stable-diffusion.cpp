@@ -681,7 +681,11 @@ public:
 
         if (sd_version_is_sd3(version)) {
             LOG_INFO("running in FLOW mode");
-            denoiser = std::make_shared<DiscreteFlowDenoiser>();
+            float shift = sd_ctx_params->flow_shift;
+            if( shift == INFINITY){
+                shift = 3.0;
+            }
+            denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
         } else if (sd_version_is_flux(version)) {
             LOG_INFO("running in Flux FLOW mode");
             float shift = 1.0f;  // TODO: validate
@@ -694,7 +698,14 @@ public:
             denoiser = std::make_shared<FluxFlowDenoiser>(shift);
         } else if (sd_version_is_wan(version)) {
             LOG_INFO("running in FLOW mode");
-            denoiser = std::make_shared<DiscreteFlowDenoiser>();
+            float shift = sd_ctx_params->flow_shift;
+            if(shift == INFINITY) {
+                shift = 5.0;
+                if (version == VERSION_WAN2){
+                    shift = 12.0;
+                }
+            }
+            denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
         } else if (is_using_v_parameterization) {
             LOG_INFO("running in v-prediction mode");
             denoiser = std::make_shared<CompVisVDenoiser>();
@@ -1553,6 +1564,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
+    sd_ctx_params->flow_shift              = INFINITY;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {

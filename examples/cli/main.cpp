@@ -115,6 +115,7 @@ struct SDParams {
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
+    float flow_shift         = INFINITY;
 
     SDParams() {
         sd_sample_params_init(&sample_params);
@@ -278,8 +279,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
     printf("  --video-frames                     video frames (default: 1)\n");
     printf("  --fps                              fps (default: 24)\n");
-    printf("  --moe-boundary BOUNDARY            Timestep boundary for Wan2.2 MoE model. (default: 0.875)\n");
-    printf("                                     Only enabled if `--high-noise-steps` is set to -1\n");
+    printf("  --moe-boundary BOUNDARY            timestep boundary for Wan2.2 MoE model. (default: 0.875)\n");
+    printf("                                     only enabled if `--high-noise-steps` is set to -1\n");
+    printf("  --flow-shift SHIFT                 shift value for Flow models like SD3.x or WAN (default: auto)\n"); 
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -514,6 +516,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--style-ratio", "", &params.style_ratio},
         {"", "--control-strength", "", &params.control_strength},
         {"", "--moe-boundary", "", &params.moe_boundary},
+        {"", "--flow-shift", "", &params.flow_shift},
     };
 
     options.bool_options = {
@@ -1181,6 +1184,7 @@ int main(int argc, const char* argv[]) {
         params.chroma_use_dit_mask,
         params.chroma_use_t5_mask,
         params.chroma_t5_mask_pad,
+        params.flow_shift,
     };
 
     sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
