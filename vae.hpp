@@ -529,6 +529,7 @@ struct VAE : public GGMLRunner {
                          struct ggml_tensor** output,
                          struct ggml_context* output_ctx)                                                         = 0;
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) = 0;
+    virtual void enable_conv2d_direct() {};
 };
 
 struct AutoEncoderKL : public VAE {
