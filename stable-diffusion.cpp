@@ -2384,7 +2384,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps + high_noise_sample_steps);
 
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(100 * 1024) * 1024;  // 100 MB
+    params.mem_size = static_cast<size_t>(200 * 1024) * 1024;  // 200 MB
     params.mem_size += width * height * frames * 3 * sizeof(float) * 2;
     params.mem_buffer = NULL;
     params.no_alloc   = false;

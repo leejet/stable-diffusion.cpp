@@ -1307,6 +1307,9 @@ protected:
     ggml_backend_buffer_t runtime_params_buffer = NULL;
     bool params_on_runtime_backend              = false;
 
+    struct ggml_context* cache_ctx     = NULL;
+    ggml_backend_buffer_t cache_buffer = NULL;
+
     struct ggml_context* compute_ctx    = NULL;
     struct ggml_gallocr* compute_allocr = NULL;
 
@@ -1314,6 +1317,8 @@ protected:
     ggml_tensor* one_tensor    = NULL;
 
     std::map<struct ggml_tensor*, const void*> backend_tensor_data_map;
+    std::map<std::string, struct ggml_tensor*> cache_tensor_map;  // name -> tensor
+    const std::string final_result_name = "ggml_runner_final_result_tensor";
 
     void alloc_params_ctx() {
         struct ggml_init_params params;
@@ -1337,6 +1342,23 @@ protected:
         if (offload_ctx != NULL) {
             ggml_free(offload_ctx);
             offload_ctx = NULL;
+        }
+    }
+
+    void alloc_cache_ctx() {
+        struct ggml_init_params params;
+        params.mem_size   = static_cast<size_t>(MAX_PARAMS_TENSOR_NUM * ggml_tensor_overhead());
+        params.mem_buffer = NULL;
+        params.no_alloc   = true;
+
+        cache_ctx = ggml_init(params);
+        GGML_ASSERT(cache_ctx != NULL);
+    }
+
+    void free_cache_ctx() {
+        if (cache_ctx != NULL) {
+            ggml_free(cache_ctx);
+            cache_ctx = NULL;
         }
     }
 
@@ -1370,6 +1392,8 @@ protected:
     struct ggml_cgraph* get_compute_graph(get_graph_cb_t get_graph) {
         prepare_build_in_tensor_before();
         struct ggml_cgraph* gf = get_graph();
+        auto result            = ggml_graph_node(gf, -1);
+        ggml_set_name(result, final_result_name.c_str());
         prepare_build_in_tensor_after(gf);
         return gf;
     }
@@ -1399,7 +1423,43 @@ protected:
         return true;
     }
 
-    void cpy_data_to_backend_tensor() {
+    void free_cache_buffer() {
+        if (cache_buffer != NULL) {
+            ggml_backend_buffer_free(cache_buffer);
+            cache_buffer = NULL;
+        }
+    }
+
+    void copy_cache_tensors_to_cache_buffer() {
+        if (cache_tensor_map.size() == 0) {
+            return;
+        }
+        free_cache_ctx_and_buffer();
+        alloc_cache_ctx();
+        GGML_ASSERT(cache_buffer == NULL);
+        std::map<ggml_tensor*, ggml_tensor*> runtime_tensor_to_cache_tensor;
+        for (auto kv : cache_tensor_map) {
+            auto cache_tensor = ggml_dup_tensor(cache_ctx, kv.second);
+            ggml_set_name(cache_tensor, kv.first.c_str());
+            runtime_tensor_to_cache_tensor[kv.second] = cache_tensor;
+        }
+        size_t num_tensors = ggml_tensor_num(cache_ctx);
+        cache_buffer       = ggml_backend_alloc_ctx_tensors(cache_ctx, runtime_backend);
+        GGML_ASSERT(cache_buffer != NULL);
+        for (auto kv : runtime_tensor_to_cache_tensor) {
+            ggml_backend_tensor_copy(kv.first, kv.second);
+        }
+        ggml_backend_synchronize(runtime_backend);
+        cache_tensor_map.clear();
+        size_t cache_buffer_size = ggml_backend_buffer_get_size(cache_buffer);
+        LOG_DEBUG("%s cache backend buffer size = % 6.2f MB(%s) (%i tensors)",
+                  get_desc().c_str(),
+                  cache_buffer_size / (1024.f * 1024.f),
+                  ggml_backend_is_cpu(runtime_backend) ? "RAM" : "VRAM",
+                  num_tensors);
+    }
+
+    void copy_data_to_backend_tensor() {
         for (auto& kv : backend_tensor_data_map) {
             auto tensor = kv.first;
             auto data   = kv.second;
@@ -1510,6 +1570,7 @@ public:
         if (params_backend != runtime_backend) {
             ggml_backend_free(params_backend);
         }
+        free_cache_ctx_and_buffer();
     }
 
     void reset_compute_ctx() {
@@ -1549,6 +1610,11 @@ public:
         return 0;
     }
 
+    void free_cache_ctx_and_buffer() {
+        free_cache_buffer();
+        free_cache_ctx();
+    }
+
     void free_compute_buffer() {
         if (compute_allocr != NULL) {
             ggml_gallocr_free(compute_allocr);
@@ -1579,6 +1645,17 @@ public:
         }
     }
 
+    void cache(const std::string name, struct ggml_tensor* tensor) {
+        cache_tensor_map[name] = tensor;
+    }
+
+    struct ggml_tensor* get_cache_tensor_by_name(const std::string& name) {
+        if (cache_ctx == NULL) {
+            return NULL;
+        }
+        return ggml_get_tensor(cache_ctx, name.c_str());
+    }
+
     void compute(get_graph_cb_t get_graph,
                  int n_threads,
                  bool free_compute_buffer_immediately = true,
@@ -1592,7 +1669,7 @@ public:
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_compute_graph(get_graph);
         GGML_ASSERT(ggml_gallocr_alloc_graph(compute_allocr, gf));
-        cpy_data_to_backend_tensor();
+        copy_data_to_backend_tensor();
         if (ggml_backend_is_cpu(runtime_backend)) {
             ggml_backend_cpu_set_n_threads(runtime_backend, n_threads);
         }
@@ -1601,8 +1678,9 @@ public:
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
+        copy_cache_tensors_to_cache_buffer();
         if (output != NULL) {
-            auto result = ggml_graph_node(gf, -1);
+            auto result = ggml_get_tensor(compute_ctx, final_result_name.c_str());
             if (*output == NULL && output_ctx != NULL) {
                 *output = ggml_dup_tensor(output_ctx, result);
             }
