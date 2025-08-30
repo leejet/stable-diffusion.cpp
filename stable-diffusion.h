@@ -101,7 +101,7 @@ enum sd_type_t {
     // SD_TYPE_IQ4_NL_4_4 = 36,
     // SD_TYPE_IQ4_NL_4_8 = 37,
     // SD_TYPE_IQ4_NL_8_8 = 38,
-    SD_TYPE_MXFP4   = 39, // MXFP4 (1 block)
+    SD_TYPE_MXFP4 = 39,  // MXFP4 (1 block)
     SD_TYPE_COUNT = 40,
 };
 
