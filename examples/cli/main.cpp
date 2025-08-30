@@ -127,9 +127,9 @@ struct SDParams {
     float flow_shift         = INFINITY;
 
     preview_t preview_method = PREVIEW_NONE;
-    int preview_interval        = 1;
-    std::string preview_path    = "preview.png";
-    bool taesd_preview          = false;
+    int preview_interval     = 1;
+    std::string preview_path = "preview.png";
+    bool taesd_preview       = false;
 
     SDParams() {
         sd_sample_params_init(&sample_params);
@@ -298,7 +298,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --preview {%s,%s,%s,%s}            preview method. (default is %s(disabled))\n", previews_str[0], previews_str[1], previews_str[2], previews_str[3], previews_str[PREVIEW_NONE]);
     printf("                                     %s is the fastest\n", previews_str[PREVIEW_PROJ]);
     printf("  --preview-interval [N]             How often to save the image preview");
-    printf("  --preview-path [PATH}              path to write preview image to (default: ./preview.png)\n");
+    printf("  --preview-path [PATH]              path to write preview image to (default: ./preview.png)\n");
     printf("  --color                            colors the logging tags according to level\n");
     printf("  --chroma-disable-dit-mask          disable dit mask for chroma\n");
     printf("  --chroma-enable-t5-mask            enable t5 mask for chroma\n");
@@ -506,7 +506,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-p", "--prompt", "", &params.prompt},
         {"-n", "--negative-prompt", "", &params.negative_prompt},
         {"", "--preview-path", "", &params.preview_path},
-
         {"", "--upscale-model", "", &params.esrgan_path},
     };
 
@@ -762,7 +761,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         }
         if (preview_method == -1) {
             fprintf(stderr, "error: preview method %s\n",
-                preview);
+                    preview);
             return -1;
         }
         params.preview_method = (preview_t)preview_method;
@@ -1065,15 +1064,37 @@ uint8_t* load_image(const char* image_path, int& width, int& height, int expecte
 }
 
 const char* preview_path;
+float preview_fps;
 
-void step_callback(int step, sd_image_t image) {
-    stbi_write_png(preview_path, image.width, image.height, image.channel, image.data, 0);
+void step_callback(int step, int frame_count, sd_image_t* image) {
+    if (frame_count == 1) {
+        stbi_write_png(preview_path, image->width, image->height, image->channel, image->data, 0);
+    } else {
+        create_mjpg_avi_from_sd_images(preview_path, image, frame_count, preview_fps);
+    }
 }
 
 int main(int argc, const char* argv[]) {
     SDParams params;
     parse_args(argc, argv, params);
     preview_path = params.preview_path.c_str();
+    if (params.video_frames > 4) {
+        size_t last_dot_pos   = params.preview_path.find_last_of(".");
+        std::string base_path = params.preview_path;
+        std::string file_ext  = "";
+        if (last_dot_pos != std::string::npos) {  // filename has extension
+            base_path = params.preview_path.substr(0, last_dot_pos);
+            file_ext  = params.preview_path.substr(last_dot_pos);
+            std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
+        }
+        if (file_ext == ".png") {
+            preview_path = (base_path + ".avi").c_str();
+        }
+    }
+    preview_fps = params.fps;
+    if (params.preview_method == PREVIEW_PROJ)
+        preview_fps /= 4.0f;
+
     params.sample_params.guidance.slg.layers                 = params.skip_layers.data();
     params.sample_params.guidance.slg.layer_count            = params.skip_layers.size();
     params.high_noise_sample_params.guidance.slg.layers      = params.high_noise_skip_layers.data();

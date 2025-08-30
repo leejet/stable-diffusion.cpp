@@ -123,36 +123,38 @@ const float sd_latent_rgb_proj[4][3]{
     {-0.2120f, -0.2616f, -0.7177f}};
 float sd_latent_rgb_bias[3] = {0,0,0};
 
-void preview_latent_image(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int width, int height, int dim) {
+void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int width, int height, int frames, int dim) {
     size_t buffer_head = 0;
-    for (int j = 0; j < height; j++) {
-        for (int i = 0; i < width; i++) {
-            size_t latent_id = (i * latents->nb[0] + j * latents->nb[1]);
-            float r = 0, g = 0, b = 0;
-            for (int d = 0; d < dim; d++) {
-                float value = *(float*)((char*)latents->data + latent_id + d * latents->nb[2]);
-                r += value * latent_rgb_proj[d][0];
-                g += value * latent_rgb_proj[d][1];
-                b += value * latent_rgb_proj[d][2];
-            }
+    for (int k = 0; k < frames; k++) {
+        for (int j = 0; j < height; j++) {
+            for (int i = 0; i < width; i++) {
+                size_t latent_id = (i * latents->nb[0] + j * latents->nb[1] + k * latents->nb[2]);
+                float r = 0, g = 0, b = 0;
+                for (int d = 0; d < dim; d++) {
+                    float value = *(float*)((char*)latents->data + latent_id + d * latents->nb[ggml_n_dims(latents) - 1]);
+                    r += value * latent_rgb_proj[d][0];
+                    g += value * latent_rgb_proj[d][1];
+                    b += value * latent_rgb_proj[d][2];
+                }
                 // bias
                 r += latent_rgb_bias[0];
                 g += latent_rgb_bias[1];
                 b += latent_rgb_bias[2];
 
-            // change range
-            r = r * .5f + .5f;
-            g = g * .5f + .5f;
-            b = b * .5f + .5f;
+                // change range
+                r = r * .5f + .5f;
+                g = g * .5f + .5f;
+                b = b * .5f + .5f;
 
-            // clamp rgb values to [0,1] range
-            r = r >= 0 ? r <= 1 ? r : 1 : 0;
-            g = g >= 0 ? g <= 1 ? g : 1 : 0;
-            b = b >= 0 ? b <= 1 ? b : 1 : 0;
+                // clamp rgb values to [0,1] range
+                r = r >= 0 ? r <= 1 ? r : 1 : 0;
+                g = g >= 0 ? g <= 1 ? g : 1 : 0;
+                b = b >= 0 ? b <= 1 ? b : 1 : 0;
 
-            buffer[buffer_head++] = (uint8_t)(r * 255);
-            buffer[buffer_head++] = (uint8_t)(g * 255);
-            buffer[buffer_head++] = (uint8_t)(b * 255);
+                buffer[buffer_head++] = (uint8_t)(r * 255);
+                buffer[buffer_head++] = (uint8_t)(g * 255);
+                buffer[buffer_head++] = (uint8_t)(b * 255);
+            }
         }
     }
 }

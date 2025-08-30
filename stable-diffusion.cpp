@@ -361,8 +361,8 @@ public:
                                                                      offload_params_to_cpu,
                                                                      model_loader.tensor_storages_types);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                               offload_params_to_cpu,
-                                                               model_loader.tensor_storages_types);
+                                                                offload_params_to_cpu,
+                                                                model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : model_loader.tensor_storages_types) {
@@ -398,11 +398,11 @@ public:
                                                                     1,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
-                                                             offload_params_to_cpu,
-                                                             model_loader.tensor_storages_types,
-                                                             "model.diffusion_model",
-                                                             version,
-                                                             sd_ctx_params->diffusion_flash_attn);
+                                                              offload_params_to_cpu,
+                                                              model_loader.tensor_storages_types,
+                                                              "model.diffusion_model",
+                                                              version,
+                                                              sd_ctx_params->diffusion_flash_attn);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
                                                                             offload_params_to_cpu,
@@ -1036,16 +1036,25 @@ public:
                        enum SDVersion version,
                        preview_t preview_mode,
                        ggml_tensor* result,
-                       std::function<void(int, sd_image_t)> step_callback) {
+                       std::function<void(int, int, sd_image_t*)> step_callback) {
         const uint32_t channel = 3;
         uint32_t width         = latents->ne[0];
         uint32_t height        = latents->ne[1];
-        uint32_t dim           = latents->ne[2];
+        uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
+
         if (preview_mode == PREVIEW_PROJ) {
             const float (*latent_rgb_proj)[channel];
             float *latent_rgb_bias;
 
-            if (dim == 16) {
+            if (dim == 48) {
+                if (sd_version_is_wan(version)) {
+                    latent_rgb_proj = wan_22_latent_rgb_proj;
+                } else {
+                    LOG_WARN("No latent to RGB projection known for this model");
+                    // unknown model
+                    return;
+                }
+            } else if (dim == 16) {
                 // 16 channels VAE -> Flux or SD3
 
                 if (sd_version_is_sd3(version)) {
@@ -1053,6 +1062,8 @@ public:
                     latent_rgb_bias = sd3_latent_rgb_bias;
                 } else if (sd_version_is_flux(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
+                } else if (sd_version_is_wan(version)) {
+                    latent_rgb_proj = wan_21_latent_rgb_proj;
                     latent_rgb_bias = flux_latent_rgb_bias;
                 } else {
                     LOG_WARN("No latent to RGB projection known for this model");
@@ -1078,16 +1089,22 @@ public:
                 // unknown latent space
                 return;
             }
-            uint8_t* data = (uint8_t*)malloc(width * height * channel * sizeof(uint8_t));
 
-            preview_latent_image(data, latents, latent_rgb_proj,latent_rgb_bias, width, height, dim);
-            sd_image_t image = {
-                width,
-                height,
-                channel,
-                data};
-            step_callback(step, image);
-            free(image.data);
+            uint32_t frames = 1;
+            if (ggml_n_dims(latents) == 4) {
+                frames = latents->ne[2];
+            }
+
+            uint8_t* data = (uint8_t*)malloc(frames * width * height * channel * sizeof(uint8_t));
+
+            preview_latent_video(data, latents, latent_rgb_proj,latent_rgb_bias, width, height, frames, dim);
+            sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
+            for (int i = 0; i < frames; i++) {
+                images[i] = {width, height, channel, data + i * width * height * channel};
+            }
+            step_callback(step, frames, images);
+            free(data);
+            free(images);
         } else {
             if (preview_mode == PREVIEW_VAE) {
                 process_latent_out(latents);
@@ -1101,8 +1118,10 @@ public:
                 } else {
                     first_stage_model->compute(n_threads, latents, true, &result, work_ctx);
                 }
+
                 first_stage_model->free_compute_buffer();
                 process_vae_output_tensor(result);
+                process_latent_in(latents);
             } else if (preview_mode == PREVIEW_TAE) {
                 if (tae_first_stage == nullptr) {
                     LOG_WARN("TAE not found for preview");
@@ -1121,15 +1140,30 @@ public:
             } else {
                 return;
             }
+
             ggml_tensor_clamp(result, 0.0f, 1.0f);
-            sd_image_t image = {
-                width * 8,
-                height * 8,
-                channel,
-                sd_tensor_to_image(result)};
+            uint32_t frames = 1;
+            if (ggml_n_dims(latents) == 4) {
+                frames = result->ne[2];
+            }
+
+            sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
+            print_ggml_tensor(result,true);
+            for (size_t i = 0; i < frames; i++) {
+                images[i].width   = result->ne[0];
+                images[i].height  = result->ne[1];
+                images[i].channel = 3;
+                images[i].data    = sd_tensor_to_image(result, i, ggml_n_dims(latents) == 4);
+            }
+
+            step_callback(step, frames, images);
+            
             ggml_tensor_scale(result, 0);
-            step_callback(step, image);
-            free(image.data);
+            for (int i = 0; i < frames; i++) {
+                free(images[i].data);
+            }
+
+            free(images);
         }
     }
 
@@ -1200,13 +1234,32 @@ public:
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
         struct ggml_tensor* preview_tensor = NULL;
-        auto sd_preview_mode = sd_get_preview_mode();
+        auto sd_preview_mode               = sd_get_preview_mode();
         if (sd_preview_mode != PREVIEW_NONE && sd_preview_mode != PREVIEW_PROJ) {
-            preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
-                                                (denoised->ne[0] * 8),
-                                                (denoised->ne[1] * 8),
-                                                3,
-                                                denoised->ne[3]);
+            int64_t W = x->ne[0] * 8;
+            int64_t H = x->ne[1] * 8;
+            if (ggml_n_dims(x) == 4) {
+                // assuming video mode (if batch processing gets implemented this will break)
+                int T = x->ne[2];
+                if (sd_version_is_wan(version)) {
+                    T = ((T - 1) * 4) + 1;
+                    if (version == VERSION_WAN2_2_TI2V) {
+                        W = x->ne[0] * 16;
+                        H = x->ne[1] * 16;
+                    }
+                }
+                preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
+                                                    W,
+                                                    H,
+                                                    T,
+                                                    3);
+            } else {
+                preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
+                                                    W,
+                                                    H,
+                                                    3,
+                                                    x->ne[3]);
+            }
         }
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
@@ -1378,7 +1431,7 @@ public:
                 pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
                 // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
-            auto sd_preview_cb = sd_get_preview_callback();
+            auto sd_preview_cb   = sd_get_preview_callback();
             auto sd_preview_mode = sd_get_preview_mode();
             if (sd_preview_cb != NULL) {
                 if (step % sd_get_preview_interval() == 0) {
@@ -1465,12 +1518,12 @@ public:
                                     -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
                                     0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
                 latents_std_vec  = {
-                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
-                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
-                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
-                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
-                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
-                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+                    0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                    0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                    0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                    0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                    0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                    0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
             }
             for (int i = 0; i < latent->ne[3]; i++) {
                 float mean = latents_mean_vec[i];
@@ -1505,12 +1558,12 @@ public:
                                     -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
                                     0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
                 latents_std_vec  = {
-                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
-                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
-                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
-                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
-                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
-                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+                    0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                    0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                    0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                    0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                    0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                    0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
             }
             for (int i = 0; i < latent->ne[3]; i++) {
                 float mean = latents_mean_vec[i];
@@ -1967,8 +2020,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     std::string input_id_images_path,
                                     std::vector<ggml_tensor*> ref_latents,
                                     bool increase_ref_index,
-                                    ggml_tensor* concat_latent                                      = NULL,
-                                    ggml_tensor* denoise_mask                                       = NULL) {
+                                    ggml_tensor* concat_latent = NULL,
+                                    ggml_tensor* denoise_mask  = NULL) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
