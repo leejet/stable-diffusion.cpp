@@ -1045,10 +1045,12 @@ public:
         if (preview_mode == PREVIEW_PROJ) {
             const float (*latent_rgb_proj)[channel];
             float *latent_rgb_bias;
+            float *latent_rgb_bias;
 
             if (dim == 48) {
                 if (sd_version_is_wan(version)) {
                     latent_rgb_proj = wan_22_latent_rgb_proj;
+                    latent_rgb_bias = wan_22_latent_rgb_bias;
                 } else {
                     LOG_WARN("No latent to RGB projection known for this model");
                     // unknown model
@@ -1062,9 +1064,10 @@ public:
                     latent_rgb_bias = sd3_latent_rgb_bias;
                 } else if (sd_version_is_flux(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
+                    latent_rgb_bias = flux_latent_rgb_bias;
                 } else if (sd_version_is_wan(version)) {
                     latent_rgb_proj = wan_21_latent_rgb_proj;
-                    latent_rgb_bias = flux_latent_rgb_bias;
+                    latent_rgb_bias = wan_21_latent_rgb_bias;
                 } else {
                     LOG_WARN("No latent to RGB projection known for this model");
                     // unknown model

@@ -15,6 +15,7 @@ const float wan_21_latent_rgb_proj[16][3] = {
     {0.0060, -0.0633, 0.0005},
     {0.3477, 0.2275, 0.2950},
     {0.1984, 0.0913, 0.1861}};
+float wan_21_latent_rgb_bias[3] = {-0.1223, -0.1889, -0.1976};
 
 const float wan_22_latent_rgb_proj[48][3] = {
     {0.0119, 0.0103, 0.0046},
@@ -65,6 +66,7 @@ const float wan_22_latent_rgb_proj[48][3] = {
     {0.0421, 0.0451, 0.0373},
     {0.0504, -0.0483, -0.0356},
     {-0.0837, 0.0168, 0.0055}};
+float wan_22_latent_rgb_bias[3] = {0.0317, -0.0878, -0.1388};
 
 // https://github.com/comfyanonymous/ComfyUI/blob/master/comfy/latent_formats.py#L152-L169
 const float flux_latent_rgb_proj[16][3] = {
