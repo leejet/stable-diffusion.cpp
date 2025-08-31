@@ -2479,7 +2479,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                         float value = 0.0f;
                         if (i2 == 0 && sd_vid_gen_params->init_image.data) {  // start image
                             value = 1.0f;
-                        } else if (i2 == frames - 1 && sd_vid_gen_params->end_image.data && i3 == 0) {
+                        } else if (i2 == frames - 1 && sd_vid_gen_params->end_image.data && i3 == 3) {
                             value = 1.0f;
                         }
                         ggml_tensor_set_f32(concat_mask, value, i0, i1, i2, i3);
