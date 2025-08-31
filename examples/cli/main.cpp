@@ -1269,11 +1269,11 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    free(results);
     for (int i = 0; i < num_results; i++) {
         free(results[i].data);
         results[i].data = NULL;
     }
+    free(results);
     free_sd_ctx(sd_ctx);
     free(control_image_buffer);
     free(input_image_buffer);
