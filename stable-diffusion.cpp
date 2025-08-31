@@ -1621,6 +1621,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
 }
 
 void sd_sample_params_init(sd_sample_params_t* sample_params) {
+    memset((void*)sample_params, 0, sizeof(sd_sample_params_t));
     sample_params->guidance.txt_cfg            = 7.0f;
     sample_params->guidance.img_cfg            = INFINITY;
     sample_params->guidance.distilled_guidance = 3.5f;
