@@ -1780,7 +1780,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     const std::vector<float>& sigmas,
                                     int64_t seed,
                                     int batch_count,
-                                    const sd_image_t* control_cond,
+                                    sd_image_t control_image,
                                     float control_strength,
                                     float style_ratio,
                                     bool normalize_input,
@@ -1947,9 +1947,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
 
     // Control net hint
     struct ggml_tensor* image_hint = NULL;
-    if (control_cond != NULL) {
+    if (control_image.data != NULL) {
         image_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-        sd_image_to_tensor(control_cond->data, image_hint);
+        sd_image_to_tensor(control_image.data, image_hint);
     }
 
     // Sample
@@ -2342,7 +2342,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sigmas,
                                                         seed,
                                                         sd_img_gen_params->batch_count,
-                                                        sd_img_gen_params->control_cond,
+                                                        sd_img_gen_params->control_image,
                                                         sd_img_gen_params->control_strength,
                                                         sd_img_gen_params->style_strength,
                                                         sd_img_gen_params->normalize_input,

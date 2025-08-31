@@ -188,7 +188,7 @@ typedef struct {
     float strength;
     int64_t seed;
     int batch_count;
-    const sd_image_t* control_cond;
+    sd_image_t control_image;
     float control_strength;
     float style_strength;
     bool normalize_input;
@@ -200,6 +200,7 @@ typedef struct {
     const char* negative_prompt;
     int clip_skip;
     sd_image_t init_image;
+    sd_image_t end_image;
     int width;
     int height;
     sd_sample_params_t sample_params;
