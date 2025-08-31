@@ -401,7 +401,7 @@ public:
                                                                             version,
                                                                             sd_ctx_params->diffusion_flash_attn);
                 }
-                if (diffusion_model->get_desc() == "Wan2.1-I2V-14B") {
+                if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" || diffusion_model->get_desc() == "Wan2.1-FLF2V-14B") {
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
                                                                              offload_params_to_cpu,
                                                                              model_loader.tensor_storages_types);
@@ -2413,38 +2413,53 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     ggml_tensor* concat_latent      = NULL;
     ggml_tensor* denoise_mask       = NULL;
     if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
-        sd_ctx->sd->diffusion_model->get_desc() == "Wan2.2-I2V-14B") {
+        sd_ctx->sd->diffusion_model->get_desc() == "Wan2.2-I2V-14B" ||
+        sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-FLF2V-14B") {
         LOG_INFO("IMG2VID");
 
-        if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B") {
+        if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
+            sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-FLF2V-14B") {
             if (sd_vid_gen_params->init_image.data) {
                 clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, -2);
             } else {
                 clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, -2, true);
             }
 
+            if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-FLF2V-14B") {
+                ggml_tensor* end_image_clip_vision_output = NULL;
+                if (sd_vid_gen_params->end_image.data) {
+                    end_image_clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->end_image, false, -2);
+                } else {
+                    end_image_clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->end_image, false, -2, true);
+                }
+                clip_vision_output = ggml_tensor_concat(work_ctx, clip_vision_output, end_image_clip_vision_output, 1);
+            }
+
             int64_t t1 = ggml_time_ms();
             LOG_INFO("get_clip_vision_output completed, taking %" PRId64 " ms", t1 - t0);
         }
 
-        int64_t t1            = ggml_time_ms();
-        ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, frames, 3);
-        for (int i3 = 0; i3 < init_img->ne[3]; i3++) {  // channels
-            for (int i2 = 0; i2 < init_img->ne[2]; i2++) {
-                for (int i1 = 0; i1 < init_img->ne[1]; i1++) {      // height
-                    for (int i0 = 0; i0 < init_img->ne[0]; i0++) {  // width
+        int64_t t1         = ggml_time_ms();
+        ggml_tensor* image = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, frames, 3);
+        for (int i3 = 0; i3 < image->ne[3]; i3++) {  // channels
+            for (int i2 = 0; i2 < image->ne[2]; i2++) {
+                for (int i1 = 0; i1 < image->ne[1]; i1++) {      // height
+                    for (int i0 = 0; i0 < image->ne[0]; i0++) {  // width
                         float value = 0.5f;
                         if (i2 == 0 && sd_vid_gen_params->init_image.data) {  // start image
                             value = *(sd_vid_gen_params->init_image.data + i1 * width * 3 + i0 * 3 + i3);
                             value /= 255.f;
+                        } else if (i2 == frames - 1 && sd_vid_gen_params->end_image.data) {
+                            value = *(sd_vid_gen_params->end_image.data + i1 * width * 3 + i0 * 3 + i3);
+                            value /= 255.f;
                         }
-                        ggml_tensor_set_f32(init_img, value, i0, i1, i2, i3);
+                        ggml_tensor_set_f32(image, value, i0, i1, i2, i3);
                     }
                 }
             }
         }
 
-        concat_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);  // [b*c, t, h/8, w/8]
+        concat_latent = sd_ctx->sd->encode_first_stage(work_ctx, image);  // [b*c, t, h/8, w/8]
 
         int64_t t2 = ggml_time_ms();
         LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);
@@ -2463,6 +2478,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                     for (int i0 = 0; i0 < concat_mask->ne[0]; i0++) {
                         float value = 0.0f;
                         if (i2 == 0 && sd_vid_gen_params->init_image.data) {  // start image
+                            value = 1.0f;
+                        } else if (i2 == frames - 1 && sd_vid_gen_params->end_image.data && i3 == 0) {
                             value = 1.0f;
                         }
                         ggml_tensor_set_f32(concat_mask, value, i0, i1, i2, i3);

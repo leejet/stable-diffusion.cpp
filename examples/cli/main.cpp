@@ -71,7 +71,7 @@ struct SDParams {
     std::string output_path = "output.png";
     std::string init_image_path;
     std::string end_image_path;
-    std::string mask_path;
+    std::string mask_image_path;
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
 
@@ -146,7 +146,7 @@ void print_params(SDParams params) {
     printf("    output_path:                       %s\n", params.output_path.c_str());
     printf("    init_image_path:                   %s\n", params.init_image_path.c_str());
     printf("    end_image_path:                    %s\n", params.end_image_path.c_str());
-    printf("    mask_image_path:                   %s\n", params.mask_path.c_str());
+    printf("    mask_image_path:                   %s\n", params.mask_image_path.c_str());
     printf("    control_image_path:                %s\n", params.control_image_path.c_str());
     printf("    ref_images_paths:\n");
     for (auto& path : params.ref_image_paths) {
@@ -210,8 +210,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     If not specified, the default is the type of the weight file\n");
     printf("  --tensor-type-rules [EXPRESSION]   weight type per tensor pattern (example: \"^vae\\.=f16,model\\.=q8_0\")\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
-    printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
+    printf("  -i, --init-img [IMAGE]             path to the init image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
+    printf("  -i, --end-img [IMAGE]              path to the end image, required by flf2v\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
     printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
@@ -455,7 +456,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--end-img", "", &params.end_image_path},
         {"", "--tensor-type-rules", "", &params.tensor_type_rules},
         {"", "--input-id-images-dir", "", &params.input_id_images_path},
-        {"", "--mask", "", &params.mask_path},
+        {"", "--mask", "", &params.mask_image_path},
         {"", "--control-image", "", &params.control_image_path},
         {"-o", "--output", "", &params.output_path},
         {"-p", "--prompt", "", &params.prompt},
@@ -1071,13 +1072,13 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    if (params.mask_path.size() > 0) {
+    if (params.mask_image_path.size() > 0) {
         int c           = 0;
         int width       = 0;
         int height      = 0;
-        mask_image.data = load_image(params.mask_path.c_str(), width, height, params.width, params.height, 1);
+        mask_image.data = load_image(params.mask_image_path.c_str(), width, height, params.width, params.height, 1);
         if (mask_image.data == NULL) {
-            fprintf(stderr, "load image from '%s' failed\n", params.mask_path.c_str());
+            fprintf(stderr, "load image from '%s' failed\n", params.mask_image_path.c_str());
             release_all_resources();
             return 1;
         }

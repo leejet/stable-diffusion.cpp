@@ -1934,6 +1934,9 @@ namespace WAN {
                 if (tensor_name.find("img_emb") != std::string::npos) {
                     wan_params.model_type = "i2v";
                 }
+                if (tensor_name.find("img_emb.emb_pos") != std::string::npos) {
+                    wan_params.flf_pos_embed_token_number = 514;
+                }
             }
 
             if (wan_params.num_layers == 30) {
@@ -1968,8 +1971,12 @@ namespace WAN {
                         wan_params.in_dim = 16;
                     }
                 } else {
-                    desc              = "Wan2.1-I2V-14B";
                     wan_params.in_dim = 36;
+                    if (wan_params.flf_pos_embed_token_number > 0) {
+                        desc = "Wan2.1-FLF2V-14B";
+                    } else {
+                        desc = "Wan2.1-I2V-14B";
+                    }
                 }
                 wan_params.dim       = 5120;
                 wan_params.eps       = 1e-06;
