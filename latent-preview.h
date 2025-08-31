@@ -1,4 +1,3 @@
-
 // https://github.com/comfyanonymous/ComfyUI/blob/master/comfy/latent_formats.py#L152-L169
 const float flux_latent_rgb_proj[16][3] = {
     {-0.0346f, 0.0244f, 0.0681f},
@@ -17,6 +16,7 @@ const float flux_latent_rgb_proj[16][3] = {
     {-0.1264f, -0.0522f, -0.1103f},
     {-0.0280f, -0.0881f, -0.0499f},
     {-0.1262f, -0.0982f, -0.0778f}};
+float flux_latent_rgb_bias[3] = {-0.0329, -0.0718, -0.0851};
 
 // https://github.com/Stability-AI/sd3.5/blob/main/sd3_impls.py#L228-L246
 const float sd3_latent_rgb_proj[16][3] = {
@@ -37,6 +37,7 @@ const float sd3_latent_rgb_proj[16][3] = {
     {-0.0749f, -0.0634f, -0.0456f},
     {-0.1418f, -0.1457f, -0.1259f},
 };
+float sd3_latent_rgb_bias[3] = {0, 0, 0};
 
 // https://github.com/comfyanonymous/ComfyUI/blob/master/comfy/latent_formats.py#L32-L38
 const float sdxl_latent_rgb_proj[4][3] = {
@@ -44,6 +45,7 @@ const float sdxl_latent_rgb_proj[4][3] = {
     {-0.2533f, -0.0042f, 0.1068f},
     {0.1076f, 0.1111f, -0.0362f},
     {-0.3165f, -0.2492f, -0.2188f}};
+float sdxl_latent_rgb_bias[3] = {0.1084, -0.0175, -0.0011};
 
 // https://github.com/comfyanonymous/ComfyUI/blob/master/comfy/latent_formats.py#L32-L38
 const float sd_latent_rgb_proj[4][3]{
@@ -51,8 +53,9 @@ const float sd_latent_rgb_proj[4][3]{
     {0.3250f, 0.4974f, 0.2350f},
     {-0.2829f, 0.1762f, 0.2721f},
     {-0.2120f, -0.2616f, -0.7177f}};
+float sd_latent_rgb_bias[3] = {0,0,0};
 
-void preview_latent_image(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], int width, int height, int dim) {
+void preview_latent_image(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int width, int height, int dim) {
     size_t buffer_head = 0;
     for (int j = 0; j < height; j++) {
         for (int i = 0; i < width; i++) {
@@ -64,6 +67,10 @@ void preview_latent_image(uint8_t* buffer, struct ggml_tensor* latents, const fl
                 g += value * latent_rgb_proj[d][1];
                 b += value * latent_rgb_proj[d][2];
             }
+                // bias
+                r += latent_rgb_bias[0];
+                g += latent_rgb_bias[1];
+                b += latent_rgb_bias[2];
 
             // change range
             r = r * .5f + .5f;

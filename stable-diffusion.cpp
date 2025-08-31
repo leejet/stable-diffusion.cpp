@@ -883,14 +883,17 @@ public:
         uint32_t dim           = latents->ne[2];
         if (preview_mode == PREVIEW_PROJ) {
             const float (*latent_rgb_proj)[channel];
+            float *latent_rgb_bias;
 
             if (dim == 16) {
                 // 16 channels VAE -> Flux or SD3
 
                 if (sd_version_is_sd3(version)) {
                     latent_rgb_proj = sd3_latent_rgb_proj;
+                    latent_rgb_bias = sd3_latent_rgb_bias;
                 } else if (sd_version_is_flux(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
+                    latent_rgb_bias = flux_latent_rgb_bias;
                 } else {
                     LOG_WARN("No latent to RGB projection known for this model");
                     // unknown model
@@ -901,8 +904,10 @@ public:
                 // 4 channels VAE
                 if (sd_version_is_sdxl(version)) {
                     latent_rgb_proj = sdxl_latent_rgb_proj;
+                    latent_rgb_bias = sdxl_latent_rgb_bias;
                 } else if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
                     latent_rgb_proj = sd_latent_rgb_proj;
+                    latent_rgb_bias = sd_latent_rgb_bias;
                 } else {
                     // unknown model
                     LOG_WARN("No latent to RGB projection known for this model");
@@ -915,7 +920,7 @@ public:
             }
             uint8_t* data = (uint8_t*)malloc(width * height * channel * sizeof(uint8_t));
 
-            preview_latent_image(data, latents, latent_rgb_proj, width, height, dim);
+            preview_latent_image(data, latents, latent_rgb_proj,latent_rgb_bias, width, height, dim);
             sd_image_t image = {
                 width,
                 height,
