@@ -60,30 +60,16 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                       const String2GGMLType& tensor_types,
                                       const std::string& embd_dir,
                                       SDVersion version = VERSION_SD1,
-                                      PMVersion pv      = PM_VERSION_1,
-                                      int clip_skip     = -1)
+                                      PMVersion pv      = PM_VERSION_1)
         : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407), embd_dir(embd_dir) {
+        bool force_clip_f32 = embd_dir.size() > 0;
         if (sd_version_is_sd1(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14);
+            text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32);
         } else if (sd_version_is_sd2(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14);
+            text_model = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, true, force_clip_f32);
         } else if (sd_version_is_sdxl(version)) {
-            text_model  = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
-            text_model2 = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
-        }
-        set_clip_skip(clip_skip);
-    }
-
-    void set_clip_skip(int clip_skip) {
-        if (clip_skip <= 0) {
-            clip_skip = 1;
-            if (sd_version_is_sd2(version) || sd_version_is_sdxl(version)) {
-                clip_skip = 2;
-            }
-        }
-        text_model->set_clip_skip(clip_skip);
-        if (sd_version_is_sdxl(version)) {
-            text_model2->set_clip_skip(clip_skip);
+            text_model  = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false, force_clip_f32);
+            text_model2 = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false, force_clip_f32);
         }
     }
 
@@ -411,7 +397,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                              int height,
                                              int adm_in_channels        = -1,
                                              bool force_zero_embeddings = false) {
-        set_clip_skip(clip_skip);
+        if (clip_skip <= 0) {
+            clip_skip = (sd_version_is_sd2(version) || sd_version_is_sdxl(version)) ? 2 : 1;
+        }
+
         int64_t t0                               = ggml_time_ms();
         struct ggml_tensor* hidden_states        = NULL;  // [N, n_token, hidden_size]
         struct ggml_tensor* chunk_hidden_states  = NULL;  // [n_token, hidden_size] or [n_token, hidden_size + hidden_size2]
@@ -454,6 +443,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                     token_embed_custom.data(),
                                     max_token_idx,
                                     false,
+                                    clip_skip,
                                     &chunk_hidden_states1,
                                     work_ctx);
                 if (sd_version_is_sdxl(version)) {
@@ -463,6 +453,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                          token_embed_custom.data(),
                                          max_token_idx,
                                          false,
+                                         clip_skip,
                                          &chunk_hidden_states2, work_ctx);
                     // concat
                     chunk_hidden_states = ggml_tensor_concat(work_ctx, chunk_hidden_states1, chunk_hidden_states2, 0);
@@ -474,6 +465,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                              token_embed_custom.data(),
                                              max_token_idx,
                                              true,
+                                             clip_skip,
                                              &pooled,
                                              work_ctx);
                     }
@@ -663,21 +655,11 @@ struct SD3CLIPEmbedder : public Conditioner {
     std::shared_ptr<T5Runner> t5;
 
     SD3CLIPEmbedder(ggml_backend_t backend,
-                    const String2GGMLType& tensor_types = {},
-                    int clip_skip                       = -1)
+                    const String2GGMLType& tensor_types = {})
         : clip_g_tokenizer(0) {
         clip_l = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
         clip_g = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
         t5     = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
-        set_clip_skip(clip_skip);
-    }
-
-    void set_clip_skip(int clip_skip) {
-        if (clip_skip <= 0) {
-            clip_skip = 2;
-        }
-        clip_l->set_clip_skip(clip_skip);
-        clip_g->set_clip_skip(clip_skip);
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
@@ -774,7 +756,9 @@ struct SD3CLIPEmbedder : public Conditioner {
                                              std::vector<std::pair<std::vector<int>, std::vector<float>>> token_and_weights,
                                              int clip_skip,
                                              bool force_zero_embeddings = false) {
-        set_clip_skip(clip_skip);
+        if (clip_skip <= 0) {
+            clip_skip = 2;
+        }
         auto& clip_l_tokens  = token_and_weights[0].first;
         auto& clip_l_weights = token_and_weights[0].second;
         auto& clip_g_tokens  = token_and_weights[1].first;
@@ -812,6 +796,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                                 NULL,
                                 max_token_idx,
                                 false,
+                                clip_skip,
                                 &chunk_hidden_states_l,
                                 work_ctx);
                 {
@@ -839,6 +824,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                                     NULL,
                                     max_token_idx,
                                     true,
+                                    clip_skip,
                                     &pooled_l,
                                     work_ctx);
                 }
@@ -860,6 +846,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                                 NULL,
                                 max_token_idx,
                                 false,
+                                clip_skip,
                                 &chunk_hidden_states_g,
                                 work_ctx);
 
@@ -888,6 +875,7 @@ struct SD3CLIPEmbedder : public Conditioner {
                                     NULL,
                                     max_token_idx,
                                     true,
+                                    clip_skip,
                                     &pooled_g,
                                     work_ctx);
                 }
@@ -1010,18 +998,9 @@ struct FluxCLIPEmbedder : public Conditioner {
     size_t chunk_len = 256;
 
     FluxCLIPEmbedder(ggml_backend_t backend,
-                     const String2GGMLType& tensor_types = {},
-                     int clip_skip                       = -1) {
+                     const String2GGMLType& tensor_types = {}) {
         clip_l = std::make_shared<CLIPTextModelRunner>(backend, tensor_types, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true);
         t5     = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
-        set_clip_skip(clip_skip);
-    }
-
-    void set_clip_skip(int clip_skip) {
-        if (clip_skip <= 0) {
-            clip_skip = 2;
-        }
-        clip_l->set_clip_skip(clip_skip);
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
@@ -1102,7 +1081,9 @@ struct FluxCLIPEmbedder : public Conditioner {
                                              std::vector<std::pair<std::vector<int>, std::vector<float>>> token_and_weights,
                                              int clip_skip,
                                              bool force_zero_embeddings = false) {
-        set_clip_skip(clip_skip);
+        if (clip_skip <= 0) {
+            clip_skip = 2;
+        }
         auto& clip_l_tokens  = token_and_weights[0].first;
         auto& clip_l_weights = token_and_weights[0].second;
         auto& t5_tokens      = token_and_weights[1].first;
@@ -1136,6 +1117,7 @@ struct FluxCLIPEmbedder : public Conditioner {
                                 NULL,
                                 max_token_idx,
                                 true,
+                                clip_skip,
                                 &pooled,
                                 work_ctx);
             }
@@ -1232,14 +1214,10 @@ struct PixArtCLIPEmbedder : public Conditioner {
 
     PixArtCLIPEmbedder(ggml_backend_t backend,
                        const String2GGMLType& tensor_types = {},
-                       int clip_skip                       = -1,
                        bool use_mask                       = false,
                        int mask_pad                        = 1)
         : use_mask(use_mask), mask_pad(mask_pad) {
         t5 = std::make_shared<T5Runner>(backend, tensor_types, "text_encoders.t5xxl.transformer");
-    }
-
-    void set_clip_skip(int clip_skip) {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
