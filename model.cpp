@@ -1942,8 +1942,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
             return true;
         };
         int tensor_count = 0;
-        int64_t t1       = ggml_time_ms();
-        bool partial     = false;
+        int64_t t0       = ggml_time_ms();
+        int64_t t1       = t0;
+        bool partial     = true;
+        int tensor_max   = (int)processed_tensor_storages.size();
+        pretty_progress(0, tensor_max, 0.0f);
         for (auto& tensor_storage : processed_tensor_storages) {
             if (tensor_storage.file_index != file_index) {
                 ++tensor_count;
@@ -2046,19 +2049,27 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
                 }
             }
-            size_t tensor_max = processed_tensor_storages.size();
-            int64_t t2        = ggml_time_ms();
-            pretty_progress(++tensor_count, tensor_max, (t2 - t1) / 1000.0f);
-            t1      = t2;
-            partial = tensor_count != tensor_max;
+            ++tensor_count;
+            int64_t t2 = ggml_time_ms();
+            if ((t2 - t1) >= 200) {
+                t1 = t2;
+                pretty_progress(tensor_count, tensor_max, (t1 - t0) / (1000.0f * tensor_count));
+                partial = tensor_count != tensor_max;
+            }
+        }
+
+        if (partial) {
+            if (tensor_count >= 1) {
+                t1 = ggml_time_ms();
+                pretty_progress(tensor_count, tensor_max, (t1 - t0) / (1000.0f * tensor_count));
+            }
+            if (tensor_count < tensor_max) {
+                printf("\n");
+            }
         }
 
         if (zip != NULL) {
             zip_close(zip);
-        }
-
-        if (partial) {
-            printf("\n");
         }
 
         if (!success) {
