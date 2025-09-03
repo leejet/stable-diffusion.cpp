@@ -154,7 +154,15 @@ typedef struct {
     float layer_start;
     float layer_end;
     float scale;
+    bool uncond;
 } sd_slg_params_t;
+
+typedef struct {
+    float eta;
+    float momentum;
+    float norm_treshold;
+    float norm_treshold_smoothing;
+} sd_apg_params_t;
 
 typedef struct {
     float txt_cfg;
@@ -162,6 +170,7 @@ typedef struct {
     float min_cfg;
     float distilled_guidance;
     sd_slg_params_t slg;
+    sd_apg_params_t apg;
 } sd_guidance_params_t;
 
 typedef struct {

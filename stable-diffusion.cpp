@@ -901,7 +901,7 @@ public:
 
         bool has_unconditioned = img_cfg_scale != 1.0 && uncond.c_crossattn != NULL;
         bool has_img_cond      = cfg_scale != img_cfg_scale && img_cond.c_crossattn != NULL;
-        bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
+        bool has_skiplayer     = (slg_scale != 0.0 || guidance.slg.uncond) && skip_layers.size() > 0;
 
         // denoise wrapper
         struct ggml_tensor* out_cond     = ggml_dup_tensor(work_ctx, x);
@@ -914,7 +914,9 @@ public:
         }
         if (has_skiplayer) {
             if (sd_version_is_dit(version)) {
-                out_skip = ggml_dup_tensor(work_ctx, x);
+                if (slg_scale != 0.0) {
+                    out_skip = ggml_dup_tensor(work_ctx, x);
+                }
             } else {
                 has_skiplayer = false;
                 LOG_WARN("SLG is incompatible with %s models", model_version_to_str[version]);
@@ -924,6 +926,10 @@ public:
             out_img_cond = ggml_dup_tensor(work_ctx, x);
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
+
+        std::vector<float> apg_momentum_buffer;
+        if (guidance.apg.momentum != 0)
+            apg_momentum_buffer.resize((size_t)ggml_nelements(denoised));
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
             if (step == 1) {
@@ -984,6 +990,8 @@ public:
                                          control_strength,
                                          &out_cond);
             }
+            int step_count         = sigmas.size();
+            bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
 
             float* negative_data = NULL;
             if (has_unconditioned) {
@@ -992,18 +1000,36 @@ public:
                     control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector);
                     controls = control_net->controls;
                 }
-                diffusion_model->compute(n_threads,
-                                         noised_input,
-                                         timesteps,
-                                         uncond.c_crossattn,
-                                         uncond.c_concat,
-                                         uncond.c_vector,
-                                         guidance_tensor,
-                                         ref_latents,
-                                         -1,
-                                         controls,
-                                         control_strength,
-                                         &out_uncond);
+                if (is_skiplayer_step && guidance.slg.uncond) {
+                    LOG_DEBUG("Skipping layers at uncond step %d\n", step);
+                    diffusion_model->compute(n_threads,
+                                             noised_input,
+                                             timesteps,
+                                             uncond.c_crossattn,
+                                             uncond.c_concat,
+                                             uncond.c_vector,
+                                             guidance_tensor,
+                                             ref_latents,
+                                             -1,
+                                             controls,
+                                             control_strength,
+                                             &out_uncond,
+                                             NULL,
+                                             skip_layers);
+                } else {
+                    diffusion_model->compute(n_threads,
+                                             noised_input,
+                                             timesteps,
+                                             uncond.c_crossattn,
+                                             uncond.c_concat,
+                                             uncond.c_vector,
+                                             guidance_tensor,
+                                             ref_latents,
+                                             -1,
+                                             controls,
+                                             control_strength,
+                                             &out_uncond);
+                }
                 negative_data = (float*)out_uncond->data;
             }
 
@@ -1024,10 +1050,8 @@ public:
                 img_cond_data = (float*)out_img_cond->data;
             }
 
-            int step_count         = sigmas.size();
-            bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
             float* skip_layer_data = NULL;
-            if (is_skiplayer_step) {
+            if (is_skiplayer_step && slg_scale != 0.0) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
                 // skip layer (same as conditionned)
                 diffusion_model->compute(n_threads,
@@ -1050,6 +1074,87 @@ public:
             float* vec_input     = (float*)input->data;
             float* positive_data = (float*)out_cond->data;
             int ne_elements      = (int)ggml_nelements(denoised);
+
+            float* deltas = vec_denoised;
+
+            // APG: https://arxiv.org/pdf/2410.02416
+
+            bool log_cfg_norm                 = false;
+            const char* SD_LOG_CFG_DELTA_NORM = getenv("SD_LOG_CFG_DELTA_NORM");
+            if (SD_LOG_CFG_DELTA_NORM != nullptr) {
+                std::string sd_log_cfg_norm_str = SD_LOG_CFG_DELTA_NORM;
+                if (sd_log_cfg_norm_str == "ON" || sd_log_cfg_norm_str == "TRUE") {
+                    log_cfg_norm = true;
+                } else if (sd_log_cfg_norm_str != "OFF" && sd_log_cfg_norm_str != "FALSE") {
+                    LOG_WARN("SD_LOG_CFG_DELTA_NORM environment variable has unexpected value. Assuming default (\"OFF\"). (Expected \"ON\"/\"TRUE\" or\"OFF\"/\"FALSE\", got \"%s\")", SD_LOG_CFG_DELTA_NORM);
+                }
+            }
+            float apg_scale_factor = 1.;
+            float diff_norm        = 0;
+            float cond_norm_sq     = 0;
+            float dot              = 0;
+            if (has_unconditioned || has_img_cond) {
+                for (int i = 0; i < ne_elements; i++) {
+                    float delta;
+                    if (has_img_cond) {
+                        if (cfg_scale == 1) {
+                            // Weird guidance (important: use img_cfg_scale instead of cfg_scale in the final formula)
+                            delta = img_cond_data[i] - negative_data[i];
+                        } else if (has_unconditioned) {
+                            // 2-conditioning CFG (img_cfg_scale != cfg_scale != 1)
+                            delta = positive_data[i] + (negative_data[i] * (1 - img_cfg_scale) + img_cond_data[i] * (img_cfg_scale - cfg_scale)) / (cfg_scale - 1);
+                        } else {
+                            // pure img CFG (img_cfg_scale == 1, cfg_scale !=1)
+                            delta = positive_data[i] - img_cond_data[i];
+                        }
+                    } else {
+                        // classic CFG (img_cfg_scale == cfg_scale != 1)
+                        delta = positive_data[i] - negative_data[i];
+                    }
+                    if (guidance.apg.momentum != 0) {
+                        delta += guidance.apg.momentum * apg_momentum_buffer[i];
+                        apg_momentum_buffer[i] = delta;
+                    }
+                    if (guidance.apg.norm_treshold > 0 || log_cfg_norm) {
+                        diff_norm += delta * delta;
+                    }
+                    if (guidance.apg.eta != 1.0f) {
+                        cond_norm_sq += positive_data[i] * positive_data[i];
+                        dot += positive_data[i] * delta;
+                    }
+                    deltas[i] = delta;
+                }
+                if (log_cfg_norm) {
+                    LOG_INFO("CFG Delta norm: %.2f", sqrtf(diff_norm));
+                }
+                if (guidance.apg.norm_treshold > 0) {
+                    diff_norm = sqrtf(diff_norm);
+                    if (guidance.apg.norm_treshold_smoothing <= 0) {
+                        apg_scale_factor = std::min(1.0f, guidance.apg.norm_treshold / diff_norm);
+                    } else {
+                        // Experimental: smooth saturate
+                        float x          = guidance.apg.norm_treshold / diff_norm;
+                        apg_scale_factor = x / std::pow(1 + std::pow(x, 1.0 / guidance.apg.norm_treshold_smoothing), guidance.apg.norm_treshold_smoothing);
+                    }
+                }
+                if (guidance.apg.eta != 1.0f) {
+                    dot *= apg_scale_factor;
+                    // pre-normalize (avoids one square root and ne_elements extra divs)
+                    dot /= cond_norm_sq;
+                }
+
+                for (int i = 0; i < ne_elements; i++) {
+                    deltas[i] *= apg_scale_factor;
+                    if (guidance.apg.eta != 1.0f) {
+                        float apg_parallel   = dot * positive_data[i];
+                        float apg_orthogonal = deltas[i] - apg_parallel;
+
+                        // tweak deltas
+                        deltas[i] = apg_orthogonal + guidance.apg.eta * apg_parallel;
+                    }
+                }
+            }
+
             for (int i = 0; i < ne_elements; i++) {
                 float latent_result = positive_data[i];
                 if (has_unconditioned) {
@@ -1059,19 +1164,19 @@ public:
                         int64_t i3  = i / out_cond->ne[0] * out_cond->ne[1] * out_cond->ne[2];
                         float scale = min_cfg + (cfg_scale - min_cfg) * (i3 * 1.0f / ne3);
                     } else {
-                        if (has_img_cond) {
-                            // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
-                            latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
-                        } else {
-                            // img_cfg_scale == cfg_scale
-                            latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                        float delta = deltas[i];
+
+                        if (cfg_scale != 1) {
+                            latent_result = positive_data[i] + (cfg_scale - 1) * delta;
+                        } else if (has_img_cond) {
+                            latent_result = positive_data[i] + (img_cfg_scale - 1) * delta;
                         }
                     }
                 } else if (has_img_cond) {
                     // img_cfg_scale == 1
                     latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
                 }
-                if (is_skiplayer_step) {
+                if (is_skiplayer_step && slg_scale != 0.0) {
                     latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
                 }
                 // v = latent_result, eps = latent_result
@@ -1112,7 +1217,8 @@ public:
     }
 
     // ldm.models.diffusion.ddpm.LatentDiffusion.get_first_stage_encoding
-    ggml_tensor* get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* moments) {
+    ggml_tensor*
+    get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* moments) {
         // ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample
         ggml_tensor* latent       = ggml_new_tensor_4d(work_ctx, moments->type, moments->ne[0], moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
         struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, latent);
