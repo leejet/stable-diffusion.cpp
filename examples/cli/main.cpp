@@ -64,6 +64,8 @@ struct SDParams {
     std::string mask_path;
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
+    std::vector<int> ref_image_indices;
+    bool increase_ref_index = false;
 
     std::string prompt;
     std::string negative_prompt;
@@ -137,8 +139,9 @@ void print_params(SDParams params) {
     printf("    mask_img:          %s\n", params.mask_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
     printf("    ref_images_paths:\n");
+    int n = 0;
     for (auto& path : params.ref_image_paths) {
-        printf("        %s\n", path.c_str());
+        printf("        %s (index: %d)\n", path.c_str(), params.ref_image_indices[n++]);
     };
     printf("    clip on cpu:       %s\n", params.clip_on_cpu ? "true" : "false");
     printf("    controlnet cpu:    %s\n", params.control_net_cpu ? "true" : "false");
@@ -201,7 +204,12 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
-    printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
+    printf("  -r, --ref-image [PATH] or [PATH,N] reference image for Flux Kontext models (can be used multiple times).\n"
+           "                                     PATH is the path to the reference image.\n"
+           "                                     Optionally, you can specify an integer identifier N (default = 1) after a comma to set the index of reference image.\n"
+           "                                     Reference indices are only supported by some fine-tunes of Flux Kontext with proper multi-reference support.\n"
+           "                                     Reference images with the same index will be stitched together and seen as one image.\n");
+    printf("  --increase-ref-index               Automatically increase the indices of references images based on the order they are listed (starting with 1). Will overwrite any manually set indices\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
@@ -227,7 +235,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
+    printf("  --schedule {discrete, karras, exponential, ays, gits}\n" 
+           "                                     Denoiser sigma schedule (default: discrete)\n");
     printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
@@ -447,6 +456,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--color", "", true, &params.color},
         {"", "--chroma-disable-dit-mask", "", false, &params.chroma_use_dit_mask},
         {"", "--chroma-enable-t5-mask", "", true, &params.chroma_use_t5_mask},
+        {"", "--increase-ref-index", "", false, &params.increase_ref_index},
     };
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
@@ -573,7 +583,28 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         if (++index >= argc) {
             return -1;
         }
-        params.ref_image_paths.push_back(argv[index]);
+
+        std::string arg  = argv[index];
+        size_t comma_pos = arg.find(',');
+
+        if (comma_pos != std::string::npos) {
+            std::string path    = arg.substr(0, comma_pos);
+            std::string num_str = arg.substr(comma_pos + 1);
+
+            try {
+                int num = std::stoi(num_str);
+                params.ref_image_paths.push_back(path);
+                params.ref_image_indices.push_back(num);
+            } catch (const std::invalid_argument& e) {
+                fprintf(stderr, "Error: invalid id: \"%s\" for ref image %s", num_str.c_str(), path.c_str());
+                return -1;
+            }
+        } else {
+            params.ref_image_paths.push_back(arg);
+            // default index is 1 (0 is the output index)
+            params.ref_image_indices.push_back(1);
+        }
+
         return 1;
     };
 
@@ -592,6 +623,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     if (!parse_options(argc, argv, options)) {
         print_usage(argc, argv);
         exit(1);
+    }
+
+    if(params.increase_ref_index){
+        for(int i=0;i<params.ref_image_indices.size();i++){
+            params.ref_image_indices[i]=i+1;
+        }
     }
 
     if (params.n_threads <= 0) {
@@ -813,7 +850,7 @@ int main(int argc, const char* argv[]) {
     uint8_t* input_image_buffer   = NULL;
     uint8_t* control_image_buffer = NULL;
     uint8_t* mask_image_buffer    = NULL;
-    std::vector<sd_image_t> ref_images;
+    std::vector<sd_ref_image_t> ref_images;
 
     if (params.input_path.size() > 0) {
         vae_decode_only = false;
@@ -865,8 +902,11 @@ int main(int argc, const char* argv[]) {
             free(input_image_buffer);
             input_image_buffer = resized_image_buffer;
         }
-    } else if (params.ref_image_paths.size() > 0) {
+    }
+
+    if (params.ref_image_paths.size() > 0) {
         vae_decode_only = false;
+        int n           = 0;
         for (auto& path : params.ref_image_paths) {
             int c                 = 0;
             int width             = 0;
@@ -891,10 +931,11 @@ int main(int argc, const char* argv[]) {
                 free(image_buffer);
                 return 1;
             }
-            ref_images.push_back({(uint32_t)width,
-                                  (uint32_t)height,
-                                  3,
-                                  image_buffer});
+            ref_images.push_back({{(uint32_t)width,
+                                   (uint32_t)height,
+                                   3,
+                                   image_buffer},
+                                  params.ref_image_indices[n++]});
         }
     }
 

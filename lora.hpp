@@ -58,6 +58,7 @@ struct LoraModel : public GGMLRunner {
         {"x_block.attn.proj", "attn.to_out.0"},
         {"x_block.attn2.proj", "attn2.to_out.0"},
         // flux
+        {"img_in", "x_embedder"},
         // singlestream
         {"linear2", "proj_out"},
         {"modulation.lin", "norm.linear"},
