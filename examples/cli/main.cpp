@@ -443,7 +443,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--diffusion-conv-direct", "", true, &params.diffusion_conv_direct},
         {"", "--vae-conv-direct", "", true, &params.vae_conv_direct},
         {"", "--canny", "", true, &params.canny_preprocess},
-        {"-v", "--verbos", "", true, &params.verbose},
+        {"-v", "--verbose", "", true, &params.verbose},
         {"", "--color", "", true, &params.color},
         {"", "--chroma-disable-dit-mask", "", false, &params.chroma_use_dit_mask},
         {"", "--chroma-enable-t5-mask", "", true, &params.chroma_use_t5_mask},
