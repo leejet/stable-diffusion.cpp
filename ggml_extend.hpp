@@ -23,9 +23,11 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
+#include "ggml/src/ggml-impl.h"
 #include "ggml.h"
 
 #include "model.h"
+#include "util.h"
 
 #ifdef SD_USE_CUDA
 #include "ggml-cuda.h"
@@ -122,13 +124,6 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_kronecker(ggml_context* ctx, struct g
                                      a->ne[3] * b->ne[3],
                                      GGML_SCALE_MODE_NEAREST),
                     b);
-}
-
-__STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void* user_data) {
-    (void)level;
-    (void)user_data;
-    fputs(text, stderr);
-    fflush(stderr);
 }
 
 __STATIC_INLINE__ void ggml_tensor_set_f32_randn(struct ggml_tensor* tensor, std::shared_ptr<RNG> rng) {
@@ -1304,7 +1299,39 @@ public:
             ggml_backend_cpu_set_n_threads(backend, n_threads);
         }
 
-        ggml_backend_graph_compute(backend, gf);
+        auto callback_eval = get_callback_eval();
+        
+        if(!callback_eval){
+            ggml_backend_graph_compute(backend, gf);
+        }else{
+            void * callback_eval_user_data = get_callback_eval_user_data();
+            for (int j0 = 0; j0 < gf->n_nodes; j0++) {
+                struct ggml_tensor * t = gf->nodes[j0];
+                
+                // check if the user needs data from this node
+                bool need = callback_eval(t, true, callback_eval_user_data);
+                
+                int j1 = j0;
+                
+                // determine the range [j0, j1] of nodes that can be computed together
+                while (!need && j1 < gf->n_nodes - 1) {
+                    t = gf->nodes[++j1];
+                    need = callback_eval(t, true, callback_eval_user_data);
+                }
+                
+                struct ggml_cgraph gv = ggml_graph_view(gf, j0, j1 + 1);
+                
+                ggml_backend_graph_compute_async(backend, &gv);
+                
+                if (need && !callback_eval(t, false, callback_eval_user_data)) {
+                    break;
+                }
+                
+                j0 = j1;
+            }
+            ggml_backend_synchronize(backend);
+        }
+
 #ifdef GGML_PERF
         ggml_graph_print(gf);
 #endif
@@ -1429,6 +1456,7 @@ protected:
             wtype = GGML_TYPE_F32;
         }
         params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
+        ggml_set_name(params["weight"], (prefix + "weight").c_str());
         if (bias) {
             enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.ypes.find(prefix + "bias") != tensor_types.end()) ? tensor_types[prefix + "bias"] : GGML_TYPE_F32;
             params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_features);
@@ -1605,6 +1633,8 @@ protected:
         if (elementwise_affine) {
             enum ggml_type wtype = GGML_TYPE_F32;
             params["weight"]     = ggml_new_tensor_1d(ctx, wtype, normalized_shape);
+            ggml_set_name(params["weight"], (prefix + "weight").c_str());
+
             if (bias) {
                 enum ggml_type wtype = GGML_TYPE_F32;
                 params["bias"]       = ggml_new_tensor_1d(ctx, wtype, normalized_shape);

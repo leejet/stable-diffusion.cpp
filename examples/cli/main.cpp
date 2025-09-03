@@ -111,6 +111,12 @@ struct SDParams {
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
+
+    /* Imatrix params */
+
+    std::string imatrix_out = "";
+
+    std::vector<std::string> imatrix_in = {};
 };
 
 void print_params(SDParams params) {
@@ -197,6 +203,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
     printf("                                     If not specified, the default is the type of the weight file\n");
     printf("  --tensor-type-rules [EXPRESSION]   weight type per tensor pattern (example: \"^vae\\.=f16,model\\.=q8_0\")\n");
+    printf("  --imat-out [PATH]                  If set, compute the imatrix for this run and save it to the provided path\n");
+    printf("  --imat-in [PATH]                   Use imatrix for quantization.\n");
     printf("  --lora-model-dir [DIR]             lora model directory\n");
     printf("  -i, --init-img [IMAGE]             path to the input image, required by img2img\n");
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
@@ -382,6 +390,16 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
     return true;
 }
 
+int file_exists(const char *path) {
+    FILE *file;
+    if ((file = fopen(path, "r"))) {
+        fclose(file);
+        return 1;
+    }
+    return 0;
+}
+
+
 void parse_args(int argc, const char** argv, SDParams& params) {
     ArgOptions options;
     options.string_options = {
@@ -406,6 +424,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-n", "--negative-prompt", "", &params.negative_prompt},
 
         {"", "--upscale-model", "", &params.esrgan_path},
+        {"", "--imat-out", "", &params.imatrix_out},
+
     };
 
     options.int_options = {
@@ -577,6 +597,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_imatrix_in_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        params.imatrix_in.push_back(argv[index]);
+        return 1;
+    };
+
     options.manual_options = {
         {"-M", "--mode", "", on_mode_arg},
         {"", "--type", "", on_type_arg},
@@ -587,6 +615,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--skip-layers", "", on_skip_layers_arg},
         {"-r", "--ref-image", "", on_ref_image_arg},
         {"-h", "--help", "", on_help_arg},
+        {"", "--imat-in", "", on_imatrix_in_arg},
+
     };
 
     if (!parse_options(argc, argv, options)) {
@@ -658,6 +688,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     if (!isfinite(params.img_cfg_scale)) {
         params.img_cfg_scale = params.cfg_scale;
+    }
+
+    if (params.imatrix_out.size() > 0 && file_exists(params.imatrix_out.c_str())) {
+        // imatrix file already exists
+        if (std::find(params.imatrix_in.begin(), params.imatrix_in.end(), params.imatrix_out) == params.imatrix_in.end()) {
+            printf("\n IMPORTANT: imatrix file %s already exists, but wasn't found in the imatrix inputs.\n", params.imatrix_out.c_str());
+            printf("%s will get overwritten!\n", params.imatrix_out.c_str());
+        }
     }
 }
 
@@ -786,8 +824,20 @@ int main(int argc, const char* argv[]) {
         printf("%s", sd_get_system_info());
     }
 
+    if (params.imatrix_out != "") {
+        enableImatrixCollection();
+    }
+    if (params.imatrix_out != "" || params.mode == CONVERT || params.wtype != SD_TYPE_COUNT) {
+        for (const auto& in_file : params.imatrix_in) {
+            printf("loading imatrix from '%s'\n", in_file.c_str());
+            if (!loadImatrix(in_file.c_str())) {
+                printf("Failed to load %s\n", in_file.c_str());
+            }
+        }
+    }
+
     if (params.mode == CONVERT) {
-        bool success = convert(params.model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype, params.tensor_type_rules.c_str());
+        bool success = convert(params.model_path.c_str(), params.clip_l_path.c_str(), params.clip_g_path.c_str(), params.t5xxl_path.c_str(), params.diffusion_model_path.c_str(), params.vae_path.c_str(), params.output_path.c_str(), params.wtype, params.tensor_type_rules.c_str());
         if (!success) {
             fprintf(stderr,
                     "convert '%s'/'%s' to '%s' failed\n",
@@ -1096,6 +1146,9 @@ int main(int argc, const char* argv[]) {
         }
         free(results[i].data);
         results[i].data = NULL;
+    }
+    if (params.imatrix_out != "") {
+        saveImatrix(params.imatrix_out.c_str());
     }
     free(results);
     free_sd_ctx(sd_ctx);

@@ -16,6 +16,7 @@
 #include "ggml-cpu.h"
 #include "ggml.h"
 
+#include "imatrix.hpp"
 #include "stable-diffusion.h"
 
 #ifdef SD_USE_METAL
@@ -31,6 +32,8 @@
 #endif
 
 #define ST_HEADER_SIZE_LEN 8
+
+static IMatrixCollector imatrix_collector;
 
 uint64_t read_u64(uint8_t* buffer) {
     // little endian
@@ -842,7 +845,8 @@ void convert_tensor(void* src,
                     void* dst,
                     ggml_type dst_type,
                     int nrows,
-                    int n_per_row) {
+                    int n_per_row,
+                    std::vector<float> imatrix = {}) {
     int n = nrows * n_per_row;
     if (src_type == dst_type) {
         size_t nbytes = n * ggml_type_size(src_type) / ggml_blck_size(src_type);
@@ -851,7 +855,10 @@ void convert_tensor(void* src,
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src, (ggml_fp16_t*)dst, n);
         } else {
-            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            // if(imatrix.size() != 0){
+            //     LOG_INFO("using imatrix");
+            // }
+            imatrix.resize(n_per_row, 1.0f);
             const float* im = imatrix.data();
             ggml_quantize_chunk(dst_type, (float*)src, dst, 0, nrows, n_per_row, im);
         }
@@ -881,7 +888,10 @@ void convert_tensor(void* src,
         if (dst_type == GGML_TYPE_F16) {
             ggml_fp32_to_fp16_row((float*)src_data_f32, (ggml_fp16_t*)dst, n);
         } else {
-            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            // if(imatrix.size() != 0){
+            //     LOG_INFO("using imatrix");
+            // }
+            imatrix.resize(n_per_row, 1.0f);
             const float* im = imatrix.data();
             ggml_quantize_chunk(dst_type, (float*)src_data_f32, dst, 0, nrows, n_per_row, im);
         }
@@ -2013,8 +2023,12 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                         i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)read_buffer.data(), tensor_storage.nelements());
                     }
 
+                    auto processed_name = convert_tensor_name(tensor_storage.name);
+                    // LOG_DEBUG("%s",processed_name.c_str());
+                    std::vector<float> imatrix = imatrix_collector.get_values(processed_name);
+
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
-                                   dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
+                                   dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0], imatrix);
                 }
             } else {
                 read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
@@ -2042,10 +2056,14 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, ggml_backend
                     ggml_backend_tensor_set(dst_tensor, read_buffer.data(), 0, ggml_nbytes(dst_tensor));
                 } else {
                     // convert first, then copy to device memory
+                    auto processed_name = convert_tensor_name(tensor_storage.name);
+                    // LOG_DEBUG("%s",processed_name.c_str());
+                    std::vector<float> imatrix = imatrix_collector.get_values(processed_name);
+
                     convert_buffer.resize(ggml_nbytes(dst_tensor));
                     convert_tensor((void*)read_buffer.data(), tensor_storage.type,
                                    (void*)convert_buffer.data(), dst_tensor->type,
-                                   (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
+                                   (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0], imatrix);
                     ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
                 }
             }
@@ -2300,12 +2318,41 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
     return mem_size;
 }
 
-bool convert(const char* input_path, const char* vae_path, const char* output_path, sd_type_t output_type, const char* tensor_type_rules) {
+bool convert(const char* model_path, const char* clip_l_path, const char* clip_g_path, const char* t5xxl_path, const char* diffusion_model_path, const char* vae_path, const char* output_path, sd_type_t output_type, const char* tensor_type_rules) {
     ModelLoader model_loader;
 
-    if (!model_loader.init_from_file(input_path)) {
-        LOG_ERROR("init model loader from file failed: '%s'", input_path);
-        return false;
+    if (model_path != NULL && strlen(model_path) > 0) {
+        if (!model_loader.init_from_file(model_path)) {
+            LOG_ERROR("init model loader from file failed: '%s'", model_path);
+            return false;
+        }
+    }
+
+    if (clip_l_path != NULL && strlen(clip_l_path) > 0) {
+        if (!model_loader.init_from_file(clip_l_path, "text_encoders.clip_l.transformer.")) {
+            LOG_ERROR("init model loader from file failed: '%s'", clip_l_path);
+            return false;
+        }
+    }
+
+    if (clip_g_path != NULL && strlen(clip_g_path) > 0) {
+        if (!model_loader.init_from_file(clip_g_path, "text_encoders.clip_g.transformer.")) {
+            LOG_ERROR("init model loader from file failed: '%s'", clip_g_path);
+            return false;
+        }
+    }
+    if (t5xxl_path != NULL && strlen(t5xxl_path) > 0) {
+        if (!model_loader.init_from_file(t5xxl_path, "text_encoders.t5xxl.transformer.")) {
+            LOG_ERROR("init model loader from file failed: '%s'", t5xxl_path);
+            return false;
+        }
+    }
+
+    if (diffusion_model_path != NULL && strlen(diffusion_model_path) > 0) {
+        if (!model_loader.init_from_file(diffusion_model_path, "model.diffusion_model.")) {
+            LOG_ERROR("init model loader from file failed: '%s'", diffusion_model_path);
+            return false;
+        }
     }
 
     if (vae_path != NULL && strlen(vae_path) > 0) {
@@ -2314,6 +2361,23 @@ bool convert(const char* input_path, const char* vae_path, const char* output_pa
             return false;
         }
     }
+
     bool success = model_loader.save_to_gguf_file(output_path, (ggml_type)output_type, tensor_type_rules);
     return success;
+}
+
+bool loadImatrix(const char* imatrix_path) {
+    return imatrix_collector.load_imatrix(imatrix_path);
+}
+void saveImatrix(const char* imatrix_path) {
+    imatrix_collector.save_imatrix(imatrix_path);
+}
+static bool collect_imatrix(struct ggml_tensor* t, bool ask, void* user_data) {
+    return imatrix_collector.collect_imatrix(t, ask, user_data);
+}
+void enableImatrixCollection() {
+    sd_set_backend_eval_callback((sd_graph_eval_callback_t)collect_imatrix, NULL);
+}
+void disableImatrixCollection() {
+    sd_set_backend_eval_callback(NULL, NULL);
 }
