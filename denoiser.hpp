@@ -382,7 +382,8 @@ struct DiscreteFlowDenoiser : public Denoiser {
 
     float sigma_data = 1.0f;
 
-    DiscreteFlowDenoiser() {
+    DiscreteFlowDenoiser(float shift = 3.0f)
+        : shift(shift) {
         set_parameters();
     }
 
