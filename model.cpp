@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "gguf_reader.hpp"
 #include "model.h"
 #include "stable-diffusion.h"
 #include "util.h"
@@ -1057,8 +1058,35 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
 
     ctx_gguf_ = gguf_init_from_file(file_path.c_str(), {true, &ctx_meta_});
     if (!ctx_gguf_) {
-        LOG_ERROR("failed to open '%s'", file_path.c_str());
-        return false;
+        LOG_ERROR("failed to open '%s' with gguf_init_from_file. Try to open it with GGUFReader.", file_path.c_str());
+        GGUFReader gguf_reader;
+        if (!gguf_reader.load(file_path)) {
+            LOG_ERROR("failed to open '%s' with GGUFReader.", file_path.c_str());
+            return false;
+        }
+
+        size_t data_offset = gguf_reader.data_offset();
+        for (const auto& gguf_tensor_info : gguf_reader.tensors()) {
+            std::string name = gguf_tensor_info.name;
+            if (!starts_with(name, prefix)) {
+                name = prefix + name;
+            }
+
+            TensorStorage tensor_storage(
+                name,
+                gguf_tensor_info.type,
+                gguf_tensor_info.shape.data(),
+                gguf_tensor_info.shape.size(),
+                file_index,
+                data_offset + gguf_tensor_info.offset);
+
+            // LOG_DEBUG("%s %s", name.c_str(), tensor_storage.to_string().c_str());
+
+            tensor_storages.push_back(tensor_storage);
+            add_preprocess_tensor_storage_types(tensor_storages_types, tensor_storage.name, tensor_storage.type);
+        }
+
+        return true;
     }
 
     int n_tensors = gguf_get_n_tensors(ctx_gguf_);
