@@ -1727,11 +1727,13 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     memset((void*)sd_vid_gen_params, 0, sizeof(sd_vid_gen_params_t));
     sd_sample_params_init(&sd_vid_gen_params->sample_params);
     sd_sample_params_init(&sd_vid_gen_params->high_noise_sample_params);
-    sd_vid_gen_params->width        = 512;
-    sd_vid_gen_params->height       = 512;
-    sd_vid_gen_params->strength     = 0.75f;
-    sd_vid_gen_params->seed         = -1;
-    sd_vid_gen_params->video_frames = 6;
+    sd_vid_gen_params->high_noise_sample_params.sample_steps = -1;
+    sd_vid_gen_params->width                                 = 512;
+    sd_vid_gen_params->height                                = 512;
+    sd_vid_gen_params->strength                              = 0.75f;
+    sd_vid_gen_params->seed                                  = -1;
+    sd_vid_gen_params->video_frames                          = 6;
+    sd_vid_gen_params->moe_boundary                          = 0.875f;
 }
 
 struct sd_ctx_t {
@@ -2381,7 +2383,24 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         high_noise_sample_steps = sd_vid_gen_params->high_noise_sample_params.sample_steps;
     }
 
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps + high_noise_sample_steps);
+    int total_steps = sample_steps;
+
+    if (high_noise_sample_steps > 0) {
+        total_steps += high_noise_sample_steps;
+    }
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps);
+
+    if (high_noise_sample_steps < 0) {
+        // timesteps ∝ sigmas for Flow models (like wan2.2 a14b)
+        for (size_t i = 0; i < sigmas.size(); ++i) {
+            if (sigmas[i] < sd_vid_gen_params->moe_boundary) {
+                high_noise_sample_steps = i;
+                break;
+            }
+        }
+        LOG_DEBUG("switching from high noise model at step %d", high_noise_sample_steps);
+        sample_steps = total_steps - high_noise_sample_steps;
+    }
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(200 * 1024) * 1024;  // 200 MB

@@ -205,6 +205,7 @@ typedef struct {
     int height;
     sd_sample_params_t sample_params;
     sd_sample_params_t high_noise_sample_params;
+    float moe_boundary;
     float strength;
     int64_t seed;
     int video_frames;

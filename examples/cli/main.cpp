@@ -89,6 +89,8 @@ struct SDParams {
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
     sd_sample_params_t high_noise_sample_params;
 
+    float moe_boundary = 0.875f;
+
     int video_frames = 1;
     int fps          = 16;
 
@@ -117,6 +119,7 @@ struct SDParams {
     SDParams() {
         sd_sample_params_init(&sample_params);
         sd_sample_params_init(&high_noise_sample_params);
+        high_noise_sample_params.sample_steps = -1;
     }
 };
 
@@ -167,6 +170,7 @@ void print_params(SDParams params) {
     printf("    height:                            %d\n", params.height);
     printf("    sample_params:                     %s\n", SAFE_STR(sample_params_str));
     printf("    high_noise_sample_params:          %s\n", SAFE_STR(high_noise_sample_params_str));
+    printf("    moe_boundary:                      %.3f\n", params.moe_boundary);
     printf("    strength(img2img):                 %.2f\n", params.strength);
     printf("    rng:                               %s\n", sd_rng_type_name(params.rng_type));
     printf("    seed:                              %ld\n", params.seed);
@@ -243,7 +247,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --high-noise-scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)\n");
     printf("  --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
     printf("                                     (high noise) sampling method (default: \"euler_a\")\n");
-    printf("  --high-noise-steps  STEPS          (high noise) number of sample steps (default: 20)\n");
+    printf("  --high-noise-steps  STEPS          (high noise) number of sample steps (default: -1 = auto)\n");
     printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
     printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)\n");
@@ -274,6 +278,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
     printf("  --video-frames                     video frames (default: 1)\n");
     printf("  --fps                              fps (default: 24)\n");
+    printf("  --moe-boundary BOUNDARY            Timestep boundary for Wan2.2 MoE model. (default: 0.875)\n");
+    printf("                                     Only enabled if `--high-noise-steps` is set to -1\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -362,7 +368,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
     std::string arg;
     for (int i = 1; i < argc; i++) {
         bool found_arg = false;
-        arg = argv[i];
+        arg            = argv[i];
 
         for (auto& option : options.string_options) {
             if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
@@ -423,7 +429,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
         for (auto& option : options.manual_options) {
             if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
                 found_arg = true;
-                int ret = option.cb(argc, argv, i);
+                int ret   = option.cb(argc, argv, i);
                 if (ret < 0) {
                     invalid_arg = true;
                     break;
@@ -435,7 +441,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
             break;
         }
         if (!found_arg) {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());    
+            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             return false;
         }
     }
@@ -507,6 +513,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--strength", "", &params.strength},
         {"", "--style-ratio", "", &params.style_ratio},
         {"", "--control-strength", "", &params.control_strength},
+        {"", "--moe-boundary", "", &params.moe_boundary},
     };
 
     options.bool_options = {
@@ -767,8 +774,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 
     if (params.high_noise_sample_params.sample_steps <= 0) {
-        fprintf(stderr, "error: the high_noise_sample_steps must be greater than 0\n");
-        exit(1);
+        params.high_noise_sample_params.sample_steps = -1;
     }
 
     if (params.strength < 0.f || params.strength > 1.f) {
@@ -1222,6 +1228,7 @@ int main(int argc, const char* argv[]) {
             params.height,
             params.sample_params,
             params.high_noise_sample_params,
+            params.moe_boundary,
             params.strength,
             params.seed,
             params.video_frames,
