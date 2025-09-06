@@ -193,9 +193,10 @@ void print_usage(int argc, const char* argv[]) {
     printf("\n");
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
-    printf("  -M, --mode [MODE]                  run mode, one of: [img_gen, convert], default: img_gen\n");
+    printf("  -M, --mode [MODE]                  run mode, one of: [img_gen, vid_gen, convert], default: img_gen\n");
     printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
+    printf("  --offload-to-cpu                   place the weights in RAM to save VRAM, and automatically load them into VRAM when needed\n");
     printf("  -m, --model [MODEL]                path to full model\n");
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
     printf("  --high-noise-diffusion-model       path to the standalone high noise diffusion model\n");

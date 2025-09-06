@@ -7,7 +7,7 @@
 Diffusion model(SD,Flux,Wan,...) inference in pure C/C++
 
 ***Note that this project is under active development. \
-API and command-line parameters may change frequently.***
+API and command-line option may change frequently.***
 
 ## Features
 
@@ -290,9 +290,10 @@ usage: ./bin/sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
-  -M, --mode [MODE]                  run mode, one of: [img_gen, convert], default: img_gen
+  -M, --mode [MODE]                  run mode, one of: [img_gen, vid_gen, convert], default: img_gen
   -t, --threads N                    number of threads to use during computation (default: -1)
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
+  --offload-to-cpu                   place the weights in RAM to save VRAM, and automatically load them into VRAM when needed
   -m, --model [MODEL]                path to full model
   --diffusion-model                  path to the standalone diffusion model
   --high-noise-diffusion-model       path to the standalone high noise diffusion model
@@ -346,7 +347,7 @@ arguments:
   --high-noise-scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)
   --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}
                                      (high noise) sampling method (default: "euler_a")
-  --high-noise-steps  STEPS          (high noise) number of sample steps (default: 20)
+  --high-noise-steps  STEPS          (high noise) number of sample steps (default: -1 = auto)
                                      SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])
   --strength STRENGTH                strength for noising/unnoising (default: 0.75)
   --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)
@@ -377,6 +378,9 @@ arguments:
   --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma
   --video-frames                     video frames (default: 1)
   --fps                              fps (default: 24)
+  --moe-boundary BOUNDARY            timestep boundary for Wan2.2 MoE model. (default: 0.875)
+                                     only enabled if `--high-noise-steps` is set to -1
+  --flow-shift SHIFT                 shift value for Flow models like SD3.x or WAN (default: auto)
   -v, --verbose                      print extra info
 ```
 

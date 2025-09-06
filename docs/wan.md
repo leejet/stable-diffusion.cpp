@@ -43,8 +43,6 @@
 
 ## Examples
 
-Since GitHub does not support AVI files, the file I uploaded was converted from AVI to MP4.
-
 ### Wan2.1 T2V 1.3B
 
 ```
