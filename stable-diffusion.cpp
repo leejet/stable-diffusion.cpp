@@ -682,7 +682,7 @@ public:
         if (sd_version_is_sd3(version)) {
             LOG_INFO("running in FLOW mode");
             float shift = sd_ctx_params->flow_shift;
-            if( shift == INFINITY){
+            if (shift == INFINITY) {
                 shift = 3.0;
             }
             denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
@@ -699,11 +699,8 @@ public:
         } else if (sd_version_is_wan(version)) {
             LOG_INFO("running in FLOW mode");
             float shift = sd_ctx_params->flow_shift;
-            if(shift == INFINITY) {
+            if (shift == INFINITY) {
                 shift = 5.0;
-                if (version == VERSION_WAN2){
-                    shift = 12.0;
-                }
             }
             denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
         } else if (is_using_v_parameterization) {
