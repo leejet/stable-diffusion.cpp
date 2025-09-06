@@ -223,6 +223,38 @@ __STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_
     }
 }
 
+__STATIC_INLINE__ void ggml_tensor_iter(
+    ggml_tensor* tensor,
+    const std::function<void(ggml_tensor*, int64_t, int64_t, int64_t, int64_t)>& fn) {
+    int64_t n0 = tensor->ne[0];
+    int64_t n1 = tensor->ne[1];
+    int64_t n2 = tensor->ne[2];
+    int64_t n3 = tensor->ne[3];
+
+    for (int64_t i3 = 0; i3 < n3; i3++) {
+        for (int64_t i2 = 0; i2 < n2; i2++) {
+            for (int64_t i1 = 0; i1 < n1; i1++) {
+                for (int64_t i0 = 0; i0 < n0; i0++) {
+                    fn(tensor, i0, i1, i2, i3);
+                }
+            }
+        }
+    }
+}
+
+__STATIC_INLINE__ void ggml_tensor_iter(
+    ggml_tensor* tensor,
+    const std::function<void(ggml_tensor*, int64_t)>& fn) {
+    int64_t n0 = tensor->ne[0];
+    int64_t n1 = tensor->ne[1];
+    int64_t n2 = tensor->ne[2];
+    int64_t n3 = tensor->ne[3];
+
+    for (int64_t i = 0; i < ggml_nelements(tensor); i++) {
+        fn(tensor, i);
+    }
+}
+
 __STATIC_INLINE__ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_path) {
     std::ifstream file(file_path, std::ios::binary);
     if (!file.is_open()) {
