@@ -142,30 +142,6 @@ public:
     }
 };
 
-class RMSNorm : public UnaryBlock {
-protected:
-    int64_t hidden_size;
-    float eps;
-
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
-        enum ggml_type wtype = GGML_TYPE_F32;
-        params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
-    }
-
-public:
-    RMSNorm(int64_t hidden_size,
-            float eps = 1e-06f)
-        : hidden_size(hidden_size),
-          eps(eps) {}
-
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
-        struct ggml_tensor* w = params["weight"];
-        x                     = ggml_rms_norm(ctx, x, eps);
-        x                     = ggml_mul(ctx, x, w);
-        return x;
-    }
-};
-
 class SelfAttention : public GGMLBlock {
 public:
     int64_t num_heads;
@@ -870,9 +846,10 @@ struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
     MMDiTRunner(ggml_backend_t backend,
+                bool offload_params_to_cpu,
                 const String2GGMLType& tensor_types = {},
                 const std::string prefix            = "")
-        : GGMLRunner(backend), mmdit(tensor_types) {
+        : GGMLRunner(backend, offload_params_to_cpu), mmdit(tensor_types) {
         mmdit.init(params_ctx, tensor_types, prefix);
     }
 
@@ -970,7 +947,7 @@ struct MMDiTRunner : public GGMLRunner {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
         ggml_backend_t backend             = ggml_backend_cpu_init();
         ggml_type model_data_type          = GGML_TYPE_F16;
-        std::shared_ptr<MMDiTRunner> mmdit = std::shared_ptr<MMDiTRunner>(new MMDiTRunner(backend));
+        std::shared_ptr<MMDiTRunner> mmdit = std::shared_ptr<MMDiTRunner>(new MMDiTRunner(backend, false));
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -984,7 +961,7 @@ struct MMDiTRunner : public GGMLRunner {
                 return;
             }
 
-            bool success = model_loader.load_tensors(tensors, backend);
+            bool success = model_loader.load_tensors(tensors);
 
             if (!success) {
                 LOG_ERROR("load tensors from model loader failed");

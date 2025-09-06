@@ -4,19 +4,33 @@
 
 # stable-diffusion.cpp
 
-Inference of Stable Diffusion and Flux in pure C/C++
+Diffusion model(SD,Flux,Wan,...) inference in pure C/C++
+
+***Note that this project is under active development. \
+API and command-line parameters may change frequently.***
 
 ## Features
 
 - Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
 - Super lightweight and without external dependencies
-- SD1.x, SD2.x, SDXL and [SD3/SD3.5](./docs/sd3.md) support
-    - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
-- [Flux-dev/Flux-schnell Support](./docs/flux.md)
-- [FLUX.1-Kontext-dev](./docs/kontext.md)
-- [Chroma](./docs/chroma.md)
-- [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) and [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo) support
-- [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
+- Supported models
+  - Image Models
+    - SD1.x, SD2.x, [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)
+    - SDXL, [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo)
+      - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
+    - [SD3/SD3.5](./docs/sd3.md)
+    - [Flux-dev/Flux-schnell](./docs/flux.md)
+    - [Chroma](./docs/chroma.md)
+  - Image Edit Models
+    - [FLUX.1-Kontext-dev](./docs/kontext.md)
+  - Video Models
+    - [Wan2.1/Wan2.2](./docs/wan.md)
+  - [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
+  - Control Net support with SD 1.5
+  - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
+  - Latent Consistency Models support (LCM/LCM-LoRA)
+  - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
+  - Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
 - 16-bit, 32-bit float support
 - 2-bit, 3-bit, 4-bit, 5-bit and 8-bit integer quantization support
 - Accelerated memory-efficient CPU inference
@@ -26,15 +40,9 @@ Inference of Stable Diffusion and Flux in pure C/C++
 - Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
     - No need to convert to `.ggml` or `.gguf` anymore!
 - Flash Attention for memory usage optimization
-- Original `txt2img` and `img2img` mode
 - Negative prompt
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
-- LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
-- Latent Consistency Models support (LCM/LCM-LoRA)
-- Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
-- Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
 - VAE tiling processing for reduce memory usage
-- Control Net support with SD 1.5
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -287,8 +295,10 @@ arguments:
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
   -m, --model [MODEL]                path to full model
   --diffusion-model                  path to the standalone diffusion model
+  --high-noise-diffusion-model       path to the standalone high noise diffusion model
   --clip_l                           path to the clip-l text encoder
   --clip_g                           path to the clip-g text encoder
+  --clip_vision                      path to the clip-vision encoder
   --t5xxl                            path to the t5xxl text encoder
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
@@ -303,8 +313,9 @@ arguments:
                                      If not specified, the default is the type of the weight file
   --tensor-type-rules [EXPRESSION]   weight type per tensor pattern (example: "^vae\.=f16,model\.=q8_0")
   --lora-model-dir [DIR]             lora model directory
-  -i, --init-img [IMAGE]             path to the input image, required by img2img
+  -i, --init-img [IMAGE]             path to the init image, required by img2img
   --mask [MASK]                      path to the mask image, required by img2img with mask
+  -i, --end-img [IMAGE]              path to the end image, required by flf2v
   --control-image [IMAGE]            path to image condition, control net
   -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times)
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
@@ -319,6 +330,23 @@ arguments:
   --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])
   --skip-layer-start START           SLG enabling point: (default: 0.01)
   --skip-layer-end END               SLG disabling point: (default: 0.2)
+  --scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)
+  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}
+                                     sampling method (default: "euler_a")
+  --steps  STEPS                     number of sample steps (default: 20)
+  --high-noise-cfg-scale SCALE       (high noise) unconditional guidance scale: (default: 7.0)
+  --high-noise-img-cfg-scale SCALE   (high noise) image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)
+  --high-noise-guidance SCALE        (high noise) distilled guidance scale for models with guidance input (default: 3.5)
+  --high-noise-slg-scale SCALE       (high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)
+                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium
+  --high-noise-eta SCALE             (high noise) eta in DDIM, only for DDIM and TCD: (default: 0)
+  --high-noise-skip-layers LAYERS    (high noise) Layers to skip for SLG steps: (default: [7,8,9])
+  --high-noise-skip-layer-start      (high noise) SLG enabling point: (default: 0.01)
+  --high-noise-skip-layer-end END    (high noise) SLG disabling point: (default: 0.2)
+  --high-noise-scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)
+  --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}
+                                     (high noise) sampling method (default: "euler_a")
+  --high-noise-steps  STEPS          (high noise) number of sample steps (default: 20)
                                      SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])
   --strength STRENGTH                strength for noising/unnoising (default: 0.75)
   --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)
@@ -326,14 +354,10 @@ arguments:
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
   -W, --width W                      image width, in pixel space (default: 512)
-  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}
-                                     sampling method (default: "euler_a")
-  --steps  STEPS                     number of sample steps (default: 20)
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate
-  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)
-  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
+  --clip-skip N                      ignore last_dot_pos layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
   --vae-on-cpu                       keep vae in cpu (for low vram)
@@ -351,6 +375,8 @@ arguments:
   --chroma-disable-dit-mask          disable dit mask for chroma
   --chroma-enable-t5-mask            enable t5 mask for chroma
   --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma
+  --video-frames                     video frames (default: 1)
+  --fps                              fps (default: 24)
   -v, --verbose                      print extra info
 ```
 
@@ -438,3 +464,5 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 - [latent-consistency-model](https://github.com/luosiallen/latent-consistency-model)
 - [generative-models](https://github.com/Stability-AI/generative-models/)
 - [PhotoMaker](https://github.com/TencentARC/PhotoMaker)
+- [Wan2.1](https://github.com/Wan-Video/Wan2.1)
+- [Wan2.2](https://github.com/Wan-Video/Wan2.2)
