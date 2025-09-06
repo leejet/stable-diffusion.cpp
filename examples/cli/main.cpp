@@ -262,9 +262,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
     printf("                                     Might lower quality, since it implies converting k and v to f16.\n");
     printf("                                     This might crash if it is not supported by the backend.\n");
-    printf("  --diffusion-conv-direct            use Conv2d direct in the diffusion model");
+    printf("  --diffusion-conv-direct            use Conv2d direct in the diffusion model\n");
     printf("                                     This might crash if it is not supported by the backend.\n");
-    printf("  --vae-conv-direct                  use Conv2d direct in the vae model (should improve the performance)");
+    printf("  --vae-conv-direct                  use Conv2d direct in the vae model (should improve the performance)\n");
     printf("                                     This might crash if it is not supported by the backend.\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
