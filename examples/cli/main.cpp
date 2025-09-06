@@ -89,6 +89,8 @@ struct SDParams {
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
     sd_sample_params_t high_noise_sample_params;
 
+    float moe_boundary = 0.875f;
+
     int video_frames = 1;
     int fps          = 16;
 
@@ -113,7 +115,6 @@ struct SDParams {
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
-    float boundary           = 0.875; 
 
     SDParams() {
         sd_sample_params_init(&sample_params);
@@ -169,6 +170,7 @@ void print_params(SDParams params) {
     printf("    height:                            %d\n", params.height);
     printf("    sample_params:                     %s\n", SAFE_STR(sample_params_str));
     printf("    high_noise_sample_params:          %s\n", SAFE_STR(high_noise_sample_params_str));
+    printf("    moe_boundary:                      %.3f\n", params.moe_boundary);
     printf("    strength(img2img):                 %.2f\n", params.strength);
     printf("    rng:                               %s\n", sd_rng_type_name(params.rng_type));
     printf("    seed:                              %ld\n", params.seed);
@@ -276,8 +278,8 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
     printf("  --video-frames                     video frames (default: 1)\n");
     printf("  --fps                              fps (default: 24)\n");
-    printf("  --moe-boundary BOUNDARY            Timestep boundary for Wan2.2 MoE model. (default: 0.875)"); 
-    printf("                                     Only enabled if `--high-noise-steps` is set to -1");
+    printf("  --moe-boundary BOUNDARY            Timestep boundary for Wan2.2 MoE model. (default: 0.875)\n");
+    printf("                                     Only enabled if `--high-noise-steps` is set to -1\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -366,7 +368,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
     std::string arg;
     for (int i = 1; i < argc; i++) {
         bool found_arg = false;
-        arg = argv[i];
+        arg            = argv[i];
 
         for (auto& option : options.string_options) {
             if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
@@ -427,7 +429,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
         for (auto& option : options.manual_options) {
             if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
                 found_arg = true;
-                int ret = option.cb(argc, argv, i);
+                int ret   = option.cb(argc, argv, i);
                 if (ret < 0) {
                     invalid_arg = true;
                     break;
@@ -439,7 +441,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
             break;
         }
         if (!found_arg) {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());    
+            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             return false;
         }
     }
@@ -511,7 +513,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--strength", "", &params.strength},
         {"", "--style-ratio", "", &params.style_ratio},
         {"", "--control-strength", "", &params.control_strength},
-        {"", "--moe-boundary", "", &params.boundary},
+        {"", "--moe-boundary", "", &params.moe_boundary},
     };
 
     options.bool_options = {
@@ -1226,10 +1228,10 @@ int main(int argc, const char* argv[]) {
             params.height,
             params.sample_params,
             params.high_noise_sample_params,
+            params.moe_boundary,
             params.strength,
             params.seed,
             params.video_frames,
-            params.boundary
         };
 
         results = generate_video(sd_ctx, &vid_gen_params, &num_results);
