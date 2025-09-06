@@ -1973,48 +1973,57 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
     std::vector<TensorStorage> processed_tensor_storages;
     
     {
-        std::unordered_map<std::string, TensorStorage> processed_map;
-        std::mutex map_mutex;
-
         int n_threads = std::min((int)std::thread::hardware_concurrency(), (int)tensor_storages.size());
         if (n_threads < 1) {
             n_threads = 1;
         }
+
+        std::vector<std::unordered_map<std::string, TensorStorage> > local_maps(n_threads);
         std::vector<std::thread> workers;
+        size_t chunk_size = (tensor_storages.size() + n_threads - 1) / n_threads;
 
         for (int i = 0; i < n_threads; ++i) {
             workers.emplace_back([&, thread_id = i]() {
+                const size_t start = thread_id * chunk_size;
+                const size_t end   = std::min(start + chunk_size, tensor_storages.size());
 
-                std::unordered_map<std::string, TensorStorage> local_processed_map;
                 std::vector<TensorStorage> temp_storages;
-
-                for (size_t j = thread_id; j < tensor_storages.size(); j += n_threads) {
+                for (size_t j = start; j < end; ++j) {
                     const auto& tensor_storage = tensor_storages[j];
                     if (is_unused_tensor(tensor_storage.name)) {
                         continue;
                     }
-                    
+
                     temp_storages.clear();
                     preprocess_tensor(tensor_storage, temp_storages);
-                    
-                    for (const auto& ts : temp_storages) {
-                        local_processed_map[ts.name] = ts;
-                    }
-                }
 
-                if (!local_processed_map.empty()) {
-                    std::lock_guard<std::mutex> lock(map_mutex);
-                    processed_map.merge(local_processed_map);
+                    for (size_t k = 0; k < temp_storages.size(); ++k) {
+                        local_maps[thread_id][temp_storages[k].name] = temp_storages[k];
+                    }
                 }
             });
         }
-        for (auto& w : workers) {
-            w.join();
+
+        for (size_t i = 0; i < workers.size(); ++i) {
+            workers[i].join();
         }
-        
+
+        std::unordered_map<std::string, TensorStorage> processed_map;
+        size_t total_keys = 0;
+        for (int i = 0; i < n_threads; ++i) {
+            total_keys += local_maps[i].size();
+        }
+        processed_map.reserve(total_keys);
+
+        for (int i = 0; i < n_threads; ++i) {
+            for (std::unordered_map<std::string, TensorStorage>::const_iterator it = local_maps[i].begin(); it != local_maps[i].end(); ++it) {
+                processed_map[it->first] = it->second;
+            }
+        }
+
         processed_tensor_storages.reserve(processed_map.size());
-        for (auto const& [name, ts] : processed_map) {
-            processed_tensor_storages.push_back(ts);
+        for (std::unordered_map<std::string, TensorStorage>::const_iterator it = processed_map.begin(); it != processed_map.end(); ++it) {
+            processed_tensor_storages.push_back(it->second);
         }
     }
 
