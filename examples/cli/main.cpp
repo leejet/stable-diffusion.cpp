@@ -1140,7 +1140,6 @@ int main(int argc, const char* argv[]) {
 
     if (params.ref_image_paths.size() > 0) {
         vae_decode_only = false;
-        int n           = 0;
         for (auto& path : params.ref_image_paths) {
             int width             = 0;
             int height            = 0;
