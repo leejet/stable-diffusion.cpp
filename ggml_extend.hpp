@@ -1000,6 +1000,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx
 // mask: [N, L_q, L_k]
 // return: [N, L_q, C]
 __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context* ctx,
+                                                            ggml_backend_t backend,
                                                             struct ggml_tensor* q,
                                                             struct ggml_tensor* k,
                                                             struct ggml_tensor* v,
@@ -1038,7 +1039,48 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
 
     float scale = (1.0f / sqrt((float)d_head));
 
-    int kv_pad = 0;
+    int kv_pad       = 0;
+    ggml_tensor* kqv = nullptr;
+
+    auto build_kqv = [&](ggml_tensor* q_in, ggml_tensor* k_in, ggml_tensor* v_in, ggml_tensor* mask_in) -> ggml_tensor* {
+        if (kv_pad != 0) {
+            k_in = ggml_pad(ctx, k_in, 0, kv_pad, 0, 0);
+        }
+        k_in = ggml_cast(ctx, k_in, GGML_TYPE_F16);
+
+        v_in = ggml_nn_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
+        v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_head * N);
+        if (kv_pad != 0) {
+            v_in = ggml_pad(ctx, v_in, 0, kv_pad, 0, 0);
+        }
+        v_in = ggml_cast(ctx, v_in, GGML_TYPE_F16);
+
+        if (mask_in != nullptr) {
+            mask_in = ggml_transpose(ctx, mask_in);
+        } else {
+            if (kv_pad > 0) {
+                mask_in         = ggml_zeros(ctx, L_k, L_q, 1, 1);
+                auto pad_tensor = ggml_full(ctx, -INFINITY, kv_pad, L_q, 1, 1);
+                mask_in         = ggml_concat(ctx, mask_in, pad_tensor, 0);
+            }
+        }
+
+        if (mask_in != nullptr) {
+            int mask_pad = 0;
+            if (mask_in->ne[1] % GGML_KQ_MASK_PAD != 0) {
+                mask_pad = GGML_PAD(L_q, GGML_KQ_MASK_PAD) - mask_in->ne[1];
+            }
+            if (mask_pad > 0) {
+                mask_in = ggml_pad(ctx, mask_in, 0, mask_pad, 0, 0);
+            }
+            mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
+        }
+
+        auto out = ggml_flash_attn_ext(ctx, q_in, k_in, v_in, mask_in, scale, 0, 0);
+        ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
+        return out;
+    };
+
     if (flash_attn) {
         // LOG_DEBUG("attention_ext L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         bool can_use_flash_attn = true;
@@ -1047,60 +1089,24 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         }
 
         if (mask != nullptr) {
-            // TODO(Green-Sky): figure out if we can bend t5 to work too
+            // TODO: figure out if we can bend t5 to work too
             can_use_flash_attn = can_use_flash_attn && mask->ne[3] == 1;
         }
 
-        if (!can_use_flash_attn) {
-            flash_attn = false;
+        if (can_use_flash_attn) {
+            kqv = build_kqv(q, k, v, mask);
+            if (!ggml_backend_supports_op(backend, kqv)) {
+                kqv = nullptr;
+            } else {
+                kqv = ggml_view_3d(ctx, kqv, d_head, n_head, L_q, kqv->nb[1], kqv->nb[2], 0);
+            }
         }
     }
 
-    ggml_tensor* kqv = nullptr;
-    if (flash_attn) {
-        // LOG_DEBUG(" uses flash attention");
-        if (kv_pad != 0) {
-            // LOG_DEBUG(" padding k and v dim1 by %d", kv_pad);
-            k = ggml_pad(ctx, k, 0, kv_pad, 0, 0);
-        }
-        k = ggml_cast(ctx, k, GGML_TYPE_F16);
-
-        v = ggml_nn_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
-        v = ggml_reshape_3d(ctx, v, d_head, L_k, n_head * N);     // [N * n_head, L_k, d_head]
-        if (kv_pad != 0) {
-            v = ggml_pad(ctx, v, 0, kv_pad, 0, 0);
-        }
-        v = ggml_cast(ctx, v, GGML_TYPE_F16);
-
-        if (mask != nullptr) {
-            mask = ggml_transpose(ctx, mask);
-        } else {
-            if (kv_pad > 0) {
-                mask            = ggml_zeros(ctx, L_k, L_q, 1, 1);               // [L_q, L_k]
-                auto pad_tensor = ggml_full(ctx, -INFINITY, kv_pad, L_q, 1, 1);  // [L_q, kv_pad]
-                mask            = ggml_concat(ctx, mask, pad_tensor, 0);         // [L_q, L_k + kv_pad]
-            }
-        }
-
-        // mask pad
-        if (mask != nullptr) {
-            int mask_pad = 0;
-            if (mask->ne[1] % GGML_KQ_MASK_PAD != 0) {
-                mask_pad = GGML_PAD(L_q, GGML_KQ_MASK_PAD) - mask->ne[1];
-            }
-            if (mask_pad > 0) {
-                mask = ggml_pad(ctx, mask, 0, mask_pad, 0, 0);  // [L_q + mask_pad, L_k + kv_pad]
-            }
-            mask = ggml_cast(ctx, mask, GGML_TYPE_F16);
-            // LOG_DEBUG("L_k: %ld, L_q: %ld, mask->ne[1]: %ld, mask_pad: %d, kv_pad: %d", L_k, L_q, mask->ne[1], mask_pad, kv_pad);
-        }
-
-        kqv = ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0, 0);
-        ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
-
-        // kqv = ggml_view_3d(ctx, kqv, d_head, n_head, L_k, kqv->nb[1], kqv->nb[2], 0);
-        kqv = ggml_view_3d(ctx, kqv, d_head, n_head, L_q, kqv->nb[1], kqv->nb[2], 0);
-    } else {
+    if (kqv == nullptr) {
+        // if (flash_attn) {
+        //     LOG_DEBUG("fallback to default attention, L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
+        // }
         v = ggml_nn_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_head, d_head, L_k]
         v = ggml_reshape_3d(ctx, v, L_k, d_head, n_head * N);     // [N * n_head, d_head, L_k]
 
@@ -2164,7 +2170,10 @@ public:
     }
 
     // x: [N, n_token, embed_dim]
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, bool mask = false) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* x,
+                                bool mask = false) {
         auto q_proj   = std::dynamic_pointer_cast<Linear>(blocks[q_proj_name]);
         auto k_proj   = std::dynamic_pointer_cast<Linear>(blocks[k_proj_name]);
         auto v_proj   = std::dynamic_pointer_cast<Linear>(blocks[v_proj_name]);
@@ -2174,7 +2183,7 @@ public:
         struct ggml_tensor* k = k_proj->forward(ctx, x);
         struct ggml_tensor* v = v_proj->forward(ctx, x);
 
-        x = ggml_nn_attention_ext(ctx, q, k, v, n_head, NULL, mask);  // [N, n_token, embed_dim]
+        x = ggml_nn_attention_ext(ctx, backend, q, k, v, n_head, NULL, mask);  // [N, n_token, embed_dim]
 
         x = out_proj->forward(ctx, x);  // [N, n_token, embed_dim]
         return x;

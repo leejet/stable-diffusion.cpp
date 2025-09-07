@@ -578,6 +578,7 @@ public:
 
     // x: [N, n_token, model_dim]
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
+                                                                ggml_backend_t backend,
                                                                 struct ggml_tensor* x,
                                                                 struct ggml_tensor* past_bias                = NULL,
                                                                 struct ggml_tensor* mask                     = NULL,
@@ -608,7 +609,7 @@ public:
 
         k = ggml_scale_inplace(ctx, k, sqrt(d_head));
 
-        x = ggml_nn_attention_ext(ctx, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
+        x = ggml_nn_attention_ext(ctx, backend, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
 
         x = out_proj->forward(ctx, x);  // [N, n_token, model_dim]
         return {x, past_bias};
@@ -627,6 +628,7 @@ public:
     }
 
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
+                                                                ggml_backend_t backend,
                                                                 struct ggml_tensor* x,
                                                                 struct ggml_tensor* past_bias                = NULL,
                                                                 struct ggml_tensor* mask                     = NULL,
@@ -636,7 +638,7 @@ public:
         auto layer_norm    = std::dynamic_pointer_cast<T5LayerNorm>(blocks["layer_norm"]);
 
         auto normed_hidden_state = layer_norm->forward(ctx, x);
-        auto ret                 = SelfAttention->forward(ctx, normed_hidden_state, past_bias, mask, relative_position_bucket);
+        auto ret                 = SelfAttention->forward(ctx, backend, normed_hidden_state, past_bias, mask, relative_position_bucket);
         auto output              = ret.first;
         past_bias                = ret.second;
 
@@ -653,6 +655,7 @@ public:
     }
 
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
+                                                                ggml_backend_t backend,
                                                                 struct ggml_tensor* x,
                                                                 struct ggml_tensor* past_bias                = NULL,
                                                                 struct ggml_tensor* mask                     = NULL,
@@ -661,7 +664,7 @@ public:
         auto layer_0 = std::dynamic_pointer_cast<T5LayerSelfAttention>(blocks["layer.0"]);
         auto layer_1 = std::dynamic_pointer_cast<T5LayerFF>(blocks["layer.1"]);
 
-        auto ret  = layer_0->forward(ctx, x, past_bias, mask, relative_position_bucket);
+        auto ret  = layer_0->forward(ctx, backend, x, past_bias, mask, relative_position_bucket);
         x         = ret.first;
         past_bias = ret.second;
         x         = layer_1->forward(ctx, x);
@@ -688,6 +691,7 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* past_bias                = NULL,
                                 struct ggml_tensor* attention_mask           = NULL,
@@ -696,7 +700,7 @@ public:
         for (int i = 0; i < num_layers; i++) {
             auto block = std::dynamic_pointer_cast<T5Block>(blocks["block." + std::to_string(i)]);
 
-            auto ret  = block->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
+            auto ret  = block->forward(ctx, backend, x, past_bias, attention_mask, relative_position_bucket);
             x         = ret.first;
             past_bias = ret.second;
         }
@@ -735,6 +739,7 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* past_bias                = NULL,
                                 struct ggml_tensor* attention_mask           = NULL,
@@ -745,7 +750,7 @@ public:
         auto encoder = std::dynamic_pointer_cast<T5Stack>(blocks["encoder"]);
 
         auto x = shared->forward(ctx, input_ids);
-        x      = encoder->forward(ctx, x, past_bias, attention_mask, relative_position_bucket);
+        x      = encoder->forward(ctx, backend, x, past_bias, attention_mask, relative_position_bucket);
         return x;
     }
 };
@@ -778,13 +783,14 @@ struct T5Runner : public GGMLRunner {
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* relative_position_bucket,
                                 struct ggml_tensor* attention_mask = NULL) {
         size_t N       = input_ids->ne[1];
         size_t n_token = input_ids->ne[0];
 
-        auto hidden_states = model.forward(ctx, input_ids, NULL, attention_mask, relative_position_bucket);  // [N, n_token, model_dim]
+        auto hidden_states = model.forward(ctx, backend, input_ids, NULL, attention_mask, relative_position_bucket);  // [N, n_token, model_dim]
         return hidden_states;
     }
 
@@ -810,7 +816,7 @@ struct T5Runner : public GGMLRunner {
                                                            input_ids->ne[0]);
         set_backend_tensor_data(relative_position_bucket, relative_position_bucket_vec.data());
 
-        struct ggml_tensor* hidden_states = forward(compute_ctx, input_ids, relative_position_bucket, attention_mask);
+        struct ggml_tensor* hidden_states = forward(compute_ctx, runtime_backend, input_ids, relative_position_bucket, attention_mask);
 
         ggml_build_forward_expand(gf, hidden_states);
 

@@ -488,14 +488,14 @@ public:
         blocks["mlp"] = std::shared_ptr<GGMLBlock>(new CLIPMLP(d_model, intermediate_size));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, bool mask = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, ggml_backend_t backend, struct ggml_tensor* x, bool mask = true) {
         // x: [N, n_token, d_model]
         auto self_attn   = std::dynamic_pointer_cast<MultiheadAttention>(blocks["self_attn"]);
         auto layer_norm1 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm1"]);
         auto layer_norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm2"]);
         auto mlp         = std::dynamic_pointer_cast<CLIPMLP>(blocks["mlp"]);
 
-        x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
+        x = ggml_add(ctx, x, self_attn->forward(ctx, backend, layer_norm1->forward(ctx, x), mask));
         x = ggml_add(ctx, x, mlp->forward(ctx, layer_norm2->forward(ctx, x)));
         return x;
     }
@@ -517,7 +517,11 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, int clip_skip = -1, bool mask = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* x,
+                                int clip_skip = -1,
+                                bool mask     = true) {
         // x: [N, n_token, d_model]
         int layer_idx = n_layer - 1;
         // LOG_DEBUG("clip_skip %d", clip_skip);
@@ -532,7 +536,7 @@ public:
             }
             std::string name = "layers." + std::to_string(i);
             auto layer       = std::dynamic_pointer_cast<CLIPLayer>(blocks[name]);
-            x                = layer->forward(ctx, x, mask);  // [N, n_token, d_model]
+            x                = layer->forward(ctx, backend, x, mask);  // [N, n_token, d_model]
             // LOG_DEBUG("layer %d", i);
         }
         return x;
@@ -712,6 +716,7 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* tkn_embeddings,
                                 size_t max_token_idx = 0,
@@ -722,7 +727,7 @@ public:
         auto final_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer_norm"]);
 
         auto x = embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
-        x      = encoder->forward(ctx, x, return_pooled ? -1 : clip_skip, true);
+        x      = encoder->forward(ctx, backend, x, return_pooled ? -1 : clip_skip, true);
         if (return_pooled || with_final_ln) {
             x = final_layer_norm->forward(ctx, x);
         }
@@ -775,6 +780,7 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* pixel_values,
                                 bool return_pooled = true,
                                 int clip_skip      = -1) {
@@ -786,7 +792,7 @@ public:
 
         auto x = embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
         x      = pre_layernorm->forward(ctx, x);
-        x      = encoder->forward(ctx, x, clip_skip, false);
+        x      = encoder->forward(ctx, backend, x, clip_skip, false);
         // print_ggml_tensor(x, true, "ClipVisionModel x: ");
         auto last_hidden_state = x;
         x                      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
@@ -855,6 +861,7 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* pixel_values,
                                 bool return_pooled = true,
                                 int clip_skip      = -1) {
@@ -863,7 +870,7 @@ public:
         auto vision_model      = std::dynamic_pointer_cast<CLIPVisionModel>(blocks["vision_model"]);
         auto visual_projection = std::dynamic_pointer_cast<CLIPProjection>(blocks["visual_projection"]);
 
-        auto x = vision_model->forward(ctx, pixel_values, return_pooled, clip_skip);  // [N, hidden_size] or [N, n_token, hidden_size]
+        auto x = vision_model->forward(ctx, backend, pixel_values, return_pooled, clip_skip);  // [N, hidden_size] or [N, n_token, hidden_size]
 
         if (return_pooled) {
             x = visual_projection->forward(ctx, x);  // [N, projection_dim]
@@ -900,6 +907,7 @@ struct CLIPTextModelRunner : public GGMLRunner {
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* embeddings,
                                 size_t max_token_idx = 0,
@@ -911,7 +919,7 @@ struct CLIPTextModelRunner : public GGMLRunner {
             input_ids = ggml_reshape_2d(ctx, input_ids, model.n_token, input_ids->ne[0] / model.n_token);
         }
 
-        return model.forward(ctx, input_ids, embeddings, max_token_idx, return_pooled);
+        return model.forward(ctx, backend, input_ids, embeddings, max_token_idx, return_pooled);
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
@@ -937,7 +945,7 @@ struct CLIPTextModelRunner : public GGMLRunner {
             embeddings = ggml_concat(compute_ctx, token_embed_weight, custom_embeddings, 1);
         }
 
-        struct ggml_tensor* hidden_states = forward(compute_ctx, input_ids, embeddings, max_token_idx, return_pooled);
+        struct ggml_tensor* hidden_states = forward(compute_ctx, runtime_backend, input_ids, embeddings, max_token_idx, return_pooled);
 
         ggml_build_forward_expand(gf, hidden_states);
 
