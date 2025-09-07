@@ -330,7 +330,7 @@ public:
             if (sd_version_is_dit(version)) {
                 use_t5xxl = true;
             }
-            if (!ggml_backend_is_cpu(backend) && use_t5xxl) {
+            if (!clip_on_cpu && !ggml_backend_is_cpu(backend) && use_t5xxl) {
                 LOG_WARN(
                     "!!!It appears that you are using the T5 model. Some backends may encounter issues with it."
                     "If you notice that the generated images are completely black,"

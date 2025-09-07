@@ -25,6 +25,7 @@
 #include "stb_image_resize.h"
 
 #include "avi_writer.h"
+#include <filesystem>
 
 #if defined(_WIN32)
 #define NOMINMAX
@@ -1314,6 +1315,19 @@ int main(int argc, const char* argv[]) {
                 continue;
             }
             std::string final_image_path = i > 0 ? base_path + "_" + std::to_string(i + 1) + file_ext : base_path + file_ext;
+
+            namespace fs = std::filesystem;
+            const fs::path out_path = params.output_path;
+            if (const fs::path out_dir = out_path.parent_path(); !out_dir.empty()) {
+                std::error_code ec;
+                fs::create_directories(out_dir, ec); // OK if already exists
+                if (ec) {
+                    fprintf(stderr, "failed to create directory '%s': %s\n",
+                        out_dir.string().c_str(), ec.message().c_str());
+                    return 1;
+                }
+            }
+
             if (is_jpg) {
                 stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                                results[i].data, 90, get_image_params(params, params.seed + i).c_str());
