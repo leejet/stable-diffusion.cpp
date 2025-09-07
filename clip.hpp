@@ -36,20 +36,20 @@ std::vector<std::pair<int, std::u32string>> bytes_to_unicode() {
     std::set<int> byte_set;
     for (int b = static_cast<int>('!'); b <= static_cast<int>('~'); ++b) {
         byte_set.insert(b);
-        byte_unicode_pairs.push_back(std::pair<int, std::u32string>(b, unicode_value_to_utf32(b)));
+        byte_unicode_pairs.emplace_back(b, unicode_value_to_utf32(b));
     }
     for (int b = 161; b <= 172; ++b) {
         byte_set.insert(b);
-        byte_unicode_pairs.push_back(std::pair<int, std::u32string>(b, unicode_value_to_utf32(b)));
+        byte_unicode_pairs.emplace_back(b, unicode_value_to_utf32(b));
     }
     for (int b = 174; b <= 255; ++b) {
         byte_set.insert(b);
-        byte_unicode_pairs.push_back(std::pair<int, std::u32string>(b, unicode_value_to_utf32(b)));
+        byte_unicode_pairs.emplace_back(b, unicode_value_to_utf32(b));
     }
     int n = 0;
     for (int b = 0; b < 256; ++b) {
         if (byte_set.find(b) == byte_set.end()) {
-            byte_unicode_pairs.push_back(std::pair<int, std::u32string>(b, unicode_value_to_utf32(n + 256)));
+            byte_unicode_pairs.emplace_back(b, unicode_value_to_utf32(n + 256));
             ++n;
         }
     }
