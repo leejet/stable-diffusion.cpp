@@ -557,8 +557,6 @@ public:
         // load weights
         LOG_DEBUG("loading weights");
 
-        int64_t t0 = ggml_time_ms();
-
         std::set<std::string> ignore_tensors;
         tensors["alphas_cumprod"] = alphas_cumprod_tensor;
         if (use_tiny_autoencoder) {
@@ -656,11 +654,7 @@ public:
                 ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM");
         }
 
-        int64_t t1 = ggml_time_ms();
-        LOG_INFO("loading model from '%s' completed, taking %.2fs", SAFE_STR(sd_ctx_params->model_path), (t1 - t0) * 1.0f / 1000);
-
         // check is_using_v_parameterization_for_sd2
-
         if (sd_version_is_sd2(version)) {
             if (is_using_v_parameterization_for_sd2(ctx, sd_version_is_inpaint(version))) {
                 is_using_v_parameterization = true;
