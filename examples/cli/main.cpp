@@ -223,7 +223,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --mask [MASK]                      path to the mask image, required by img2img with mask\n");
     printf("  -i, --end-img [IMAGE]              path to the end image, required by flf2v\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
-    printf("  -r, --ref-image [PATH] reference image for Flux Kontext models (can be used multiple times) \n");
+    printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
     printf("  --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");

@@ -318,12 +318,8 @@ arguments:
   --mask [MASK]                      path to the mask image, required by img2img with mask
   -i, --end-img [IMAGE]              path to the end image, required by flf2v
   --control-image [IMAGE]            path to image condition, control net
-  -r, --ref-image [PATH] or [PATH,N] reference image for Flux Kontext models (can be used multiple times).
-                                     PATH is the path to the reference image.
-                                     Optionally, you can specify an integer identifier N (default = 1) after a comma to set the index of reference image.
-                                     Reference indices are only supported by some fine-tunes of Flux Kontext with proper multi-reference support.
-                                     Reference images with the same index will be stitched together and seen as one image.
-  --increase-ref-index               Automatically increase the indices of references images based on the order they are listed (starting with 1). Will overwrite any manually set indices
+  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times)
+  --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
