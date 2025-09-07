@@ -1,6 +1,5 @@
 build*/
 test/
-.vscode/
 .cache/
 *.swp
 .vscode/
