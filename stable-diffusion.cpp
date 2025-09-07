@@ -775,7 +775,7 @@ public:
 
         int64_t t0              = ggml_time_ms();
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, {}, -1, {}, 0.f, &out);
+        diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, {}, false, -1, {}, 0.f, &out);
         diffusion_model->free_compute_buffer();
 
         double result = 0.f;
@@ -1032,6 +1032,7 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
+                        bool increase_ref_index               = false,
                         ggml_tensor* denoise_mask             = nullptr) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
@@ -1126,6 +1127,7 @@ public:
                                               cond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1139,6 +1141,7 @@ public:
                                               id_cond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1160,6 +1163,7 @@ public:
                                               uncond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1177,6 +1181,7 @@ public:
                                               img_cond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1198,6 +1203,7 @@ public:
                                               cond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1710,6 +1716,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "\n"
              "batch_count: %d\n"
              "ref_images_count: %d\n"
+             "increase_ref_index: %s\n"
              "control_strength: %.2f\n"
              "style_strength: %.2f\n"
              "normalize_input: %s\n"
@@ -1724,6 +1731,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->seed,
              sd_img_gen_params->batch_count,
              sd_img_gen_params->ref_images_count,
+             BOOL_STR(sd_img_gen_params->increase_ref_index),
              sd_img_gen_params->control_strength,
              sd_img_gen_params->style_strength,
              BOOL_STR(sd_img_gen_params->normalize_input),
@@ -1797,6 +1805,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     bool normalize_input,
                                     std::string input_id_images_path,
                                     std::vector<ggml_tensor*> ref_latents,
+                                    bool increase_ref_index,
                                     ggml_tensor* concat_latent = NULL,
                                     ggml_tensor* denoise_mask  = NULL) {
     if (seed < 0) {
@@ -2054,6 +2063,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
+                                                     increase_ref_index,
                                                      denoise_mask);
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -2304,7 +2314,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         LOG_INFO("EDIT mode");
     }
 
-    std::vector<struct ggml_tensor*> ref_latents;
+    std::vector<ggml_tensor*> ref_latents;
     for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
         ggml_tensor* img = ggml_new_tensor_4d(work_ctx,
                                               GGML_TYPE_F32,
@@ -2359,6 +2369,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->normalize_input,
                                                         sd_img_gen_params->input_id_images_path,
                                                         ref_latents,
+                                                        sd_img_gen_params->increase_ref_index,
                                                         concat_latent,
                                                         denoise_mask);
 

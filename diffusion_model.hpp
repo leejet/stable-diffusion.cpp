@@ -16,6 +16,7 @@ struct DiffusionModel {
                          struct ggml_tensor* y,
                          struct ggml_tensor* guidance,
                          std::vector<ggml_tensor*> ref_latents     = {},
+                         bool increase_ref_index                   = false,
                          int num_video_frames                      = -1,
                          std::vector<struct ggml_tensor*> controls = {},
                          float control_strength                    = 0.f,
@@ -77,6 +78,7 @@ struct UNetModel : public DiffusionModel {
                  struct ggml_tensor* y,
                  struct ggml_tensor* guidance,
                  std::vector<ggml_tensor*> ref_latents     = {},
+                 bool increase_ref_index                   = false,
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
@@ -133,6 +135,7 @@ struct MMDiTModel : public DiffusionModel {
                  struct ggml_tensor* y,
                  struct ggml_tensor* guidance,
                  std::vector<ggml_tensor*> ref_latents     = {},
+                 bool increase_ref_index                   = false,
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
@@ -191,13 +194,14 @@ struct FluxModel : public DiffusionModel {
                  struct ggml_tensor* y,
                  struct ggml_tensor* guidance,
                  std::vector<ggml_tensor*> ref_latents     = {},
+                 bool increase_ref_index                   = false,
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
                  struct ggml_tensor** output               = NULL,
                  struct ggml_context* output_ctx           = NULL,
                  std::vector<int> skip_layers              = std::vector<int>()) {
-        return flux.compute(n_threads, x, timesteps, context, c_concat, y, guidance, ref_latents, output, output_ctx, skip_layers);
+        return flux.compute(n_threads, x, timesteps, context, c_concat, y, guidance, ref_latents, increase_ref_index, output, output_ctx, skip_layers);
     }
 };
 
@@ -250,6 +254,7 @@ struct WanModel : public DiffusionModel {
                  struct ggml_tensor* y,
                  struct ggml_tensor* guidance,
                  std::vector<ggml_tensor*> ref_latents     = {},
+                 bool increase_ref_index                   = false,
                  int num_video_frames                      = -1,
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,

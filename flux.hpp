@@ -960,6 +960,7 @@ namespace Flux {
                                         struct ggml_tensor* y,
                                         struct ggml_tensor* guidance,
                                         std::vector<ggml_tensor*> ref_latents = {},
+                                        bool increase_ref_index               = false,
                                         std::vector<int> skip_layers          = {}) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
@@ -999,6 +1000,7 @@ namespace Flux {
                                             x->ne[3],
                                             context->ne[1],
                                             ref_latents,
+                                            increase_ref_index,
                                             flux_params.theta,
                                             flux_params.axes_dim);
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
@@ -1035,6 +1037,7 @@ namespace Flux {
                      struct ggml_tensor* y,
                      struct ggml_tensor* guidance,
                      std::vector<ggml_tensor*> ref_latents = {},
+                     bool increase_ref_index               = false,
                      struct ggml_tensor** output           = NULL,
                      struct ggml_context* output_ctx       = NULL,
                      std::vector<int> skip_layers          = std::vector<int>()) {
@@ -1044,7 +1047,7 @@ namespace Flux {
             // y: [N, adm_in_channels] or [1, adm_in_channels]
             // guidance: [N, ]
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, skip_layers);
+                return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, increase_ref_index, skip_layers);
             };
 
             GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -1084,7 +1087,7 @@ namespace Flux {
                 struct ggml_tensor* out = NULL;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, NULL, y, guidance, {}, &out, work_ctx);
+                compute(8, x, timesteps, context, NULL, y, guidance, {}, false, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

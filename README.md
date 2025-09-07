@@ -319,6 +319,7 @@ arguments:
   -i, --end-img [IMAGE]              path to the end image, required by flf2v
   --control-image [IMAGE]            path to image condition, control net
   -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times)
+  --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
