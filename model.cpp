@@ -1,15 +1,15 @@
 #include <stdarg.h>
+#include <atomic>
+#include <chrono>
 #include <fstream>
+#include <functional>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
-#include <thread>
-#include <atomic>
-#include <functional>
-#include <mutex>
-#include <chrono>
 
 #include "gguf_reader.hpp"
 #include "model.h"
@@ -1955,7 +1955,7 @@ std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& v
 
     for (const auto& ts : vec) {
         const std::string& current_name = ts.name;
-        auto it = name_to_index_map.find(current_name);
+        auto it                         = name_to_index_map.find(current_name);
 
         if (it != name_to_index_map.end()) {
             // Found a duplicate, overwrite the existing one in res
@@ -1970,8 +1970,18 @@ std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& v
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
+    int64_t process_time_ms         = 0;
+    int64_t read_time_ms            = 0;
+    int64_t memcpy_time_ms          = 0;
+    int64_t copy_to_backend_time_ms = 0;
+    int64_t convert_time_ms         = 0;
+
+    int64_t prev_time_ms = 0;
+    int64_t curr_time_ms = 0;
+    int64_t start_time   = ggml_time_ms();
+    prev_time_ms         = start_time;
     std::vector<TensorStorage> processed_tensor_storages;
-    
+
     {
         std::unordered_map<std::string, TensorStorage> processed_map;
         std::mutex map_mutex;
@@ -1984,7 +1994,6 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
 
         for (int i = 0; i < n_threads; ++i) {
             workers.emplace_back([&, thread_id = i]() {
-
                 std::unordered_map<std::string, TensorStorage> local_processed_map;
                 std::vector<TensorStorage> temp_storages;
 
@@ -1993,10 +2002,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
                     if (is_unused_tensor(tensor_storage.name)) {
                         continue;
                     }
-                    
+
                     temp_storages.clear();
                     preprocess_tensor(tensor_storage, temp_storages);
-                    
+
                     for (const auto& ts : temp_storages) {
                         local_processed_map[ts.name] = ts;
                     }
@@ -2011,17 +2020,21 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
         for (auto& w : workers) {
             w.join();
         }
-        
+
         processed_tensor_storages.reserve(processed_map.size());
         for (auto const& [name, ts] : processed_map) {
             processed_tensor_storages.push_back(ts);
         }
     }
 
-    bool success                      = true;
-    size_t total_tensors_processed    = 0;
+    curr_time_ms    = ggml_time_ms();
+    process_time_ms = curr_time_ms - prev_time_ms;
+    prev_time_ms    = curr_time_ms;
+
+    bool success                          = true;
+    size_t total_tensors_processed        = 0;
     const size_t total_tensors_to_process = processed_tensor_storages.size();
-    const int64_t t_start             = ggml_time_ms();
+    const int64_t t_start                 = ggml_time_ms();
 
     for (size_t file_index = 0; file_index < file_paths_.size(); file_index++) {
         std::string file_path = file_paths_[file_index];
@@ -2104,15 +2117,27 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
                             size_t entry_size = zip_entry_size(zip);
                             if (entry_size != n) {
                                 read_buffer.resize(entry_size);
+                                prev_time_ms = ggml_time_ms();
                                 zip_entry_noallocread(zip, (void*)read_buffer.data(), entry_size);
+                                curr_time_ms = ggml_time_ms();
+                                read_time_ms += curr_time_ms - prev_time_ms;
+                                prev_time_ms = curr_time_ms;
                                 memcpy((void*)buf, (void*)(read_buffer.data() + tensor_storage.offset), n);
+                                curr_time_ms = ggml_time_ms();
+                                memcpy_time_ms += curr_time_ms - prev_time_ms;
                             } else {
+                                prev_time_ms = ggml_time_ms();
                                 zip_entry_noallocread(zip, (void*)buf, n);
+                                curr_time_ms = ggml_time_ms();
+                                read_time_ms += curr_time_ms - prev_time_ms;
                             }
                             zip_entry_close(zip);
                         } else {
+                            prev_time_ms = ggml_time_ms();
                             file.seekg(tensor_storage.offset);
                             file.read(buf, n);
+                            curr_time_ms = ggml_time_ms();
+                            read_time_ms += curr_time_ms - prev_time_ms;
                             if (!file) {
                                 LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
                                 failed = true;
@@ -2130,75 +2155,92 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
                                 read_data((char*)dst_tensor->data, nbytes_to_read);
                             }
 
+                            prev_time_ms = ggml_time_ms();
                             if (tensor_storage.is_bf16) {
-                        // inplace op
+                                // inplace op
                                 bf16_to_f32_vec((uint16_t*)dst_tensor->data, (float*)dst_tensor->data, tensor_storage.nelements());
                             } else if (tensor_storage.is_f8_e4m3) {
-                        // inplace op
+                                // inplace op
                                 f8_e4m3_to_f16_vec((uint8_t*)dst_tensor->data, (uint16_t*)dst_tensor->data, tensor_storage.nelements());
                             } else if (tensor_storage.is_f8_e5m2) {
-                        // inplace op
+                                // inplace op
                                 f8_e5m2_to_f16_vec((uint8_t*)dst_tensor->data, (uint16_t*)dst_tensor->data, tensor_storage.nelements());
                             } else if (tensor_storage.is_f64) {
                                 f64_to_f32_vec((double*)read_buffer.data(), (float*)dst_tensor->data, tensor_storage.nelements());
                             } else if (tensor_storage.is_i64) {
                                 i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)dst_tensor->data, tensor_storage.nelements());
                             }
+                            curr_time_ms = ggml_time_ms();
+                            convert_time_ms += curr_time_ms - prev_time_ms;
                         } else {
                             read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
                             read_data((char*)read_buffer.data(), nbytes_to_read);
 
+                            prev_time_ms = ggml_time_ms();
                             if (tensor_storage.is_bf16) {
-                        // inplace op
+                                // inplace op
                                 bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
                             } else if (tensor_storage.is_f8_e4m3) {
-                        // inplace op
+                                // inplace op
                                 f8_e4m3_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
                             } else if (tensor_storage.is_f8_e5m2) {
-                        // inplace op
+                                // inplace op
                                 f8_e5m2_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
                             } else if (tensor_storage.is_f64) {
-                        // inplace op
+                                // inplace op
                                 f64_to_f32_vec((double*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
                             } else if (tensor_storage.is_i64) {
-                        // inplace op
+                                // inplace op
                                 i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)read_buffer.data(), tensor_storage.nelements());
                             }
 
                             convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
                                            dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
+                            curr_time_ms = ggml_time_ms();
+                            convert_time_ms += curr_time_ms - prev_time_ms;
                         }
                     } else {
                         read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
                         read_data((char*)read_buffer.data(), nbytes_to_read);
 
+                        prev_time_ms = ggml_time_ms();
                         if (tensor_storage.is_bf16) {
-                    // inplace op
+                            // inplace op
                             bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
                         } else if (tensor_storage.is_f8_e4m3) {
-                    // inplace op
+                            // inplace op
                             f8_e4m3_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
                         } else if (tensor_storage.is_f8_e5m2) {
-                    // inplace op
+                            // inplace op
                             f8_e5m2_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
                         } else if (tensor_storage.is_f64) {
-                    // inplace op
+                            // inplace op
                             f64_to_f32_vec((double*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
                         } else if (tensor_storage.is_i64) {
-                    // inplace op
+                            // inplace op
                             i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)read_buffer.data(), tensor_storage.nelements());
                         }
 
                         if (tensor_storage.type == dst_tensor->type) {
-                    // copy to device memory
+                            // copy to device memory
+                            curr_time_ms = ggml_time_ms();
+                            convert_time_ms += curr_time_ms - prev_time_ms;
+                            prev_time_ms = curr_time_ms;
                             ggml_backend_tensor_set(dst_tensor, read_buffer.data(), 0, ggml_nbytes(dst_tensor));
+                            curr_time_ms = ggml_time_ms();
+                            copy_to_backend_time_ms += curr_time_ms - prev_time_ms;
                         } else {
-                    // convert first, then copy to device memory
+                            // convert first, then copy to device memory
                             convert_buffer.resize(ggml_nbytes(dst_tensor));
                             convert_tensor((void*)read_buffer.data(), tensor_storage.type,
                                            (void*)convert_buffer.data(), dst_tensor->type,
                                            (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
+                            curr_time_ms = ggml_time_ms();
+                            convert_time_ms += curr_time_ms - prev_time_ms;
+                            prev_time_ms = curr_time_ms;
                             ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
+                            curr_time_ms = ggml_time_ms();
+                            copy_to_backend_time_ms += curr_time_ms - prev_time_ms;
                         }
                     }
                 }
@@ -2233,6 +2275,14 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
         printf("\n");
     }
 
+    int64_t end_time = ggml_time_ms();
+    LOG_INFO("loading tensors completed, taking %.2fs (process: %.2fs, read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
+             (end_time - start_time) / 1000.f,
+             process_time_ms / 1000.f,
+             read_time_ms / 1000.f,
+             memcpy_time_ms / 1000.f,
+             convert_time_ms / 1000.f,
+             copy_to_backend_time_ms / 1000.f);
     return success;
 }
 

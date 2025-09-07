@@ -74,6 +74,7 @@ struct SDParams {
     std::string mask_image_path;
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
+    bool increase_ref_index = false;
 
     std::string prompt;
     std::string negative_prompt;
@@ -88,6 +89,8 @@ struct SDParams {
 
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
     sd_sample_params_t high_noise_sample_params;
+
+    float moe_boundary = 0.875f;
 
     int video_frames = 1;
     int fps          = 16;
@@ -113,10 +116,12 @@ struct SDParams {
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
+    float flow_shift         = INFINITY;
 
     SDParams() {
         sd_sample_params_init(&sample_params);
         sd_sample_params_init(&high_noise_sample_params);
+        high_noise_sample_params.sample_steps = -1;
     }
 };
 
@@ -152,6 +157,7 @@ void print_params(SDParams params) {
     for (auto& path : params.ref_image_paths) {
         printf("        %s\n", path.c_str());
     };
+    printf("    increase_ref_index:                %s\n", params.increase_ref_index ? "true" : "false");
     printf("    offload_params_to_cpu:             %s\n", params.offload_params_to_cpu ? "true" : "false");
     printf("    clip_on_cpu:                       %s\n", params.clip_on_cpu ? "true" : "false");
     printf("    control_net_cpu:                   %s\n", params.control_net_cpu ? "true" : "false");
@@ -167,6 +173,8 @@ void print_params(SDParams params) {
     printf("    height:                            %d\n", params.height);
     printf("    sample_params:                     %s\n", SAFE_STR(sample_params_str));
     printf("    high_noise_sample_params:          %s\n", SAFE_STR(high_noise_sample_params_str));
+    printf("    moe_boundary:                      %.3f\n", params.moe_boundary);
+    printf("    flow_shift:                        %.2f\n", params.flow_shift);
     printf("    strength(img2img):                 %.2f\n", params.strength);
     printf("    rng:                               %s\n", sd_rng_type_name(params.rng_type));
     printf("    seed:                              %ld\n", params.seed);
@@ -187,9 +195,10 @@ void print_usage(int argc, const char* argv[]) {
     printf("\n");
     printf("arguments:\n");
     printf("  -h, --help                         show this help message and exit\n");
-    printf("  -M, --mode [MODE]                  run mode, one of: [img_gen, convert], default: img_gen\n");
+    printf("  -M, --mode [MODE]                  run mode, one of: [img_gen, vid_gen, convert], default: img_gen\n");
     printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
     printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
+    printf("  --offload-to-cpu                   place the weights in RAM to save VRAM, and automatically load them into VRAM when needed\n");
     printf("  -m, --model [MODEL]                path to full model\n");
     printf("  --diffusion-model                  path to the standalone diffusion model\n");
     printf("  --high-noise-diffusion-model       path to the standalone high noise diffusion model\n");
@@ -215,6 +224,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -i, --end-img [IMAGE]              path to the end image, required by flf2v\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
     printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
+    printf("  --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
@@ -243,7 +253,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --high-noise-scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)\n");
     printf("  --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
     printf("                                     (high noise) sampling method (default: \"euler_a\")\n");
-    printf("  --high-noise-steps  STEPS          (high noise) number of sample steps (default: 20)\n");
+    printf("  --high-noise-steps  STEPS          (high noise) number of sample steps (default: -1 = auto)\n");
     printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
     printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)\n");
@@ -274,6 +284,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --chroma-t5-mask-pad  PAD_SIZE     t5 mask pad size of chroma\n");
     printf("  --video-frames                     video frames (default: 1)\n");
     printf("  --fps                              fps (default: 24)\n");
+    printf("  --moe-boundary BOUNDARY            timestep boundary for Wan2.2 MoE model. (default: 0.875)\n");
+    printf("                                     only enabled if `--high-noise-steps` is set to -1\n");
+    printf("  --flow-shift SHIFT                 shift value for Flow models like SD3.x or WAN (default: auto)\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -362,7 +375,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
     std::string arg;
     for (int i = 1; i < argc; i++) {
         bool found_arg = false;
-        arg = argv[i];
+        arg            = argv[i];
 
         for (auto& option : options.string_options) {
             if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
@@ -423,7 +436,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
         for (auto& option : options.manual_options) {
             if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
                 found_arg = true;
-                int ret = option.cb(argc, argv, i);
+                int ret   = option.cb(argc, argv, i);
                 if (ret < 0) {
                     invalid_arg = true;
                     break;
@@ -435,7 +448,7 @@ bool parse_options(int argc, const char** argv, ArgOptions& options) {
             break;
         }
         if (!found_arg) {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());    
+            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             return false;
         }
     }
@@ -507,6 +520,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--strength", "", &params.strength},
         {"", "--style-ratio", "", &params.style_ratio},
         {"", "--control-strength", "", &params.control_strength},
+        {"", "--moe-boundary", "", &params.moe_boundary},
+        {"", "--flow-shift", "", &params.flow_shift},
     };
 
     options.bool_options = {
@@ -524,6 +539,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--color", "", true, &params.color},
         {"", "--chroma-disable-dit-mask", "", false, &params.chroma_use_dit_mask},
         {"", "--chroma-enable-t5-mask", "", true, &params.chroma_use_t5_mask},
+        {"", "--increase-ref-index", "", true, &params.increase_ref_index},
     };
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
@@ -767,8 +783,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 
     if (params.high_noise_sample_params.sample_steps <= 0) {
-        fprintf(stderr, "error: the high_noise_sample_steps must be greater than 0\n");
-        exit(1);
+        params.high_noise_sample_params.sample_steps = -1;
     }
 
     if (params.strength < 0.f || params.strength > 1.f) {
@@ -1175,6 +1190,7 @@ int main(int argc, const char* argv[]) {
         params.chroma_use_dit_mask,
         params.chroma_use_t5_mask,
         params.chroma_t5_mask_pad,
+        params.flow_shift,
     };
 
     sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
@@ -1195,6 +1211,7 @@ int main(int argc, const char* argv[]) {
             init_image,
             ref_images.data(),
             (int)ref_images.size(),
+            params.increase_ref_index,
             mask_image,
             params.width,
             params.height,
@@ -1222,6 +1239,7 @@ int main(int argc, const char* argv[]) {
             params.height,
             params.sample_params,
             params.high_noise_sample_params,
+            params.moe_boundary,
             params.strength,
             params.seed,
             params.video_frames,

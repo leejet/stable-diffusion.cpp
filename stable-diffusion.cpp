@@ -557,8 +557,6 @@ public:
         // load weights
         LOG_DEBUG("loading weights");
 
-        int64_t t0 = ggml_time_ms();
-
         std::set<std::string> ignore_tensors;
         tensors["alphas_cumprod"] = alphas_cumprod_tensor;
         if (use_tiny_autoencoder) {
@@ -656,11 +654,7 @@ public:
                 ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM");
         }
 
-        int64_t t1 = ggml_time_ms();
-        LOG_INFO("loading model from '%s' completed, taking %.2fs", SAFE_STR(sd_ctx_params->model_path), (t1 - t0) * 1.0f / 1000);
-
         // check is_using_v_parameterization_for_sd2
-
         if (sd_version_is_sd2(version)) {
             if (is_using_v_parameterization_for_sd2(ctx, sd_version_is_inpaint(version))) {
                 is_using_v_parameterization = true;
@@ -681,7 +675,11 @@ public:
 
         if (sd_version_is_sd3(version)) {
             LOG_INFO("running in FLOW mode");
-            denoiser = std::make_shared<DiscreteFlowDenoiser>();
+            float shift = sd_ctx_params->flow_shift;
+            if (shift == INFINITY) {
+                shift = 3.0;
+            }
+            denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
         } else if (sd_version_is_flux(version)) {
             LOG_INFO("running in Flux FLOW mode");
             float shift = 1.0f;  // TODO: validate
@@ -694,7 +692,11 @@ public:
             denoiser = std::make_shared<FluxFlowDenoiser>(shift);
         } else if (sd_version_is_wan(version)) {
             LOG_INFO("running in FLOW mode");
-            denoiser = std::make_shared<DiscreteFlowDenoiser>();
+            float shift = sd_ctx_params->flow_shift;
+            if (shift == INFINITY) {
+                shift = 5.0;
+            }
+            denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
         } else if (is_using_v_parameterization) {
             LOG_INFO("running in v-prediction mode");
             denoiser = std::make_shared<CompVisVDenoiser>();
@@ -767,7 +769,7 @@ public:
 
         int64_t t0              = ggml_time_ms();
         struct ggml_tensor* out = ggml_dup_tensor(work_ctx, x_t);
-        diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, {}, -1, {}, 0.f, &out);
+        diffusion_model->compute(n_threads, x_t, timesteps, c, concat, NULL, NULL, {}, false, -1, {}, 0.f, &out);
         diffusion_model->free_compute_buffer();
 
         double result = 0.f;
@@ -1024,6 +1026,7 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
+                        bool increase_ref_index               = false,
                         ggml_tensor* denoise_mask             = nullptr) {
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
@@ -1118,6 +1121,7 @@ public:
                                               cond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1131,6 +1135,7 @@ public:
                                               id_cond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1152,6 +1157,7 @@ public:
                                               uncond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1169,6 +1175,7 @@ public:
                                               img_cond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1190,6 +1197,7 @@ public:
                                               cond.c_vector,
                                               guidance_tensor,
                                               ref_latents,
+                                              increase_ref_index,
                                               -1,
                                               controls,
                                               control_strength,
@@ -1553,6 +1561,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
+    sd_ctx_params->flow_shift              = INFINITY;
 }
 
 char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
@@ -1701,6 +1710,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "\n"
              "batch_count: %d\n"
              "ref_images_count: %d\n"
+             "increase_ref_index: %s\n"
              "control_strength: %.2f\n"
              "style_strength: %.2f\n"
              "normalize_input: %s\n"
@@ -1715,6 +1725,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->seed,
              sd_img_gen_params->batch_count,
              sd_img_gen_params->ref_images_count,
+             BOOL_STR(sd_img_gen_params->increase_ref_index),
              sd_img_gen_params->control_strength,
              sd_img_gen_params->style_strength,
              BOOL_STR(sd_img_gen_params->normalize_input),
@@ -1727,11 +1738,13 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     memset((void*)sd_vid_gen_params, 0, sizeof(sd_vid_gen_params_t));
     sd_sample_params_init(&sd_vid_gen_params->sample_params);
     sd_sample_params_init(&sd_vid_gen_params->high_noise_sample_params);
-    sd_vid_gen_params->width        = 512;
-    sd_vid_gen_params->height       = 512;
-    sd_vid_gen_params->strength     = 0.75f;
-    sd_vid_gen_params->seed         = -1;
-    sd_vid_gen_params->video_frames = 6;
+    sd_vid_gen_params->high_noise_sample_params.sample_steps = -1;
+    sd_vid_gen_params->width                                 = 512;
+    sd_vid_gen_params->height                                = 512;
+    sd_vid_gen_params->strength                              = 0.75f;
+    sd_vid_gen_params->seed                                  = -1;
+    sd_vid_gen_params->video_frames                          = 6;
+    sd_vid_gen_params->moe_boundary                          = 0.875f;
 }
 
 struct sd_ctx_t {
@@ -1786,6 +1799,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     bool normalize_input,
                                     std::string input_id_images_path,
                                     std::vector<ggml_tensor*> ref_latents,
+                                    bool increase_ref_index,
                                     ggml_tensor* concat_latent = NULL,
                                     ggml_tensor* denoise_mask  = NULL) {
     if (seed < 0) {
@@ -2043,6 +2057,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
+                                                     increase_ref_index,
                                                      denoise_mask);
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -2293,7 +2308,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         LOG_INFO("EDIT mode");
     }
 
-    std::vector<struct ggml_tensor*> ref_latents;
+    std::vector<ggml_tensor*> ref_latents;
     for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
         ggml_tensor* img = ggml_new_tensor_4d(work_ctx,
                                               GGML_TYPE_F32,
@@ -2348,6 +2363,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->normalize_input,
                                                         sd_img_gen_params->input_id_images_path,
                                                         ref_latents,
+                                                        sd_img_gen_params->increase_ref_index,
                                                         concat_latent,
                                                         denoise_mask);
 
@@ -2381,7 +2397,24 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         high_noise_sample_steps = sd_vid_gen_params->high_noise_sample_params.sample_steps;
     }
 
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps + high_noise_sample_steps);
+    int total_steps = sample_steps;
+
+    if (high_noise_sample_steps > 0) {
+        total_steps += high_noise_sample_steps;
+    }
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps);
+
+    if (high_noise_sample_steps < 0) {
+        // timesteps ∝ sigmas for Flow models (like wan2.2 a14b)
+        for (size_t i = 0; i < sigmas.size(); ++i) {
+            if (sigmas[i] < sd_vid_gen_params->moe_boundary) {
+                high_noise_sample_steps = i;
+                break;
+            }
+        }
+        LOG_DEBUG("switching from high noise model at step %d", high_noise_sample_steps);
+        sample_steps = total_steps - high_noise_sample_steps;
+    }
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(200 * 1024) * 1024;  // 200 MB

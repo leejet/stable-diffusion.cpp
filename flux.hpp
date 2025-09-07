@@ -114,6 +114,7 @@ namespace Flux {
     }
 
     __STATIC_INLINE__ struct ggml_tensor* attention(struct ggml_context* ctx,
+                                                    ggml_backend_t backend,
                                                     struct ggml_tensor* q,
                                                     struct ggml_tensor* k,
                                                     struct ggml_tensor* v,
@@ -126,7 +127,7 @@ namespace Flux {
         q = apply_rope(ctx, q, pe);  // [N*n_head, L, d_head]
         k = apply_rope(ctx, k, pe);  // [N*n_head, L, d_head]
 
-        auto x = ggml_nn_attention_ext(ctx, q, k, v, v->ne[1], mask, false, true, flash_attn);  // [N, L, n_head*d_head]
+        auto x = ggml_nn_attention_ext(ctx, backend, q, k, v, v->ne[1], mask, false, true, flash_attn);  // [N, L, n_head*d_head]
         return x;
     }
 
@@ -169,13 +170,17 @@ namespace Flux {
             return x;
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* pe, struct ggml_tensor* mask) {
+        struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    ggml_backend_t backend,
+                                    struct ggml_tensor* x,
+                                    struct ggml_tensor* pe,
+                                    struct ggml_tensor* mask) {
             // x: [N, n_token, dim]
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
-            auto qkv = pre_attention(ctx, x);                                         // q,k,v: [N, n_token, n_head, d_head]
-            x        = attention(ctx, qkv[0], qkv[1], qkv[2], pe, mask, flash_attn);  // [N, n_token, dim]
-            x        = post_attention(ctx, x);                                        // [N, n_token, dim]
+            auto qkv = pre_attention(ctx, x);                                                  // q,k,v: [N, n_token, n_head, d_head]
+            x        = attention(ctx, backend, qkv[0], qkv[1], qkv[2], pe, mask, flash_attn);  // [N, n_token, dim]
+            x        = post_attention(ctx, x);                                                 // [N, n_token, dim]
             return x;
         }
     };
@@ -299,6 +304,7 @@ namespace Flux {
         }
 
         std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
+                                                                    ggml_backend_t backend,
                                                                     struct ggml_tensor* img,
                                                                     struct ggml_tensor* txt,
                                                                     struct ggml_tensor* vec,
@@ -362,8 +368,8 @@ namespace Flux {
             auto k = ggml_concat(ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = attention(ctx, q, k, v, pe, mask, flash_attn);        // [N, n_txt_token + n_img_token, n_head*d_head]
-            attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
+            auto attn         = attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_txt_token + n_img_token, n_head*d_head]
+            attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));     // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx,
                                              attn,
                                              attn->ne[0],
@@ -446,6 +452,7 @@ namespace Flux {
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    ggml_backend_t backend,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* vec,
                                     struct ggml_tensor* pe,
@@ -496,7 +503,7 @@ namespace Flux {
             auto v           = ggml_reshape_4d(ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
             q                = norm->query_norm(ctx, q);
             k                = norm->key_norm(ctx, k);
-            auto attn        = attention(ctx, q, k, v, pe, mask, flash_attn);  // [N, n_token, hidden_size]
+            auto attn        = attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_token, hidden_size]
 
             auto attn_mlp = ggml_concat(ctx, attn, ggml_gelu_inplace(ctx, mlp), 0);  // [N, n_token, hidden_size + mlp_hidden_dim]
             auto output   = linear2->forward(ctx, attn_mlp);                         // [N, n_token, hidden_size]
@@ -699,6 +706,7 @@ namespace Flux {
         }
 
         struct ggml_tensor* forward_orig(struct ggml_context* ctx,
+                                         ggml_backend_t backend,
                                          struct ggml_tensor* img,
                                          struct ggml_tensor* txt,
                                          struct ggml_tensor* timesteps,
@@ -763,7 +771,7 @@ namespace Flux {
 
                 auto block = std::dynamic_pointer_cast<DoubleStreamBlock>(blocks["double_blocks." + std::to_string(i)]);
 
-                auto img_txt = block->forward(ctx, img, txt, vec, pe, txt_img_mask);
+                auto img_txt = block->forward(ctx, backend, img, txt, vec, pe, txt_img_mask);
                 img          = img_txt.first;   // [N, n_img_token, hidden_size]
                 txt          = img_txt.second;  // [N, n_txt_token, hidden_size]
             }
@@ -775,7 +783,7 @@ namespace Flux {
                 }
                 auto block = std::dynamic_pointer_cast<SingleStreamBlock>(blocks["single_blocks." + std::to_string(i)]);
 
-                txt_img = block->forward(ctx, txt_img, vec, pe, txt_img_mask);
+                txt_img = block->forward(ctx, backend, txt_img, vec, pe, txt_img_mask);
             }
 
             txt_img = ggml_cont(ctx, ggml_permute(ctx, txt_img, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
@@ -808,6 +816,7 @@ namespace Flux {
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    ggml_backend_t backend,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* timestep,
                                     struct ggml_tensor* context,
@@ -857,7 +866,7 @@ namespace Flux {
                 }
             }
 
-            auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe, mod_index_arange, skip_layers);  // [N, num_tokens, C * patch_size * patch_size]
+            auto out = forward_orig(ctx, backend, img, context, timestep, y, guidance, pe, mod_index_arange, skip_layers);  // [N, num_tokens, C * patch_size * patch_size]
             if (out->ne[1] > img_tokens) {
                 out = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));  // [num_tokens, N, C * patch_size * patch_size]
                 out = ggml_view_3d(ctx, out, out->ne[0], out->ne[1], img_tokens, out->nb[1], out->nb[2], 0);
@@ -951,6 +960,7 @@ namespace Flux {
                                         struct ggml_tensor* y,
                                         struct ggml_tensor* guidance,
                                         std::vector<ggml_tensor*> ref_latents = {},
+                                        bool increase_ref_index               = false,
                                         std::vector<int> skip_layers          = {}) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
@@ -990,6 +1000,7 @@ namespace Flux {
                                             x->ne[3],
                                             context->ne[1],
                                             ref_latents,
+                                            increase_ref_index,
                                             flux_params.theta,
                                             flux_params.axes_dim);
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
@@ -1001,6 +1012,7 @@ namespace Flux {
             set_backend_tensor_data(pe, pe_vec.data());
 
             struct ggml_tensor* out = flux.forward(compute_ctx,
+                                                   runtime_backend,
                                                    x,
                                                    timesteps,
                                                    context,
@@ -1025,6 +1037,7 @@ namespace Flux {
                      struct ggml_tensor* y,
                      struct ggml_tensor* guidance,
                      std::vector<ggml_tensor*> ref_latents = {},
+                     bool increase_ref_index               = false,
                      struct ggml_tensor** output           = NULL,
                      struct ggml_context* output_ctx       = NULL,
                      std::vector<int> skip_layers          = std::vector<int>()) {
@@ -1034,7 +1047,7 @@ namespace Flux {
             // y: [N, adm_in_channels] or [1, adm_in_channels]
             // guidance: [N, ]
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, skip_layers);
+                return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, increase_ref_index, skip_layers);
             };
 
             GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -1074,7 +1087,7 @@ namespace Flux {
                 struct ggml_tensor* out = NULL;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, NULL, y, guidance, {}, &out, work_ctx);
+                compute(8, x, timesteps, context, NULL, y, guidance, {}, false, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

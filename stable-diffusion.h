@@ -142,6 +142,7 @@ typedef struct {
     bool chroma_use_dit_mask;
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
+    float flow_shift;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -181,6 +182,7 @@ typedef struct {
     sd_image_t init_image;
     sd_image_t* ref_images;
     int ref_images_count;
+    bool increase_ref_index;
     sd_image_t mask_image;
     int width;
     int height;
@@ -205,6 +207,7 @@ typedef struct {
     int height;
     sd_sample_params_t sample_params;
     sd_sample_params_t high_noise_sample_params;
+    float moe_boundary;
     float strength;
     int64_t seed;
     int video_frames;
