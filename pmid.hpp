@@ -1,5 +1,5 @@
-#ifndef __PMI_HPP__
-#define __PMI_HPP__
+#ifndef SD_PMI_HPP
+#define SD_PMI_HPP
 
 #include "ggml_extend.hpp"
 
@@ -849,4 +849,4 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
     }
 };
 
-#endif  // __PMI_HPP__
+#endif  // SD_PMI_HPP

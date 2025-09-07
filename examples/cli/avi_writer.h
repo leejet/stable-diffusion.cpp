@@ -1,5 +1,5 @@
-#ifndef __AVI_WRITER_H__
-#define __AVI_WRITER_H__
+#ifndef SD_AVI_WRITER_H
+#define SD_AVI_WRITER_H
 
 #include <stdint.h>
 #include <stdio.h>
@@ -214,4 +214,4 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
     return 0;
 }
 
-#endif  // __AVI_WRITER_H__
+#endif  // SD_AVI_WRITER_H

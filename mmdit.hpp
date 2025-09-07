@@ -1,5 +1,5 @@
-#ifndef __MMDIT_HPP__
-#define __MMDIT_HPP__
+#ifndef SD_MMDIT_HPP
+#define SD_MMDIT_HPP
 
 #include "ggml_extend.hpp"
 #include "model.h"
@@ -974,4 +974,4 @@ struct MMDiTRunner : public GGMLRunner {
     }
 };
 
-#endif
+#endif  // SD_MMDIT_HPP

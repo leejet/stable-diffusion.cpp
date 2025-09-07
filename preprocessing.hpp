@@ -1,5 +1,5 @@
-#ifndef __PREPROCESSING_HPP__
-#define __PREPROCESSING_HPP__
+#ifndef SD_PREPROCESSING_HPP
+#define SD_PREPROCESSING_HPP
 
 #include "ggml_extend.hpp"
 #define M_PI_ 3.14159265358979323846
@@ -224,4 +224,4 @@ uint8_t* preprocess_canny(uint8_t* img, int width, int height, float high_thresh
     return output;
 }
 
-#endif  // __PREPROCESSING_HPP__
+#endif  // SD_PREPROCESSING_HPP

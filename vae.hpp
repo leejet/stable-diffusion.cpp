@@ -1,5 +1,5 @@
-#ifndef __VAE_HPP__
-#define __VAE_HPP__
+#ifndef SD_VAE_HPP
+#define SD_VAE_HPP
 
 #include "common.hpp"
 #include "ggml_extend.hpp"
@@ -638,4 +638,4 @@ struct AutoEncoderKL : public VAE {
     };
 };
 
-#endif
+#endif  // SD_VAE_HPP

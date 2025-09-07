@@ -1,5 +1,5 @@
-#ifndef __ESRGAN_HPP__
-#define __ESRGAN_HPP__
+#ifndef SD_ESRGAN_HPP
+#define SD_ESRGAN_HPP
 
 #include "ggml_extend.hpp"
 #include "model.h"
@@ -207,4 +207,4 @@ struct ESRGAN : public GGMLRunner {
     }
 };
 
-#endif  // __ESRGAN_HPP__
+#endif  // SD_ESRGAN_HPP

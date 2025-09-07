@@ -1,5 +1,5 @@
-#ifndef __LORA_HPP__
-#define __LORA_HPP__
+#ifndef SD_LORA_HPP
+#define SD_LORA_HPP
 
 #include "ggml_extend.hpp"
 
@@ -880,4 +880,4 @@ struct LoraModel : public GGMLRunner {
     }
 };
 
-#endif  // __LORA_HPP__
+#endif  // SD_LORA_HPP

@@ -1,5 +1,5 @@
-#ifndef __COMMON_HPP__
-#define __COMMON_HPP__
+#ifndef SD_COMMON_HPP
+#define SD_COMMON_HPP
 
 #include "ggml_extend.hpp"
 
@@ -520,4 +520,4 @@ public:
     }
 };
 
-#endif  // __COMMON_HPP__
+#endif  // SD_COMMON_HPP

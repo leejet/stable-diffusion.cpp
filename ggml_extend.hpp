@@ -1,5 +1,5 @@
-#ifndef __GGML_EXTEND_HPP__
-#define __GGML_EXTEND_HPP__
+#ifndef SD_GGML_EXTEND_HPP
+#define SD_GGML_EXTEND_HPP
 
 #include <assert.h>
 #include <inttypes.h>
@@ -2181,4 +2181,4 @@ public:
     }
 };
 
-#endif  // __GGML_EXTEND__HPP__
+#endif  // SD_GGML_EXTEND_HPP

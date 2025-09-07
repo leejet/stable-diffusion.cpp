@@ -1,5 +1,5 @@
-#ifndef __ROPE_HPP__
-#define __ROPE_HPP__
+#ifndef SD_ROPE_HPP
+#define SD_ROPE_HPP
 
 #include <vector>
 #include "ggml_extend.hpp"
@@ -249,4 +249,4 @@ struct Rope {
     }
 };  // struct Rope
 
-#endif  // __ROPE_HPP__
+#endif  // SD_ROPE_HPP

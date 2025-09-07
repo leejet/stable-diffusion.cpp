@@ -1,5 +1,5 @@
-#ifndef __RNG_PHILOX_H__
-#define __RNG_PHILOX_H__
+#ifndef SD_RNG_PHILOX_HPP
+#define SD_RNG_PHILOX_HPP
 
 #include <cmath>
 #include <vector>
@@ -122,4 +122,4 @@ public:
     }
 };
 
-#endif  // __RNG_PHILOX_H__
+#endif  // SD_RNG_PHILOX_HPP

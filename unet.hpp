@@ -1,5 +1,5 @@
-#ifndef __UNET_HPP__
-#define __UNET_HPP__
+#ifndef SD_UNET_HPP
+#define SD_UNET_HPP
 
 #include "common.hpp"
 #include "ggml_extend.hpp"
@@ -671,4 +671,4 @@ struct UNetModelRunner : public GGMLRunner {
     }
 };
 
-#endif  // __UNET_HPP__
+#endif  // SD_UNET_HPP

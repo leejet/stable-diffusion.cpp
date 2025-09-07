@@ -1,5 +1,5 @@
-#ifndef __LTXV_HPP__
-#define __LTXV_HPP__
+#ifndef SD_LTXV_HPP
+#define SD_LTXV_HPP
 
 #include "common.hpp"
 #include "ggml_extend.hpp"
@@ -71,4 +71,4 @@ namespace LTXV {
 
 };
 
-#endif
+#endif  // SD_LTXV_HPP

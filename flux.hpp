@@ -1,5 +1,5 @@
-#ifndef __FLUX_HPP__
-#define __FLUX_HPP__
+#ifndef SD_FLUX_HPP
+#define SD_FLUX_HPP
 
 #include <vector>
 
@@ -1115,4 +1115,4 @@ namespace Flux {
 
 }  // namespace Flux
 
-#endif  // __FLUX_HPP__
+#endif  // SD_FLUX_HPP

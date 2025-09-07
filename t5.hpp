@@ -1,5 +1,5 @@
-#ifndef __T5_HPP__
-#define __T5_HPP__
+#ifndef SD_T5_HPP
+#define SD_T5_HPP
 
 #include <float.h>
 #include <limits>
@@ -1032,4 +1032,4 @@ struct T5Embedder {
     }
 };
 
-#endif  // __T5_HPP__
+#endif  // SD_T5_HPP

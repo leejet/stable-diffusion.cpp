@@ -1,5 +1,5 @@
-#ifndef __STABLE_DIFFUSION_H__
-#define __STABLE_DIFFUSION_H__
+#ifndef SD_STABLE_DIFFUSION_H
+#define SD_STABLE_DIFFUSION_H
 
 #if defined(_WIN32) || defined(__CYGWIN__)
 #ifndef SD_BUILD_SHARED_LIB
@@ -278,4 +278,4 @@ SD_API uint8_t* preprocess_canny(uint8_t* img,
 }
 #endif
 
-#endif  // __STABLE_DIFFUSION_H__
+#endif  // SD_STABLE_DIFFUSION_H

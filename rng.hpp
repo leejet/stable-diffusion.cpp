@@ -1,5 +1,5 @@
-#ifndef __RNG_H__
-#define __RNG_H__
+#ifndef SD_RNG_HPP
+#define SD_RNG_HPP
 
 #include <random>
 #include <vector>
@@ -32,4 +32,4 @@ public:
     }
 };
 
-#endif  // __RNG_H__
+#endif  // SD_RNG_HPP

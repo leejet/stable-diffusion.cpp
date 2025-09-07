@@ -1,5 +1,5 @@
-#ifndef __MODEL_H__
-#define __MODEL_H__
+#ifndef SD_MODEL_H
+#define SD_MODEL_H
 
 #include <functional>
 #include <map>
@@ -261,4 +261,4 @@ public:
     static std::string load_umt5_tokenizer_json();
 };
 
-#endif  // __MODEL_H__
+#endif  // SD_MODEL_H

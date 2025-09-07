@@ -1,5 +1,5 @@
-#ifndef __CONDITIONER_HPP__
-#define __CONDITIONER_HPP__
+#ifndef SD_CONDITIONER_HPP
+#define SD_CONDITIONER_HPP
 
 #include "clip.hpp"
 #include "t5.hpp"
@@ -1437,4 +1437,4 @@ struct T5CLIPEmbedder : public Conditioner {
     }
 };
 
-#endif
+#endif  // SD_CONDITIONER_HPP

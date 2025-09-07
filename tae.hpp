@@ -1,5 +1,5 @@
-#ifndef __TAE_HPP__
-#define __TAE_HPP__
+#ifndef SD_TAE_HPP
+#define SD_TAE_HPP
 
 #include "ggml_extend.hpp"
 
@@ -270,4 +270,4 @@ struct TinyAutoEncoder : public GGMLRunner {
     }
 };
 
-#endif  // __TAE_HPP__
+#endif  // SD_TAE_HPP

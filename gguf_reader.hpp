@@ -1,5 +1,5 @@
-#ifndef __GGUF_READER_HPP__
-#define __GGUF_READER_HPP__
+#ifndef SD_GGUF_READER_HPP
+#define SD_GGUF_READER_HPP
 
 #include <cstdint>
 #include <fstream>
@@ -228,4 +228,4 @@ public:
     size_t data_offset() const { return data_offset_; }
 };
 
-#endif  // __GGUF_READER_HPP__
+#endif  // SD_GGUF_READER_HPP

@@ -1,5 +1,5 @@
-#ifndef __DIFFUSION_MODEL_H__
-#define __DIFFUSION_MODEL_H__
+#ifndef SD_DIFFUSION_MODEL_HPP
+#define SD_DIFFUSION_MODEL_HPP
 
 #include "flux.hpp"
 #include "mmdit.hpp"
@@ -260,4 +260,4 @@ struct WanModel : public DiffusionModel {
     }
 };
 
-#endif
+#endif  // SD_DIFFUSION_MODEL_HPP

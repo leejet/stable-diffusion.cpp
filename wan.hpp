@@ -1,5 +1,5 @@
-#ifndef __WAN_HPP__
-#define __WAN_HPP__
+#ifndef SD_WAN_HPP
+#define SD_WAN_HPP
 
 #include <map>
 
@@ -2154,4 +2154,4 @@ namespace WAN {
 
 }  // namespace WAN
 
-#endif  // __WAN_HPP__
+#endif  // SD_WAN_HPP

@@ -1,5 +1,5 @@
-#ifndef __CONTROL_HPP__
-#define __CONTROL_HPP__
+#ifndef SD_CONTROL_HPP
+#define SD_CONTROL_HPP
 
 #include "common.hpp"
 #include "ggml_extend.hpp"
@@ -467,4 +467,4 @@ struct ControlNet : public GGMLRunner {
     }
 };
 
-#endif  // __CONTROL_HPP__
+#endif  // SD_CONTROL_HPP

@@ -1,5 +1,5 @@
-#ifndef __DENOISER_HPP__
-#define __DENOISER_HPP__
+#ifndef SD_DENOISER_HPP
+#define SD_DENOISER_HPP
 
 #include "ggml_extend.hpp"
 #include "gits_noise.inl"
@@ -1401,4 +1401,4 @@ static void sample_k_diffusion(sample_method_t method,
     }
 }
 
-#endif  // __DENOISER_HPP__
+#endif  // SD_DENOISER_HPP

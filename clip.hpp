@@ -1,5 +1,5 @@
-#ifndef __CLIP_HPP__
-#define __CLIP_HPP__
+#ifndef SD_CLIP_HPP
+#define SD_CLIP_HPP
 
 #include "ggml_extend.hpp"
 #include "model.h"
@@ -959,4 +959,4 @@ struct CLIPTextModelRunner : public GGMLRunner {
     }
 };
 
-#endif  // __CLIP_HPP__
+#endif  // SD_CLIP_HPP
