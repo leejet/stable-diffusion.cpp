@@ -1546,7 +1546,7 @@ enum scheduler_t str_to_schedule(const char* str) {
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
-    memset((void*)sd_ctx_params, 0, sizeof(sd_ctx_params_t));
+    *sd_ctx_params = {};
     sd_ctx_params->vae_decode_only         = true;
     sd_ctx_params->vae_tiling              = false;
     sd_ctx_params->free_params_immediately = true;
@@ -1630,6 +1630,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
 }
 
 void sd_sample_params_init(sd_sample_params_t* sample_params) {
+    *sample_params = {};
     sample_params->guidance.txt_cfg            = 7.0f;
     sample_params->guidance.img_cfg            = INFINITY;
     sample_params->guidance.distilled_guidance = 3.5f;
@@ -1676,9 +1677,9 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
 }
 
 void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
-    memset((void*)sd_img_gen_params, 0, sizeof(sd_img_gen_params_t));
-    sd_img_gen_params->clip_skip = -1;
+    *sd_img_gen_params = {};
     sd_sample_params_init(&sd_img_gen_params->sample_params);
+    sd_img_gen_params->clip_skip        = -1;
     sd_img_gen_params->ref_images_count = 0;
     sd_img_gen_params->width            = 512;
     sd_img_gen_params->height           = 512;
@@ -1733,7 +1734,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
 }
 
 void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
-    memset((void*)sd_vid_gen_params, 0, sizeof(sd_vid_gen_params_t));
+    *sd_vid_gen_params = {};
     sd_sample_params_init(&sd_vid_gen_params->sample_params);
     sd_sample_params_init(&sd_vid_gen_params->high_noise_sample_params);
     sd_vid_gen_params->high_noise_sample_params.sample_steps = -1;
@@ -1757,6 +1758,7 @@ sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params) {
 
     sd_ctx->sd = new StableDiffusionGGML();
     if (sd_ctx->sd == NULL) {
+        free(sd_ctx);
         return NULL;
     }
 
