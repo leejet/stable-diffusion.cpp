@@ -5,6 +5,7 @@
 
 #include "ggml_extend.hpp"
 #include "model.h"
+#include "rope.hpp"
 
 #define FLUX_GRAPH_SIZE 10240
 
@@ -113,6 +114,7 @@ namespace Flux {
     }
 
     __STATIC_INLINE__ struct ggml_tensor* attention(struct ggml_context* ctx,
+                                                    ggml_backend_t backend,
                                                     struct ggml_tensor* q,
                                                     struct ggml_tensor* k,
                                                     struct ggml_tensor* v,
@@ -125,7 +127,7 @@ namespace Flux {
         q = apply_rope(ctx, q, pe);  // [N*n_head, L, d_head]
         k = apply_rope(ctx, k, pe);  // [N*n_head, L, d_head]
 
-        auto x = ggml_nn_attention_ext(ctx, q, k, v, v->ne[1], mask, false, true, flash_attn);  // [N, L, n_head*d_head]
+        auto x = ggml_nn_attention_ext(ctx, backend, q, k, v, v->ne[1], mask, false, true, flash_attn);  // [N, L, n_head*d_head]
         return x;
     }
 
@@ -168,13 +170,17 @@ namespace Flux {
             return x;
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* pe, struct ggml_tensor* mask) {
+        struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    ggml_backend_t backend,
+                                    struct ggml_tensor* x,
+                                    struct ggml_tensor* pe,
+                                    struct ggml_tensor* mask) {
             // x: [N, n_token, dim]
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
-            auto qkv = pre_attention(ctx, x);                                         // q,k,v: [N, n_token, n_head, d_head]
-            x        = attention(ctx, qkv[0], qkv[1], qkv[2], pe, mask, flash_attn);  // [N, n_token, dim]
-            x        = post_attention(ctx, x);                                        // [N, n_token, dim]
+            auto qkv = pre_attention(ctx, x);                                                  // q,k,v: [N, n_token, n_head, d_head]
+            x        = attention(ctx, backend, qkv[0], qkv[1], qkv[2], pe, mask, flash_attn);  // [N, n_token, dim]
+            x        = post_attention(ctx, x);                                                 // [N, n_token, dim]
             return x;
         }
     };
@@ -298,6 +304,7 @@ namespace Flux {
         }
 
         std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(struct ggml_context* ctx,
+                                                                    ggml_backend_t backend,
                                                                     struct ggml_tensor* img,
                                                                     struct ggml_tensor* txt,
                                                                     struct ggml_tensor* vec,
@@ -361,8 +368,8 @@ namespace Flux {
             auto k = ggml_concat(ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = attention(ctx, q, k, v, pe, mask, flash_attn);        // [N, n_txt_token + n_img_token, n_head*d_head]
-            attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
+            auto attn         = attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_txt_token + n_img_token, n_head*d_head]
+            attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));     // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx,
                                              attn,
                                              attn->ne[0],
@@ -445,6 +452,7 @@ namespace Flux {
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    ggml_backend_t backend,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* vec,
                                     struct ggml_tensor* pe,
@@ -495,7 +503,7 @@ namespace Flux {
             auto v           = ggml_reshape_4d(ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
             q                = norm->query_norm(ctx, q);
             k                = norm->key_norm(ctx, k);
-            auto attn        = attention(ctx, q, k, v, pe, mask, flash_attn);  // [N, n_token, hidden_size]
+            auto attn        = attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_token, hidden_size]
 
             auto attn_mlp = ggml_concat(ctx, attn, ggml_gelu_inplace(ctx, mlp), 0);  // [N, n_token, hidden_size + mlp_hidden_dim]
             auto output   = linear2->forward(ctx, attn_mlp);                         // [N, n_token, hidden_size]
@@ -611,190 +619,10 @@ namespace Flux {
 
     struct Flux : public GGMLBlock {
     public:
-        std::vector<float> linspace(float start, float end, int num) {
-            std::vector<float> result(num);
-            float step = (end - start) / (num - 1);
-            for (int i = 0; i < num; ++i) {
-                result[i] = start + i * step;
-            }
-            return result;
-        }
-
-        std::vector<std::vector<float>> transpose(const std::vector<std::vector<float>>& mat) {
-            int rows = mat.size();
-            int cols = mat[0].size();
-            std::vector<std::vector<float>> transposed(cols, std::vector<float>(rows));
-            for (int i = 0; i < rows; ++i) {
-                for (int j = 0; j < cols; ++j) {
-                    transposed[j][i] = mat[i][j];
-                }
-            }
-            return transposed;
-        }
-
-        std::vector<float> flatten(const std::vector<std::vector<float>>& vec) {
-            std::vector<float> flat_vec;
-            for (const auto& sub_vec : vec) {
-                flat_vec.insert(flat_vec.end(), sub_vec.begin(), sub_vec.end());
-            }
-            return flat_vec;
-        }
-
-        std::vector<std::vector<float>> rope(const std::vector<float>& pos, int dim, int theta) {
-            assert(dim % 2 == 0);
-            int half_dim = dim / 2;
-
-            std::vector<float> scale = linspace(0, (dim * 1.0f - 2) / dim, half_dim);
-
-            std::vector<float> omega(half_dim);
-            for (int i = 0; i < half_dim; ++i) {
-                omega[i] = 1.0 / std::pow(theta, scale[i]);
-            }
-
-            int pos_size = pos.size();
-            std::vector<std::vector<float>> out(pos_size, std::vector<float>(half_dim));
-            for (int i = 0; i < pos_size; ++i) {
-                for (int j = 0; j < half_dim; ++j) {
-                    out[i][j] = pos[i] * omega[j];
-                }
-            }
-
-            std::vector<std::vector<float>> result(pos_size, std::vector<float>(half_dim * 4));
-            for (int i = 0; i < pos_size; ++i) {
-                for (int j = 0; j < half_dim; ++j) {
-                    result[i][4 * j]     = std::cos(out[i][j]);
-                    result[i][4 * j + 1] = -std::sin(out[i][j]);
-                    result[i][4 * j + 2] = std::sin(out[i][j]);
-                    result[i][4 * j + 3] = std::cos(out[i][j]);
-                }
-            }
-
-            return result;
-        }
-
-        // Generate IDs for image patches and text
-        std::vector<std::vector<float>> gen_txt_ids(int bs, int context_len) {
-            return std::vector<std::vector<float>>(bs * context_len, std::vector<float>(3, 0.0));
-        }
-
-        std::vector<std::vector<float>> gen_img_ids(int h, int w, int patch_size, int bs, int index = 0, int h_offset = 0, int w_offset = 0) {
-            int h_len = (h + (patch_size / 2)) / patch_size;
-            int w_len = (w + (patch_size / 2)) / patch_size;
-
-            std::vector<std::vector<float>> img_ids(h_len * w_len, std::vector<float>(3, 0.0));
-
-            std::vector<float> row_ids = linspace(h_offset, h_len - 1 + h_offset, h_len);
-            std::vector<float> col_ids = linspace(w_offset, w_len - 1 + w_offset, w_len);
-
-            for (int i = 0; i < h_len; ++i) {
-                for (int j = 0; j < w_len; ++j) {
-                    img_ids[i * w_len + j][0] = index;
-                    img_ids[i * w_len + j][1] = row_ids[i];
-                    img_ids[i * w_len + j][2] = col_ids[j];
-                }
-            }
-
-            std::vector<std::vector<float>> img_ids_repeated(bs * img_ids.size(), std::vector<float>(3));
-            for (int i = 0; i < bs; ++i) {
-                for (int j = 0; j < img_ids.size(); ++j) {
-                    img_ids_repeated[i * img_ids.size() + j] = img_ids[j];
-                }
-            }
-            return img_ids_repeated;
-        }
-
-        std::vector<std::vector<float>> concat_ids(const std::vector<std::vector<float>>& a,
-                                                   const std::vector<std::vector<float>>& b,
-                                                   int bs) {
-            size_t a_len = a.size() / bs;
-            size_t b_len = b.size() / bs;
-            std::vector<std::vector<float>> ids(a.size() + b.size(), std::vector<float>(3));
-            for (int i = 0; i < bs; ++i) {
-                for (int j = 0; j < a_len; ++j) {
-                    ids[i * (a_len + b_len) + j] = a[i * a_len + j];
-                }
-                for (int j = 0; j < b_len; ++j) {
-                    ids[i * (a_len + b_len) + a_len + j] = b[i * b_len + j];
-                }
-            }
-            return ids;
-        }
-        std::vector<std::vector<float>> gen_ids(int h, int w, int patch_size, int bs, int context_len, std::vector<std::pair<ggml_tensor*, int>> ref_latents) {
-            auto txt_ids = gen_txt_ids(bs, context_len);
-            auto img_ids = gen_img_ids(h, w, patch_size, bs);
-            auto ids     = concat_ids(txt_ids, img_ids, bs);
-
-            std::unordered_map<int, std::pair<uint64_t, uint64_t>> offsets;
-            offsets[0] = {h, w};
-
-            for (const auto& ref_pair : ref_latents) {
-                ggml_tensor* ref    = ref_pair.first;
-                const int ref_index = ref_pair.second;
-
-                if (offsets.find(ref_index) == offsets.end()) {
-                    offsets[ref_index] = std::make_pair(0, 0);
-                }
-
-                uint64_t h_offset = offsets[ref_index].first;
-                uint64_t w_offset = offsets[ref_index].second;
-
-                uint64_t curr_h = 0;
-                uint64_t curr_w = 0;
-                if (ref->ne[1] + h_offset > ref->ne[0] + w_offset) {
-                    curr_w = w_offset;
-                } else {
-                    curr_h = h_offset;
-                }
-
-                auto ref_ids = gen_img_ids(ref->ne[1], ref->ne[0], patch_size, bs, ref_index, curr_h, curr_w);
-                ids          = concat_ids(ids, ref_ids, bs);
-
-                // Update offsets
-                offsets[ref_index].first  = std::max(h_offset, ref->ne[1] + curr_h);
-                offsets[ref_index].second = std::max(w_offset, ref->ne[0] + curr_w);
-            }
-
-            return ids;
-        }
-
-        // Generate positional embeddings
-        std::vector<float> gen_pe(int h, int w, int patch_size, int bs, int context_len, std::vector<std::pair<struct ggml_tensor*, int>> ref_latents, int theta, const std::vector<int>& axes_dim) {
-            std::vector<std::vector<float>> ids       = gen_ids(h, w, patch_size, bs, context_len, ref_latents);
-            std::vector<std::vector<float>> trans_ids = transpose(ids);
-            size_t pos_len                            = ids.size();
-            int num_axes                              = axes_dim.size();
-            for (int i = 0; i < pos_len; i++) {
-                // std::cout << trans_ids[0][i] << " " << trans_ids[1][i] << " " << trans_ids[2][i] << std::endl;
-            }
-
-            int emb_dim = 0;
-            for (int d : axes_dim)
-                emb_dim += d / 2;
-
-            std::vector<std::vector<float>> emb(bs * pos_len, std::vector<float>(emb_dim * 2 * 2, 0.0));
-            int offset = 0;
-            for (int i = 0; i < num_axes; ++i) {
-                std::vector<std::vector<float>> rope_emb = rope(trans_ids[i], axes_dim[i], theta);  // [bs*pos_len, axes_dim[i]/2 * 2 * 2]
-                for (int b = 0; b < bs; ++b) {
-                    for (int j = 0; j < pos_len; ++j) {
-                        for (int k = 0; k < rope_emb[0].size(); ++k) {
-                            emb[b * pos_len + j][offset + k] = rope_emb[j][k];
-                        }
-                    }
-                }
-                offset += rope_emb[0].size();
-            }
-
-            return flatten(emb);
-        }
-
-    public:
         FluxParams params;
         Flux() {}
         Flux(FluxParams params)
             : params(params) {
-            int64_t pe_dim = params.hidden_size / params.num_heads;
-
             blocks["img_in"] = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, params.hidden_size, true));
             if (params.is_chroma) {
                 blocks["distilled_guidance_layer"] = std::shared_ptr<GGMLBlock>(new ChromaApproximator(params.in_channels, params.hidden_size));
@@ -878,6 +706,7 @@ namespace Flux {
         }
 
         struct ggml_tensor* forward_orig(struct ggml_context* ctx,
+                                         ggml_backend_t backend,
                                          struct ggml_tensor* img,
                                          struct ggml_tensor* txt,
                                          struct ggml_tensor* timesteps,
@@ -942,7 +771,7 @@ namespace Flux {
 
                 auto block = std::dynamic_pointer_cast<DoubleStreamBlock>(blocks["double_blocks." + std::to_string(i)]);
 
-                auto img_txt = block->forward(ctx, img, txt, vec, pe, txt_img_mask);
+                auto img_txt = block->forward(ctx, backend, img, txt, vec, pe, txt_img_mask);
                 img          = img_txt.first;   // [N, n_img_token, hidden_size]
                 txt          = img_txt.second;  // [N, n_txt_token, hidden_size]
             }
@@ -954,7 +783,7 @@ namespace Flux {
                 }
                 auto block = std::dynamic_pointer_cast<SingleStreamBlock>(blocks["single_blocks." + std::to_string(i)]);
 
-                txt_img = block->forward(ctx, txt_img, vec, pe, txt_img_mask);
+                txt_img = block->forward(ctx, backend, txt_img, vec, pe, txt_img_mask);
             }
 
             txt_img = ggml_cont(ctx, ggml_permute(ctx, txt_img, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
@@ -987,6 +816,7 @@ namespace Flux {
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    ggml_backend_t backend,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* timestep,
                                     struct ggml_tensor* context,
@@ -1037,7 +867,7 @@ namespace Flux {
                 }
             }
 
-            auto out = forward_orig(ctx, img, context, timestep, y, guidance, pe, mod_index_arange, skip_layers);  // [N, num_tokens, C * patch_size * patch_size]
+            auto out = forward_orig(ctx, backend, img, context, timestep, y, guidance, pe, mod_index_arange, skip_layers);  // [N, num_tokens, C * patch_size * patch_size]
             if (out->ne[1] > img_tokens) {
                 out = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));  // [num_tokens, N, C * patch_size * patch_size]
                 out = ggml_view_3d(ctx, out, out->ne[0], out->ne[1], img_tokens, out->nb[1], out->nb[2], 0);
@@ -1061,12 +891,13 @@ namespace Flux {
         bool use_mask = false;
 
         FluxRunner(ggml_backend_t backend,
+                   bool offload_params_to_cpu,
                    const String2GGMLType& tensor_types = {},
                    const std::string prefix            = "",
                    SDVersion version                   = VERSION_FLUX,
                    bool flash_attn                     = false,
                    bool use_mask                       = false)
-            : GGMLRunner(backend), use_mask(use_mask) {
+            : GGMLRunner(backend, offload_params_to_cpu), use_mask(use_mask) {
             flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
@@ -1076,7 +907,7 @@ namespace Flux {
             }
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
-                if (tensor_name.find("model.diffusion_model.") == std::string::npos)
+                if (!starts_with(tensor_name, prefix))
                     continue;
                 if (tensor_name.find("guidance_in.in_layer.weight") != std::string::npos) {
                     // not schnell
@@ -1163,7 +994,14 @@ namespace Flux {
                 ref_latents[i].first = to_backend(ref_latents[i].first);
             }
 
-            pe_vec      = flux.gen_pe(x->ne[1], x->ne[0], 2, x->ne[3], context->ne[1], ref_latents, flux_params.theta, flux_params.axes_dim);
+            pe_vec      = Rope::gen_flux_pe(x->ne[1],
+                                            x->ne[0],
+                                            2,
+                                            x->ne[3],
+                                            context->ne[1],
+                                            ref_latents,
+                                            flux_params.theta,
+                                            flux_params.axes_dim);
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
@@ -1173,6 +1011,7 @@ namespace Flux {
             set_backend_tensor_data(pe, pe_vec.data());
 
             struct ggml_tensor* out = flux.forward(compute_ctx,
+                                                   runtime_backend,
                                                    x,
                                                    timesteps,
                                                    context,
@@ -1258,7 +1097,7 @@ namespace Flux {
             // ggml_backend_t backend    = ggml_backend_cuda_init(0);
             ggml_backend_t backend           = ggml_backend_cpu_init();
             ggml_type model_data_type        = GGML_TYPE_Q8_0;
-            std::shared_ptr<FluxRunner> flux = std::shared_ptr<FluxRunner>(new FluxRunner(backend));
+            std::shared_ptr<FluxRunner> flux = std::shared_ptr<FluxRunner>(new FluxRunner(backend, false));
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -1272,7 +1111,7 @@ namespace Flux {
                     return;
                 }
 
-                bool success = model_loader.load_tensors(tensors, backend);
+                bool success = model_loader.load_tensors(tensors);
 
                 if (!success) {
                     LOG_ERROR("load tensors from model loader failed");

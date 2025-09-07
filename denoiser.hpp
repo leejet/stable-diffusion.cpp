@@ -252,7 +252,7 @@ struct KarrasSchedule : SigmaSchedule {
 };
 
 struct Denoiser {
-    std::shared_ptr<SigmaSchedule> schedule                                                  = std::make_shared<DiscreteSchedule>();
+    std::shared_ptr<SigmaSchedule> scheduler                                                 = std::make_shared<DiscreteSchedule>();
     virtual float sigma_min()                                                                = 0;
     virtual float sigma_max()                                                                = 0;
     virtual float sigma_to_t(float sigma)                                                    = 0;
@@ -263,7 +263,7 @@ struct Denoiser {
 
     virtual std::vector<float> get_sigmas(uint32_t n) {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
-        return schedule->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
+        return scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
     }
 };
 
@@ -349,7 +349,7 @@ struct EDMVDenoiser : public CompVisVDenoiser {
 
     EDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0)
         : min_sigma(min_sigma), max_sigma(max_sigma) {
-        schedule = std::make_shared<ExponentialSchedule>();
+        scheduler = std::make_shared<ExponentialSchedule>();
     }
 
     float t_to_sigma(float t) {
@@ -382,7 +382,8 @@ struct DiscreteFlowDenoiser : public Denoiser {
 
     float sigma_data = 1.0f;
 
-    DiscreteFlowDenoiser() {
+    DiscreteFlowDenoiser(float shift = 3.0f)
+        : shift(shift) {
         set_parameters();
     }
 
