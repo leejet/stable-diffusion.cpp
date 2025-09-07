@@ -1,7 +1,7 @@
 #ifndef __T5_HPP__
 #define __T5_HPP__
 
-#include <float.h>
+#include <cfloat>
 #include <limits>
 #include <map>
 #include <memory>

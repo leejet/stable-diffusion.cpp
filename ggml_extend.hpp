@@ -1,9 +1,9 @@
 #ifndef __GGML_EXTEND_HPP__
 #define __GGML_EXTEND_HPP__
 
-#include <assert.h>
-#include <inttypes.h>
-#include <stdarg.h>
+#include <cassert>
+#include <cinttypes>
+#include <cstdarg>
 #include <algorithm>
 #include <cstring>
 #include <fstream>

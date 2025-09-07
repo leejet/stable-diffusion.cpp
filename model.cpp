@@ -1,4 +1,4 @@
-#include <stdarg.h>
+#include <cstdarg>
 #include <fstream>
 #include <regex>
 #include <set>

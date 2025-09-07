@@ -1,5 +1,5 @@
 #include "util.h"
-#include <stdarg.h>
+#include <cstdarg>
 #include <algorithm>
 #include <cmath>
 #include <codecvt>

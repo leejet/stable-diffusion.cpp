@@ -1,10 +1,10 @@
 #ifndef __AVI_WRITER_H__
 #define __AVI_WRITER_H__
 
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 #include "stable-diffusion.h"
 

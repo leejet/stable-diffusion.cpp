@@ -1,6 +1,6 @@
-#include <stdio.h>
-#include <string.h>
-#include <time.h>
+#include <cstdio>
+#include <cstring>
+#include <ctime>
 #include <functional>
 #include <iostream>
 #include <map>
