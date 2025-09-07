@@ -2213,7 +2213,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
         }
     }
     int64_t end_time = ggml_time_ms();
-    LOG_INFO("loading tensors completed, taking %.2fs (process: %.2f, read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
+    LOG_INFO("loading tensors completed, taking %.2fs (process: %.2fs, read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
              (end_time - start_time) / 1000.f,
              process_time_ms / 1000.f,
              read_time_ms / 1000.f,
