@@ -573,7 +573,7 @@ public:
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
         }
-        bool success = model_loader.load_tensors(tensors, ignore_tensors);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);

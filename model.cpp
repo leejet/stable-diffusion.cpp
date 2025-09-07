@@ -1969,7 +1969,7 @@ std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& v
     return res;
 }
 
-bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
+bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p) {
     int64_t process_time_ms         = 0;
     int64_t read_time_ms            = 0;
     int64_t memcpy_time_ms          = 0;
@@ -1986,7 +1986,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
         std::unordered_map<std::string, TensorStorage> processed_map;
         std::mutex map_mutex;
 
-        int n_threads = std::min((int)std::thread::hardware_concurrency(), (int)tensor_storages.size());
+        int num_threads = n_threads_p > 0 ? n_threads_p : (int)std::thread::hardware_concurrency();
+        int n_threads   = std::min(num_threads, (int)tensor_storages.size());
         if (n_threads < 1) {
             n_threads = 1;
         }
@@ -2058,7 +2059,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
             }
         }
 
-        int n_threads = is_zip ? 1 : std::min((int)std::thread::hardware_concurrency(), (int)file_tensors.size());
+        int num_threads = n_threads_p > 0 ? n_threads_p : (int)std::thread::hardware_concurrency();
+        int n_threads   = is_zip ? 1 : std::min(num_threads, (int)file_tensors.size());
         if (n_threads < 1) {
             n_threads = 1;
         }
@@ -2287,7 +2289,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
 }
 
 bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
-                               std::set<std::string> ignore_tensors) {
+                               std::set<std::string> ignore_tensors,
+                               int n_threads) {
     std::set<std::string> tensor_names_in_file;
     std::mutex tensor_names_mutex;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
@@ -2330,7 +2333,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb);
+    bool success = load_tensors(on_new_tensor_cb, n_threads);
     if (!success) {
         LOG_ERROR("load tensors from file failed");
         return false;
