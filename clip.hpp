@@ -104,7 +104,7 @@ private:
 
     static std::set<std::pair<std::u32string, std::u32string>> get_pairs(const std::vector<std::u32string>& subwords) {
         std::set<std::pair<std::u32string, std::u32string>> pairs;
-        if (subwords.size() == 0) {
+        if (subwords.empty()) {
             return pairs;
         }
         std::u32string prev_subword = subwords[0];
@@ -120,10 +120,10 @@ private:
 public:
     CLIPTokenizer(int pad_token_id = 49407, const std::string& merges_utf8_str = "")
         : PAD_TOKEN_ID(pad_token_id) {
-        if (merges_utf8_str.size() > 0) {
-            load_from_merges(merges_utf8_str);
-        } else {
+        if (merges_utf8_str.empty()) {
             load_from_merges(ModelLoader::load_merges());
+        } else {
+            load_from_merges(merges_utf8_str);
         }
     }
 

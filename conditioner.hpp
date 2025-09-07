@@ -201,13 +201,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
             embd_name             = trim(embd_name);
             std::string embd_path = get_full_path(embd_dir, embd_name + ".pt");
-            if (embd_path.size() == 0) {
+            if (embd_path.empty()) {
                 embd_path = get_full_path(embd_dir, embd_name + ".ckpt");
             }
-            if (embd_path.size() == 0) {
+            if (embd_path.empty()) {
                 embd_path = get_full_path(embd_dir, embd_name + ".safetensors");
             }
-            if (embd_path.size() > 0) {
+            if (!embd_path.empty()) {
                 if (load_embedding(embd_name, embd_path, bpe_tokens)) {
                     if (word_end != std::string::npos) {
                         str = str.substr(word_end);
@@ -250,13 +250,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
             embd_name             = trim(embd_name);
             std::string embd_path = get_full_path(embd_dir, embd_name + ".pt");
-            if (embd_path.size() == 0) {
+            if (embd_path.empty()) {
                 embd_path = get_full_path(embd_dir, embd_name + ".ckpt");
             }
-            if (embd_path.size() == 0) {
+            if (embd_path.empty()) {
                 embd_path = get_full_path(embd_dir, embd_name + ".safetensors");
             }
-            if (embd_path.size() > 0) {
+            if (!embd_path.empty()) {
                 if (load_embedding(embd_name, embd_path, bpe_tokens)) {
                     if (word_end != std::string::npos) {
                         str = str.substr(word_end);
@@ -364,13 +364,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
             embd_name             = trim(embd_name);
             std::string embd_path = get_full_path(embd_dir, embd_name + ".pt");
-            if (embd_path.size() == 0) {
+            if (embd_path.empty()) {
                 embd_path = get_full_path(embd_dir, embd_name + ".ckpt");
             }
-            if (embd_path.size() == 0) {
+            if (embd_path.empty()) {
                 embd_path = get_full_path(embd_dir, embd_name + ".safetensors");
             }
-            if (embd_path.size() > 0) {
+            if (!embd_path.empty()) {
                 if (load_embedding(embd_name, embd_path, bpe_tokens)) {
                     if (word_end != std::string::npos) {
                         str = str.substr(word_end);

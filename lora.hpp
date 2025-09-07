@@ -256,7 +256,7 @@ struct LoraModel : public GGMLRunner {
 
             std::vector<std::string> keys = to_lora_keys(model_tensor_name, version);
             bool is_bias                  = ends_with(model_tensor_name, ".bias");
-            if (keys.size() == 0) {
+            if (keys.empty()) {
                 if (is_bias) {
                     keys.push_back(model_tensor_name.substr(0, model_tensor_name.size() - 5));  // remove .bias
                 } else {

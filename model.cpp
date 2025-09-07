@@ -2245,7 +2245,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
 std::vector<std::pair<std::string, ggml_type>> parse_tensor_type_rules(const std::string& tensor_type_rules) {
     std::vector<std::pair<std::string, ggml_type>> result;
     for (const auto& item : split_string(tensor_type_rules, ',')) {
-        if (item.size() == 0)
+        if (item.empty())
             continue;
         std::string::size_type pos = item.find('=');
         if (pos == std::string::npos) {

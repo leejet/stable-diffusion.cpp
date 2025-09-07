@@ -1937,7 +1937,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     if (guidance.txt_cfg != 1.0 ||
         (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
         bool zero_out_masked = false;
-        if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.size() == 0 && !sd_ctx->sd->is_using_edm_v_parameterization) {
+        if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.empty() && !sd_ctx->sd->is_using_edm_v_parameterization) {
             zero_out_masked = true;
         }
         uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(work_ctx,

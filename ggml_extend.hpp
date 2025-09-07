@@ -1431,7 +1431,7 @@ protected:
     }
 
     void copy_cache_tensors_to_cache_buffer() {
-        if (cache_tensor_map.size() == 0) {
+        if (cache_tensor_map.empty()) {
             return;
         }
         free_cache_ctx_and_buffer();
