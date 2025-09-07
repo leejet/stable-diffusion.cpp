@@ -1966,7 +1966,7 @@ std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& v
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
-    int64_t proccess_time_ms        = 0;
+    int64_t process_time_ms        = 0;
     int64_t read_time_ms            = 0;
     int64_t memcpy_time_ms          = 0;
     int64_t copy_to_backend_time_ms = 0;
@@ -1989,7 +1989,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
     std::vector<TensorStorage> dedup = remove_duplicates(processed_tensor_storages);
     processed_tensor_storages        = dedup;
     curr_time_ms                     = ggml_time_ms();
-    proccess_time_ms                 = curr_time_ms - prev_time_ms;
+    process_time_ms                 = curr_time_ms - prev_time_ms;
     prev_time_ms                     = curr_time_ms;
 
     bool success = true;
@@ -2215,7 +2215,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb) {
     int64_t end_time = ggml_time_ms();
     LOG_INFO("loading tensors completed, taking %.2fs (process: %.2f, read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
              (end_time - start_time) / 1000.f,
-             proccess_time_ms / 1000.f,
+             process_time_ms / 1000.f,
              read_time_ms / 1000.f,
              memcpy_time_ms / 1000.f,
              convert_time_ms / 1000.f,
