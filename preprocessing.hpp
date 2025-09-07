@@ -7,7 +7,7 @@
 void convolve(struct ggml_tensor* input, struct ggml_tensor* output, struct ggml_tensor* kernel, int padding) {
     struct ggml_init_params params;
     params.mem_size                 = 20 * 1024 * 1024;  // 10
-    params.mem_buffer               = NULL;
+    params.mem_buffer               = nullptr;
     params.no_alloc                 = false;
     struct ggml_context* ctx0       = ggml_init(params);
     struct ggml_tensor* kernel_fp16 = ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, kernel->ne[0], kernel->ne[1], 1, 1);
@@ -165,13 +165,13 @@ void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float lo
 uint8_t* preprocess_canny(uint8_t* img, int width, int height, float high_threshold, float low_threshold, float weak, float strong, bool inverse) {
     struct ggml_init_params params;
     params.mem_size               = static_cast<size_t>(10 * 1024 * 1024);  // 10
-    params.mem_buffer             = NULL;
+    params.mem_buffer             = nullptr;
     params.no_alloc               = false;
     struct ggml_context* work_ctx = ggml_init(params);
 
     if (!work_ctx) {
         LOG_ERROR("ggml_init() failed");
-        return NULL;
+        return nullptr;
     }
 
     float kX[9] = {

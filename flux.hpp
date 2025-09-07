@@ -181,11 +181,11 @@ namespace Flux {
     };
 
     struct ModulationOut {
-        ggml_tensor* shift = NULL;
-        ggml_tensor* scale = NULL;
-        ggml_tensor* gate  = NULL;
+        ggml_tensor* shift = nullptr;
+        ggml_tensor* scale = nullptr;
+        ggml_tensor* gate  = nullptr;
 
-        ModulationOut(ggml_tensor* shift = NULL, ggml_tensor* scale = NULL, ggml_tensor* gate = NULL)
+        ModulationOut(ggml_tensor* shift = nullptr, ggml_tensor* scale = nullptr, ggml_tensor* gate = nullptr)
             : shift(shift), scale(scale), gate(gate) {}
 
         ModulationOut(struct ggml_context* ctx, ggml_tensor* vec, int64_t offset) {
@@ -303,7 +303,7 @@ namespace Flux {
                                                                     struct ggml_tensor* txt,
                                                                     struct ggml_tensor* vec,
                                                                     struct ggml_tensor* pe,
-                                                                    struct ggml_tensor* mask = NULL) {
+                                                                    struct ggml_tensor* mask = nullptr) {
             // img: [N, n_img_token, hidden_size]
             // txt: [N, n_txt_token, hidden_size]
             // pe: [n_img_token + n_txt_token, d_head/2, 2, 2]
@@ -449,7 +449,7 @@ namespace Flux {
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* vec,
                                     struct ggml_tensor* pe,
-                                    struct ggml_tensor* mask = NULL) {
+                                    struct ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
             // pe: [n_token, d_head/2, 2, 2]
             // return: [N, n_token, hidden_size]
@@ -528,7 +528,7 @@ namespace Flux {
             auto shift     = ggml_view_2d(ctx, vec, vec->ne[0], vec->ne[1], vec->nb[1], stride * (offset + 0));  // [N, dim]
             auto scale     = ggml_view_2d(ctx, vec, vec->ne[0], vec->ne[1], vec->nb[1], stride * (offset + 1));  // [N, dim]
             // No gate
-            return ModulationOut(shift, scale, NULL);
+            return ModulationOut(shift, scale, nullptr);
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
@@ -705,7 +705,7 @@ namespace Flux {
                                          struct ggml_tensor* y,
                                          struct ggml_tensor* guidance,
                                          struct ggml_tensor* pe,
-                                         struct ggml_tensor* mod_index_arange = NULL,
+                                         struct ggml_tensor* mod_index_arange = nullptr,
                                          std::vector<int> skip_layers         = {}) {
             auto img_in      = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
             auto txt_in      = std::dynamic_pointer_cast<Linear>(blocks["txt_in"]);
@@ -713,7 +713,7 @@ namespace Flux {
 
             img = img_in->forward(ctx, img);
             struct ggml_tensor* vec;
-            struct ggml_tensor* txt_img_mask = NULL;
+            struct ggml_tensor* txt_img_mask = nullptr;
             if (params.is_chroma) {
                 int64_t mod_index_length = 344;
                 auto approx              = std::dynamic_pointer_cast<ChromaApproximator>(blocks["distilled_guidance_layer"]);
@@ -722,7 +722,7 @@ namespace Flux {
 
                 // auto mod_index_arange  = ggml_arange(ctx, 0, (float)mod_index_length, 1);
                 // ggml_arange tot working on a lot of backends, precomputing it on CPU instead
-                GGML_ASSERT(arange != NULL);
+                GGML_ASSERT(arange != nullptr);
                 auto modulation_index = ggml_nn_timestep_embedding(ctx, mod_index_arange, 32, 10000, 1000.f);  // [1, 344, 32]
 
                 // Batch broadcast (will it ever be useful)
@@ -736,7 +736,7 @@ namespace Flux {
                 vec = ggml_cont(ctx, ggml_permute(ctx, vec, 0, 2, 1, 3));  // [344, N, 64]
                 vec = approx->forward(ctx, vec);                           // [344, N, hidden_size]
 
-                if (y != NULL) {
+                if (y != nullptr) {
                     txt_img_mask = ggml_pad(ctx, y, img->ne[1], 0, 0, 0);
                 }
             } else {
@@ -744,7 +744,7 @@ namespace Flux {
                 auto vector_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["vector_in"]);
                 vec            = time_in->forward(ctx, ggml_nn_timestep_embedding(ctx, timesteps, 256, 10000, 1000.f));
                 if (params.guidance_embed) {
-                    GGML_ASSERT(guidance != NULL);
+                    GGML_ASSERT(guidance != nullptr);
                     auto guidance_in = std::dynamic_pointer_cast<MLPEmbedder>(blocks["guidance_in"]);
                     // bf16 and fp16 result is different
                     auto g_in = ggml_nn_timestep_embedding(ctx, guidance, 256, 10000, 1000.f);
@@ -815,14 +815,14 @@ namespace Flux {
                                     struct ggml_tensor* y,
                                     struct ggml_tensor* guidance,
                                     struct ggml_tensor* pe,
-                                    struct ggml_tensor* mod_index_arange  = NULL,
+                                    struct ggml_tensor* mod_index_arange  = nullptr,
                                     std::vector<ggml_tensor*> ref_latents = {},
                                     std::vector<int> skip_layers          = {}) {
             // Forward pass of DiT.
             // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
             // timestep: (N,) tensor of diffusion timesteps
             // context: (N, L, D)
-            // c_concat: NULL, or for (N,C+M, H, W) for Fill
+            // c_concat: nullptr, or for (N,C+M, H, W) for Fill
             // y: (N, adm_in_channels) tensor of class labels
             // guidance: (N,)
             // pe: (L, d_head/2, 2, 2)
@@ -840,7 +840,7 @@ namespace Flux {
             auto img            = process_img(ctx, x);
             uint64_t img_tokens = img->ne[1];
 
-            if (c_concat != NULL) {
+            if (c_concat != nullptr) {
                 ggml_tensor* masked = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], 0);
                 ggml_tensor* mask   = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 8 * 8, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
 
@@ -955,18 +955,18 @@ namespace Flux {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
 
-            struct ggml_tensor* mod_index_arange = NULL;
+            struct ggml_tensor* mod_index_arange = nullptr;
 
             x       = to_backend(x);
             context = to_backend(context);
-            if (c_concat != NULL) {
+            if (c_concat != nullptr) {
                 c_concat = to_backend(c_concat);
             }
             if (flux_params.is_chroma) {
                 guidance = ggml_set_f32(guidance, 0);
 
                 if (!use_mask) {
-                    y = NULL;
+                    y = nullptr;
                 }
 
                 // ggml_arange is not working on some backends, precompute it
@@ -997,7 +997,7 @@ namespace Flux {
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
-            // pe->data = NULL;
+            // pe->data = nullptr;
             set_backend_tensor_data(pe, pe_vec.data());
 
             struct ggml_tensor* out = flux.forward(compute_ctx,
@@ -1025,8 +1025,8 @@ namespace Flux {
                      struct ggml_tensor* y,
                      struct ggml_tensor* guidance,
                      std::vector<ggml_tensor*> ref_latents = {},
-                     struct ggml_tensor** output           = NULL,
-                     struct ggml_context* output_ctx       = NULL,
+                     struct ggml_tensor** output           = nullptr,
+                     struct ggml_context* output_ctx       = nullptr,
                      std::vector<int> skip_layers          = std::vector<int>()) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
@@ -1043,11 +1043,11 @@ namespace Flux {
         void test() {
             struct ggml_init_params params;
             params.mem_size   = static_cast<size_t>(20 * 1024 * 1024);  // 20 MB
-            params.mem_buffer = NULL;
+            params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
             struct ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != NULL);
+            GGML_ASSERT(work_ctx != nullptr);
 
             {
                 // cpu f16:
@@ -1071,10 +1071,10 @@ namespace Flux {
                 ggml_set_f32(y, 0.01f);
                 // print_ggml_tensor(y);
 
-                struct ggml_tensor* out = NULL;
+                struct ggml_tensor* out = nullptr;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, NULL, y, guidance, {}, &out, work_ctx);
+                compute(8, x, timesteps, context, nullptr, y, guidance, {}, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

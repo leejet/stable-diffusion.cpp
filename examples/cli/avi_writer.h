@@ -149,7 +149,7 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
     } jpeg_data;
 
     for (int i = 0; i < num_images; i++) {
-        jpeg_data.buf  = NULL;
+        jpeg_data.buf  = nullptr;
         jpeg_data.size = 0;
 
         // Callback function to collect JPEG data into memory

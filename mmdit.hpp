@@ -341,7 +341,7 @@ public:
             auto attn_in = modulate(ctx, norm1->forward(ctx, x), shift_msa, scale_msa);
             auto qkv     = attn->pre_attention(ctx, attn_in);
 
-            return {qkv, {NULL, NULL, NULL, NULL, NULL}};
+            return {qkv, {nullptr, nullptr, nullptr, nullptr, nullptr}};
         }
     }
 
@@ -521,7 +521,7 @@ block_mixing(struct ggml_context* ctx,
                                                 context_intermediates[3],
                                                 context_intermediates[4]);
     } else {
-        context = NULL;
+        context = nullptr;
     }
 
     if (x_block->self_attn) {
@@ -802,8 +802,8 @@ public:
     struct ggml_tensor* forward(struct ggml_context* ctx,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* t,
-                                struct ggml_tensor* y        = NULL,
-                                struct ggml_tensor* context  = NULL,
+                                struct ggml_tensor* y        = nullptr,
+                                struct ggml_tensor* context  = nullptr,
                                 std::vector<int> skip_layers = std::vector<int>()) {
         // Forward pass of DiT.
         // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -822,14 +822,14 @@ public:
         x                = ggml_add(ctx, patch_embed, pos_embed);  // [N, H*W, hidden_size]
 
         auto c = t_embedder->forward(ctx, t);  // [N, hidden_size]
-        if (y != NULL && adm_in_channels != -1) {
+        if (y != nullptr && adm_in_channels != -1) {
             auto y_embedder = std::dynamic_pointer_cast<VectorEmbedder>(blocks["y_embedder"]);
 
             y = y_embedder->forward(ctx, y);  // [N, hidden_size]
             c = ggml_add(ctx, c, y);
         }
 
-        if (context != NULL) {
+        if (context != nullptr) {
             auto context_embedder = std::dynamic_pointer_cast<Linear>(blocks["context_embedder"]);
 
             context = context_embedder->forward(ctx, context);  // [N, L, D] aka [N, L, 1536]
@@ -890,8 +890,8 @@ struct MMDiTRunner : public GGMLRunner {
                  struct ggml_tensor* timesteps,
                  struct ggml_tensor* context,
                  struct ggml_tensor* y,
-                 struct ggml_tensor** output     = NULL,
-                 struct ggml_context* output_ctx = NULL,
+                 struct ggml_tensor** output     = nullptr,
+                 struct ggml_context* output_ctx = nullptr,
                  std::vector<int> skip_layers    = std::vector<int>()) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
@@ -907,11 +907,11 @@ struct MMDiTRunner : public GGMLRunner {
     void test() {
         struct ggml_init_params params;
         params.mem_size   = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-        params.mem_buffer = NULL;
+        params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
         struct ggml_context* work_ctx = ggml_init(params);
-        GGML_ASSERT(work_ctx != NULL);
+        GGML_ASSERT(work_ctx != nullptr);
 
         {
             // cpu f16: pass
@@ -932,7 +932,7 @@ struct MMDiTRunner : public GGMLRunner {
             ggml_set_f32(y, 0.01f);
             // print_ggml_tensor(y);
 
-            struct ggml_tensor* out = NULL;
+            struct ggml_tensor* out = nullptr;
 
             int t0 = ggml_time_ms();
             compute(8, x, timesteps, context, y, &out, work_ctx);

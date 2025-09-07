@@ -543,7 +543,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             return -1;
         }
         const char* mode = argv[index];
-        if (mode != NULL) {
+        if (mode != nullptr) {
             int mode_found = -1;
             for (int i = 0; i < MODE_COUNT; i++) {
                 if (!strcmp(mode, modes_str[i])) {
@@ -807,7 +807,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 
     if (params.seed < 0) {
-        srand((int)time(NULL));
+        srand((int)time(nullptr));
         params.seed = rand();
     }
 
@@ -930,9 +930,9 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 uint8_t* load_image(const char* image_path, int& width, int& height, int expected_width = 0, int expected_height = 0, int expected_channel = 3) {
     int c                 = 0;
     uint8_t* image_buffer = (uint8_t*)stbi_load(image_path, &width, &height, &c, expected_channel);
-    if (image_buffer == NULL) {
+    if (image_buffer == nullptr) {
         fprintf(stderr, "load image from '%s' failed\n", image_path);
-        return NULL;
+        return nullptr;
     }
     if (c < expected_channel) {
         fprintf(stderr,
@@ -942,17 +942,17 @@ uint8_t* load_image(const char* image_path, int& width, int& height, int expecte
                 c,
                 image_path);
         free(image_buffer);
-        return NULL;
+        return nullptr;
     }
     if (width <= 0) {
         fprintf(stderr, "error: the width of image must be greater than 0, image_path = %s\n", image_path);
         free(image_buffer);
-        return NULL;
+        return nullptr;
     }
     if (height <= 0) {
         fprintf(stderr, "error: the height of image must be greater than 0, image_path = %s\n", image_path);
         free(image_buffer);
-        return NULL;
+        return nullptr;
     }
 
     // Resize input image ...
@@ -974,10 +974,10 @@ uint8_t* load_image(const char* image_path, int& width, int& height, int expecte
         if (crop_x != 0 || crop_y != 0) {
             printf("crop input image from %dx%d to %dx%d, image_path = %s\n", width, height, crop_w, crop_h, image_path);
             uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
-            if (cropped_image_buffer == NULL) {
+            if (cropped_image_buffer == nullptr) {
                 fprintf(stderr, "error: allocate memory for crop\n");
                 free(image_buffer);
-                return NULL;
+                return nullptr;
             }
             for (int row = 0; row < crop_h; row++) {
                 uint8_t* src = image_buffer + ((crop_y + row) * width + crop_x) * expected_channel;
@@ -996,10 +996,10 @@ uint8_t* load_image(const char* image_path, int& width, int& height, int expecte
         int resized_width  = expected_width;
 
         uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * expected_channel);
-        if (resized_image_buffer == NULL) {
+        if (resized_image_buffer == nullptr) {
             fprintf(stderr, "error: allocate memory for resize input image\n");
             free(image_buffer);
-            return NULL;
+            return nullptr;
         }
         stbir_resize(image_buffer, width, height, 0,
                      resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
@@ -1049,10 +1049,10 @@ int main(int argc, const char* argv[]) {
     }
 
     bool vae_decode_only     = true;
-    sd_image_t init_image    = {(uint32_t)params.width, (uint32_t)params.height, 3, NULL};
-    sd_image_t end_image     = {(uint32_t)params.width, (uint32_t)params.height, 3, NULL};
-    sd_image_t control_image = {(uint32_t)params.width, (uint32_t)params.height, 3, NULL};
-    sd_image_t mask_image    = {(uint32_t)params.width, (uint32_t)params.height, 1, NULL};
+    sd_image_t init_image    = {(uint32_t)params.width, (uint32_t)params.height, 3, nullptr};
+    sd_image_t end_image     = {(uint32_t)params.width, (uint32_t)params.height, 3, nullptr};
+    sd_image_t control_image = {(uint32_t)params.width, (uint32_t)params.height, 3, nullptr};
+    sd_image_t mask_image    = {(uint32_t)params.width, (uint32_t)params.height, 1, nullptr};
     std::vector<sd_image_t> ref_images;
 
     auto release_all_resources = [&]() {
@@ -1062,7 +1062,7 @@ int main(int argc, const char* argv[]) {
         free(mask_image.data);
         for (auto ref_image : ref_images) {
             free(ref_image.data);
-            ref_image.data = NULL;
+            ref_image.data = nullptr;
         }
         ref_images.clear();
     };
@@ -1073,7 +1073,7 @@ int main(int argc, const char* argv[]) {
         int width       = 0;
         int height      = 0;
         init_image.data = load_image(params.init_image_path.c_str(), width, height, params.width, params.height);
-        if (init_image.data == NULL) {
+        if (init_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", params.init_image_path.c_str());
             release_all_resources();
             return 1;
@@ -1086,7 +1086,7 @@ int main(int argc, const char* argv[]) {
         int width      = 0;
         int height     = 0;
         end_image.data = load_image(params.end_image_path.c_str(), width, height, params.width, params.height);
-        if (end_image.data == NULL) {
+        if (end_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", params.end_image_path.c_str());
             release_all_resources();
             return 1;
@@ -1098,7 +1098,7 @@ int main(int argc, const char* argv[]) {
         int width       = 0;
         int height      = 0;
         mask_image.data = load_image(params.mask_image_path.c_str(), width, height, params.width, params.height, 1);
-        if (mask_image.data == NULL) {
+        if (mask_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", params.mask_image_path.c_str());
             release_all_resources();
             return 1;
@@ -1106,7 +1106,7 @@ int main(int argc, const char* argv[]) {
     } else {
         mask_image.data = (uint8_t*)malloc(params.width * params.height);
         memset(mask_image.data, 255, params.width * params.height);
-        if (mask_image.data == NULL) {
+        if (mask_image.data == nullptr) {
             fprintf(stderr, "malloc mask image failed\n");
             release_all_resources();
             return 1;
@@ -1117,7 +1117,7 @@ int main(int argc, const char* argv[]) {
         int width          = 0;
         int height         = 0;
         control_image.data = load_image(params.control_image_path.c_str(), width, height, params.width, params.height);
-        if (control_image.data == NULL) {
+        if (control_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", params.control_image_path.c_str());
             release_all_resources();
             return 1;
@@ -1140,7 +1140,7 @@ int main(int argc, const char* argv[]) {
             int width             = 0;
             int height            = 0;
             uint8_t* image_buffer = load_image(path.c_str(), width, height);
-            if (image_buffer == NULL) {
+            if (image_buffer == nullptr) {
                 fprintf(stderr, "load image from '%s' failed\n", path.c_str());
                 release_all_resources();
                 return 1;
@@ -1191,7 +1191,7 @@ int main(int argc, const char* argv[]) {
 
     sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
 
-    if (sd_ctx == NULL) {
+    if (sd_ctx == nullptr) {
         printf("new_sd_ctx_t failed\n");
         release_all_resources();
         return 1;
@@ -1243,7 +1243,7 @@ int main(int argc, const char* argv[]) {
         results = generate_video(sd_ctx, &vid_gen_params, &num_results);
     }
 
-    if (results == NULL) {
+    if (results == nullptr) {
         printf("generate failed\n");
         free_sd_ctx(sd_ctx);
         return 1;
@@ -1256,17 +1256,17 @@ int main(int argc, const char* argv[]) {
                                                         params.diffusion_conv_direct,
                                                         params.n_threads);
 
-        if (upscaler_ctx == NULL) {
+        if (upscaler_ctx == nullptr) {
             printf("new_upscaler_ctx failed\n");
         } else {
             for (int i = 0; i < params.batch_count; i++) {
-                if (results[i].data == NULL) {
+                if (results[i].data == nullptr) {
                     continue;
                 }
                 sd_image_t current_image = results[i];
                 for (int u = 0; u < params.upscale_repeats; ++u) {
                     sd_image_t upscaled_image = upscale(upscaler_ctx, current_image, upscale_factor);
-                    if (upscaled_image.data == NULL) {
+                    if (upscaled_image.data == nullptr) {
                         printf("upscale failed\n");
                         break;
                     }
@@ -1310,7 +1310,7 @@ int main(int argc, const char* argv[]) {
             file_ext = ".png";
         }
         for (int i = 0; i < num_results; i++) {
-            if (results[i].data == NULL) {
+            if (results[i].data == nullptr) {
                 continue;
             }
             std::string final_image_path = i > 0 ? base_path + "_" + std::to_string(i + 1) + file_ext : base_path + file_ext;
@@ -1328,7 +1328,7 @@ int main(int argc, const char* argv[]) {
 
     for (int i = 0; i < num_results; i++) {
         free(results[i].data);
-        results[i].data = NULL;
+        results[i].data = nullptr;
     }
     free(results);
     free_sd_ctx(sd_ctx);

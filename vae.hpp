@@ -582,7 +582,7 @@ struct AutoEncoderKL : public VAE {
                  struct ggml_tensor* z,
                  bool decode_graph,
                  struct ggml_tensor** output,
-                 struct ggml_context* output_ctx = NULL) {
+                 struct ggml_context* output_ctx = nullptr) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
@@ -594,11 +594,11 @@ struct AutoEncoderKL : public VAE {
     void test() {
         struct ggml_init_params params;
         params.mem_size   = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-        params.mem_buffer = NULL;
+        params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
         struct ggml_context* work_ctx = ggml_init(params);
-        GGML_ASSERT(work_ctx != NULL);
+        GGML_ASSERT(work_ctx != nullptr);
 
         {
             // CPU, x{1, 3, 64, 64}: Pass
@@ -608,7 +608,7 @@ struct AutoEncoderKL : public VAE {
             auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 64, 64, 3, 2);
             ggml_set_f32(x, 0.5f);
             print_ggml_tensor(x);
-            struct ggml_tensor* out = NULL;
+            struct ggml_tensor* out = nullptr;
 
             int t0 = ggml_time_ms();
             compute(8, x, false, &out, work_ctx);
@@ -626,7 +626,7 @@ struct AutoEncoderKL : public VAE {
             auto z = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 4, 1);
             ggml_set_f32(z, 0.5f);
             print_ggml_tensor(z);
-            struct ggml_tensor* out = NULL;
+            struct ggml_tensor* out = nullptr;
 
             int t0 = ggml_time_ms();
             compute(8, z, true, &out, work_ctx);

@@ -575,7 +575,7 @@ public:
 
         GGML_ASSERT(input_ids->ne[0] == position_embed_weight->ne[1]);
         input_ids            = ggml_reshape_3d(ctx, input_ids, input_ids->ne[0], 1, input_ids->ne[1]);
-        auto token_embedding = ggml_get_rows(ctx, custom_embed_weight != NULL ? custom_embed_weight : token_embed_weight, input_ids);
+        auto token_embedding = ggml_get_rows(ctx, custom_embed_weight != nullptr ? custom_embed_weight : token_embed_weight, input_ids);
         token_embedding      = ggml_reshape_3d(ctx, token_embedding, token_embedding->ne[0], token_embedding->ne[1], token_embedding->ne[3]);
 
         // token_embedding + position_embedding
@@ -629,7 +629,7 @@ public:
         // concat(patch_embedding, class_embedding) + position_embedding
         struct ggml_tensor* patch_embedding;
         int64_t N       = pixel_values->ne[3];
-        patch_embedding = ggml_nn_conv_2d(ctx, pixel_values, patch_embed_weight, NULL, patch_size, patch_size);  // [N, embed_dim, image_size // pacht_size, image_size // pacht_size]
+        patch_embedding = ggml_nn_conv_2d(ctx, pixel_values, patch_embed_weight, nullptr, patch_size, patch_size);  // [N, embed_dim, image_size // pacht_size, image_size // pacht_size]
         patch_embedding = ggml_reshape_3d(ctx, patch_embedding, num_patches, embed_dim, N);                      // [N, embed_dim, num_patches]
         patch_embedding = ggml_cont(ctx, ggml_permute(ctx, patch_embedding, 1, 0, 2, 3));                        // [N, num_patches, embed_dim]
         patch_embedding = ggml_reshape_4d(ctx, patch_embedding, 1, embed_dim, num_patches, N);                   // [N, num_patches, embed_dim, 1]
@@ -730,8 +730,8 @@ public:
         if (return_pooled) {
             auto text_projection = params["text_projection"];
             ggml_tensor* pooled  = ggml_view_1d(ctx, x, hidden_size, x->nb[1] * max_token_idx);
-            if (text_projection != NULL) {
-                pooled = ggml_nn_linear(ctx, pooled, text_projection, NULL);
+            if (text_projection != nullptr) {
+                pooled = ggml_nn_linear(ctx, pooled, text_projection, nullptr);
             } else {
                 LOG_DEBUG("identity projection");
             }
@@ -830,7 +830,7 @@ public:
         if (transpose_weight) {
             w = ggml_cont(ctx, ggml_transpose(ctx, w));
         }
-        return ggml_nn_linear(ctx, x, w, NULL);
+        return ggml_nn_linear(ctx, x, w, nullptr);
     }
 };
 
@@ -916,16 +916,16 @@ struct CLIPTextModelRunner : public GGMLRunner {
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
                                     int num_custom_embeddings    = 0,
-                                    void* custom_embeddings_data = NULL,
+                                    void* custom_embeddings_data = nullptr,
                                     size_t max_token_idx         = 0,
                                     bool return_pooled           = false) {
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
         input_ids = to_backend(input_ids);
 
-        struct ggml_tensor* embeddings = NULL;
+        struct ggml_tensor* embeddings = nullptr;
 
-        if (num_custom_embeddings > 0 && custom_embeddings_data != NULL) {
+        if (num_custom_embeddings > 0 && custom_embeddings_data != nullptr) {
             auto token_embed_weight = model.get_token_embed_weight();
             auto custom_embeddings  = ggml_new_tensor_2d(compute_ctx,
                                                          token_embed_weight->type,
@@ -951,7 +951,7 @@ struct CLIPTextModelRunner : public GGMLRunner {
                  size_t max_token_idx,
                  bool return_pooled,
                  ggml_tensor** output,
-                 ggml_context* output_ctx = NULL) {
+                 ggml_context* output_ctx = nullptr) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled);
         };

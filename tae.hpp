@@ -261,7 +261,7 @@ struct TinyAutoEncoder : public GGMLRunner {
                  struct ggml_tensor* z,
                  bool decode_graph,
                  struct ggml_tensor** output,
-                 struct ggml_context* output_ctx = NULL) {
+                 struct ggml_context* output_ctx = nullptr) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
