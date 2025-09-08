@@ -330,7 +330,7 @@ public:
             if (sd_version_is_dit(version)) {
                 use_t5xxl = true;
             }
-            if (!ggml_backend_is_cpu(backend) && use_t5xxl) {
+            if (!clip_on_cpu && !ggml_backend_is_cpu(backend) && use_t5xxl) {
                 LOG_WARN(
                     "!!!It appears that you are using the T5 model. Some backends may encounter issues with it."
                     "If you notice that the generated images are completely black,"
@@ -557,8 +557,6 @@ public:
         // load weights
         LOG_DEBUG("loading weights");
 
-        int64_t t0 = ggml_time_ms();
-
         std::set<std::string> ignore_tensors;
         tensors["alphas_cumprod"] = alphas_cumprod_tensor;
         if (use_tiny_autoencoder) {
@@ -656,11 +654,7 @@ public:
                 ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM");
         }
 
-        int64_t t1 = ggml_time_ms();
-        LOG_INFO("loading model from '%s' completed, taking %.2fs", SAFE_STR(sd_ctx_params->model_path), (t1 - t0) * 1.0f / 1000);
-
         // check is_using_v_parameterization_for_sd2
-
         if (sd_version_is_sd2(version)) {
             if (is_using_v_parameterization_for_sd2(ctx, sd_version_is_inpaint(version))) {
                 is_using_v_parameterization = true;
@@ -1037,6 +1031,7 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
+                        bool increase_ref_index               = false,
                         ggml_tensor* denoise_mask             = NULL,
                         ggml_tensor* vace_context             = NULL,
                         float vace_strength                   = 1.f) {
@@ -1128,6 +1123,7 @@ public:
             diffusion_params.timesteps        = timesteps;
             diffusion_params.guidance         = guidance_tensor;
             diffusion_params.ref_latents      = ref_latents;
+            diffusion_params.increase_ref_index = increase_ref_index;
             diffusion_params.controls         = controls;
             diffusion_params.control_strength = control_strength;
             diffusion_params.vace_context     = vace_context;
@@ -1697,6 +1693,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "\n"
              "batch_count: %d\n"
              "ref_images_count: %d\n"
+             "increase_ref_index: %s\n"
              "control_strength: %.2f\n"
              "style_strength: %.2f\n"
              "normalize_input: %s\n"
@@ -1711,6 +1708,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->seed,
              sd_img_gen_params->batch_count,
              sd_img_gen_params->ref_images_count,
+             BOOL_STR(sd_img_gen_params->increase_ref_index),
              sd_img_gen_params->control_strength,
              sd_img_gen_params->style_strength,
              BOOL_STR(sd_img_gen_params->normalize_input),
@@ -1784,6 +1782,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     bool normalize_input,
                                     std::string input_id_images_path,
                                     std::vector<ggml_tensor*> ref_latents,
+                                    bool increase_ref_index,
                                     ggml_tensor* concat_latent = NULL,
                                     ggml_tensor* denoise_mask  = NULL) {
     if (seed < 0) {
@@ -2041,6 +2040,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
+                                                     increase_ref_index,
                                                      denoise_mask);
         // print_ggml_tensor(x_0);
         int64_t sampling_end = ggml_time_ms();
@@ -2291,7 +2291,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         LOG_INFO("EDIT mode");
     }
 
-    std::vector<struct ggml_tensor*> ref_latents;
+    std::vector<ggml_tensor*> ref_latents;
     for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
         ggml_tensor* img = ggml_new_tensor_4d(work_ctx,
                                               GGML_TYPE_F32,
@@ -2346,6 +2346,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->normalize_input,
                                                         sd_img_gen_params->input_id_images_path,
                                                         ref_latents,
+                                                        sd_img_gen_params->increase_ref_index,
                                                         concat_latent,
                                                         denoise_mask);
 
@@ -2641,6 +2642,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                  -1,
                                  {},
                                  {},
+                                 false,
                                  denoise_mask,
                                  vace_context);
 
@@ -2674,6 +2676,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           -1,
                                           {},
                                           {},
+                                          false,
                                           denoise_mask,
                                           vace_context);
 

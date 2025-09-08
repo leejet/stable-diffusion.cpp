@@ -1306,6 +1306,7 @@ namespace WAN {
         }
 
         virtual struct ggml_tensor* forward(struct ggml_context* ctx,
+                                            ggml_backend_t backend,
                                             struct ggml_tensor* x,
                                             struct ggml_tensor* pe,
                                             struct ggml_tensor* mask = NULL) {
@@ -1332,7 +1333,7 @@ namespace WAN {
             k = ggml_reshape_4d(ctx, k, head_dim, num_heads, n_token, N);  // [N, n_token, n_head, d_head]
             v = ggml_reshape_4d(ctx, v, head_dim, num_heads, n_token, N);  // [N, n_token, n_head, d_head]
 
-            x = Flux::attention(ctx, q, k, v, pe, mask, flash_attn);  // [N, n_token, dim]
+            x = Flux::attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
@@ -1348,6 +1349,7 @@ namespace WAN {
                           bool flash_attn = false)
             : WanSelfAttention(dim, num_heads, qk_norm, eps, flash_attn) {}
         virtual struct ggml_tensor* forward(struct ggml_context* ctx,
+                                            ggml_backend_t backend,
                                             struct ggml_tensor* x,
                                             struct ggml_tensor* context,
                                             int64_t context_img_len) = 0;
@@ -1362,6 +1364,7 @@ namespace WAN {
                              bool flash_attn = false)
             : WanCrossAttention(dim, num_heads, qk_norm, eps, flash_attn) {}
         struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    ggml_backend_t backend,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* context,
                                     int64_t context_img_len) {
@@ -1385,7 +1388,7 @@ namespace WAN {
             k      = norm_k->forward(ctx, k);
             auto v = v_proj->forward(ctx, context);  // [N, n_context, dim]
 
-            x = ggml_nn_attention_ext(ctx, q, k, v, num_heads, NULL, false, false, flash_attn);  // [N, n_token, dim]
+            x = ggml_nn_attention_ext(ctx, backend, q, k, v, num_heads, NULL, false, false, flash_attn);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
@@ -1411,6 +1414,7 @@ namespace WAN {
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    ggml_backend_t backend,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* context,
                                     int64_t context_img_len) {
@@ -1451,8 +1455,8 @@ namespace WAN {
             k_img      = norm_k_img->forward(ctx, k_img);
             auto v_img = v_img_proj->forward(ctx, context_img);  // [N, context_img_len, dim]
 
-            auto img_x = ggml_nn_attention_ext(ctx, q, k_img, v_img, num_heads, NULL, false, false, flash_attn);  // [N, n_token, dim]
-            x          = ggml_nn_attention_ext(ctx, q, k, v, num_heads, NULL, false, false, flash_attn);          // [N, n_token, dim]
+            auto img_x = ggml_nn_attention_ext(ctx, backend, q, k_img, v_img, num_heads, NULL, false, false, flash_attn);  // [N, n_token, dim]
+            x          = ggml_nn_attention_ext(ctx, backend, q, k, v, num_heads, NULL, false, false, flash_attn);          // [N, n_token, dim]
 
             x = ggml_add(ctx, x, img_x);
 
@@ -1529,11 +1533,12 @@ namespace WAN {
         }
 
         virtual struct ggml_tensor* forward(struct ggml_context* ctx,
-                                            struct ggml_tensor* x,
-                                            struct ggml_tensor* e,
-                                            struct ggml_tensor* pe,
-                                            struct ggml_tensor* context,
-                                            int64_t context_img_len = 257) {
+                                    ggml_backend_t backend,
+                                    struct ggml_tensor* x,
+                                    struct ggml_tensor* e,
+                                    struct ggml_tensor* pe,
+                                    struct ggml_tensor* context,
+                                    int64_t context_img_len = 257) {
             // x: [N, n_token, dim]
             // e: [N, 6, dim] or [N, T, 6, dim]
             // context: [N, context_img_len + context_txt_len, dim]
@@ -1555,14 +1560,14 @@ namespace WAN {
             auto y = norm1->forward(ctx, x);
             y      = ggml_add(ctx, y, modulate_mul(ctx, y, es[1]));
             y      = modulate_add(ctx, y, es[0]);
-            y      = self_attn->forward(ctx, y, pe);
+            y      = self_attn->forward(ctx, backend, y, pe);
 
             x = ggml_add(ctx, x, modulate_mul(ctx, y, es[2]));
 
             // cross-attention
             x = ggml_add(ctx,
                          x,
-                         cross_attn->forward(ctx, norm3->forward(ctx, x), context, context_img_len));
+                         cross_attn->forward(ctx, backend, norm3->forward(ctx, x), context, context_img_len));
 
             // ffn
             y = norm2->forward(ctx, x);
@@ -1605,6 +1610,7 @@ namespace WAN {
         }
 
         std::pair<ggml_tensor*, ggml_tensor*> forward(struct ggml_context* ctx,
+            ggml_backend_t backend,
                                                       struct ggml_tensor* c,
                                                       struct ggml_tensor* x,
                                                       struct ggml_tensor* e,
@@ -1624,7 +1630,7 @@ namespace WAN {
 
             auto after_proj = std::dynamic_pointer_cast<Linear>(blocks["after_proj"]);
 
-            c           = WanAttentionBlock::forward(ctx, c, e, pe, context, context_img_len);
+            c           = WanAttentionBlock::forward(ctx, backend, c, e, pe, context, context_img_len);
             auto c_skip = after_proj->forward(ctx, c);
 
             return {c_skip, c};
@@ -1865,6 +1871,7 @@ namespace WAN {
         }
 
         struct ggml_tensor* forward_orig(struct ggml_context* ctx,
+                                         ggml_backend_t backend,
                                          struct ggml_tensor* x,
                                          struct ggml_tensor* timestep,
                                          struct ggml_tensor* context,
@@ -1937,7 +1944,7 @@ namespace WAN {
             for (int i = 0; i < params.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<WanAttentionBlock>(blocks["blocks." + std::to_string(i)]);
 
-                x = block->forward(ctx, x, e0, pe, context, context_img_len);
+                x = block->forward(ctx, backend, x, e0, pe, context, context_img_len);
 
                 auto iter = params.vace_layers_mapping.find(i);
                 if (iter != params.vace_layers_mapping.end()) {
@@ -1945,7 +1952,7 @@ namespace WAN {
 
                     auto vace_block = std::dynamic_pointer_cast<VaceWanAttentionBlock>(blocks["vace_blocks." + std::to_string(n)]);
 
-                    auto result = vace_block->forward(ctx, c, x_orig, e0, pe, context, context_img_len);
+                    auto result = vace_block->forward(ctx, backend, c, x_orig, e0, pe, context, context_img_len);
                     auto c_skip = result.first;
                     c           = result.second;
                     c_skip      = ggml_scale(ctx, c_skip, vace_strength);
@@ -1959,6 +1966,7 @@ namespace WAN {
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx,
+                                    ggml_backend_t backend,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* timestep,
                                     struct ggml_tensor* context,
@@ -1995,7 +2003,7 @@ namespace WAN {
                 t_len           = ((x->ne[2] + (std::get<0>(params.patch_size) / 2)) / std::get<0>(params.patch_size));
             }
 
-            auto out = forward_orig(ctx, x, timestep, context, pe, clip_fea, vace_context, vace_strength, N);  // [N, t_len*h_len*w_len, pt*ph*pw*C]
+            auto out = forward_orig(ctx, backend, x, timestep, context, pe, clip_fea, vace_context, vace_strength, N);  // [N, t_len*h_len*w_len, pt*ph*pw*C]
 
             out = unpatchify(ctx, out, t_len, h_len, w_len);  // [N*C, (T+pad_t) + (T2+pad_t2), H + pad_h, W + pad_w]
 
@@ -2174,6 +2182,7 @@ namespace WAN {
             }
 
             struct ggml_tensor* out = wan.forward(compute_ctx,
+                                                  runtime_backend,
                                                   x,
                                                   timesteps,
                                                   context,

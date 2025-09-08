@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -74,6 +75,7 @@ struct SDParams {
     std::string mask_image_path;
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
+    bool increase_ref_index = false;
 
     std::string prompt;
     std::string negative_prompt;
@@ -156,6 +158,7 @@ void print_params(SDParams params) {
     for (auto& path : params.ref_image_paths) {
         printf("        %s\n", path.c_str());
     };
+    printf("    increase_ref_index:                %s\n", params.increase_ref_index ? "true" : "false");
     printf("    offload_params_to_cpu:             %s\n", params.offload_params_to_cpu ? "true" : "false");
     printf("    clip_on_cpu:                       %s\n", params.clip_on_cpu ? "true" : "false");
     printf("    control_net_cpu:                   %s\n", params.control_net_cpu ? "true" : "false");
@@ -222,6 +225,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -i, --end-img [IMAGE]              path to the end image, required by flf2v\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
     printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
+    printf("  --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
     printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
@@ -536,6 +540,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--color", "", true, &params.color},
         {"", "--chroma-disable-dit-mask", "", false, &params.chroma_use_dit_mask},
         {"", "--chroma-enable-t5-mask", "", true, &params.chroma_use_t5_mask},
+        {"", "--increase-ref-index", "", true, &params.increase_ref_index},
     };
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
@@ -1207,6 +1212,7 @@ int main(int argc, const char* argv[]) {
             init_image,
             ref_images.data(),
             (int)ref_images.size(),
+            params.increase_ref_index,
             mask_image,
             params.width,
             params.height,
@@ -1274,6 +1280,21 @@ int main(int argc, const char* argv[]) {
                     current_image = upscaled_image;
                 }
                 results[i] = current_image;  // Set the final upscaled image as the result
+            }
+        }
+    }
+
+    // create directory if not exists
+    {
+        namespace fs            = std::filesystem;
+        const fs::path out_path = params.output_path;
+        if (const fs::path out_dir = out_path.parent_path(); !out_dir.empty()) {
+            std::error_code ec;
+            fs::create_directories(out_dir, ec);  // OK if already exists
+            if (ec) {
+                fprintf(stderr, "failed to create directory '%s': %s\n",
+                        out_dir.string().c_str(), ec.message().c_str());
+                return 1;
             }
         }
     }
