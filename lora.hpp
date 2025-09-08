@@ -2,6 +2,7 @@
 #define __LORA_HPP__
 
 #include "ggml_extend.hpp"
+#include <mutex>
 
 #define LORA_GRAPH_BASE_SIZE 10240
 
