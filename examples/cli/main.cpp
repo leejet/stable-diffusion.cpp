@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -1279,6 +1280,21 @@ int main(int argc, const char* argv[]) {
                     current_image = upscaled_image;
                 }
                 results[i] = current_image;  // Set the final upscaled image as the result
+            }
+        }
+    }
+
+    // create directory if not exists
+    {
+        namespace fs            = std::filesystem;
+        const fs::path out_path = params.output_path;
+        if (const fs::path out_dir = out_path.parent_path(); !out_dir.empty()) {
+            std::error_code ec;
+            fs::create_directories(out_dir, ec);  // OK if already exists
+            if (ec) {
+                fprintf(stderr, "failed to create directory '%s': %s\n",
+                        out_dir.string().c_str(), ec.message().c_str());
+                return 1;
             }
         }
     }
