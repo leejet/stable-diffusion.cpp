@@ -1382,6 +1382,16 @@ public:
     ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode_video = false) {
         int64_t t0          = ggml_time_ms();
         ggml_tensor* result = NULL;
+        int W               = x->ne[0] / 8;
+        int H               = x->ne[1] / 8;
+        if (vae_tiling && !decode_video) {
+            // TODO wan2.2 vae support?
+            int C = sd_version_is_dit(version) ? 16 : 4;
+            if (!use_tiny_autoencoder) {
+                C *= 2;
+            }
+            result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, x->ne[3]);
+        }
         // TODO: args instead of env for tile size / overlap?
         if (!use_tiny_autoencoder) {
             float tile_overlap = 0.5f;
@@ -1389,7 +1399,7 @@ public:
             int tile_size_y    = 32;
     
             get_vae_tile_overlap(tile_overlap);
-            get_vae_tile_sizes(tile_size_x, tile_size_y, tile_overlap, x->ne[0] / 8, x->ne[1] / 8);
+            get_vae_tile_sizes(tile_size_x, tile_size_y, tile_overlap, W, H);
     
             // TODO: also use an arg for this one?
             // multiply tile size for encode to keep the compute buffer size consistent
@@ -1399,7 +1409,7 @@ public:
             process_vae_input_tensor(x);
             if (vae_tiling && !decode_video) {
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    first_stage_model->compute(n_threads, in, true, &out, NULL);
+                    first_stage_model->compute(n_threads, in, false, &out, work_ctx);
                 };
                 sd_tiling_non_square(x, result, 8, tile_size_x, tile_size_y, tile_overlap, on_tiling);
             } else {
@@ -1410,7 +1420,7 @@ public:
             if (vae_tiling && !decode_video) {
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    tae_first_stage->compute(n_threads, in, true, &out, NULL);
+                    tae_first_stage->compute(n_threads, in, false, &out, NULL);
                 };
                 sd_tiling(x, result, 8, 64, 0.5f, on_tiling);
             } else {
