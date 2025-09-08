@@ -123,36 +123,48 @@ struct LoraModel : public GGMLRunner {
             return false;
         }
 
+        std::unordered_map<std::string, TensorStorage> tensors_to_create;
+        std::mutex lora_mutex;
         bool dry_run          = true;
         auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
-            const std::string& name = tensor_storage.name;
-
-            if (filter_tensor && !contains(name, "lora")) {
-                // LOG_INFO("skipping LoRA tesnor '%s'", name.c_str());
-                return true;
-            }
-
             if (dry_run) {
-                for (int i = 0; i < LORA_TYPE_COUNT; i++) {
-                    if (name.find(type_fingerprints[i]) != std::string::npos) {
-                        type = (lora_t)i;
-                        break;
-                    }
-                }
-                struct ggml_tensor* real = ggml_new_tensor(params_ctx,
-                                                           tensor_storage.type,
-                                                           tensor_storage.n_dims,
-                                                           tensor_storage.ne);
-                lora_tensors[name]       = real;
-            } else {
-                auto real   = lora_tensors[name];
-                *dst_tensor = real;
-            }
+                const std::string& name = tensor_storage.name;
 
+                if (filter_tensor && !contains(name, "lora")) {
+                    return true;
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(lora_mutex);
+                    for (int i = 0; i < LORA_TYPE_COUNT; i++) {
+                        if (name.find(type_fingerprints[i]) != std::string::npos) {
+                            type = (lora_t)i;
+                            break;
+                        }
+                    }
+                    tensors_to_create[name] = tensor_storage;
+                }
+            } else {
+                const std::string& name = tensor_storage.name;
+                if (lora_tensors.count(name)) {
+                    *dst_tensor = lora_tensors.at(name);
+                }
+            }
             return true;
         };
 
-        model_loader.load_tensors(on_new_tensor_cb, 1);
+        model_loader.load_tensors(on_new_tensor_cb, n_threads);
+
+        for (const auto& pair : tensors_to_create) {
+            const auto& name = pair.first;
+            const auto& ts   = pair.second;
+            struct ggml_tensor* real = ggml_new_tensor(params_ctx,
+                                                       ts.type,
+                                                       ts.n_dims,
+                                                       ts.ne);
+            lora_tensors[name] = real;
+        }
+
         alloc_params_buffer();
 
         dry_run = false;
