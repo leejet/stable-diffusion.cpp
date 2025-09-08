@@ -1533,12 +1533,12 @@ namespace WAN {
         }
 
         virtual struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* e,
-                                    struct ggml_tensor* pe,
-                                    struct ggml_tensor* context,
-                                    int64_t context_img_len = 257) {
+                                            ggml_backend_t backend,
+                                            struct ggml_tensor* x,
+                                            struct ggml_tensor* e,
+                                            struct ggml_tensor* pe,
+                                            struct ggml_tensor* context,
+                                            int64_t context_img_len = 257) {
             // x: [N, n_token, dim]
             // e: [N, 6, dim] or [N, T, 6, dim]
             // context: [N, context_img_len + context_txt_len, dim]
@@ -1610,7 +1610,7 @@ namespace WAN {
         }
 
         std::pair<ggml_tensor*, ggml_tensor*> forward(struct ggml_context* ctx,
-            ggml_backend_t backend,
+                                                      ggml_backend_t backend,
                                                       struct ggml_tensor* c,
                                                       struct ggml_tensor* x,
                                                       struct ggml_tensor* e,

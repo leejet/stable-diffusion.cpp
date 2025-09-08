@@ -14,7 +14,7 @@ struct DiffusionParams {
     struct ggml_tensor* y                     = NULL;
     struct ggml_tensor* guidance              = NULL;
     std::vector<ggml_tensor*> ref_latents     = {};
-    bool increase_ref_index = false;
+    bool increase_ref_index                   = false;
     int num_video_frames                      = -1;
     std::vector<struct ggml_tensor*> controls = {};
     float control_strength                    = 0.f;

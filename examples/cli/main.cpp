@@ -91,10 +91,10 @@ struct SDParams {
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
     sd_sample_params_t high_noise_sample_params;
 
-    float moe_boundary = 0.875f;
-
-    int video_frames = 1;
-    int fps          = 16;
+    float moe_boundary  = 0.875f;
+    int video_frames    = 1;
+    int fps             = 16;
+    float vace_strength = 1.f;
 
     float strength             = 0.75f;
     float control_strength     = 0.9f;
@@ -186,6 +186,7 @@ void print_params(SDParams params) {
     printf("    chroma_use_t5_mask:                %s\n", params.chroma_use_t5_mask ? "true" : "false");
     printf("    chroma_t5_mask_pad:                %d\n", params.chroma_t5_mask_pad);
     printf("    video_frames:                      %d\n", params.video_frames);
+    printf("    vace_strength:                     %.2f\n", params.vace_strength);
     printf("    fps:                               %d\n", params.fps);
     free(sample_params_str);
     free(high_noise_sample_params_str);
@@ -288,6 +289,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --moe-boundary BOUNDARY            timestep boundary for Wan2.2 MoE model. (default: 0.875)\n");
     printf("                                     only enabled if `--high-noise-steps` is set to -1\n");
     printf("  --flow-shift SHIFT                 shift value for Flow models like SD3.x or WAN (default: auto)\n");
+    printf("  --vace-strength                    wan vace strength\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -523,6 +525,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--control-strength", "", &params.control_strength},
         {"", "--moe-boundary", "", &params.moe_boundary},
         {"", "--flow-shift", "", &params.flow_shift},
+        {"", "--vace-strength", "", &params.vace_strength},
     };
 
     options.bool_options = {
@@ -1244,6 +1247,7 @@ int main(int argc, const char* argv[]) {
             params.strength,
             params.seed,
             params.video_frames,
+            params.vace_strength,
         };
 
         results = generate_video(sd_ctx, &vid_gen_params, &num_results);

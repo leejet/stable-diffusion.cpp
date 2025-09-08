@@ -1119,15 +1119,15 @@ public:
             }
 
             DiffusionParams diffusion_params;
-            diffusion_params.x                = noised_input;
-            diffusion_params.timesteps        = timesteps;
-            diffusion_params.guidance         = guidance_tensor;
-            diffusion_params.ref_latents      = ref_latents;
+            diffusion_params.x                  = noised_input;
+            diffusion_params.timesteps          = timesteps;
+            diffusion_params.guidance           = guidance_tensor;
+            diffusion_params.ref_latents        = ref_latents;
             diffusion_params.increase_ref_index = increase_ref_index;
-            diffusion_params.controls         = controls;
-            diffusion_params.control_strength = control_strength;
-            diffusion_params.vace_context     = vace_context;
-            diffusion_params.vace_strength    = vace_strength;
+            diffusion_params.controls           = controls;
+            diffusion_params.control_strength   = control_strength;
+            diffusion_params.vace_context       = vace_context;
+            diffusion_params.vace_strength      = vace_strength;
 
             if (start_merge_step == -1 || step <= start_merge_step) {
                 // cond
@@ -1728,6 +1728,7 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->seed                                  = -1;
     sd_vid_gen_params->video_frames                          = 6;
     sd_vid_gen_params->moe_boundary                          = 0.875f;
+    sd_vid_gen_params->vace_strength                         = 1.f;
 }
 
 struct sd_ctx_t {
@@ -2644,7 +2645,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                  {},
                                  false,
                                  denoise_mask,
-                                 vace_context);
+                                 vace_context,
+                                 sd_vid_gen_params->vace_strength);
 
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling(high noise) completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
@@ -2678,7 +2680,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           {},
                                           false,
                                           denoise_mask,
-                                          vace_context);
+                                          vace_context,
+                                          sd_vid_gen_params->vace_strength);
 
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
