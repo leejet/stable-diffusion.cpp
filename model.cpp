@@ -1970,24 +1970,22 @@ std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& v
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p) {
-    int64_t process_time_ms         = 0;
-    int64_t read_time_ms            = 0;
-    int64_t memcpy_time_ms          = 0;
-    int64_t copy_to_backend_time_ms = 0;
-    int64_t convert_time_ms         = 0;
+    int64_t process_time_ms = 0;
+    std::atomic<int64_t> read_time_ms(0);
+    std::atomic<int64_t> memcpy_time_ms(0);
+    std::atomic<int64_t> copy_to_backend_time_ms(0);
+    std::atomic<int64_t> convert_time_ms(0);
 
-    int64_t prev_time_ms = 0;
-    int64_t curr_time_ms = 0;
-    int64_t start_time   = ggml_time_ms();
-    prev_time_ms         = start_time;
+    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : (int)std::thread::hardware_concurrency();
+
+    int64_t start_time = ggml_time_ms();
     std::vector<TensorStorage> processed_tensor_storages;
 
     {
         std::unordered_map<std::string, TensorStorage> processed_map;
         std::mutex map_mutex;
 
-        int num_threads = n_threads_p > 0 ? n_threads_p : (int)std::thread::hardware_concurrency();
-        int n_threads   = std::min(num_threads, (int)tensor_storages.size());
+        int n_threads = std::min(num_threads_to_use, (int)tensor_storages.size());
         if (n_threads < 1) {
             n_threads = 1;
         }
@@ -2028,14 +2026,13 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
         }
     }
 
-    curr_time_ms    = ggml_time_ms();
-    process_time_ms = curr_time_ms - prev_time_ms;
-    prev_time_ms    = curr_time_ms;
+    process_time_ms = ggml_time_ms() - start_time;
 
     bool success                          = true;
     size_t total_tensors_processed        = 0;
     const size_t total_tensors_to_process = processed_tensor_storages.size();
     const int64_t t_start                 = ggml_time_ms();
+    int last_n_threads                    = 1;
 
     for (size_t file_index = 0; file_index < file_paths_.size(); file_index++) {
         std::string file_path = file_paths_[file_index];
@@ -2059,11 +2056,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             }
         }
 
-        int num_threads = n_threads_p > 0 ? n_threads_p : (int)std::thread::hardware_concurrency();
-        int n_threads   = is_zip ? 1 : std::min(num_threads, (int)file_tensors.size());
+        int n_threads = is_zip ? 1 : std::min(num_threads_to_use, (int)file_tensors.size());
         if (n_threads < 1) {
             n_threads = 1;
         }
+        last_n_threads = n_threads;
 
         std::atomic<size_t> tensor_idx(0);
         std::atomic<bool> failed(false);
@@ -2093,6 +2090,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                 std::vector<uint8_t> convert_buffer;
 
                 while (true) {
+                    int64_t t0, t1;
                     size_t idx = tensor_idx.fetch_add(1);
                     if (idx >= file_tensors.size() || failed) {
                         break;
@@ -2101,6 +2099,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     const TensorStorage& tensor_storage = *file_tensors[idx];
                     ggml_tensor* dst_tensor             = NULL;
 
+                    t0 = ggml_time_ms();
+
                     if (!on_new_tensor_cb(tensor_storage, &dst_tensor)) {
                         LOG_WARN("process tensor failed: '%s'", tensor_storage.name.c_str());
                         failed = true;
@@ -2108,6 +2108,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     }
 
                     if (dst_tensor == NULL) {
+                        t1 = ggml_time_ms();
+                        read_time_ms.fetch_add(t1 - t0);
                         continue;
                     }
 
@@ -2118,28 +2120,19 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                             zip_entry_openbyindex(zip, tensor_storage.index_in_zip);
                             size_t entry_size = zip_entry_size(zip);
                             if (entry_size != n) {
+                                int64_t t_memcpy_start;
                                 read_buffer.resize(entry_size);
-                                prev_time_ms = ggml_time_ms();
                                 zip_entry_noallocread(zip, (void*)read_buffer.data(), entry_size);
-                                curr_time_ms = ggml_time_ms();
-                                read_time_ms += curr_time_ms - prev_time_ms;
-                                prev_time_ms = curr_time_ms;
+                                t_memcpy_start = ggml_time_ms();
                                 memcpy((void*)buf, (void*)(read_buffer.data() + tensor_storage.offset), n);
-                                curr_time_ms = ggml_time_ms();
-                                memcpy_time_ms += curr_time_ms - prev_time_ms;
+                                memcpy_time_ms.fetch_add(ggml_time_ms() - t_memcpy_start);
                             } else {
-                                prev_time_ms = ggml_time_ms();
                                 zip_entry_noallocread(zip, (void*)buf, n);
-                                curr_time_ms = ggml_time_ms();
-                                read_time_ms += curr_time_ms - prev_time_ms;
                             }
                             zip_entry_close(zip);
                         } else {
-                            prev_time_ms = ggml_time_ms();
                             file.seekg(tensor_storage.offset);
                             file.read(buf, n);
-                            curr_time_ms = ggml_time_ms();
-                            read_time_ms += curr_time_ms - prev_time_ms;
                             if (!file) {
                                 LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
                                 failed = true;
@@ -2156,8 +2149,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                             } else {
                                 read_data((char*)dst_tensor->data, nbytes_to_read);
                             }
+                            t1 = ggml_time_ms();
+                            read_time_ms.fetch_add(t1 - t0);
 
-                            prev_time_ms = ggml_time_ms();
+                            t0 = ggml_time_ms();
                             if (tensor_storage.is_bf16) {
                                 // inplace op
                                 bf16_to_f32_vec((uint16_t*)dst_tensor->data, (float*)dst_tensor->data, tensor_storage.nelements());
@@ -2172,13 +2167,15 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                             } else if (tensor_storage.is_i64) {
                                 i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)dst_tensor->data, tensor_storage.nelements());
                             }
-                            curr_time_ms = ggml_time_ms();
-                            convert_time_ms += curr_time_ms - prev_time_ms;
+                            t1 = ggml_time_ms();
+                            convert_time_ms.fetch_add(t1 - t0);
                         } else {
                             read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
                             read_data((char*)read_buffer.data(), nbytes_to_read);
+                            t1 = ggml_time_ms();
+                            read_time_ms.fetch_add(t1 - t0);
 
-                            prev_time_ms = ggml_time_ms();
+                            t0 = ggml_time_ms();
                             if (tensor_storage.is_bf16) {
                                 // inplace op
                                 bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
@@ -2195,17 +2192,17 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                                 // inplace op
                                 i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)read_buffer.data(), tensor_storage.nelements());
                             }
-
-                            convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data,
-                                           dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
-                            curr_time_ms = ggml_time_ms();
-                            convert_time_ms += curr_time_ms - prev_time_ms;
+                            convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data, dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
+                            t1 = ggml_time_ms();
+                            convert_time_ms.fetch_add(t1 - t0);
                         }
                     } else {
                         read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
                         read_data((char*)read_buffer.data(), nbytes_to_read);
+                        t1 = ggml_time_ms();
+                        read_time_ms.fetch_add(t1 - t0);
 
-                        prev_time_ms = ggml_time_ms();
+                        t0 = ggml_time_ms();
                         if (tensor_storage.is_bf16) {
                             // inplace op
                             bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
@@ -2229,20 +2226,18 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                             convert_time_ms += curr_time_ms - prev_time_ms;
                             prev_time_ms = curr_time_ms;
                             ggml_backend_tensor_set(dst_tensor, read_buffer.data(), 0, ggml_nbytes(dst_tensor));
-                            curr_time_ms = ggml_time_ms();
-                            copy_to_backend_time_ms += curr_time_ms - prev_time_ms;
+                            t1 = ggml_time_ms();
+                            copy_to_backend_time_ms.fetch_add(t1 - t0);
                         } else {
                             // convert first, then copy to device memory
                             convert_buffer.resize(ggml_nbytes(dst_tensor));
-                            convert_tensor((void*)read_buffer.data(), tensor_storage.type,
-                                           (void*)convert_buffer.data(), dst_tensor->type,
-                                           (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
-                            curr_time_ms = ggml_time_ms();
-                            convert_time_ms += curr_time_ms - prev_time_ms;
-                            prev_time_ms = curr_time_ms;
+                            convert_tensor((void*)read_buffer.data(), tensor_storage.type, (void*)convert_buffer.data(), dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
+                            t1 = ggml_time_ms();
+                            convert_time_ms.fetch_add(t1 - t0);
+                            t0 = ggml_time_ms();
                             ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
-                            curr_time_ms = ggml_time_ms();
-                            copy_to_backend_time_ms += curr_time_ms - prev_time_ms;
+                            t1 = ggml_time_ms();
+                            copy_to_backend_time_ms.fetch_add(t1 - t0);
                         }
                     }
                 }
@@ -2281,10 +2276,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     LOG_INFO("loading tensors completed, taking %.2fs (process: %.2fs, read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
              (end_time - start_time) / 1000.f,
              process_time_ms / 1000.f,
-             read_time_ms / 1000.f,
-             memcpy_time_ms / 1000.f,
-             convert_time_ms / 1000.f,
-             copy_to_backend_time_ms / 1000.f);
+             (read_time_ms.load() / (float)last_n_threads) / 1000.f,
+             (memcpy_time_ms.load() / (float)last_n_threads) / 1000.f,
+             (convert_time_ms.load() / (float)last_n_threads) / 1000.f,
+             (copy_to_backend_time_ms.load() / (float)last_n_threads) / 1000.f);
     return success;
 }
 
