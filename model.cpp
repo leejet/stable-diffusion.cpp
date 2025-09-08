@@ -2222,14 +2222,15 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
                         if (tensor_storage.type == dst_tensor->type) {
                             // copy to device memory
-                            curr_time_ms = ggml_time_ms();
-                            convert_time_ms += curr_time_ms - prev_time_ms;
-                            prev_time_ms = curr_time_ms;
+                            t1 = ggml_time_ms();
+                            convert_time_ms.fetch_add(t1 - t0);
+                            t0 = ggml_time_ms();
                             ggml_backend_tensor_set(dst_tensor, read_buffer.data(), 0, ggml_nbytes(dst_tensor));
                             t1 = ggml_time_ms();
                             copy_to_backend_time_ms.fetch_add(t1 - t0);
                         } else {
                             // convert first, then copy to device memory
+
                             convert_buffer.resize(ggml_nbytes(dst_tensor));
                             convert_tensor((void*)read_buffer.data(), tensor_storage.type, (void*)convert_buffer.data(), dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
                             t1 = ggml_time_ms();
