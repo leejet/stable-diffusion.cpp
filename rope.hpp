@@ -156,24 +156,32 @@ struct Rope {
                                                         int patch_size,
                                                         int bs,
                                                         int context_len,
-                                                        std::vector<ggml_tensor*> ref_latents) {
+                                                        std::vector<ggml_tensor*> ref_latents,
+                                                        bool increase_ref_index) {
         auto txt_ids = gen_txt_ids(bs, context_len);
         auto img_ids = gen_img_ids(h, w, patch_size, bs);
 
         auto ids               = concat_ids(txt_ids, img_ids, bs);
         uint64_t curr_h_offset = 0;
         uint64_t curr_w_offset = 0;
+        int index              = 1;
         for (ggml_tensor* ref : ref_latents) {
             uint64_t h_offset = 0;
             uint64_t w_offset = 0;
-            if (ref->ne[1] + curr_h_offset > ref->ne[0] + curr_w_offset) {
-                w_offset = curr_w_offset;
-            } else {
-                h_offset = curr_h_offset;
+            if (!increase_ref_index) {
+                if (ref->ne[1] + curr_h_offset > ref->ne[0] + curr_w_offset) {
+                    w_offset = curr_w_offset;
+                } else {
+                    h_offset = curr_h_offset;
+                }
             }
 
-            auto ref_ids = gen_img_ids(ref->ne[1], ref->ne[0], patch_size, bs, 1, h_offset, w_offset);
+            auto ref_ids = gen_img_ids(ref->ne[1], ref->ne[0], patch_size, bs, index, h_offset, w_offset);
             ids          = concat_ids(ids, ref_ids, bs);
+
+            if (increase_ref_index) {
+                index++;
+            }
 
             curr_h_offset = std::max(curr_h_offset, ref->ne[1] + h_offset);
             curr_w_offset = std::max(curr_w_offset, ref->ne[0] + w_offset);
@@ -188,9 +196,10 @@ struct Rope {
                                           int bs,
                                           int context_len,
                                           std::vector<ggml_tensor*> ref_latents,
+                                          bool increase_ref_index,
                                           int theta,
                                           const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_flux_ids(h, w, patch_size, bs, context_len, ref_latents);
+        std::vector<std::vector<float>> ids = gen_flux_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
         return embed_nd(ids, bs, theta, axes_dim);
     }
 

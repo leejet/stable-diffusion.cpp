@@ -182,6 +182,7 @@ typedef struct {
     sd_image_t init_image;
     sd_image_t* ref_images;
     int ref_images_count;
+    bool increase_ref_index;
     sd_image_t mask_image;
     int width;
     int height;
