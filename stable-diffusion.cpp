@@ -345,7 +345,7 @@ public:
             }
             if (sd_version_is_sd3(version)) {
                 if (sd_ctx_params->diffusion_flash_attn) {
-                    LOG_WARN("flash attention in this diffusion model is currently unsupported!");
+                    LOG_WARN("flash attention in this diffusion model is currently not implemented!");
                 }
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
                                                                      offload_params_to_cpu,
