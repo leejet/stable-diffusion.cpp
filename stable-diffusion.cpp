@@ -1539,8 +1539,7 @@ public:
             int tile_size_y    = 32;
     
             get_vae_tile_overlap(tile_overlap);
-            get_vae_tile_sizes(tile_size_x, tile_size_y, tile_overlap, x->ne[0] / 8, x->ne[1] / 8);
-    
+            get_vae_tile_sizes(tile_size_x, tile_size_y, tile_overlap, x->ne[0], x->ne[1]);
             process_latent_out(x);
             // x = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
             if (vae_tiling && !decode_video) {
