@@ -2361,7 +2361,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->control_strength,
                                                         sd_img_gen_params->style_strength,
                                                         sd_img_gen_params->normalize_input,
-                                                        sd_img_gen_params->input_id_images_path,
+                                                        SAFE_STR(sd_img_gen_params->input_id_images_path),
                                                         ref_latents,
                                                         sd_img_gen_params->increase_ref_index,
                                                         concat_latent,
