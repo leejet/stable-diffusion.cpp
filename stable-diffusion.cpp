@@ -729,6 +729,7 @@ public:
 
         LOG_DEBUG("finished loaded file");
         ggml_free(ctx);
+        use_tiny_autoencoder = use_tiny_autoencoder && !sd_ctx_params->tae_preview_only;
         return true;
     }
 
@@ -763,51 +764,6 @@ public:
                 LOG_ERROR("Unknown scheduler %i", scheduler);
                 abort();
         }
-        if (sd_ctx_params->schedule != DEFAULT) {
-            switch (sd_ctx_params->schedule) {
-                case DISCRETE:
-                    LOG_INFO("running with discrete schedule");
-                    denoiser->schedule = std::make_shared<DiscreteSchedule>();
-                    break;
-                case KARRAS:
-                    LOG_INFO("running with Karras schedule");
-                    denoiser->schedule = std::make_shared<KarrasSchedule>();
-                    break;
-                case EXPONENTIAL:
-                    LOG_INFO("running exponential schedule");
-                    denoiser->schedule = std::make_shared<ExponentialSchedule>();
-                    break;
-                case AYS:
-                    LOG_INFO("Running with Align-Your-Steps schedule");
-                    denoiser->schedule          = std::make_shared<AYSSchedule>();
-                    denoiser->schedule->version = version;
-                    break;
-                case GITS:
-                    LOG_INFO("Running with GITS schedule");
-                    denoiser->schedule          = std::make_shared<GITSSchedule>();
-                    denoiser->schedule->version = version;
-                    break;
-                case DEFAULT:
-                    // Don't touch anything.
-                    break;
-                default:
-                    LOG_ERROR("Unknown schedule %i", sd_ctx_params->schedule);
-                    abort();
-            }
-        }
-
-        auto comp_vis_denoiser = std::dynamic_pointer_cast<CompVisDenoiser>(denoiser);
-        if (comp_vis_denoiser) {
-            for (int i = 0; i < TIMESTEPS; i++) {
-                comp_vis_denoiser->sigmas[i]     = std::sqrt((1 - ((float*)alphas_cumprod_tensor->data)[i]) / ((float*)alphas_cumprod_tensor->data)[i]);
-                comp_vis_denoiser->log_sigmas[i] = std::log(comp_vis_denoiser->sigmas[i]);
-            }
-        }
-
-        LOG_DEBUG("finished loaded file");
-        ggml_free(ctx);
-        use_tiny_autoencoder = use_tiny_autoencoder && !sd_ctx_params->tae_preview_only;
-        return true;
     }
 
     bool is_using_v_parameterization_for_sd2(ggml_context* work_ctx, bool is_inpaint = false) {
@@ -1134,21 +1090,19 @@ public:
             free(image.data);
         } else {
             if (preview_mode == PREVIEW_VAE) {
-                ggml_tensor_scale(latents, 1.0f / scale_factor);
+                process_latent_out(latents);
                 if (vae_tiling) {
                     // split latent in 32x32 tiles and compute in several steps
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                        first_stage_model->compute(n_threads, in, true, &out);
+                        first_stage_model->compute(n_threads, in, true, &out, NULL);
                     };
                     silent_tiling(latents, result, 8, 32, 0.5f, on_tiling);
 
                 } else {
-                    first_stage_model->compute(n_threads, latents, true, &result);
+                    first_stage_model->compute(n_threads, latents, true, &result, work_ctx);
                 }
                 first_stage_model->free_compute_buffer();
-                ggml_tensor_scale(latents, scale_factor);
-
-                ggml_tensor_scale_output(result);
+                process_vae_output_tensor(result);
             } else if (preview_mode == PREVIEW_TAE) {
                 if (tae_first_stage == nullptr) {
                     LOG_WARN("TAE not found for preview");
@@ -1157,11 +1111,11 @@ public:
                 if (vae_tiling) {
                     // split latent in 64x64 tiles and compute in several steps
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                        tae_first_stage->compute(n_threads, in, true, &out);
+                        tae_first_stage->compute(n_threads, in, true, &out, NULL);
                     };
                     silent_tiling(latents, result, 8, 64, 0.5f, on_tiling);
                 } else {
-                    tae_first_stage->compute(n_threads, latents, true, &result);
+                    tae_first_stage->compute(n_threads, latents, true, &result, work_ctx);
                 }
                 tae_first_stage->free_compute_buffer();
             } else {
@@ -2884,9 +2838,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           -1,
                                           {},
                                           {},
-                                          denoise_mask,
-                                                 {},
-                                                 NULL);
+                                          denoise_mask);
 
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
