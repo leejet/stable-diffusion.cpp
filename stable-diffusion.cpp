@@ -1045,7 +1045,6 @@ public:
         if (preview_mode == PREVIEW_PROJ) {
             const float (*latent_rgb_proj)[channel];
             float *latent_rgb_bias;
-            float *latent_rgb_bias;
 
             if (dim == 48) {
                 if (sd_version_is_wan(version)) {
