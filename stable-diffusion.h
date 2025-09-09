@@ -50,7 +50,7 @@ enum sample_method_t {
     SAMPLE_METHOD_COUNT
 };
 
-enum schedule_t {
+enum scheduler_t {
     DEFAULT,
     DISCRETE,
     KARRAS,
@@ -101,7 +101,8 @@ enum sd_type_t {
     // SD_TYPE_IQ4_NL_4_4 = 36,
     // SD_TYPE_IQ4_NL_4_8 = 37,
     // SD_TYPE_IQ4_NL_8_8 = 38,
-    SD_TYPE_COUNT = 39,
+    SD_TYPE_MXFP4 = 39,  // MXFP4 (1 block)
+    SD_TYPE_COUNT = 40,
 };
 
 enum sd_log_level_t {
@@ -123,8 +124,10 @@ typedef struct {
     const char* model_path;
     const char* clip_l_path;
     const char* clip_g_path;
+    const char* clip_vision_path;
     const char* t5xxl_path;
     const char* diffusion_model_path;
+    const char* high_noise_diffusion_model_path;
     const char* vae_path;
     const char* taesd_path;
     const char* control_net_path;
@@ -137,7 +140,7 @@ typedef struct {
     int n_threads;
     enum sd_type_t wtype;
     enum rng_type_t rng_type;
-    enum schedule_t schedule;
+    bool offload_params_to_cpu;
     bool keep_clip_on_cpu;
     bool keep_control_net_on_cpu;
     bool keep_vae_on_cpu;
@@ -148,6 +151,7 @@ typedef struct {
     bool chroma_use_dit_mask;
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
+    float flow_shift;
 } sd_ctx_params_t;
 
 typedef struct {
@@ -168,29 +172,34 @@ typedef struct {
 typedef struct {
     float txt_cfg;
     float img_cfg;
-    float min_cfg;
     float distilled_guidance;
     sd_slg_params_t slg;
 } sd_guidance_params_t;
 
 typedef struct {
-    const char* prompt;
-    const char* negative_prompt;
-    int clip_skip;
     sd_guidance_params_t guidance;
-    sd_image_t init_image;
-    sd_image_t* ref_images;
-    int ref_images_count;
-    sd_image_t mask_image;
-    int width;
-    int height;
+    enum scheduler_t scheduler;
     enum sample_method_t sample_method;
     int sample_steps;
     float eta;
+} sd_sample_params_t;
+
+typedef struct {
+    const char* prompt;
+    const char* negative_prompt;
+    int clip_skip;
+    sd_image_t init_image;
+    sd_image_t* ref_images;
+    int ref_images_count;
+    bool increase_ref_index;
+    sd_image_t mask_image;
+    int width;
+    int height;
+    sd_sample_params_t sample_params;
     float strength;
     int64_t seed;
     int batch_count;
-    const sd_image_t* control_cond;
+    sd_image_t control_image;
     float control_strength;
     float style_strength;
     bool normalize_input;
@@ -198,18 +207,19 @@ typedef struct {
 } sd_img_gen_params_t;
 
 typedef struct {
+    const char* prompt;
+    const char* negative_prompt;
+    int clip_skip;
     sd_image_t init_image;
+    sd_image_t end_image;
     int width;
     int height;
-    sd_guidance_params_t guidance;
-    enum sample_method_t sample_method;
-    int sample_steps;
+    sd_sample_params_t sample_params;
+    sd_sample_params_t high_noise_sample_params;
+    float moe_boundary;
     float strength;
     int64_t seed;
     int video_frames;
-    int motion_bucket_id;
-    int fps;
-    float augmentation_level;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
@@ -230,8 +240,8 @@ SD_API const char* sd_rng_type_name(enum rng_type_t rng_type);
 SD_API enum rng_type_t str_to_rng_type(const char* str);
 SD_API const char* sd_sample_method_name(enum sample_method_t sample_method);
 SD_API enum sample_method_t str_to_sample_method(const char* str);
-SD_API const char* sd_schedule_name(enum schedule_t schedule);
-SD_API enum schedule_t str_to_schedule(const char* str);
+SD_API const char* sd_schedule_name(enum scheduler_t scheduler);
+SD_API enum scheduler_t str_to_schedule(const char* str);
 SD_API const char* sd_preview_name(enum preview_t preview);
 SD_API enum preview_t str_to_preview(const char* str);
 
@@ -241,21 +251,27 @@ SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
 
+SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
+SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
+
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
-SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params);  // broken
+SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, int* num_frames_out);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
-                                        int n_threads,
-                                        bool direct);
+                                        bool offload_params_to_cpu,
+                                        bool direct,
+                                        int n_threads);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
-SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor);
+SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
+                          sd_image_t input_image,
+                          uint32_t upscale_factor);
 
 SD_API bool convert(const char* input_path,
                     const char* vae_path,
