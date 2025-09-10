@@ -1543,6 +1543,7 @@ protected:
             ggml_backend_tensor_copy(t, offload_t);
             std::swap(t->buffer, offload_t->buffer);
             std::swap(t->data, offload_t->data);
+            std::swap(t->extra, offload_t->extra);
 
             t         = ggml_get_next_tensor(params_ctx, t);
             offload_t = ggml_get_next_tensor(offload_ctx, offload_t);
@@ -1573,8 +1574,10 @@ protected:
         while (t != NULL && offload_t != NULL) {
             t->buffer         = offload_t->buffer;
             t->data           = offload_t->data;
+            t->extra          = offload_t->extra;
             offload_t->buffer = NULL;
             offload_t->data   = NULL;
+            offload_t->extra  = NULL;
 
             t         = ggml_get_next_tensor(params_ctx, t);
             offload_t = ggml_get_next_tensor(offload_ctx, offload_t);

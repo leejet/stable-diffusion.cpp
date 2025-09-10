@@ -2402,7 +2402,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     struct ggml_init_params params;
     params.mem_size = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
-    params.mem_size += width * height * frames * 3 * sizeof(float) * 2;
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);
@@ -2430,6 +2429,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     ggml_tensor* concat_latent      = NULL;
     ggml_tensor* denoise_mask       = NULL;
     ggml_tensor* vace_context       = NULL;
+    int64_t ref_image_num           = 0;  // for vace
     if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
         sd_ctx->sd->diffusion_model->get_desc() == "Wan2.2-I2V-14B" ||
         sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-FLF2V-14B") {
@@ -2526,6 +2526,20 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     } else if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-VACE-1.3B" ||
                sd_ctx->sd->diffusion_model->get_desc() == "Wan2.x-VACE-14B") {
         LOG_INFO("VACE");
+        int64_t t1                    = ggml_time_ms();
+        ggml_tensor* ref_image_latent = NULL;
+        if (sd_vid_gen_params->init_image.data) {
+            ggml_tensor* ref_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+            sd_image_to_tensor(sd_vid_gen_params->init_image.data, ref_img);
+            ref_img = ggml_reshape_4d(work_ctx, ref_img, width, height, 1, 3);
+
+            ref_image_latent = sd_ctx->sd->encode_first_stage(work_ctx, ref_img);  // [b*c, 1, h/16, w/16]
+            sd_ctx->sd->process_latent_in(ref_image_latent);
+            auto zero_latent = ggml_dup_tensor(work_ctx, ref_image_latent);
+            ggml_set_f32(zero_latent, 0.f);
+            ref_image_latent = ggml_tensor_concat(work_ctx, ref_image_latent, zero_latent, 3);  // [b*2*c, 1, h/16, w/16]
+        }
+
         ggml_tensor* control_video = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, frames, 3);
         ggml_set_f32(control_video, 0.5f);
         ggml_tensor* mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, frames, 1);
@@ -2549,22 +2563,42 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         sd_ctx->sd->process_latent_in(inactive);
         sd_ctx->sd->process_latent_in(reactive);
 
-        vace_context = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, inactive->ne[0], inactive->ne[1], inactive->ne[2], 96);  // [b*96, t, h/8, w/8]
+        int64_t length = inactive->ne[2];
+        if (ref_image_latent) {
+            length += 1;
+            frames        = (length - 1) * 4 + 1;
+            ref_image_num = 1;
+        }
+        vace_context = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, inactive->ne[0], inactive->ne[1], length, 96);  // [b*96, t, h/8, w/8]
         ggml_tensor_iter(vace_context, [&](ggml_tensor* vace_context, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
             float value;
-            if (i3 < 16) {
-                value = ggml_tensor_get_f32(inactive, i0, i1, i2, i3);
-            } else if (i3 >= 16 && i3 < 32) {
-                value = ggml_tensor_get_f32(reactive, i0, i1, i2, i3);
+            if (i3 < 32) {
+                if (ref_image_latent && i2 == 0) {
+                    value = ggml_tensor_get_f32(ref_image_latent, i0, i1, 0, i3);
+                } else {
+                    if (i3 < 16) {
+                        value = ggml_tensor_get_f32(inactive, i0, i1, i2 - ref_image_num, i3);
+                    } else {
+                        value = ggml_tensor_get_f32(reactive, i0, i1, i2 - ref_image_num, i3);
+                    }
+                }
             } else {  // mask
-                int64_t vae_stride        = 8;
-                int64_t mask_height_index = i1 * vae_stride + (i3 - 32) / vae_stride;
-                int64_t mask_width_index  = i0 * vae_stride + (i3 - 32) % vae_stride;
-                value                     = ggml_tensor_get_f32(mask, mask_width_index, mask_height_index, i2, 0);
+                if (ref_image_latent && i2 == 0) {
+                    value = 0.f;
+                } else {
+                    int64_t vae_stride        = 8;
+                    int64_t mask_height_index = i1 * vae_stride + (i3 - 32) / vae_stride;
+                    int64_t mask_width_index  = i0 * vae_stride + (i3 - 32) % vae_stride;
+                    value                     = ggml_tensor_get_f32(mask, mask_width_index, mask_height_index, i2 - ref_image_num, 0);
+                }
             }
             ggml_tensor_set_f32(vace_context, value, i0, i1, i2, i3);
         });
+        int64_t t2 = ggml_time_ms();
+        LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);
     }
+
+    print_ggml_tensor(vace_context);
 
     if (init_latent == NULL) {
         init_latent = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
@@ -2688,6 +2722,20 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         if (sd_ctx->sd->free_params_immediately) {
             sd_ctx->sd->diffusion_model->free_params_buffer();
         }
+    }
+
+    if (ref_image_num > 0) {
+        ggml_tensor* trim_latent = ggml_new_tensor_4d(work_ctx,
+                                                      GGML_TYPE_F32,
+                                                      final_latent->ne[0],
+                                                      final_latent->ne[1],
+                                                      final_latent->ne[2] - ref_image_num,
+                                                      final_latent->ne[3]);
+        ggml_tensor_iter(trim_latent, [&](ggml_tensor* trim_latent, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+            float value = ggml_tensor_get_f32(final_latent, i0, i1, i2 + ref_image_num, i3);
+            ggml_tensor_set_f32(trim_latent, value, i0, i1, i2, i3);
+        });
+        final_latent = trim_latent;
     }
 
     int64_t t4 = ggml_time_ms();
