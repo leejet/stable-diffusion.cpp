@@ -251,6 +251,35 @@ struct KarrasSchedule : SigmaSchedule {
     }
 };
 
+// Close to Beta Schedule, but increadably simple in code.
+struct SmoothStepSchedule : SigmaSchedule {
+    static constexpr float smoothstep(float x) {
+        return x * x * (3.0f - 2.0f * x);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> result;
+        result.reserve(n + 1);
+
+        const int t_max = TIMESTEPS - 1;
+        if (n == 0) {
+            return result;
+        } else if (n == 1) {
+            result.push_back(t_to_sigma((float)t_max));
+            result.push_back(0.f);
+            return result;
+        }
+
+        for (uint32_t i = 0; i < n; i++) {
+            float u = 1.f - float(i)/float(n);
+            result.push_back(t_to_sigma(std::round(smoothstep(u) * t_max)));
+        }
+
+        result.push_back(0.f);
+        return result;
+    }
+};
+
 struct Denoiser {
     std::shared_ptr<SigmaSchedule> scheduler                                                 = std::make_shared<DiscreteSchedule>();
     virtual float sigma_min()                                                                = 0;
