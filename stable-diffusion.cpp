@@ -345,7 +345,7 @@ public:
             }
             if (sd_version_is_sd3(version)) {
                 if (sd_ctx_params->diffusion_flash_attn) {
-                    LOG_WARN("flash attention in this diffusion model is currently unsupported!");
+                    LOG_WARN("flash attention in this diffusion model is currently not implemented!");
                 }
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
                                                                      offload_params_to_cpu,
@@ -362,6 +362,15 @@ public:
                     }
                 }
                 if (is_chroma) {
+                    if (sd_ctx_params->diffusion_flash_attn && sd_ctx_params->chroma_use_dit_mask) {
+                        LOG_WARN(
+                            "!!!It looks like you are using Chroma with flash attention. "
+                            "This is currently unsupported. "
+                            "If you find that the generated images are broken, "
+                            "try either disabling flash attention or specifying "
+                            "--chroma-disable-dit-mask as a workaround.");
+                    }
+
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                         offload_params_to_cpu,
                                                                         model_loader.tensor_storages_types,
