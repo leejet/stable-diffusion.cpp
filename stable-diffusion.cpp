@@ -730,6 +730,10 @@ public:
                 LOG_INFO("running with Karras scheduler");
                 denoiser->scheduler = std::make_shared<KarrasSchedule>();
                 break;
+            case BETA:
+                LOG_INFO("running with Beta scheduler");
+                denoiser->scheduler = std::make_shared<BetaSchedule>();
+                break;
             case EXPONENTIAL:
                 LOG_INFO("running exponential scheduler");
                 denoiser->scheduler = std::make_shared<ExponentialSchedule>();
@@ -1524,6 +1528,7 @@ const char* schedule_to_str[] = {
     "default",
     "discrete",
     "karras",
+    "beta",
     "exponential",
     "ays",
     "gits",

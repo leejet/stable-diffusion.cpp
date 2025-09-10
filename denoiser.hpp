@@ -251,6 +251,119 @@ struct KarrasSchedule : SigmaSchedule {
     }
 };
 
+struct BetaSchedule : SigmaSchedule {
+    static constexpr double alpha = 0.6;
+    static constexpr double beta  = 0.6;
+
+    // Log Beta function
+    static double log_beta(double a, double b) {
+        return std::lgamma(a) + std::lgamma(b) - std::lgamma(a + b);
+    }
+
+    // Regularized incomplete beta function using continued fraction
+    static double incbeta(double x, double a, double b) {
+        if (x <= 0.0) return 0.0;
+        if (x >= 1.0) return 1.0;
+
+        // Use the continued fraction approximation (Lentz’s method)
+        const int MAX_ITER = 200;
+        const double EPSILON = 3.0e-7;
+
+        double aa, c, d, del, h;
+        double qab = a + b;
+        double qap = a + 1.0;
+        double qam = a - 1.0;
+
+        c = 1.0;
+        d = 1.0 - qab * x / qap;
+        if (std::abs(d) < 1e-30) d = 1e-30;
+        d = 1.0 / d;
+        h = d;
+
+        for (int m = 1; m <= MAX_ITER; m++) {
+            int m2 = 2 * m;
+
+            // Even term
+            aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+            d = 1.0 + aa * d;
+            if (std::abs(d) < 1e-30) d = 1e-30;
+            c = 1.0 + aa / c;
+            if (std::abs(c) < 1e-30) c = 1e-30;
+            d = 1.0 / d;
+            h *= d * c;
+
+            // Odd term
+            aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+            d = 1.0 + aa * d;
+            if (std::abs(d) < 1e-30) d = 1e-30;
+            c = 1.0 + aa / c;
+            if (std::abs(c) < 1e-30) c = 1e-30;
+            d = 1.0 / d;
+            del = d * c;
+            h *= del;
+
+            if (std::abs(del - 1.0) < EPSILON) break;
+        }
+
+        return std::exp(a * std::log(x) + b * std::log(1.0 - x) - log_beta(a, b)) / a * h;
+    }
+
+    // Beta CDF using symmetry for better convergence
+    static double beta_cdf(double x, double a, double b) {
+        if (x == 0.0) return 0.0;
+        if (x == 1.0) return 1.0;
+        if (x < (a + 1.0) / (a + b + 2.0)) {
+            return incbeta(x, a, b);
+        } else {
+            return 1.0 - incbeta(1.0 - x, b, a);
+        }
+    }
+
+    // Inverse Beta CDF (PPF) using Newton-Raphson
+    static double beta_ppf(double u, double a, double b, int max_iter = 30) {
+        double x = 0.5; // initial guess
+        for (int i = 0; i < max_iter; i++) {
+            double f = beta_cdf(x, a, b) - u;
+            if (std::abs(f) < 1e-10) break;
+            // derivative = x^(a-1) * (1-x)^(b-1) / B(a,b)
+            double df = std::exp((a-1.0)*std::log(x) + (b-1.0)*std::log(1.0-x) - log_beta(a,b));
+            x -= f / df;
+            if (x <= 0.0) x = 1e-10;
+            if (x >= 1.0) x = 1.0 - 1e-10;
+        }
+        return x;
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float /*sigma_min*/, float /*sigma_max*/, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> result;
+        result.reserve(n + 1);
+
+        int t_max = TIMESTEPS - 1;
+        if (n == 0) {
+            return result;
+        } else if (n == 1) {
+            result.push_back(t_to_sigma((float)t_max));
+            result.push_back(0.f);
+            return result;
+        }
+
+        int last_t = -1;
+        for (uint32_t i = 0; i < n; i++) {
+            double u = 1.0 - double(i)/double(n); // reversed linspace
+            double t_cont = beta_ppf(u, alpha, beta) * t_max;
+            int t = (int)std::lround(t_cont);
+
+            if (t != last_t) {
+                result.push_back(t_to_sigma((float)t));
+                last_t = t;
+            }
+        }
+
+        result.push_back(0.f);
+        return result;
+    }
+};
+
 struct Denoiser {
     std::shared_ptr<SigmaSchedule> scheduler                                                 = std::make_shared<DiscreteSchedule>();
     virtual float sigma_min()                                                                = 0;
