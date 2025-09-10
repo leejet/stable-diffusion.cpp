@@ -344,9 +344,6 @@ public:
                 LOG_INFO("Using flash attention in the diffusion model");
             }
             if (sd_version_is_sd3(version)) {
-                if (sd_ctx_params->diffusion_flash_attn) {
-                    LOG_WARN("flash attention in this diffusion model is currently not implemented!");
-                }
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
                                                                      offload_params_to_cpu,
                                                                      model_loader.tensor_storages_types);
@@ -1555,7 +1552,7 @@ enum scheduler_t str_to_schedule(const char* str) {
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
-    *sd_ctx_params = {};
+    *sd_ctx_params                         = {};
     sd_ctx_params->vae_decode_only         = true;
     sd_ctx_params->vae_tiling              = false;
     sd_ctx_params->free_params_immediately = true;
@@ -1639,7 +1636,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
 }
 
 void sd_sample_params_init(sd_sample_params_t* sample_params) {
-    *sample_params = {};
+    *sample_params                             = {};
     sample_params->guidance.txt_cfg            = 7.0f;
     sample_params->guidance.img_cfg            = INFINITY;
     sample_params->guidance.distilled_guidance = 3.5f;
