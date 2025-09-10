@@ -349,6 +349,7 @@ public:
                                                                      model_loader.tensor_storages_types);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
                                                                offload_params_to_cpu,
+                                                               sd_ctx_params->diffusion_flash_attn,
                                                                model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
