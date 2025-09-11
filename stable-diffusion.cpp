@@ -145,7 +145,6 @@ public:
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
-        ggml_log_set(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
 #ifdef SD_USE_VULKAN
@@ -191,6 +190,8 @@ public:
         } else if (sd_ctx_params->rng_type == CUDA_RNG) {
             rng = std::make_shared<PhiloxRNG>();
         }
+
+        ggml_log_set(ggml_log_callback_default, nullptr);
 
         init_backend();
 
