@@ -255,6 +255,21 @@ __STATIC_INLINE__ void ggml_tensor_iter(
     }
 }
 
+
+__STATIC_INLINE__ void ggml_tensor_diff(
+    ggml_tensor* a,
+    ggml_tensor* b,
+    float gap = 0.1f) {
+    GGML_ASSERT(ggml_nelements(a) == ggml_nelements(b));
+    ggml_tensor_iter(a, [&] (ggml_tensor* a, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+        float a_value = ggml_tensor_get_f32(a, i0, i1, i2, i3);
+        float b_value = ggml_tensor_get_f32(b, i0, i1, i2, i3);
+        if (abs(a_value - b_value) > gap) {
+            LOG_WARN("[%ld, %ld, %ld, %ld] %f %f", i3, i2, i1, i0, a_value, b_value);
+        }
+    });
+}
+
 __STATIC_INLINE__ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_path) {
     std::ifstream file(file_path, std::ios::binary);
     if (!file.is_open()) {

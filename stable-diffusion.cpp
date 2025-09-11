@@ -2579,7 +2579,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                     if (i3 < 16) {
                         value = ggml_tensor_get_f32(inactive, i0, i1, i2 - ref_image_num, i3);
                     } else {
-                        value = ggml_tensor_get_f32(reactive, i0, i1, i2 - ref_image_num, i3);
+                        value = ggml_tensor_get_f32(reactive, i0, i1, i2 - ref_image_num, i3 - 16);
                     }
                 }
             } else {  // mask
@@ -2597,8 +2597,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         int64_t t2 = ggml_time_ms();
         LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);
     }
-
-    print_ggml_tensor(vace_context);
 
     if (init_latent == NULL) {
         init_latent = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
