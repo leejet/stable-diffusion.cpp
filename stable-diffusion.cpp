@@ -751,6 +751,10 @@ public:
                 denoiser->scheduler          = std::make_shared<GITSSchedule>();
                 denoiser->scheduler->version = version;
                 break;
+            case SMOOTHSTEP:
+                LOG_INFO("Running with SmoothStep scheduler");
+                denoiser->scheduler = std::make_shared<SmoothStepSchedule>();
+                break;
             case DEFAULT:
                 // Don't touch anything.
                 break;
@@ -1534,6 +1538,7 @@ const char* schedule_to_str[] = {
     "exponential",
     "ays",
     "gits",
+    "smoothstep",
 };
 
 const char* sd_schedule_name(enum scheduler_t scheduler) {
