@@ -54,6 +54,7 @@ enum scheduler_t {
     DEFAULT,
     DISCRETE,
     KARRAS,
+    BETA,
     EXPONENTIAL,
     AYS,
     GITS,
