@@ -56,8 +56,8 @@ public:
         // x: [N, channels, h, w]
         auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-        x = ggml_upscale(ctx, x, 2);  // [N, channels, h*2, w*2]
-        x = conv->forward(ctx, x);    // [N, out_channels, h*2, w*2]
+        x = ggml_upscale(ctx, x, 2, GGML_SCALE_MODE_NEAREST);  // [N, channels, h*2, w*2]
+        x = conv->forward(ctx, x);                             // [N, out_channels, h*2, w*2]
         return x;
     }
 };
@@ -182,9 +182,9 @@ protected:
     int64_t dim_in;
     int64_t dim_out;
 
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
-        enum ggml_type wtype      = (tensor_types.find(prefix + "proj.weight") != tensor_types.end()) ? tensor_types[prefix + "proj.weight"] : GGML_TYPE_F32;
-        enum ggml_type bias_wtype = GGML_TYPE_F32;  //(tensor_types.find(prefix + "proj.bias") != tensor_types.end()) ? tensor_types[prefix + "proj.bias"] : GGML_TYPE_F32;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+        enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_types, GGML_TYPE_F32);
+        enum ggml_type bias_wtype = GGML_TYPE_F32;
         params["proj.weight"]     = ggml_new_tensor_2d(ctx, wtype, dim_in, dim_out * 2);
         params["proj.bias"]       = ggml_new_tensor_1d(ctx, bias_wtype, dim_out * 2);
     }
@@ -270,7 +270,10 @@ public:
         // to_out_1 is nn.Dropout(), skip for inference
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* x,
+                                struct ggml_tensor* context) {
         // x: [N, n_token, query_dim]
         // context: [N, n_context, context_dim]
         // return: [N, n_token, query_dim]
@@ -288,7 +291,7 @@ public:
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
         auto v = to_v->forward(ctx, context);  // [N, n_context, inner_dim]
 
-        x = ggml_nn_attention_ext(ctx, q, k, v, n_head, NULL, false, false, flash_attn);  // [N, n_token, inner_dim]
+        x = ggml_nn_attention_ext(ctx, backend, q, k, v, n_head, NULL, false, false, flash_attn);  // [N, n_token, inner_dim]
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]
         return x;
@@ -327,7 +330,10 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* x,
+                                struct ggml_tensor* context) {
         // x: [N, n_token, query_dim]
         // context: [N, n_context, context_dim]
         // return: [N, n_token, query_dim]
@@ -352,11 +358,11 @@ public:
 
         auto r = x;
         x      = norm1->forward(ctx, x);
-        x      = attn1->forward(ctx, x, x);  // self-attention
+        x      = attn1->forward(ctx, backend, x, x);  // self-attention
         x      = ggml_add(ctx, x, r);
         r      = x;
         x      = norm2->forward(ctx, x);
-        x      = attn2->forward(ctx, x, context);  // cross-attention
+        x      = attn2->forward(ctx, backend, x, context);  // cross-attention
         x      = ggml_add(ctx, x, r);
         r      = x;
         x      = norm3->forward(ctx, x);
@@ -401,7 +407,10 @@ public:
         blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}));
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
+    virtual struct ggml_tensor* forward(struct ggml_context* ctx,
+                                        ggml_backend_t backend,
+                                        struct ggml_tensor* x,
+                                        struct ggml_tensor* context) {
         // x: [N, in_channels, h, w]
         // context: [N, max_position(aka n_token), hidden_size(aka context_dim)]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
@@ -424,7 +433,7 @@ public:
             std::string name       = "transformer_blocks." + std::to_string(i);
             auto transformer_block = std::dynamic_pointer_cast<BasicTransformerBlock>(blocks[name]);
 
-            x = transformer_block->forward(ctx, x, context);
+            x = transformer_block->forward(ctx, backend, x, context);
         }
 
         x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
@@ -440,9 +449,9 @@ public:
 
 class AlphaBlender : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, std::map<std::string, enum ggml_type>& tensor_types, std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
         // Get the type of the "mix_factor" tensor from the input tensors map with the specified prefix
-        enum ggml_type wtype = GGML_TYPE_F32;  //(tensor_types.ypes.find(prefix + "mix_factor") != tensor_types.end()) ? tensor_types[prefix + "mix_factor"] : GGML_TYPE_F32;
+        enum ggml_type wtype = GGML_TYPE_F32;
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 

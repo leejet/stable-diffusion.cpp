@@ -28,10 +28,12 @@ option(SD_CUDA                       "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
 option(SD_VULKAN                     "sd: vulkan backend" OFF)
+option(SD_OPENCL                     "sd: opencl backend" OFF)
 option(SD_SYCL                       "sd: sycl backend" OFF)
 option(SD_MUSA                       "sd: musa backend" OFF)
 option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
 option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
+option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
 if(SD_CUDA)
@@ -52,9 +54,15 @@ if (SD_VULKAN)
     add_definitions(-DSD_USE_VULKAN)
 endif ()
 
+if (SD_OPENCL)
+    message("-- Use OpenCL as backend stable-diffusion")
+    set(GGML_OPENCL ON)
+    add_definitions(-DSD_USE_OPENCL)
+endif ()
+
 if (SD_HIPBLAS)
     message("-- Use HIPBLAS as backend stable-diffusion")
-    set(GGML_HIPBLAS ON)
+    set(GGML_HIP ON)
     add_definitions(-DSD_USE_CUDA)
     if(SD_FAST_SOFTMAX)
         set(GGML_CUDA_FAST_SOFTMAX ON)
@@ -64,7 +72,7 @@ endif ()
 if(SD_MUSA)
     message("-- Use MUSA as backend stable-diffusion")
     set(GGML_MUSA ON)
-    add_definitions(-DSD_USE_CUBLAS)
+    add_definitions(-DSD_USE_CUDA)
     if(SD_FAST_SOFTMAX)
         set(GGML_CUDA_FAST_SOFTMAX ON)
     endif()
@@ -96,6 +104,7 @@ endif()
 if(SD_SYCL)
     message("-- Use SYCL as backend stable-diffusion")
     set(GGML_SYCL ON)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing -fsycl")
     add_definitions(-DSD_USE_SYCL)
     # disable fast-math on host, see:
     # https://www.intel.com/content/www/us/en/docs/cpp-compiler/developer-guide-reference/2021-10/fp-model-fp.html
@@ -110,20 +119,30 @@ endif()
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 
-# see https://github.com/ggerganov/ggml/pull/682
-add_definitions(-DGGML_MAX_NAME=128)
+if (NOT SD_USE_SYSTEM_GGML)
+    # see https://github.com/ggerganov/ggml/pull/682
+    add_definitions(-DGGML_MAX_NAME=128)
+endif()
 
 # deps
 # Only add ggml if it hasn't been added yet
 if (NOT TARGET ggml)
-    add_subdirectory(ggml)
+    if (SD_USE_SYSTEM_GGML)
+        find_package(ggml REQUIRED)
+        if (NOT ggml_FOUND)
+            message(FATAL_ERROR "System-installed GGML library not found.")
+        endif()
+        add_library(ggml ALIAS ggml::ggml)
+    else()
+        add_subdirectory(ggml)
+    endif()
 endif()
 
 add_subdirectory(thirdparty)
 
 target_link_libraries(${SD_LIB} PUBLIC ggml zip)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
-target_compile_features(${SD_LIB} PUBLIC cxx_std_11)
+target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 
 
 if (SD_BUILD_EXAMPLES)

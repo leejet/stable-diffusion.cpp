@@ -6,6 +6,7 @@ test/
 .cache/
 *.swp
 .vscode/
+.idea/
 *.bat
 *.bin
 *.exe

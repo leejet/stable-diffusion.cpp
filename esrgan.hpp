@@ -130,8 +130,8 @@ public:
         body_feat = conv_body->forward(ctx, body_feat);
         feat      = ggml_add(ctx, feat, body_feat);
         // upsample
-        feat     = lrelu(ctx, conv_up1->forward(ctx, ggml_upscale(ctx, feat, 2)));
-        feat     = lrelu(ctx, conv_up2->forward(ctx, ggml_upscale(ctx, feat, 2)));
+        feat     = lrelu(ctx, conv_up1->forward(ctx, ggml_upscale(ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
+        feat     = lrelu(ctx, conv_up2->forward(ctx, ggml_upscale(ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
         auto out = conv_last->forward(ctx, lrelu(ctx, conv_hr->forward(ctx, feat)));
         return out;
     }
@@ -142,9 +142,22 @@ struct ESRGAN : public GGMLRunner {
     int scale     = 4;
     int tile_size = 128;  // avoid cuda OOM for 4gb VRAM
 
-    ESRGAN(ggml_backend_t backend, std::map<std::string, enum ggml_type>& tensor_types)
-        : GGMLRunner(backend) {
+    ESRGAN(ggml_backend_t backend,
+           bool offload_params_to_cpu,
+           const String2GGMLType& tensor_types = {})
+        : GGMLRunner(backend, offload_params_to_cpu) {
         rrdb_net.init(params_ctx, tensor_types, "");
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        rrdb_net.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {
@@ -164,7 +177,7 @@ struct ESRGAN : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(esrgan_tensors, backend);
+        bool success = model_loader.load_tensors(esrgan_tensors);
 
         if (!success) {
             LOG_ERROR("load esrgan tensors from model loader failed");

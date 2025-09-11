@@ -7,6 +7,9 @@
 
 #include "stable-diffusion.h"
 
+#define SAFE_STR(s) ((s) ? (s) : "")
+#define BOOL_STR(b) ((b) ? "true" : "false")
+
 bool ends_with(const std::string& str, const std::string& ending);
 bool starts_with(const std::string& str, const std::string& start);
 bool contains(const std::string& str, const std::string& substr);
@@ -14,6 +17,8 @@ bool contains(const std::string& str, const std::string& substr);
 std::string format(const char* fmt, ...);
 
 void replace_all_chars(std::string& str, char target, char replacement);
+
+int round_up_to(int value, int base);
 
 bool file_exists(const std::string& filename);
 bool is_directory(const std::string& path);
@@ -45,7 +50,7 @@ sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int
 sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size);
 
 std::string path_join(const std::string& p1, const std::string& p2);
-std::vector<std::string> splitString(const std::string& str, char delimiter);
+std::vector<std::string> split_string(const std::string& str, char delimiter);
 void pretty_progress(int step, int steps, float time);
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);

@@ -1,2 +1,5 @@
-clang-format -style=file -i *.cpp *.h *.hpp
-clang-format -style=file -i examples/cli/*.cpp
+for f in *.cpp *.h *.hpp examples/cli/*.cpp examples/cli/*.h; do
+  [[ "$f" == vocab* ]] && continue
+  echo "formatting '$f'"
+  clang-format -style=file -i "$f"
+done
