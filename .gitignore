@@ -5,8 +5,6 @@ test/
 .idea/
 .cache/
 *.swp
-.vscode/
-.idea/
 *.bat
 *.bin
 *.exe
