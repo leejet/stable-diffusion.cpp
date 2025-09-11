@@ -271,7 +271,7 @@ struct SmoothStepSchedule : SigmaSchedule {
         }
 
         for (uint32_t i = 0; i < n; i++) {
-            float u = 1.f - float(i)/float(n);
+            float u = 1.f - float(i) / float(n);
             result.push_back(t_to_sigma(std::round(smoothstep(u) * t_max)));
         }
 
