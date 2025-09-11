@@ -164,7 +164,7 @@ void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float lo
 
 uint8_t* preprocess_canny(uint8_t* img, int width, int height, float high_threshold, float low_threshold, float weak, float strong, bool inverse) {
     struct ggml_init_params params;
-    params.mem_size               = static_cast<size_t>(10 * 1024 * 1024);  // 10
+    params.mem_size               = static_cast<size_t>(10 * 1024 * 1024);  // 10MB
     params.mem_buffer             = NULL;
     params.no_alloc               = false;
     struct ggml_context* work_ctx = ggml_init(params);
