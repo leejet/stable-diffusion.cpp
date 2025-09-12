@@ -57,6 +57,7 @@ enum scheduler_t {
     EXPONENTIAL,
     AYS,
     GITS,
+    SMOOTHSTEP,
     SCHEDULE_COUNT
 };
 
