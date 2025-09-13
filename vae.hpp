@@ -588,7 +588,7 @@ struct AutoEncoderKL : public VAE {
         };
         // ggml_set_f32(z, 0.5f);
         // print_ggml_tensor(z);
-        GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+        GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
     }
 
     void test() {
