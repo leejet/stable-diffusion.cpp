@@ -240,7 +240,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --skip-layer-end END               SLG disabling point: (default: 0.2)\n");
     printf("  --scheduler {discrete, karras, exponential, ays, gits, smoothstep} Denoiser sigma scheduler (default: discrete)\n");
     printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
-    printf("                                     sampling method (default: \"euler_a\")\n");
+    printf("                                     sampling method (default: \"euler\" for Flux/SD3, \"euler_a\" otherwise)\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --high-noise-cfg-scale SCALE       (high noise) unconditional guidance scale: (default: 7.0)\n");
     printf("  --high-noise-img-cfg-scale SCALE   (high noise) image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)\n");
@@ -1200,6 +1200,10 @@ int main(int argc, const char* argv[]) {
         printf("new_sd_ctx_t failed\n");
         release_all_resources();
         return 1;
+    }
+
+    if (params.sample_params.sample_method == SAMPLE_METHOD_DEFAULT) {
+        params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
     }
 
     sd_image_t* results;
