@@ -145,7 +145,6 @@ public:
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
-        ggml_log_set(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
 #ifdef SD_USE_VULKAN
@@ -191,6 +190,8 @@ public:
         } else if (sd_ctx_params->rng_type == CUDA_RNG) {
             rng = std::make_shared<PhiloxRNG>();
         }
+
+        ggml_log_set(ggml_log_callback_default, nullptr);
 
         init_backend();
 
@@ -330,7 +331,7 @@ public:
             if (sd_version_is_dit(version)) {
                 use_t5xxl = true;
             }
-            if (!ggml_backend_is_cpu(backend) && use_t5xxl) {
+            if (!clip_on_cpu && !ggml_backend_is_cpu(backend) && use_t5xxl) {
                 LOG_WARN(
                     "!!!It appears that you are using the T5 model. Some backends may encounter issues with it."
                     "If you notice that the generated images are completely black,"
@@ -344,14 +345,12 @@ public:
                 LOG_INFO("Using flash attention in the diffusion model");
             }
             if (sd_version_is_sd3(version)) {
-                if (sd_ctx_params->diffusion_flash_attn) {
-                    LOG_WARN("flash attention in this diffusion model is currently unsupported!");
-                }
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
                                                                      offload_params_to_cpu,
                                                                      model_loader.tensor_storages_types);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
                                                                offload_params_to_cpu,
+                                                               sd_ctx_params->diffusion_flash_attn,
                                                                model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
@@ -362,6 +361,15 @@ public:
                     }
                 }
                 if (is_chroma) {
+                    if (sd_ctx_params->diffusion_flash_attn && sd_ctx_params->chroma_use_dit_mask) {
+                        LOG_WARN(
+                            "!!!It looks like you are using Chroma with flash attention. "
+                            "This is currently unsupported. "
+                            "If you find that the generated images are broken, "
+                            "try either disabling flash attention or specifying "
+                            "--chroma-disable-dit-mask as a workaround.");
+                    }
+
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                         offload_params_to_cpu,
                                                                         model_loader.tensor_storages_types,
@@ -573,7 +581,7 @@ public:
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
         }
-        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads);
+        bool success = model_loader.load_tensors(tensors, ignore_tensors);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
@@ -743,6 +751,10 @@ public:
                 LOG_INFO("Running with GITS scheduler");
                 denoiser->scheduler          = std::make_shared<GITSSchedule>();
                 denoiser->scheduler->version = version;
+                break;
+            case SMOOTHSTEP:
+                LOG_INFO("Running with SmoothStep scheduler");
+                denoiser->scheduler = std::make_shared<SmoothStepSchedule>();
                 break;
             case DEFAULT:
                 // Don't touch anything.
@@ -1544,6 +1556,7 @@ const char* schedule_to_str[] = {
     "exponential",
     "ays",
     "gits",
+    "smoothstep",
 };
 
 const char* sd_schedule_name(enum scheduler_t scheduler) {
@@ -1563,7 +1576,7 @@ enum scheduler_t str_to_schedule(const char* str) {
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
-    memset((void*)sd_ctx_params, 0, sizeof(sd_ctx_params_t));
+    *sd_ctx_params                         = {};
     sd_ctx_params->vae_decode_only         = true;
     sd_ctx_params->vae_tiling              = false;
     sd_ctx_params->free_params_immediately = true;
@@ -1647,6 +1660,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
 }
 
 void sd_sample_params_init(sd_sample_params_t* sample_params) {
+    *sample_params                             = {};
     sample_params->guidance.txt_cfg            = 7.0f;
     sample_params->guidance.img_cfg            = INFINITY;
     sample_params->guidance.distilled_guidance = 3.5f;
@@ -1693,9 +1707,9 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
 }
 
 void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
-    memset((void*)sd_img_gen_params, 0, sizeof(sd_img_gen_params_t));
-    sd_img_gen_params->clip_skip = -1;
+    *sd_img_gen_params = {};
     sd_sample_params_init(&sd_img_gen_params->sample_params);
+    sd_img_gen_params->clip_skip        = -1;
     sd_img_gen_params->ref_images_count = 0;
     sd_img_gen_params->width            = 512;
     sd_img_gen_params->height           = 512;
@@ -1752,7 +1766,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
 }
 
 void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
-    memset((void*)sd_vid_gen_params, 0, sizeof(sd_vid_gen_params_t));
+    *sd_vid_gen_params = {};
     sd_sample_params_init(&sd_vid_gen_params->sample_params);
     sd_sample_params_init(&sd_vid_gen_params->high_noise_sample_params);
     sd_vid_gen_params->high_noise_sample_params.sample_steps = -1;
@@ -1776,6 +1790,7 @@ sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params) {
 
     sd_ctx->sd = new StableDiffusionGGML();
     if (sd_ctx->sd == NULL) {
+        free(sd_ctx);
         return NULL;
     }
 
@@ -2378,7 +2393,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->control_strength,
                                                         sd_img_gen_params->style_strength,
                                                         sd_img_gen_params->normalize_input,
-                                                        sd_img_gen_params->input_id_images_path,
+                                                        SAFE_STR(sd_img_gen_params->input_id_images_path),
                                                         ref_latents,
                                                         sd_img_gen_params->increase_ref_index,
                                                         concat_latent,
