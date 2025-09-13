@@ -952,7 +952,7 @@ public:
                     free(resized_image.data);
                     resized_image.data = NULL;
                 } else {
-                    sd_image_to_tensor(init_image.data, init_img);
+                    sd_image_to_tensor(init_image, init_img);
                 }
                 if (augmentation_level > 0.f) {
                     struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, init_img);
@@ -1947,7 +1947,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     struct ggml_tensor* image_hint = NULL;
     if (control_image.data != NULL) {
         image_hint = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-        sd_image_to_tensor(control_image.data, image_hint);
+        sd_image_to_tensor(control_image, image_hint);
     }
 
     // Sample
@@ -2208,8 +2208,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
         ggml_tensor* mask_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 1, 1);
 
-        sd_mask_to_tensor(sd_img_gen_params->mask_image.data, mask_img);
-        sd_image_to_tensor(sd_img_gen_params->init_image.data, init_img);
+        sd_image_to_tensor(sd_img_gen_params->mask_image, mask_img);
+        sd_image_to_tensor(sd_img_gen_params->init_image, init_img);
 
         if (sd_version_is_inpaint(sd_ctx->sd->version)) {
             int64_t mask_channels = 1;
@@ -2300,7 +2300,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                               sd_img_gen_params->ref_images[i].height,
                                               3,
                                               1);
-        sd_image_to_tensor(sd_img_gen_params->ref_images[i].data, img);
+        sd_image_to_tensor(sd_img_gen_params->ref_images[i], img);
 
         ggml_tensor* latent = NULL;
         if (sd_ctx->sd->use_tiny_autoencoder) {
@@ -2401,7 +2401,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     }
 
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
+    params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);
@@ -2500,7 +2500,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
         int64_t t1            = ggml_time_ms();
         ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-        sd_image_to_tensor(sd_vid_gen_params->init_image.data, init_img);
+        sd_image_to_tensor(sd_vid_gen_params->init_image, init_img);
         init_img = ggml_reshape_4d(work_ctx, init_img, width, height, 1, 3);
 
         auto init_image_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);  // [b*c, 1, h/16, w/16]
@@ -2530,7 +2530,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         ggml_tensor* ref_image_latent = NULL;
         if (sd_vid_gen_params->init_image.data) {
             ggml_tensor* ref_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
-            sd_image_to_tensor(sd_vid_gen_params->init_image.data, ref_img);
+            sd_image_to_tensor(sd_vid_gen_params->init_image, ref_img);
             ref_img = ggml_reshape_4d(work_ctx, ref_img, width, height, 1, 3);
 
             ref_image_latent = sd_ctx->sd->encode_first_stage(work_ctx, ref_img);  // [b*c, 1, h/16, w/16]
@@ -2541,7 +2541,13 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         }
 
         ggml_tensor* control_video = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, frames, 3);
-        ggml_set_f32(control_video, 0.5f);
+        ggml_tensor_iter(control_video, [&](ggml_tensor* control_video, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+            float value = 0.5f;
+            if (i2 < sd_vid_gen_params->control_frames_size) {
+                value = sd_image_get_f32(sd_vid_gen_params->control_frames[i2], i0, i1, i3);
+            }
+            ggml_tensor_set_f32(control_video, value, i0, i1, i2, i3);
+        });
         ggml_tensor* mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, frames, 1);
         ggml_set_f32(mask, 1.0f);
         ggml_tensor* inactive = ggml_dup_tensor(work_ctx, control_video);

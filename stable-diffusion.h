@@ -203,6 +203,8 @@ typedef struct {
     int clip_skip;
     sd_image_t init_image;
     sd_image_t end_image;
+    sd_image_t* control_frames;
+    int control_frames_size;
     int width;
     int height;
     sd_sample_params_t sample_params;
@@ -267,14 +269,12 @@ SD_API bool convert(const char* input_path,
                     enum sd_type_t output_type,
                     const char* tensor_type_rules);
 
-SD_API uint8_t* preprocess_canny(uint8_t* img,
-                                 int width,
-                                 int height,
-                                 float high_threshold,
-                                 float low_threshold,
-                                 float weak,
-                                 float strong,
-                                 bool inverse);
+SD_API bool preprocess_canny(sd_image_t image,
+                             float high_threshold,
+                             float low_threshold,
+                             float weak,
+                             float strong,
+                             bool inverse);
 
 #ifdef __cplusplus
 }
