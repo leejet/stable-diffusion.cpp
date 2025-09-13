@@ -114,6 +114,15 @@ enum sd_log_level_t {
 };
 
 typedef struct {
+    bool enabled;
+    int tile_size_x;
+    int tile_size_y;
+    float target_overlap;
+    float rel_size_x;
+    float rel_size_y;
+} sd_tiling_params_t;
+
+typedef struct {
     const char* model_path;
     const char* clip_l_path;
     const char* clip_g_path;
@@ -128,7 +137,6 @@ typedef struct {
     const char* embedding_dir;
     const char* stacked_id_embed_dir;
     bool vae_decode_only;
-    bool vae_tiling;
     bool free_params_immediately;
     int n_threads;
     enum sd_type_t wtype;
@@ -196,6 +204,7 @@ typedef struct {
     float style_strength;
     bool normalize_input;
     const char* input_id_images_path;
+    sd_tiling_params_t vae_tiling_params;
 } sd_img_gen_params_t;
 
 typedef struct {
