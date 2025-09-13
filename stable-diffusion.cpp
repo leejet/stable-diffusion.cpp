@@ -373,7 +373,6 @@ public:
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                         offload_params_to_cpu,
                                                                         model_loader.tensor_storages_types,
-                                                                        -1,
                                                                         sd_ctx_params->chroma_use_t5_mask,
                                                                         sd_ctx_params->chroma_t5_mask_pad);
                 } else {
@@ -391,7 +390,6 @@ public:
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
                                                                     model_loader.tensor_storages_types,
-                                                                    -1,
                                                                     true,
                                                                     1,
                                                                     true);
