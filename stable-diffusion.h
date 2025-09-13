@@ -118,7 +118,6 @@ typedef struct {
     int tile_size_x;
     int tile_size_y;
     float target_overlap;
-    bool relative;
     float rel_size_x;
     float rel_size_y;
 } sd_tiling_params_t;

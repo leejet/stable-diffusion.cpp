@@ -118,7 +118,7 @@ struct SDParams {
     int chroma_t5_mask_pad   = 1;
     float flow_shift         = INFINITY;
 
-    sd_tiling_params_t vae_tiling_params = {false, 32, 32, 0.5f, false, 0.0f, 0.0f};
+    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 
     SDParams() {
         sd_sample_params_init(&sample_params);
@@ -749,7 +749,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         } catch (const std::out_of_range& e) {
             return -1;
         }
-        params.vae_tiling_params.relative = false;
         return 1;
     };
 
@@ -773,7 +772,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         } catch (const std::out_of_range& e) {
             return -1;
         }
-        params.vae_tiling_params.relative = true;
         return 1;
     };
 

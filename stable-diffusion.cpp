@@ -108,7 +108,7 @@ public:
 
     std::string taesd_path;
     bool use_tiny_autoencoder            = false;
-    sd_tiling_params_t vae_tiling_params = {false, 32, 32, 0.5f, false, 0, 0};
+    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
     bool stacked_id                      = false;
 
@@ -1300,27 +1300,30 @@ public:
         return latent;
     }
 
-    void get_relative_tile_sizes(int& tile_size_x, int& tile_size_y, float tile_overlap, float rel_size_x, float rel_size_y, int latent_x, int latent_y) {
-        // format is AxB, or just A (equivalent to AxA)
-        // A and B can be integers (tile size) or floating point
-        // floating point <= 1 means simple fraction of the latent dimension
-        // floating point > 1 means number of tiles across that dimension
-        // a single number gets applied to both
-        auto get_tile_factor = [tile_overlap](float factor) {
-            if (factor > 1.0)
-                factor = 1 / (factor - factor * tile_overlap + tile_overlap);
-            return factor;
+
+    void get_tile_sizes(int& tile_size_x, int& tile_size_y, float& tile_overlap, const sd_tiling_params_t & params,
+        int latent_x, int latent_y, float encoding_factor = 1.0f) {
+        tile_overlap = std::max(std::min(params.target_overlap, 0.5f), 0.0f);
+        auto get_tile_size = [&](int requested_size, float factor, int latent_size) {
+            const int default_tile_size = 32;
+            const int min_tile_dimension = 4;
+            int tile_size = default_tile_size;
+            // rel_size <= 1 means simple fraction of the latent dimension
+            // rel_size > 1 means number of tiles across that dimension
+            if (factor > 0.f) {
+                if (factor > 1.0)
+                    factor = 1 / (factor - factor * tile_overlap + tile_overlap);
+                tile_size = std::round(latent_size * factor);
+            }
+            else if (requested_size >= min_tile_dimension) {
+                tile_size = requested_size;
+            }
+            tile_size *= encoding_factor;
+            return std::max(std::min(tile_size, latent_size), min_tile_dimension);
         };
-        const int min_tile_dimension = 4;
 
-        int tmp_x = tile_size_x, tmp_y = tile_size_y;
-        tmp_x = std::round(latent_x * get_tile_factor(rel_size_x));
-        tmp_y = std::round(latent_y * get_tile_factor(rel_size_y));
-
-        tile_size_x = std::max(std::min(tmp_x, latent_x), min_tile_dimension);
-        tile_size_y = std::max(std::min(tmp_y, latent_y), min_tile_dimension);
-
-        LOG_INFO("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+        tile_size_x = get_tile_size(params.tile_size_x, params.rel_size_x, latent_x);
+        tile_size_y = get_tile_size(params.tile_size_y, params.rel_size_y, latent_y);
     }
 
     ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode_video = false) {
@@ -1336,20 +1339,14 @@ public:
             }
             result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, x->ne[3]);
         }
-        // TODO: args instead of env for tile size / overlap?
+
         if (!use_tiny_autoencoder) {
-            float tile_overlap = vae_tiling_params.target_overlap;
-            int tile_size_x    = vae_tiling_params.tile_size_x;
-            int tile_size_y    = vae_tiling_params.tile_size_y;
-
-            if (vae_tiling_params.relative) {
-                get_relative_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params.rel_size_x, vae_tiling_params.rel_size_y, W, H);
-            }
-
-            // TODO: also use an arg for this one?
+            float tile_overlap;
+            int tile_size_x, tile_size_y;
             // multiply tile size for encode to keep the compute buffer size consistent
-            tile_size_x *= 1.30539;
-            tile_size_y *= 1.30539;
+            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H, 1.30539);
+
+            LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
 
             process_vae_input_tensor(x);
             if (vae_tiling_params.enabled && !decode_video) {
@@ -1489,13 +1486,10 @@ public:
         }
         int64_t t0 = ggml_time_ms();
         if (!use_tiny_autoencoder) {
-            float tile_overlap = vae_tiling_params.target_overlap;
-            int tile_size_x    = vae_tiling_params.tile_size_x;
-            int tile_size_y    = vae_tiling_params.tile_size_y;
+            float tile_overlap;
+            int tile_size_x, tile_size_y;
+            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H);
 
-            if (vae_tiling_params.relative) {
-                get_relative_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params.rel_size_x, vae_tiling_params.rel_size_y, x->ne[0], x->ne[1]);
-            }
             LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
 
             process_latent_out(x);
@@ -1769,7 +1763,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->control_strength  = 0.9f;
     sd_img_gen_params->style_strength    = 20.f;
     sd_img_gen_params->normalize_input   = false;
-    sd_img_gen_params->vae_tiling_params = {false, 32, 32, 0.5f, false, 0.0f, 0.0f};
+    sd_img_gen_params->vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 }
 
 char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
