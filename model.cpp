@@ -1949,26 +1949,6 @@ std::string ModelLoader::load_umt5_tokenizer_json() {
     return json_str;
 }
 
-std::vector<TensorStorage> remove_duplicates(const std::vector<TensorStorage>& vec) {
-    std::vector<TensorStorage> res;
-    std::unordered_map<std::string, size_t> name_to_index_map;
-
-    for (const auto& ts : vec) {
-        const std::string& current_name = ts.name;
-        auto it                         = name_to_index_map.find(current_name);
-
-        if (it != name_to_index_map.end()) {
-            // Found a duplicate, overwrite the existing one in res
-            res[it->second] = ts;
-        } else {
-            // Not a duplicate, add to map and push to res
-            name_to_index_map[current_name] = res.size();
-            res.push_back(ts);
-        }
-    }
-    return res;
-}
-
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p) {
     int64_t process_time_ms = 0;
     std::atomic<int64_t> read_time_ms(0);
