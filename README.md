@@ -313,6 +313,9 @@ arguments:
   -i, --end-img [IMAGE]              path to the end image, required by flf2v
   --control-image [IMAGE]            path to image condition, control net
   -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times)
+  --control-video [PATH]             path to control video frames, It must be a directory path.
+                                     The video frames inside should be stored as images in lexicographical (character) order
+                                     For example, if the control video path is `frames`, the directory contain images such as 00.png, 01.png, 鈥?etc.
   --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
@@ -379,6 +382,7 @@ arguments:
   --moe-boundary BOUNDARY            timestep boundary for Wan2.2 MoE model. (default: 0.875)
                                      only enabled if `--high-noise-steps` is set to -1
   --flow-shift SHIFT                 shift value for Flow models like SD3.x or WAN (default: auto)
+  --vace-strength                    wan vace strength
   -v, --verbose                      print extra info
 ```
 

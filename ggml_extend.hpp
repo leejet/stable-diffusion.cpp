@@ -185,6 +185,14 @@ __STATIC_INLINE__ ggml_fp16_t ggml_tensor_get_f16(const ggml_tensor* tensor, int
     return *(ggml_fp16_t*)((char*)(tensor->data) + i * tensor->nb[3] + j * tensor->nb[2] + k * tensor->nb[1] + l * tensor->nb[0]);
 }
 
+__STATIC_INLINE__ float sd_image_get_f32(sd_image_t image, int iw, int ih, int ic, bool scale = true) {
+    float value = *(image.data + ih * image.width * image.channel + iw * image.channel + ic);
+    if (scale) {
+        value /= 255.f;
+    }
+    return value;
+}
+
 static struct ggml_tensor* get_tensor_from_graph(struct ggml_cgraph* gf, const char* name) {
     struct ggml_tensor* res = NULL;
     for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
@@ -233,6 +241,52 @@ __STATIC_INLINE__ void print_ggml_tensor(struct ggml_tensor* tensor, bool shape_
             }
         }
     }
+}
+
+__STATIC_INLINE__ void ggml_tensor_iter(
+    ggml_tensor* tensor,
+    const std::function<void(ggml_tensor*, int64_t, int64_t, int64_t, int64_t)>& fn) {
+    int64_t n0 = tensor->ne[0];
+    int64_t n1 = tensor->ne[1];
+    int64_t n2 = tensor->ne[2];
+    int64_t n3 = tensor->ne[3];
+
+    for (int64_t i3 = 0; i3 < n3; i3++) {
+        for (int64_t i2 = 0; i2 < n2; i2++) {
+            for (int64_t i1 = 0; i1 < n1; i1++) {
+                for (int64_t i0 = 0; i0 < n0; i0++) {
+                    fn(tensor, i0, i1, i2, i3);
+                }
+            }
+        }
+    }
+}
+
+__STATIC_INLINE__ void ggml_tensor_iter(
+    ggml_tensor* tensor,
+    const std::function<void(ggml_tensor*, int64_t)>& fn) {
+    int64_t n0 = tensor->ne[0];
+    int64_t n1 = tensor->ne[1];
+    int64_t n2 = tensor->ne[2];
+    int64_t n3 = tensor->ne[3];
+
+    for (int64_t i = 0; i < ggml_nelements(tensor); i++) {
+        fn(tensor, i);
+    }
+}
+
+__STATIC_INLINE__ void ggml_tensor_diff(
+    ggml_tensor* a,
+    ggml_tensor* b,
+    float gap = 0.1f) {
+    GGML_ASSERT(ggml_nelements(a) == ggml_nelements(b));
+    ggml_tensor_iter(a, [&](ggml_tensor* a, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+        float a_value = ggml_tensor_get_f32(a, i0, i1, i2, i3);
+        float b_value = ggml_tensor_get_f32(b, i0, i1, i2, i3);
+        if (abs(a_value - b_value) > gap) {
+            LOG_WARN("[%ld, %ld, %ld, %ld] %f %f", i3, i2, i1, i0, a_value, b_value);
+        }
+    });
 }
 
 __STATIC_INLINE__ ggml_tensor* load_tensor_from_file(ggml_context* ctx, const std::string& file_path) {
@@ -366,42 +420,18 @@ __STATIC_INLINE__ uint8_t* sd_tensor_to_image(struct ggml_tensor* input, int idx
     return image_data;
 }
 
-__STATIC_INLINE__ void sd_image_to_tensor(const uint8_t* image_data,
-                                          struct ggml_tensor* output,
+__STATIC_INLINE__ void sd_image_to_tensor(sd_image_t image,
+                                          ggml_tensor* tensor,
                                           bool scale = true) {
-    int64_t width    = output->ne[0];
-    int64_t height   = output->ne[1];
-    int64_t channels = output->ne[2];
-    GGML_ASSERT(channels == 3 && output->type == GGML_TYPE_F32);
-    for (int iy = 0; iy < height; iy++) {
-        for (int ix = 0; ix < width; ix++) {
-            for (int k = 0; k < channels; k++) {
-                float value = *(image_data + iy * width * channels + ix * channels + k);
-                if (scale) {
-                    value /= 255.f;
-                }
-                ggml_tensor_set_f32(output, value, ix, iy, k);
-            }
-        }
-    }
-}
-
-__STATIC_INLINE__ void sd_mask_to_tensor(const uint8_t* image_data,
-                                         struct ggml_tensor* output,
-                                         bool scale = true) {
-    int64_t width    = output->ne[0];
-    int64_t height   = output->ne[1];
-    int64_t channels = output->ne[2];
-    GGML_ASSERT(channels == 1 && output->type == GGML_TYPE_F32);
-    for (int iy = 0; iy < height; iy++) {
-        for (int ix = 0; ix < width; ix++) {
-            float value = *(image_data + iy * width * channels + ix);
-            if (scale) {
-                value /= 255.f;
-            }
-            ggml_tensor_set_f32(output, value, ix, iy);
-        }
-    }
+    GGML_ASSERT(image.width == tensor->ne[0]);
+    GGML_ASSERT(image.height == tensor->ne[1]);
+    GGML_ASSERT(image.channel == tensor->ne[2]);
+    GGML_ASSERT(1 == tensor->ne[3]);
+    GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+    ggml_tensor_iter(tensor, [&](ggml_tensor* tensor, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+        float value = sd_image_get_f32(image, i0, i1, i2, scale);
+        ggml_tensor_set_f32(tensor, value, i0, i1, i2, i3);
+    });
 }
 
 __STATIC_INLINE__ void sd_apply_mask(struct ggml_tensor* image_data,
@@ -1636,6 +1666,7 @@ protected:
             ggml_backend_tensor_copy(t, offload_t);
             std::swap(t->buffer, offload_t->buffer);
             std::swap(t->data, offload_t->data);
+            std::swap(t->extra, offload_t->extra);
 
             t         = ggml_get_next_tensor(params_ctx, t);
             offload_t = ggml_get_next_tensor(offload_ctx, offload_t);
@@ -1666,8 +1697,10 @@ protected:
         while (t != NULL && offload_t != NULL) {
             t->buffer         = offload_t->buffer;
             t->data           = offload_t->data;
+            t->extra          = offload_t->extra;
             offload_t->buffer = NULL;
             offload_t->data   = NULL;
+            offload_t->extra  = NULL;
 
             t         = ggml_get_next_tensor(params_ctx, t);
             offload_t = ggml_get_next_tensor(offload_ctx, offload_t);
