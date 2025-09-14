@@ -147,8 +147,9 @@ struct LoraModel : public GGMLRunner {
                 }
             } else {
                 const std::string& name = tensor_storage.name;
-                if (lora_tensors.count(name)) {
-                    *dst_tensor = lora_tensors.at(name);
+                auto iter = lora_tensors.find(name);
+                if (iter != lora_tensors.end()) {
+                    *dst_tensor = iter->second;
                 }
             }
             return true;
