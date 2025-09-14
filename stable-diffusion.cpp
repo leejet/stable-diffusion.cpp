@@ -1796,8 +1796,7 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
     free(sd_ctx);
 }
 
-enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx)
-{
+enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
     if (sd_ctx != NULL && sd_ctx->sd != NULL) {
         SDVersion version = sd_ctx->sd->version;
         if (sd_version_is_dit(version))
