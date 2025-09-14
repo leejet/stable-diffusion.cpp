@@ -1487,7 +1487,7 @@ public:
         if (!use_tiny_autoencoder) {
             float tile_overlap;
             int tile_size_x, tile_size_y;
-            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H);
+            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, x->ne[0], x->ne[1]);
 
             LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
 
