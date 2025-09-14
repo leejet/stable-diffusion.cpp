@@ -265,7 +265,9 @@ public:
         }
 
         LOG_INFO("Version: %s ", model_version_to_str[version]);
-        ggml_type wtype = (ggml_type)sd_ctx_params->wtype;
+        ggml_type wtype = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
+                              ? (ggml_type)sd_ctx_params->wtype
+                              : GGML_TYPE_COUNT;
         if (wtype == GGML_TYPE_COUNT) {
             model_wtype = model_loader.get_sd_wtype();
             if (model_wtype == GGML_TYPE_COUNT) {
@@ -1465,11 +1467,14 @@ public:
 #define NONE_STR "NONE"
 
 const char* sd_type_name(enum sd_type_t type) {
-    return ggml_type_name((ggml_type)type);
+    if ((int)type < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
+        return ggml_type_name((ggml_type)type);
+    }
+    return NONE_STR;
 }
 
 enum sd_type_t str_to_sd_type(const char* str) {
-    for (int i = 0; i < SD_TYPE_COUNT; i++) {
+    for (int i = 0; i < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT); i++) {
         auto trait = ggml_get_type_traits((ggml_type)i);
         if (!strcmp(str, trait->type_name)) {
             return (enum sd_type_t)i;
