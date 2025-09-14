@@ -299,7 +299,7 @@ arguments:
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
   --embd-dir [EMBEDDING_PATH]        path to embeddings
-  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings
+  --photo-maker                      path to PHOTOMAKER model
   --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir
   --normalize-input                  normalize PHOTOMAKER input id images
   --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now
