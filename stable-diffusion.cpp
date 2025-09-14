@@ -2196,19 +2196,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     }
 
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    if (sd_version_is_sd3(sd_ctx->sd->version)) {
-        params.mem_size *= 3;
-    }
-    if (sd_version_is_flux(sd_ctx->sd->version)) {
-        params.mem_size *= 4;
-    }
-    if (sd_ctx->sd->stacked_id) {
-        params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    }
-    params.mem_size += width * height * 3 * sizeof(float) * 3;
-    params.mem_size += width * height * 3 * sizeof(float) * 3 * sd_img_gen_params->ref_images_count;
-    params.mem_size *= sd_img_gen_params->batch_count;
+    params.mem_size = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);
@@ -2448,8 +2436,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     }
 
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(200 * 1024) * 1024;  // 200 MB
-    params.mem_size += width * height * frames * 3 * sizeof(float) * 2;
+    params.mem_size = static_cast<size_t>(1024 * 1024) * 1024;  // 1GB
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);

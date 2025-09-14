@@ -115,7 +115,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             return true;
         }
         struct ggml_init_params params;
-        params.mem_size               = 10 * 1024 * 1024;  // max for custom embeddings 10 MB
+        params.mem_size               = 100 * 1024 * 1024;  // max for custom embeddings 100 MB
         params.mem_buffer             = NULL;
         params.no_alloc               = false;
         struct ggml_context* embd_ctx = ggml_init(params);
