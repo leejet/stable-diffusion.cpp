@@ -35,7 +35,7 @@ enum rng_type_t {
 };
 
 enum sample_method_t {
-    EULER_A,
+    SAMPLE_METHOD_DEFAULT,
     EULER,
     HEUN,
     DPM2,
@@ -47,6 +47,7 @@ enum sample_method_t {
     LCM,
     DDIM_TRAILING,
     TCD,
+    EULER_A,
     SAMPLE_METHOD_COUNT
 };
 
@@ -247,6 +248,7 @@ SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
 
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
+SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
 
 SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
 SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);

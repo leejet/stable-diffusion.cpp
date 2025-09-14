@@ -43,7 +43,7 @@ const char* model_version_to_str[] = {
 };
 
 const char* sampling_methods_str[] = {
-    "Euler A",
+    "default",
     "Euler",
     "Heun",
     "DPM2",
@@ -55,6 +55,7 @@ const char* sampling_methods_str[] = {
     "LCM",
     "DDIM \"trailing\"",
     "TCD",
+    "Euler A",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -264,7 +265,9 @@ public:
         }
 
         LOG_INFO("Version: %s ", model_version_to_str[version]);
-        ggml_type wtype = (ggml_type)sd_ctx_params->wtype;
+        ggml_type wtype = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
+                              ? (ggml_type)sd_ctx_params->wtype
+                              : GGML_TYPE_COUNT;
         if (wtype == GGML_TYPE_COUNT) {
             model_wtype = model_loader.get_sd_wtype();
             if (model_wtype == GGML_TYPE_COUNT) {
@@ -290,11 +293,6 @@ public:
             diffusion_model_wtype = wtype;
             vae_wtype             = wtype;
             model_loader.set_wtype_override(wtype);
-        }
-
-        if (sd_version_is_sdxl(version)) {
-            vae_wtype = GGML_TYPE_F32;
-            model_loader.set_wtype_override(GGML_TYPE_F32, "vae.");
         }
 
         LOG_INFO("Weight type:                 %s", ggml_type_name(model_wtype));
@@ -372,7 +370,6 @@ public:
                     cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                         offload_params_to_cpu,
                                                                         model_loader.tensor_storages_types,
-                                                                        -1,
                                                                         sd_ctx_params->chroma_use_t5_mask,
                                                                         sd_ctx_params->chroma_t5_mask_pad);
                 } else {
@@ -390,7 +387,6 @@ public:
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
                                                                     model_loader.tensor_storages_types,
-                                                                    -1,
                                                                     true,
                                                                     1,
                                                                     true);
@@ -1533,11 +1529,14 @@ public:
 #define NONE_STR "NONE"
 
 const char* sd_type_name(enum sd_type_t type) {
-    return ggml_type_name((ggml_type)type);
+    if ((int)type < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
+        return ggml_type_name((ggml_type)type);
+    }
+    return NONE_STR;
 }
 
 enum sd_type_t str_to_sd_type(const char* str) {
-    for (int i = 0; i < SD_TYPE_COUNT; i++) {
+    for (int i = 0; i < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT); i++) {
         auto trait = ggml_get_type_traits((ggml_type)i);
         if (!strcmp(str, trait->type_name)) {
             return (enum sd_type_t)i;
@@ -1568,7 +1567,7 @@ enum rng_type_t str_to_rng_type(const char* str) {
 }
 
 const char* sample_method_to_str[] = {
-    "euler_a",
+    "default",
     "euler",
     "heun",
     "dpm2",
@@ -1580,6 +1579,7 @@ const char* sample_method_to_str[] = {
     "lcm",
     "ddim_trailing",
     "tcd",
+    "euler_a",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -1716,7 +1716,7 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->guidance.slg.layer_end      = 0.2f;
     sample_params->guidance.slg.scale          = 0.f;
     sample_params->scheduler                   = DEFAULT;
-    sample_params->sample_method               = EULER_A;
+    sample_params->sample_method               = SAMPLE_METHOD_DEFAULT;
     sample_params->sample_steps                = 20;
 }
 
@@ -1859,6 +1859,17 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
         sd_ctx->sd = NULL;
     }
     free(sd_ctx);
+}
+
+enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
+    if (sd_ctx != NULL && sd_ctx->sd != NULL) {
+        SDVersion version = sd_ctx->sd->version;
+        if (sd_version_is_dit(version))
+            return EULER;
+        else
+            return EULER_A;
+    }
+    return SAMPLE_METHOD_COUNT;
 }
 
 sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
@@ -2253,19 +2264,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     }
 
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    if (sd_version_is_sd3(sd_ctx->sd->version)) {
-        params.mem_size *= 3;
-    }
-    if (sd_version_is_flux(sd_ctx->sd->version)) {
-        params.mem_size *= 4;
-    }
-    if (sd_ctx->sd->stacked_id) {
-        params.mem_size += static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
-    }
-    params.mem_size += width * height * 3 * sizeof(float) * 3;
-    params.mem_size += width * height * 3 * sizeof(float) * 3 * sd_img_gen_params->ref_images_count;
-    params.mem_size *= sd_img_gen_params->batch_count;
+    params.mem_size = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);
@@ -2426,6 +2425,11 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
     }
 
+    enum sample_method_t sample_method = sd_img_gen_params->sample_params.sample_method;
+    if (sample_method == SAMPLE_METHOD_DEFAULT) {
+        sample_method = sd_get_default_sample_method(sd_ctx);
+    }
+
     sd_image_t* result_images = generate_image_internal(sd_ctx,
                                                         work_ctx,
                                                         init_latent,
@@ -2436,7 +2440,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->sample_params.eta,
                                                         width,
                                                         height,
-                                                        sd_img_gen_params->sample_params.sample_method,
+                                                        sample_method,
                                                         sigmas,
                                                         seed,
                                                         sd_img_gen_params->batch_count,
@@ -2500,8 +2504,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     }
 
     struct ggml_init_params params;
-    params.mem_size = static_cast<size_t>(200 * 1024) * 1024;  // 200 MB
-    params.mem_size += width * height * frames * 3 * sizeof(float) * 2;
+    params.mem_size = static_cast<size_t>(1024 * 1024) * 1024;  // 1GB
     params.mem_buffer = NULL;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);

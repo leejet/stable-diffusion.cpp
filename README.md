@@ -60,14 +60,6 @@ API and command-line option may change frequently.***
     - Windows
     - Android (via Termux, [Local Diffusion](https://github.com/rmatif/Local-Diffusion))
 
-### TODO
-
-- [ ] More sampling methods
-- [ ] Make inference faster
-    - The current implementation of ggml_conv_2d is slow and has high memory usage
-- [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
-- [ ] Implement Inpainting support
-
 ## Usage
 
 For most users, you can download the built executable program from the latest [release](https://github.com/leejet/stable-diffusion.cpp/releases/latest).
@@ -334,9 +326,9 @@ arguments:
   --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])
   --skip-layer-start START           SLG enabling point: (default: 0.01)
   --skip-layer-end END               SLG disabling point: (default: 0.2)
-  --scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)
+  --scheduler {discrete, karras, exponential, ays, gits, smoothstep} Denoiser sigma scheduler (default: discrete)
   --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}
-                                     sampling method (default: "euler_a")
+                                     sampling method (default: "euler" for Flux/SD3/Wan, "euler_a" otherwise)
   --steps  STEPS                     number of sample steps (default: 20)
   --high-noise-cfg-scale SCALE       (high noise) unconditional guidance scale: (default: 7.0)
   --high-noise-img-cfg-scale SCALE   (high noise) image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)
@@ -347,7 +339,7 @@ arguments:
   --high-noise-skip-layers LAYERS    (high noise) Layers to skip for SLG steps: (default: [7,8,9])
   --high-noise-skip-layer-start      (high noise) SLG enabling point: (default: 0.01)
   --high-noise-skip-layer-end END    (high noise) SLG disabling point: (default: 0.2)
-  --high-noise-scheduler {discrete, karras, exponential, ays, gits} Denoiser sigma scheduler (default: discrete)
+  --high-noise-scheduler {discrete, karras, exponential, ays, gits, smoothstep} Denoiser sigma scheduler (default: discrete)
   --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}
                                      (high noise) sampling method (default: "euler_a")
   --high-noise-steps  STEPS          (high noise) number of sample steps (default: -1 = auto)
@@ -393,9 +385,9 @@ arguments:
 ./bin/sd -m ../models/sd-v1-4.ckpt -p "a lovely cat"
 # ./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 # ./bin/sd -m ../models/sd_xl_base_1.0.safetensors --vae ../models/sdxl_vae-fp16-fix.safetensors -H 1024 -W 1024 -p "a lovely cat" -v
-# ./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable Diffusion CPP\"' --cfg-scale 4.5 --sampling-method euler -v
-# ./bin/sd --diffusion-model  ../models/flux1-dev-q3_k.gguf --vae ../models/ae.sft --clip_l ../models/clip_l.safetensors --t5xxl ../models/t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'" --cfg-scale 1.0 --sampling-method euler -v
-# ./bin/sd -m  ..\models\sd3.5_large.safetensors --clip_l ..\models\clip_l.safetensors --clip_g ..\models\clip_g.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable diffusion 3.5 Large\"' --cfg-scale 4.5 --sampling-method euler -v
+# ./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable Diffusion CPP\"' --cfg-scale 4.5 --sampling-method euler -v --clip-on-cpu
+# ./bin/sd --diffusion-model  ../models/flux1-dev-q3_k.gguf --vae ../models/ae.sft --clip_l ../models/clip_l.safetensors --t5xxl ../models/t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'" --cfg-scale 1.0 --sampling-method euler -v --clip-on-cpu
+# ./bin/sd -m  ..\models\sd3.5_large.safetensors --clip_l ..\models\clip_l.safetensors --clip_g ..\models\clip_g.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable diffusion 3.5 Large\"' --cfg-scale 4.5 --sampling-method euler -v --clip-on-cpu
 ```
 
 Using formats of different precisions will yield results of varying quality.
