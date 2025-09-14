@@ -299,9 +299,6 @@ arguments:
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
   --embd-dir [EMBEDDING_PATH]        path to embeddings
-  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings
-  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir
-  --normalize-input                  normalize PHOTOMAKER input id images
   --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now
   --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)
   --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)
@@ -348,7 +345,6 @@ arguments:
   --high-noise-steps  STEPS          (high noise) number of sample steps (default: -1 = auto)
                                      SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])
   --strength STRENGTH                strength for noising/unnoising (default: 0.75)
-  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)
   --control-strength STRENGTH        strength to apply Control Net (default: 0.9)
                                      1.0 corresponds to full destruction of information in init image
   -H, --height H                     image height, in pixel space (default: 512)
@@ -383,6 +379,11 @@ arguments:
                                      only enabled if `--high-noise-steps` is set to -1
   --flow-shift SHIFT                 shift value for Flow models like SD3.x or WAN (default: auto)
   --vace-strength                    wan vace strength
+  --photo-maker                      path to PHOTOMAKER model
+  --pm-id-images-dir [DIR]           path to PHOTOMAKER input id images dir
+  --pm-id-embed-path [PATH]          path to PHOTOMAKER v2 id embed
+  --pm-style-strength                strength for keeping PHOTOMAKER input identity (default: 20)
+  --normalize-input                  normalize PHOTOMAKER input id images
   -v, --verbose                      print extra info
 ```
 

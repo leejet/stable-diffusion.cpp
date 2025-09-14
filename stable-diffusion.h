@@ -136,7 +136,7 @@ typedef struct {
     const char* control_net_path;
     const char* lora_model_dir;
     const char* embedding_dir;
-    const char* stacked_id_embed_dir;
+    const char* photo_maker_path;
     bool vae_decode_only;
     bool free_params_immediately;
     int n_threads;
@@ -186,6 +186,13 @@ typedef struct {
 } sd_sample_params_t;
 
 typedef struct {
+    sd_image_t* id_images;
+    int id_images_count;
+    const char* id_embed_path;
+    float style_strength;
+} sd_pm_params_t;  // photo maker
+
+typedef struct {
     const char* prompt;
     const char* negative_prompt;
     int clip_skip;
@@ -202,9 +209,8 @@ typedef struct {
     int batch_count;
     sd_image_t control_image;
     float control_strength;
-    float style_strength;
     bool normalize_input;
-    const char* input_id_images_path;
+    sd_pm_params_t pm_params;
     sd_tiling_params_t vae_tiling_params;
 } sd_img_gen_params_t;
 
