@@ -1982,8 +1982,13 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     std::vector<TensorStorage> processed_tensor_storages;
 
     {
-        std::unordered_map<std::string, TensorStorage> processed_map;
-        std::mutex map_mutex;
+        struct IndexedStorage {
+            size_t index;
+            TensorStorage ts;
+        };
+
+        std::mutex vec_mutex;
+        std::vector<IndexedStorage> all_results;
 
         int n_threads = std::min(num_threads_to_use, (int)tensor_storages.size());
         if (n_threads < 1) {
@@ -1993,7 +1998,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
         for (int i = 0; i < n_threads; ++i) {
             workers.emplace_back([&, thread_id = i]() {
-                std::unordered_map<std::string, TensorStorage> local_processed_map;
+                std::vector<IndexedStorage> local_results;
                 std::vector<TensorStorage> temp_storages;
 
                 for (size_t j = thread_id; j < tensor_storages.size(); j += n_threads) {
@@ -2006,13 +2011,14 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     preprocess_tensor(tensor_storage, temp_storages);
 
                     for (const auto& ts : temp_storages) {
-                        local_processed_map[ts.name] = ts;
+                        local_results.push_back({j, ts});
                     }
                 }
 
-                if (!local_processed_map.empty()) {
-                    std::lock_guard<std::mutex> lock(map_mutex);
-                    processed_map.merge(local_processed_map);
+                if (!local_results.empty()) {
+                    std::lock_guard<std::mutex> lock(vec_mutex);
+                    all_results.insert(all_results.end(),
+                                       local_results.begin(), local_results.end());
                 }
             });
         }
@@ -2020,9 +2026,14 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             w.join();
         }
 
-        processed_tensor_storages.reserve(processed_map.size());
-        for (auto const& [name, ts] : processed_map) {
-            processed_tensor_storages.push_back(ts);
+        std::unordered_map<std::string, IndexedStorage> latest_map;
+        for (auto& entry : all_results) {
+            latest_map[entry.ts.name] = entry;
+        }
+
+        processed_tensor_storages.reserve(latest_map.size());
+        for (auto& [name, entry] : latest_map) {
+            processed_tensor_storages.push_back(entry.ts);
         }
     }
 

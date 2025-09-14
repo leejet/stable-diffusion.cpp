@@ -1,8 +1,8 @@
 #ifndef __LORA_HPP__
 #define __LORA_HPP__
 
-#include "ggml_extend.hpp"
 #include <mutex>
+#include "ggml_extend.hpp"
 
 #define LORA_GRAPH_BASE_SIZE 10240
 
@@ -157,13 +157,13 @@ struct LoraModel : public GGMLRunner {
         model_loader.load_tensors(on_new_tensor_cb, n_threads);
 
         for (const auto& pair : tensors_to_create) {
-            const auto& name = pair.first;
-            const auto& ts   = pair.second;
+            const auto& name         = pair.first;
+            const auto& ts           = pair.second;
             struct ggml_tensor* real = ggml_new_tensor(params_ctx,
                                                        ts.type,
                                                        ts.n_dims,
                                                        ts.ne);
-            lora_tensors[name] = real;
+            lora_tensors[name]       = real;
         }
 
         alloc_params_buffer();
