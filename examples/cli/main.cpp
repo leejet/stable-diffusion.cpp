@@ -526,6 +526,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--control-strength", "", &params.control_strength},
         {"", "--moe-boundary", "", &params.moe_boundary},
         {"", "--flow-shift", "", &params.flow_shift},
+        {"", "--vae-tile-overlap", "", &params.vae_tiling_params.target_overlap},
     };
 
     options.bool_options = {
@@ -775,14 +776,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
-    auto on_tile_overlap_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        params.vae_tiling_params.target_overlap = std::stof(argv[index]);
-        return 1;
-    };
-
     options.manual_options = {
         {"-M", "--mode", "", on_mode_arg},
         {"", "--type", "", on_type_arg},
@@ -798,7 +791,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-h", "--help", "", on_help_arg},
         {"", "--vae-tile-size", "", on_tile_size_arg},
         {"", "--vae-relative-tile-size", "", on_relative_tile_size_arg},
-        {"", "--vae-tile-overlap", "", on_tile_overlap_arg},
     };
 
     if (!parse_options(argc, argv, options)) {

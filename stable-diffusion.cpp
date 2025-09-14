@@ -348,9 +348,9 @@ public:
                                                                      offload_params_to_cpu,
                                                                      model_loader.tensor_storages_types);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                                offload_params_to_cpu,
-                                                                sd_ctx_params->diffusion_flash_attn,
-                                                                model_loader.tensor_storages_types);
+                                                               offload_params_to_cpu,
+                                                               sd_ctx_params->diffusion_flash_attn,
+                                                               model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : model_loader.tensor_storages_types) {
@@ -395,11 +395,11 @@ public:
                                                                     1,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
-                                                              offload_params_to_cpu,
-                                                              model_loader.tensor_storages_types,
-                                                              "model.diffusion_model",
-                                                              version,
-                                                              sd_ctx_params->diffusion_flash_attn);
+                                                             offload_params_to_cpu,
+                                                             model_loader.tensor_storages_types,
+                                                             "model.diffusion_model",
+                                                             version,
+                                                             sd_ctx_params->diffusion_flash_attn);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
                                                                             offload_params_to_cpu,
@@ -1300,22 +1300,25 @@ public:
         return latent;
     }
 
-
-    void get_tile_sizes(int& tile_size_x, int& tile_size_y, float& tile_overlap, const sd_tiling_params_t & params,
-        int latent_x, int latent_y, float encoding_factor = 1.0f) {
-        tile_overlap = std::max(std::min(params.target_overlap, 0.5f), 0.0f);
+    void get_tile_sizes(int& tile_size_x,
+                        int& tile_size_y,
+                        float& tile_overlap,
+                        const sd_tiling_params_t& params,
+                        int latent_x,
+                        int latent_y,
+                        float encoding_factor = 1.0f) {
+        tile_overlap       = std::max(std::min(params.target_overlap, 0.5f), 0.0f);
         auto get_tile_size = [&](int requested_size, float factor, int latent_size) {
-            const int default_tile_size = 32;
+            const int default_tile_size  = 32;
             const int min_tile_dimension = 4;
-            int tile_size = default_tile_size;
-            // rel_size <= 1 means simple fraction of the latent dimension
-            // rel_size > 1 means number of tiles across that dimension
+            int tile_size                = default_tile_size;
+            // factor <= 1 means simple fraction of the latent dimension
+            // factor > 1 means number of tiles across that dimension
             if (factor > 0.f) {
                 if (factor > 1.0)
                     factor = 1 / (factor - factor * tile_overlap + tile_overlap);
                 tile_size = std::round(latent_size * factor);
-            }
-            else if (requested_size >= min_tile_dimension) {
+            } else if (requested_size >= min_tile_dimension) {
                 tile_size = requested_size;
             }
             tile_size *= encoding_factor;
@@ -1326,12 +1329,12 @@ public:
         tile_size_y = get_tile_size(params.tile_size_y, params.rel_size_y, latent_y);
     }
 
-    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode_video = false) {
+    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
         int64_t t0          = ggml_time_ms();
         ggml_tensor* result = NULL;
         int W               = x->ne[0] / 8;
         int H               = x->ne[1] / 8;
-        if (vae_tiling_params.enabled && !decode_video) {
+        if (vae_tiling_params.enabled && !encode_video) {
             // TODO wan2.2 vae support?
             int C = sd_version_is_dit(version) ? 16 : 4;
             if (!use_tiny_autoencoder) {
@@ -1344,12 +1347,12 @@ public:
             float tile_overlap;
             int tile_size_x, tile_size_y;
             // multiply tile size for encode to keep the compute buffer size consistent
-            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H, 1.30539);
+            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H, 1.30539f);
 
             LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
 
             process_vae_input_tensor(x);
-            if (vae_tiling_params.enabled && !decode_video) {
+            if (vae_tiling_params.enabled && !encode_video) {
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, false, &out, work_ctx);
                 };
@@ -1359,7 +1362,7 @@ public:
             }
             first_stage_model->free_compute_buffer();
         } else {
-            if (vae_tiling_params.enabled && !decode_video) {
+            if (vae_tiling_params.enabled && !encode_video) {
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     tae_first_stage->compute(n_threads, in, false, &out, NULL);
@@ -1391,12 +1394,12 @@ public:
                                     -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
                                     0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
                 latents_std_vec  = {
-                    0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
-                    0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
-                    0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
-                    0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
-                    0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
-                    0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
             }
             for (int i = 0; i < latent->ne[3]; i++) {
                 float mean = latents_mean_vec[i];
@@ -1431,12 +1434,12 @@ public:
                                     -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
                                     0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
                 latents_std_vec  = {
-                    0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
-                    0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
-                    0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
-                    0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
-                    0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
-                    0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
             }
             for (int i = 0; i < latent->ne[3]; i++) {
                 float mean = latents_mean_vec[i];
@@ -1753,7 +1756,7 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
 void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     *sd_img_gen_params = {};
     sd_sample_params_init(&sd_img_gen_params->sample_params);
-    sd_img_gen_params->clip_skip        = -1;
+    sd_img_gen_params->clip_skip         = -1;
     sd_img_gen_params->ref_images_count  = 0;
     sd_img_gen_params->width             = 512;
     sd_img_gen_params->height            = 512;
@@ -2227,8 +2230,8 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
 
 sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
-    int width  = sd_img_gen_params->width;
-    int height = sd_img_gen_params->height;
+    int width                     = sd_img_gen_params->width;
+    int height                    = sd_img_gen_params->height;
     if (sd_version_is_dit(sd_ctx->sd->version)) {
         if (width % 16 || height % 16) {
             LOG_ERROR("Image dimensions must be must be a multiple of 16 on each axis for %s models. (Got %dx%d)",

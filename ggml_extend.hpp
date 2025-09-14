@@ -748,13 +748,15 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_chunk(struct ggml_contex
 
 typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
-__STATIC_INLINE__ void
-sd_tiling_calc_tiles(int &num_tiles_dim, float& tile_overlap_factor_dim, int small_dim, int tile_size, const float tile_overlap_factor) {
-
+__STATIC_INLINE__ void sd_tiling_calc_tiles(int& num_tiles_dim,
+                                            float& tile_overlap_factor_dim,
+                                            int small_dim,
+                                            int tile_size,
+                                            const float tile_overlap_factor) {
     int tile_overlap     = (tile_size * tile_overlap_factor);
     int non_tile_overlap = tile_size - tile_overlap;
 
-    num_tiles_dim = (small_dim - tile_overlap) / non_tile_overlap;
+    num_tiles_dim     = (small_dim - tile_overlap) / non_tile_overlap;
     int overshoot_dim = ((num_tiles_dim + 1) * non_tile_overlap + tile_overlap) % small_dim;
 
     if ((overshoot_dim != non_tile_overlap) && (overshoot_dim <= num_tiles_dim * (tile_size / 2 - tile_overlap))) {
@@ -776,10 +778,13 @@ sd_tiling_calc_tiles(int &num_tiles_dim, float& tile_overlap_factor_dim, int sma
 }
 
 // Tiling
-__STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input, ggml_tensor* output, const int scale,
-                                            const int p_tile_size_x, const int p_tile_size_y,
-                                            const float tile_overlap_factor, on_tile_process on_processing) {
-
+__STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
+                                            ggml_tensor* output,
+                                            const int scale,
+                                            const int p_tile_size_x,
+                                            const int p_tile_size_y,
+                                            const float tile_overlap_factor,
+                                            on_tile_process on_processing) {
     output = ggml_set_f32(output, 0);
 
     int input_width   = (int)input->ne[0];
@@ -787,15 +792,16 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input, ggml_tensor* out
     int output_width  = (int)output->ne[0];
     int output_height = (int)output->ne[1];
 
-    GGML_ASSERT(input_width / output_width == input_height / output_height && output_width / input_width == output_height / input_height);
-    GGML_ASSERT(input_width / output_width == scale || output_width / input_width == scale);
+    GGML_ASSERT(((input_width / output_width) == (input_height / output_height)) &&
+                ((output_width / input_width) == (output_height / input_height)));
+    GGML_ASSERT(((input_width / output_width) == scale) ||
+                ((output_width / input_width) == scale));
 
     int small_width  = output_width;
     int small_height = output_height;
 
-    bool big_out = output_width > input_width;
-    if (big_out) {
-        // Ex: decode
+    bool decode = output_width > input_width;
+    if (decode) {
         small_width  = input_width;
         small_height = input_height;
     }
@@ -827,7 +833,7 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input, ggml_tensor* out
     int output_tile_size_x = tile_size_x;
     int output_tile_size_y = tile_size_y;
 
-    if (big_out) {
+    if (decode) {
         output_tile_size_x *= scale;
         output_tile_size_y *= scale;
     } else {
@@ -866,7 +872,7 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input, ggml_tensor* out
             int _y = y;
             y      = small_height - tile_size_y;
             dy     = _y - y;
-            if (big_out) {
+            if (decode) {
                 dy *= scale;
             }
             last_y = true;
@@ -877,19 +883,19 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input, ggml_tensor* out
                 int _x = x;
                 x      = small_width - tile_size_x;
                 dx     = _x - x;
-                if (big_out) {
+                if (decode) {
                     dx *= scale;
                 }
                 last_x = true;
             }
 
-            int x_in  = big_out ? x : scale * x;
-            int y_in  = big_out ? y : scale * y;
-            int x_out = big_out ? x * scale : x;
-            int y_out = big_out ? y * scale : y;
+            int x_in  = decode ? x : scale * x;
+            int y_in  = decode ? y : scale * y;
+            int x_out = decode ? x * scale : x;
+            int y_out = decode ? y * scale : y;
 
-            int overlap_x_out = big_out ? tile_overlap_x * scale : tile_overlap_x;
-            int overlap_y_out = big_out ? tile_overlap_y * scale : tile_overlap_y;
+            int overlap_x_out = decode ? tile_overlap_x * scale : tile_overlap_x;
+            int overlap_y_out = decode ? tile_overlap_y * scale : tile_overlap_y;
 
             int64_t t1 = ggml_time_ms();
             ggml_split_tensor_2d(input, input_tile, x_in, y_in);
@@ -909,8 +915,12 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input, ggml_tensor* out
     ggml_free(tiles_ctx);
 }
 
-__STATIC_INLINE__ void sd_tiling(ggml_tensor* input, ggml_tensor* output, const int scale,
-    const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
+__STATIC_INLINE__ void sd_tiling(ggml_tensor* input,
+                                 ggml_tensor* output,
+                                 const int scale,
+                                 const int tile_size,
+                                 const float tile_overlap_factor,
+                                 on_tile_process on_processing) {
     sd_tiling_non_square(input, output, scale, tile_size, tile_size, tile_overlap_factor, on_processing);
 }
 
