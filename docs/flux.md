@@ -28,7 +28,7 @@ Using fp16 will lead to overflow, but ggml's support for bf16 is not yet fully d
 For example:
 
 ```
- .\bin\Release\sd.exe --diffusion-model  ..\models\flux1-dev-q8_0.gguf --vae ..\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'" --cfg-scale 1.0 --sampling-method euler -v
+ .\bin\Release\sd.exe --diffusion-model  ..\models\flux1-dev-q8_0.gguf --vae ..\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'" --cfg-scale 1.0 --sampling-method euler -v --clip-on-cpu
 ```
 
 Using formats of different precisions will yield results of varying quality.
@@ -44,7 +44,7 @@ Using formats of different precisions will yield results of varying quality.
 
 
 ```
- .\bin\Release\sd.exe --diffusion-model  ..\models\flux1-schnell-q8_0.gguf --vae ..\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'" --cfg-scale 1.0 --sampling-method euler -v --steps 4
+ .\bin\Release\sd.exe --diffusion-model  ..\models\flux1-schnell-q8_0.gguf --vae ..\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'" --cfg-scale 1.0 --sampling-method euler -v --steps 4 --clip-on-cpu
 ```
 
 | q8_0  |
@@ -60,7 +60,7 @@ Since many flux LoRA training libraries have used various LoRA naming formats, i
 - LoRA model from https://huggingface.co/XLabs-AI/flux-lora-collection/tree/main (using comfy converted version!!!)
 
 ```
-.\bin\Release\sd.exe --diffusion-model  ..\models\flux1-dev-q8_0.gguf --vae ...\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'<lora:realism_lora_comfy_converted:1>" --cfg-scale 1.0 --sampling-method euler -v --lora-model-dir ../models
+.\bin\Release\sd.exe --diffusion-model  ..\models\flux1-dev-q8_0.gguf --vae ...\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'<lora:realism_lora_comfy_converted:1>" --cfg-scale 1.0 --sampling-method euler -v --lora-model-dir ../models --clip-on-cpu
 ```
 
 ![output](../assets/flux/flux1-dev-q8_0%20with%20lora.png)
