@@ -356,6 +356,9 @@ arguments:
   --clip-skip N                      ignore last_dot_pos layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
+  --vae-tile-size [X]x[Y]            tile size for vae tiling (default: 32x32)
+  --vae-relative-tile-size [X]x[Y]   relative tile size for vae tiling, in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)
+  --vae-tile-overlap OVERLAP         tile overlap for vae tiling, in fraction of tile size (default: 0.5)
   --vae-on-cpu                       keep vae in cpu (for low vram)
   --clip-on-cpu                      keep clip in cpu (for low vram)
   --diffusion-fa                     use flash attention in the diffusion model (for low vram)
