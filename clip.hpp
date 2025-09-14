@@ -4,6 +4,8 @@
 #include "ggml_extend.hpp"
 #include "model.h"
 
+#include <filesystem>
+
 /*================================================== CLIPTokenizer ===================================================*/
 
 __STATIC_INLINE__ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remove_lora(std::string text) {
@@ -20,6 +22,17 @@ __STATIC_INLINE__ std::pair<std::unordered_map<std::string, float>, std::string>
         if (multiplier == 0.f) {
             continue;
         }
+
+        // allow relative paths, but avoid traversing outside the base directory
+        auto path = std::filesystem::path(filename).lexically_normal();
+        if (path.empty() || *path.begin() == ".") {
+            LOG_WARN("ignoring LoRA with empty filename");
+            continue;
+        } else if (*path.begin() == ".." || path.has_root_directory()) {
+            LOG_WARN("ignoring LoRA \"%s\" outside the LoRA model directory", filename.c_str());
+            continue;
+        }
+        filename = path.string();
 
         if (filename2multiplier.find(filename) == filename2multiplier.end()) {
             filename2multiplier[filename] = multiplier;
