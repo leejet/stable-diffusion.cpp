@@ -551,7 +551,7 @@ protected:
     bool force_clip_f32;
 
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
-        enum ggml_type token_wtype    = GGML_TYPE_F32;
+        enum ggml_type token_wtype = GGML_TYPE_F32;
         if (!force_clip_f32) {
             auto tensor_type = tensor_types.find(prefix + "token_embedding.weight");
             if (tensor_type != tensor_types.end())
