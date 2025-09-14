@@ -231,7 +231,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -i, --end-img [IMAGE]              path to the end image, required by flf2v\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
     printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
-    printf("  --control-video [PATH]             path to control video frames, It must be a directory path.");
+    printf("  --control-video [PATH]             path to control video frames, It must be a directory path.\n");
     printf("                                     The video frames inside should be stored as images in lexicographical (character) order\n");
     printf("                                     For example, if the control video path is `frames`, the directory contain images such as 00.png, 01.png, … etc.\n");
     printf("  --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).\n");
