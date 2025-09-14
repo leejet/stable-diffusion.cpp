@@ -266,8 +266,8 @@ public:
 
         LOG_INFO("Version: %s ", model_version_to_str[version]);
         ggml_type wtype = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
-                          ? (ggml_type)sd_ctx_params->wtype
-                          : GGML_TYPE_COUNT;
+                              ? (ggml_type)sd_ctx_params->wtype
+                              : GGML_TYPE_COUNT;
         if (wtype == GGML_TYPE_COUNT) {
             model_wtype = model_loader.get_sd_wtype();
             if (model_wtype == GGML_TYPE_COUNT) {
@@ -1469,7 +1469,7 @@ public:
 #define NONE_STR "NONE"
 
 const char* sd_type_name(enum sd_type_t type) {
-    if ((int) type < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
+    if ((int)type < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)) {
         return ggml_type_name((ggml_type)type);
     }
     return NONE_STR;
