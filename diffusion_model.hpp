@@ -97,8 +97,9 @@ struct MMDiTModel : public DiffusionModel {
 
     MMDiTModel(ggml_backend_t backend,
                bool offload_params_to_cpu,
+               bool flash_attn                     = false,
                const String2GGMLType& tensor_types = {})
-        : mmdit(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model") {
+        : mmdit(backend, offload_params_to_cpu, flash_attn, tensor_types, "model.diffusion_model") {
     }
 
     std::string get_desc() {

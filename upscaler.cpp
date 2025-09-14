@@ -19,13 +19,13 @@ struct UpscalerGGML {
 
     bool load_from_file(const std::string& esrgan_path,
                         bool offload_params_to_cpu) {
+        ggml_log_set(ggml_log_callback_default, nullptr);
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
         backend = ggml_backend_cuda_init(0);
 #endif
 #ifdef SD_USE_METAL
         LOG_DEBUG("Using Metal backend");
-        ggml_log_set(ggml_log_callback_default, nullptr);
         backend = ggml_backend_metal_init();
 #endif
 #ifdef SD_USE_VULKAN
@@ -69,8 +69,7 @@ struct UpscalerGGML {
                  input_image.width, input_image.height, output_width, output_height);
 
         struct ggml_init_params params;
-        params.mem_size = output_width * output_height * 3 * sizeof(float) * 2;
-        params.mem_size += 2 * ggml_tensor_overhead();
+        params.mem_size = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
         params.mem_buffer = NULL;
         params.no_alloc   = false;
 
@@ -80,7 +79,7 @@ struct UpscalerGGML {
             LOG_ERROR("ggml_init() failed");
             return upscaled_image;
         }
-        LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
+        // LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
         ggml_tensor* input_image_tensor = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, input_image.width, input_image.height, 3, 1);
         sd_image_to_tensor(input_image, input_image_tensor);
 

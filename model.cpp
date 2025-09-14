@@ -107,7 +107,7 @@ const char* unused_tensors[] = {
 };
 
 bool is_unused_tensor(std::string name) {
-    for (int i = 0; i < sizeof(unused_tensors) / sizeof(const char*); i++) {
+    for (size_t i = 0; i < sizeof(unused_tensors) / sizeof(const char*); i++) {
         if (starts_with(name, unused_tensors[i])) {
             return true;
         }
@@ -2310,7 +2310,7 @@ std::vector<std::pair<std::string, ggml_type>> parse_tensor_type_rules(const std
         if (type_name == "f32") {
             tensor_type = GGML_TYPE_F32;
         } else {
-            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+            for (size_t i = 0; i < GGML_TYPE_COUNT; i++) {
                 auto trait = ggml_get_type_traits((ggml_type)i);
                 if (trait->to_float && trait->type_size && type_name == trait->type_name) {
                     tensor_type = (ggml_type)i;
