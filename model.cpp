@@ -2264,7 +2264,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             if (current_idx >= file_tensors.size() || failed) {
                 break;
             }
-            pretty_progress(total_tensors_processed + current_idx, total_tensors_to_process, (ggml_time_ms() - t_start) / 1000.0f);
+            size_t curr_num = total_tensors_processed + current_idx;
+            pretty_progress(curr_num, total_tensors_to_process, (ggml_time_ms() - t_start) / 1000.0f / (curr_num + 1e-6f));
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
 
@@ -2277,11 +2278,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             break;
         }
         total_tensors_processed += file_tensors.size();
-    }
-
-    pretty_progress(total_tensors_processed, total_tensors_to_process, (ggml_time_ms() - t_start) / 1000.0f);
-    if (total_tensors_to_process > 0) {
-        printf("\n");
+        pretty_progress(total_tensors_processed, total_tensors_to_process, (ggml_time_ms() - t_start) / 1000.0f / (total_tensors_processed + 1e-6f));
+        if (total_tensors_processed < total_tensors_to_process) {
+            printf("\n");
+        }
     }
 
     int64_t end_time = ggml_time_ms();
