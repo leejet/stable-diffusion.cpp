@@ -234,16 +234,15 @@ struct GITSSchedule : SigmaSchedule {
 
 struct SGMUniformSchedule : SigmaSchedule {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min_in, float sigma_max_in, t_to_sigma_t t_to_sigma_func) override {
-
         std::vector<float> result;
         if (n == 0) {
             result.push_back(0.0f);
             return result;
         }
         result.reserve(n + 1);
-        int t_max = TIMESTEPS -1;
-        float step = static_cast<float>(t_max) / static_cast<float>(n > 1 ? (n -1) : 1) ;
-        for(uint32_t i=0; i<n; ++i) {
+        int t_max  = TIMESTEPS - 1;
+        float step = static_cast<float>(t_max) / static_cast<float>(n > 1 ? (n - 1) : 1);
+        for (uint32_t i = 0; i < n; ++i) {
             result.push_back(t_to_sigma_func(t_max - step * i));
         }
         result.push_back(0.0f);
@@ -285,9 +284,8 @@ struct SimpleSchedule : SigmaSchedule {
         float step_factor = static_cast<float>(model_sigmas_len) / static_cast<float>(n);
 
         for (uint32_t i = 0; i < n; ++i) {
-
             int offset_from_start_of_py_array = static_cast<int>(static_cast<float>(i) * step_factor);
-            int timestep_index = model_sigmas_len - 1 - offset_from_start_of_py_array;
+            int timestep_index                = model_sigmas_len - 1 - offset_from_start_of_py_array;
 
             if (timestep_index < 0) {
                 timestep_index = 0;
@@ -327,9 +325,9 @@ struct Denoiser {
 
             float dt_per_step;
             if (n > 0) {
-                 dt_per_step = (end_t_val - start_t_val) / static_cast<float>(n);
+                dt_per_step = (end_t_val - start_t_val) / static_cast<float>(n);
             } else {
-                 dt_per_step = 0.0f;
+                dt_per_step = 0.0f;
             }
 
             for (uint32_t i = 0; i < n; ++i) {
@@ -340,7 +338,7 @@ struct Denoiser {
             sigs.push_back(0.0f);
             return sigs;
 
-        } else { // For all other schedules, use the existing virtual dispatch
+        } else {  // For all other schedules, use the existing virtual dispatch
             auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
             return schedule->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
         }
