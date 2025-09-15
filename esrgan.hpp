@@ -142,9 +142,22 @@ struct ESRGAN : public GGMLRunner {
     int scale     = 4;
     int tile_size = 128;  // avoid cuda OOM for 4gb VRAM
 
-    ESRGAN(ggml_backend_t backend, const String2GGMLType& tensor_types = {})
-        : GGMLRunner(backend) {
+    ESRGAN(ggml_backend_t backend,
+           bool offload_params_to_cpu,
+           const String2GGMLType& tensor_types = {})
+        : GGMLRunner(backend, offload_params_to_cpu) {
         rrdb_net.init(params_ctx, tensor_types, "");
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        rrdb_net.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {
@@ -164,7 +177,7 @@ struct ESRGAN : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(esrgan_tensors, backend);
+        bool success = model_loader.load_tensors(esrgan_tensors);
 
         if (!success) {
             LOG_ERROR("load esrgan tensors from model loader failed");

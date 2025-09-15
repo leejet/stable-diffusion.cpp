@@ -27,7 +27,7 @@ You can download the preconverted gguf weights from [FLUX.1-Kontext-dev-GGUF](ht
 For example:
 
 ```
- .\bin\Release\sd.exe -r .\flux1-dev-q8_0.png --diffusion-model  ..\models\flux1-kontext-dev-q8_0.gguf --vae ..\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors -p "change 'flux.cpp' to 'kontext.cpp'" --cfg-scale 1.0 --sampling-method euler -v
+ .\bin\Release\sd.exe -r .\flux1-dev-q8_0.png --diffusion-model  ..\models\flux1-kontext-dev-q8_0.gguf --vae ..\models\ae.sft --clip_l ..\models\clip_l.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors -p "change 'flux.cpp' to 'kontext.cpp'" --cfg-scale 1.0 --sampling-method euler -v --clip-on-cpu
 ```
 
 
