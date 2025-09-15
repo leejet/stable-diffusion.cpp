@@ -1076,12 +1076,18 @@ public:
                 float latent_result = positive_data[i];
                 if (has_unconditioned) {
                     // out_uncond + cfg_scale * (out_cond - out_uncond)
-                    if (has_img_cond) {
-                        // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
-                        latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                    int64_t ne3 = out_cond->ne[3];
+                    if (min_cfg != cfg_scale && ne3 != 1) {
+                        int64_t i3  = i / out_cond->ne[0] * out_cond->ne[1] * out_cond->ne[2];
+                        float scale = min_cfg + (cfg_scale - min_cfg) * (i3 * 1.0f / ne3);
                     } else {
-                        // img_cfg_scale == cfg_scale
-                        latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                        if (has_img_cond) {
+                            // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
+                            latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                        } else {
+                            // img_cfg_scale == cfg_scale
+                            latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                        }
                     }
                 } else if (has_img_cond) {
                     // img_cfg_scale == 1
