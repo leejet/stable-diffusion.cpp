@@ -1055,65 +1055,46 @@ public:
                                          skip_layers);
                 skip_layer_data = (float*)out_skip->data;
             }
-            float* vec_denoised        = (float*)denoised->data;
-            float* vec_input           = (float*)input->data;
-            float* positive_data       = (float*)out_cond->data;
-            float* negative_data_ptr   = has_unconditioned ? (float*)out_uncond->data : nullptr;
-            float* skip_layer_data_ptr = is_skiplayer_step ? (float*)out_skip->data : nullptr;
-            int ne_elements            = (int)ggml_nelements(denoised);
+            float* vec_denoised  = (float*)denoised->data;
+            float* vec_input     = (float*)input->data;
+            float* positive_data = (float*)out_cond->data;
+            int ne_elements      = (int)ggml_nelements(denoised);
 
             if (shifted_timestep > 0 && sd_version_is_sdxl(version)) {
-                int64_t shifted_t_idx = static_cast<int64_t>(roundf(timesteps_vec[0]));
-
+                int64_t shifted_t_idx              = static_cast<int64_t>(roundf(timesteps_vec[0]));
                 float shifted_sigma                = denoiser->t_to_sigma((float)shifted_t_idx);
                 std::vector<float> shifted_scaling = denoiser->get_scalings(shifted_sigma);
                 float shifted_c_skip               = shifted_scaling[0];
                 float shifted_c_out                = shifted_scaling[1];
-                auto compvis_denoiser_ptr          = std::dynamic_pointer_cast<CompVisDenoiser>(denoiser);
-                float sigma_data                   = compvis_denoiser_ptr ? compvis_denoiser_ptr->sigma_data : 1.0f;
+                float shifted_c_in                 = shifted_scaling[2];
 
-                float sigma_sq         = sigma * sigma;
-                float shifted_sigma_sq = shifted_sigma * shifted_sigma;
-                float sigma_data_sq    = sigma_data * sigma_data;
-
-                float input_scale_factor = sqrtf((shifted_sigma_sq + sigma_data_sq) / (sigma_sq + sigma_data_sq));
-
-                for (int i = 0; i < ne_elements; i++) {
-                    float model_output_result = positive_data[i];
-                    if (has_unconditioned) {
-                        if (has_img_cond) {
-                            model_output_result = negative_data_ptr[i] + img_cfg_scale * (img_cond_data[i] - negative_data_ptr[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
-                        } else {
-                            model_output_result = negative_data_ptr[i] + cfg_scale * (positive_data[i] - negative_data_ptr[i]);
-                        }
-                    } else if (has_img_cond) {
-                        model_output_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
-                    }
-                    if (is_skiplayer_step) {
-                        model_output_result = model_output_result + slg_scale * (positive_data[i] - skip_layer_data_ptr[i]);
-                    }
-                    float adjusted_input = vec_input[i] * input_scale_factor;
-                    vec_denoised[i]      = adjusted_input * shifted_c_skip + model_output_result * shifted_c_out;
-                }
-
-            } else {
-                for (int i = 0; i < ne_elements; i++) {
-                    float model_output_result = positive_data[i];
-                    if (has_unconditioned) {
-                        if (has_img_cond) {
-                            model_output_result = negative_data_ptr[i] + img_cfg_scale * (img_cond_data[i] - negative_data_ptr[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
-                        } else {
-                            model_output_result = negative_data_ptr[i] + cfg_scale * (positive_data[i] - negative_data_ptr[i]);
-                        }
-                    } else if (has_img_cond) {
-                        model_output_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
-                    }
-                    if (is_skiplayer_step) {
-                        model_output_result = model_output_result + slg_scale * (positive_data[i] - skip_layer_data_ptr[i]);
-                    }
-                    vec_denoised[i] = vec_input[i] * c_skip + model_output_result * c_out;
-                }
+                c_skip = shifted_c_skip * c_in / shifted_c_in;
+                c_out  = shifted_c_out;
             }
+
+            for (int i = 0; i < ne_elements; i++) {
+                float latent_result = positive_data[i];
+                if (has_unconditioned) {
+                    // out_uncond + cfg_scale * (out_cond - out_uncond)
+                    if (has_img_cond) {
+                        // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
+                        latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                    } else {
+                        // img_cfg_scale == cfg_scale
+                        latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
+                    }
+                } else if (has_img_cond) {
+                    // img_cfg_scale == 1
+                    latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                }
+                if (is_skiplayer_step) {
+                    latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
+                }
+                // v = latent_result, eps = latent_result
+                // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
+                vec_denoised[i] = latent_result * c_out + vec_input[i] * c_skip;
+            }
+
             int64_t t1 = ggml_time_us();
             if (step > 0) {
                 pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
