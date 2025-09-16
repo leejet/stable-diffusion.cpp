@@ -149,7 +149,7 @@ public:
                 if (i == 1) {
                     h = ggml_relu_inplace(ctx, h);
                 } else {
-                    h = ggml_upscale(ctx, h, 2);
+                    h = ggml_upscale(ctx, h, 2, GGML_SCALE_MODE_NEAREST);
                 }
                 continue;
             }
@@ -196,14 +196,26 @@ struct TinyAutoEncoder : public GGMLRunner {
     bool decode_only = false;
 
     TinyAutoEncoder(ggml_backend_t backend,
-                    std::map<std::string, enum ggml_type>& tensor_types,
+                    bool offload_params_to_cpu,
+                    const String2GGMLType& tensor_types,
                     const std::string prefix,
                     bool decoder_only = true,
                     SDVersion version = VERSION_SD1)
         : decode_only(decoder_only),
           taesd(decoder_only, version),
-          GGMLRunner(backend) {
+          GGMLRunner(backend, offload_params_to_cpu) {
         taesd.init(params_ctx, tensor_types, prefix);
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        taesd.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {
@@ -226,7 +238,7 @@ struct TinyAutoEncoder : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(taesd_tensors, backend, ignore_tensors);
+        bool success = model_loader.load_tensors(taesd_tensors, ignore_tensors);
 
         if (!success) {
             LOG_ERROR("load tae tensors from model loader failed");
