@@ -1323,15 +1323,15 @@ public:
         }
 
         if (!use_tiny_autoencoder) {
-            float tile_overlap;
-            int tile_size_x, tile_size_y;
-            // multiply tile size for encode to keep the compute buffer size consistent
-            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H, 1.30539f);
-
-            LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
-
             process_vae_input_tensor(x);
             if (vae_tiling_params.enabled && !encode_video) {
+                float tile_overlap;
+                int tile_size_x, tile_size_y;
+                // multiply tile size for encode to keep the compute buffer size consistent
+                get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H, 1.30539f);
+
+                LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, false, &out, work_ctx);
                 };
@@ -1468,15 +1468,15 @@ public:
         }
         int64_t t0 = ggml_time_ms();
         if (!use_tiny_autoencoder) {
-            float tile_overlap;
-            int tile_size_x, tile_size_y;
-            get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, x->ne[0], x->ne[1]);
-
-            LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
-
             process_latent_out(x);
             // x = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
             if (vae_tiling_params.enabled && !decode_video) {
+                float tile_overlap;
+                int tile_size_x, tile_size_y;
+                get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, x->ne[0], x->ne[1]);
+
+                LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     first_stage_model->compute(n_threads, in, true, &out, NULL);
