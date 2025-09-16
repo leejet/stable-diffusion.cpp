@@ -2427,7 +2427,12 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
 
     auto tensor_type_rules = parse_tensor_type_rules(tensor_type_rules_str);
 
+    std::mutex mux_conversion;
+
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
+
+        std::lock_guard<std::mutex> lock(mux_conversion);
+
         const std::string& name = tensor_storage.name;
         ggml_type tensor_type   = tensor_storage.type;
         ggml_type dst_type      = type;
