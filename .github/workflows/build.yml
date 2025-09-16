@@ -296,6 +296,10 @@ jobs:
           pattern: sd-*
           merge-multiple: true
 
+      - name: Get commit count
+        id: commit_count
+        run: echo "count=$(git rev-list --count HEAD)" >> $GITHUB_OUTPUT
+
       - name: Get commit hash
         id: commit
         uses: pr-mpt/actions-commit-hash@v2
@@ -306,7 +310,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}
+          tag_name: >
+            ${{ github.ref_name == 'master' &&
+                format('release_{0}_{1}', steps.commit_count.outputs.count, steps.commit.outputs.short) ||
+                format('{0}-{1}', env.BRANCH_NAME, steps.commit.outputs.short) }}
 
       - name: Upload release
         id: upload_release
