@@ -288,6 +288,11 @@ jobs:
       - windows-latest-cmake
 
     steps:
+      - name: Clone
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
       - name: Download artifacts
         id: download-artifact
         uses: actions/download-artifact@v4
@@ -298,14 +303,18 @@ jobs:
 
       - name: Get commit count
         id: commit_count
-        run: echo "count=$(git rev-list --count HEAD)" >> $GITHUB_OUTPUT
+        run: |
+          echo "count=$(git rev-list --count HEAD)" >> $GITHUB_OUTPUT
+          echo "DEBUG: commit count = $(git rev-list --count HEAD)"
 
       - name: Get commit hash
         id: commit
         uses: pr-mpt/actions-commit-hash@v2
+        run: echo "DEBUG commit short hash = ${{ steps.commit.outputs.short }}"
 
       - name: Create release
         id: create_release
+        if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'master' }}
         uses: anzz1/action-create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -317,6 +326,7 @@ jobs:
 
       - name: Upload release
         id: upload_release
+        if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'master' }}
         uses: actions/github-script@v3
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}
