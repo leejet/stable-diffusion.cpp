@@ -58,6 +58,8 @@ enum scheduler_t {
     EXPONENTIAL,
     AYS,
     GITS,
+    SGM_UNIFORM,
+    SIMPLE,
     SMOOTHSTEP,
     SCHEDULE_COUNT
 };
@@ -183,6 +185,7 @@ typedef struct {
     enum sample_method_t sample_method;
     int sample_steps;
     float eta;
+    int shifted_timestep;
 } sd_sample_params_t;
 
 typedef struct {
