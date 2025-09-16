@@ -310,7 +310,6 @@ jobs:
       - name: Get commit hash
         id: commit
         uses: pr-mpt/actions-commit-hash@v2
-        run: echo "DEBUG commit short hash = ${{ steps.commit.outputs.short }}"
 
       - name: Create release
         id: create_release
