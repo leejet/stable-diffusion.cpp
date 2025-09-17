@@ -2408,6 +2408,8 @@ bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage
             // Pass, do not convert. For MMDiT
         } else if (contains(name, "time_embed.") || contains(name, "label_emb.")) {
             // Pass, do not convert. For Unet
+        } else if (contains(name, "embedding")) {
+            // Pass, do not convert embedding
         } else {
             return true;
         }
