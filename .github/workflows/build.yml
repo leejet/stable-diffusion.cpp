@@ -318,10 +318,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: >
-            ${{ github.ref_name == 'master' &&
-                format('release_{0}_{1}', steps.commit_count.outputs.count, steps.commit.outputs.short) ||
-                format('{0}-{1}', env.BRANCH_NAME, steps.commit.outputs.short) }}
+          tag_name: ${{ format('{0}-{1}-{2}', env.BRANCH_NAME, steps.commit_count.outputs.count, steps.commit.outputs.short) }}
 
       - name: Upload release
         id: upload_release
