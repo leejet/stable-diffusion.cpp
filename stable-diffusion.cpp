@@ -443,6 +443,10 @@ public:
             diffusion_model->alloc_params_buffer();
             diffusion_model->get_param_tensors(tensors);
 
+            if (sd_version_is_unet_edit(version)) {
+                vae_decode_only = false;
+            }
+
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->alloc_params_buffer();
                 high_noise_diffusion_model->get_param_tensors(tensors);
@@ -748,15 +752,15 @@ public:
                 denoiser->scheduler->version = version;
                 break;
             case SGM_UNIFORM:
-                    LOG_INFO("Running with SGM Uniform schedule");
-                    denoiser->scheduler          = std::make_shared<SGMUniformSchedule>();
-                    denoiser->scheduler->version = version;
-                    break;
+                LOG_INFO("Running with SGM Uniform schedule");
+                denoiser->scheduler          = std::make_shared<SGMUniformSchedule>();
+                denoiser->scheduler->version = version;
+                break;
             case SIMPLE:
-                    LOG_INFO("Running with Simple schedule");
-                    denoiser->scheduler          = std::make_shared<SimpleSchedule>();
-                    denoiser->scheduler->version = version;
-                    break;
+                LOG_INFO("Running with Simple schedule");
+                denoiser->scheduler          = std::make_shared<SimpleSchedule>();
+                denoiser->scheduler->version = version;
+                break;
             case SMOOTHSTEP:
                 LOG_INFO("Running with SmoothStep scheduler");
                 denoiser->scheduler = std::make_shared<SmoothStepSchedule>();
@@ -1053,7 +1057,7 @@ public:
                         ggml_tensor* denoise_mask             = NULL,
                         ggml_tensor* vace_context             = NULL,
                         float vace_strength                   = 1.f) {
-         if (shifted_timestep > 0 && !sd_version_is_sdxl(version)) {
+        if (shifted_timestep > 0 && !sd_version_is_sdxl(version)) {
             LOG_WARN("timestep shifting is only supported for SDXL models!");
             shifted_timestep = 0;
         }
@@ -1127,7 +1131,7 @@ public:
             } else {
                 timesteps_vec.assign(1, t);
             }
-            
+
             timesteps_vec  = process_timesteps(timesteps_vec, init_latent, denoise_mask);
             auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
             std::vector<float> guidance_vec(1, guidance.distilled_guidance);
@@ -2387,19 +2391,35 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         init_latent = generate_init_latent(sd_ctx, work_ctx, width, height);
     }
 
-    if (sd_img_gen_params->ref_images_count > 0) {
+    sd_guidance_params_t guidance = sd_img_gen_params->sample_params.guidance;
+    std::vector<sd_image_t*> ref_images;
+    for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
+        ref_images.push_back(&sd_img_gen_params->ref_images[i]);
+    }
+
+    std::vector<uint8_t> empty_image_data;
+    sd_image_t empty_image = {(uint32_t)width, (uint32_t)height, 3, nullptr};
+    if (ref_images.empty() && sd_version_is_unet_edit(sd_ctx->sd->version)) {
+        LOG_WARN("This model needs at least one reference image; using an empty reference");
+        empty_image_data.resize(width * height * 3);
+        ref_images.push_back(&empty_image);
+        empty_image.data = empty_image_data.data();
+        guidance.img_cfg = 0.f;
+    }
+
+    if (ref_images.size() > 0) {
         LOG_INFO("EDIT mode");
     }
 
     std::vector<ggml_tensor*> ref_latents;
-    for (int i = 0; i < sd_img_gen_params->ref_images_count; i++) {
+    for (int i = 0; i < ref_images.size(); i++) {
         ggml_tensor* img = ggml_new_tensor_4d(work_ctx,
                                               GGML_TYPE_F32,
-                                              sd_img_gen_params->ref_images[i].width,
-                                              sd_img_gen_params->ref_images[i].height,
+                                              ref_images[i]->width,
+                                              ref_images[i]->height,
                                               3,
                                               1);
-        sd_image_to_tensor(sd_img_gen_params->ref_images[i], img);
+        sd_image_to_tensor(*ref_images[i], img);
 
         ggml_tensor* latent = NULL;
         if (sd_ctx->sd->use_tiny_autoencoder) {
@@ -2437,7 +2457,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         SAFE_STR(sd_img_gen_params->prompt),
                                                         SAFE_STR(sd_img_gen_params->negative_prompt),
                                                         sd_img_gen_params->clip_skip,
-                                                        sd_img_gen_params->sample_params.guidance,
+                                                        guidance,
                                                         sd_img_gen_params->sample_params.eta,
                                                         sd_img_gen_params->sample_params.shifted_timestep,
                                                         width,
