@@ -2334,7 +2334,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     if (ref_images.empty() && sd_version_is_unet_edit(sd_ctx->sd->version))
     {
         LOG_WARN("This model needs at least one reference image; using an empty reference");
-        empty_image_data.reserve(width * height * 3);
+        empty_image_data.resize(width * height * 3);
         ref_images.push_back(&empty_image);
         empty_image.data = empty_image_data.data();
         guidance.img_cfg = 0.f;
