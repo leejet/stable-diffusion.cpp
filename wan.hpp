@@ -1219,7 +1219,7 @@ namespace WAN {
 
         void test() {
             struct ggml_init_params params;
-            params.mem_size   = static_cast<size_t>(1000 * 1024 * 1024);  // 10 MB
+            params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
             params.mem_buffer = NULL;
             params.no_alloc   = false;
 
@@ -1532,13 +1532,13 @@ namespace WAN {
             blocks["ffn.2"] = std::shared_ptr<GGMLBlock>(new Linear(ffn_dim, dim));
         }
 
-        struct ggml_tensor* forward(struct ggml_context* ctx,
-                                    ggml_backend_t backend,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* e,
-                                    struct ggml_tensor* pe,
-                                    struct ggml_tensor* context,
-                                    int64_t context_img_len = 257) {
+        virtual struct ggml_tensor* forward(struct ggml_context* ctx,
+                                            ggml_backend_t backend,
+                                            struct ggml_tensor* x,
+                                            struct ggml_tensor* e,
+                                            struct ggml_tensor* pe,
+                                            struct ggml_tensor* context,
+                                            int64_t context_img_len = 257) {
             // x: [N, n_token, dim]
             // e: [N, 6, dim] or [N, T, 6, dim]
             // context: [N, context_img_len + context_txt_len, dim]
@@ -1581,6 +1581,59 @@ namespace WAN {
             x = ggml_add(ctx, x, modulate_mul(ctx, y, es[5]));
 
             return x;
+        }
+    };
+
+    class VaceWanAttentionBlock : public WanAttentionBlock {
+    protected:
+        int block_id;
+        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+            enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
+            params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 6, 1);
+        }
+
+    public:
+        VaceWanAttentionBlock(bool t2v_cross_attn,
+                              int64_t dim,
+                              int64_t ffn_dim,
+                              int64_t num_heads,
+                              bool qk_norm         = true,
+                              bool cross_attn_norm = false,
+                              float eps            = 1e-6,
+                              int block_id         = 0,
+                              bool flash_attn      = false)
+            : WanAttentionBlock(t2v_cross_attn, dim, ffn_dim, num_heads, qk_norm, cross_attn_norm, eps, flash_attn), block_id(block_id) {
+            if (block_id == 0) {
+                blocks["before_proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
+            }
+            blocks["after_proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
+        }
+
+        std::pair<ggml_tensor*, ggml_tensor*> forward(struct ggml_context* ctx,
+                                                      ggml_backend_t backend,
+                                                      struct ggml_tensor* c,
+                                                      struct ggml_tensor* x,
+                                                      struct ggml_tensor* e,
+                                                      struct ggml_tensor* pe,
+                                                      struct ggml_tensor* context,
+                                                      int64_t context_img_len = 257) {
+            // x: [N, n_token, dim]
+            // e: [N, 6, dim] or [N, T, 6, dim]
+            // context: [N, context_img_len + context_txt_len, dim]
+            // return [N, n_token, dim]
+            if (block_id == 0) {
+                auto before_proj = std::dynamic_pointer_cast<Linear>(blocks["before_proj"]);
+
+                c = before_proj->forward(ctx, c);
+                c = ggml_add(ctx, c, x);
+            }
+
+            auto after_proj = std::dynamic_pointer_cast<Linear>(blocks["after_proj"]);
+
+            c           = WanAttentionBlock::forward(ctx, backend, c, e, pe, context, context_img_len);
+            auto c_skip = after_proj->forward(ctx, c);
+
+            return {c_skip, c};
         }
     };
 
@@ -1680,22 +1733,25 @@ namespace WAN {
     };
 
     struct WanParams {
-        std::string model_type               = "t2v";
-        std::tuple<int, int, int> patch_size = {1, 2, 2};
-        int64_t text_len                     = 512;
-        int64_t in_dim                       = 16;
-        int64_t dim                          = 2048;
-        int64_t ffn_dim                      = 8192;
-        int64_t freq_dim                     = 256;
-        int64_t text_dim                     = 4096;
-        int64_t out_dim                      = 16;
-        int64_t num_heads                    = 16;
-        int64_t num_layers                   = 32;
-        bool qk_norm                         = true;
-        bool cross_attn_norm                 = true;
-        float eps                            = 1e-6;
-        int64_t flf_pos_embed_token_number   = 0;
-        int theta                            = 10000;
+        std::string model_type                 = "t2v";
+        std::tuple<int, int, int> patch_size   = {1, 2, 2};
+        int64_t text_len                       = 512;
+        int64_t in_dim                         = 16;
+        int64_t dim                            = 2048;
+        int64_t ffn_dim                        = 8192;
+        int64_t freq_dim                       = 256;
+        int64_t text_dim                       = 4096;
+        int64_t out_dim                        = 16;
+        int64_t num_heads                      = 16;
+        int64_t num_layers                     = 32;
+        int64_t vace_layers                    = 0;
+        int64_t vace_in_dim                    = 96;
+        std::map<int, int> vace_layers_mapping = {};
+        bool qk_norm                           = true;
+        bool cross_attn_norm                   = true;
+        float eps                              = 1e-6;
+        int64_t flf_pos_embed_token_number     = 0;
+        int theta                              = 10000;
         // wan2.1 1.3B: 1536/12, wan2.1/2.2 14B: 5120/40, wan2.2 5B: 3074/24
         std::vector<int> axes_dim = {44, 42, 42};
         int64_t axes_dim_sum      = 128;
@@ -1746,6 +1802,31 @@ namespace WAN {
             if (params.model_type == "i2v") {
                 blocks["img_emb"] = std::shared_ptr<GGMLBlock>(new MLPProj(1280, params.dim, params.flf_pos_embed_token_number));
             }
+
+            // vace
+            if (params.vace_layers > 0) {
+                for (int i = 0; i < params.vace_layers; i++) {
+                    auto block                                 = std::shared_ptr<GGMLBlock>(new VaceWanAttentionBlock(params.model_type == "t2v",
+                                                                                                                      params.dim,
+                                                                                                                      params.ffn_dim,
+                                                                                                                      params.num_heads,
+                                                                                                                      params.qk_norm,
+                                                                                                                      params.cross_attn_norm,
+                                                                                                                      params.eps,
+                                                                                                                      i,
+                                                                                                                      params.flash_attn));
+                    blocks["vace_blocks." + std::to_string(i)] = block;
+                }
+
+                int step = params.num_layers / params.vace_layers;
+                int n    = 0;
+                for (int i = 0; i < params.num_layers; i += step) {
+                    this->params.vace_layers_mapping[i] = n;
+                    n++;
+                }
+
+                blocks["vace_patch_embedding"] = std::shared_ptr<GGMLBlock>(new Conv3d(params.vace_in_dim, params.dim, params.patch_size, params.patch_size));
+            }
         }
 
         struct ggml_tensor* pad_to_patch_size(struct ggml_context* ctx,
@@ -1795,9 +1876,12 @@ namespace WAN {
                                          struct ggml_tensor* timestep,
                                          struct ggml_tensor* context,
                                          struct ggml_tensor* pe,
-                                         struct ggml_tensor* clip_fea = NULL,
-                                         int64_t N                    = 1) {
+                                         struct ggml_tensor* clip_fea     = NULL,
+                                         struct ggml_tensor* vace_context = NULL,
+                                         float vace_strength              = 1.f,
+                                         int64_t N                        = 1) {
             // x: [N*C, T, H, W], C => in_dim
+            // vace_context: [N*vace_in_dim, T, H, W]
             // timestep: [N,] or [T]
             // context: [N, L, text_dim]
             // return: [N, t_len*h_len*w_len, out_dim*pt*ph*pw]
@@ -1845,10 +1929,35 @@ namespace WAN {
                 context_img_len = clip_fea->ne[1];  // 257
             }
 
+            // vace_patch_embedding
+            ggml_tensor* c = NULL;
+            if (params.vace_layers > 0) {
+                auto vace_patch_embedding = std::dynamic_pointer_cast<Conv3d>(blocks["vace_patch_embedding"]);
+
+                c = vace_patch_embedding->forward(ctx, vace_context);                          // [N*dim, t_len, h_len, w_len]
+                c = ggml_reshape_3d(ctx, c, c->ne[0] * c->ne[1] * c->ne[2], c->ne[3] / N, N);  // [N, dim, t_len*h_len*w_len]
+                c = ggml_nn_cont(ctx, ggml_torch_permute(ctx, c, 1, 0, 2, 3));                 // [N, t_len*h_len*w_len, dim]
+            }
+
+            auto x_orig = x;
+
             for (int i = 0; i < params.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<WanAttentionBlock>(blocks["blocks." + std::to_string(i)]);
 
                 x = block->forward(ctx, backend, x, e0, pe, context, context_img_len);
+
+                auto iter = params.vace_layers_mapping.find(i);
+                if (iter != params.vace_layers_mapping.end()) {
+                    int n = iter->second;
+
+                    auto vace_block = std::dynamic_pointer_cast<VaceWanAttentionBlock>(blocks["vace_blocks." + std::to_string(n)]);
+
+                    auto result = vace_block->forward(ctx, backend, c, x_orig, e0, pe, context, context_img_len);
+                    auto c_skip = result.first;
+                    c           = result.second;
+                    c_skip      = ggml_scale(ctx, c_skip, vace_strength);
+                    x           = ggml_add(ctx, x, c_skip);
+                }
             }
 
             x = head->forward(ctx, x, e);  // [N, t_len*h_len*w_len, pt*ph*pw*out_dim]
@@ -1864,6 +1973,8 @@ namespace WAN {
                                     struct ggml_tensor* pe,
                                     struct ggml_tensor* clip_fea        = NULL,
                                     struct ggml_tensor* time_dim_concat = NULL,
+                                    struct ggml_tensor* vace_context    = NULL,
+                                    float vace_strength                 = 1.f,
                                     int64_t N                           = 1) {
             // Forward pass of DiT.
             // x: [N*C, T, H, W]
@@ -1892,7 +2003,7 @@ namespace WAN {
                 t_len           = ((x->ne[2] + (std::get<0>(params.patch_size) / 2)) / std::get<0>(params.patch_size));
             }
 
-            auto out = forward_orig(ctx, backend, x, timestep, context, pe, clip_fea, N);  // [N, t_len*h_len*w_len, pt*ph*pw*C]
+            auto out = forward_orig(ctx, backend, x, timestep, context, pe, clip_fea, vace_context, vace_strength, N);  // [N, t_len*h_len*w_len, pt*ph*pw*C]
 
             out = unpatchify(ctx, out, t_len, h_len, w_len);  // [N*C, (T+pad_t) + (T2+pad_t2), H + pad_h, W + pad_w]
 
@@ -1927,7 +2038,19 @@ namespace WAN {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find(prefix) == std::string::npos)
                     continue;
-                size_t pos = tensor_name.find("blocks.");
+                size_t pos = tensor_name.find("vace_blocks.");
+                if (pos != std::string::npos) {
+                    tensor_name = tensor_name.substr(pos);  // remove prefix
+                    auto items  = split_string(tensor_name, '.');
+                    if (items.size() > 1) {
+                        int block_index = atoi(items[1].c_str());
+                        if (block_index + 1 > wan_params.vace_layers) {
+                            wan_params.vace_layers = block_index + 1;
+                        }
+                    }
+                    continue;
+                }
+                pos = tensor_name.find("blocks.");
                 if (pos != std::string::npos) {
                     tensor_name = tensor_name.substr(pos);  // remove prefix
                     auto items  = split_string(tensor_name, '.');
@@ -1937,6 +2060,7 @@ namespace WAN {
                             wan_params.num_layers = block_index + 1;
                         }
                     }
+                    continue;
                 }
                 if (tensor_name.find("img_emb") != std::string::npos) {
                     wan_params.model_type = "i2v";
@@ -1958,7 +2082,11 @@ namespace WAN {
                     wan_params.out_dim   = 48;
                     wan_params.text_len  = 512;
                 } else {
-                    desc                 = "Wan2.1-T2V-1.3B";
+                    if (wan_params.vace_layers > 0) {
+                        desc = "Wan2.1-VACE-1.3B";
+                    } else {
+                        desc = "Wan2.1-T2V-1.3B";
+                    }
                     wan_params.dim       = 1536;
                     wan_params.eps       = 1e-06;
                     wan_params.ffn_dim   = 8960;
@@ -1974,7 +2102,11 @@ namespace WAN {
                         desc              = "Wan2.2-I2V-14B";
                         wan_params.in_dim = 36;
                     } else {
-                        desc              = "Wan2.x-T2V-14B";
+                        if (wan_params.vace_layers > 0) {
+                            desc = "Wan2.x-VACE-14B";
+                        } else {
+                            desc = "Wan2.x-T2V-14B";
+                        }
                         wan_params.in_dim = 16;
                     }
                 } else {
@@ -2015,7 +2147,9 @@ namespace WAN {
                                         struct ggml_tensor* context,
                                         struct ggml_tensor* clip_fea        = NULL,
                                         struct ggml_tensor* c_concat        = NULL,
-                                        struct ggml_tensor* time_dim_concat = NULL) {
+                                        struct ggml_tensor* time_dim_concat = NULL,
+                                        struct ggml_tensor* vace_context    = NULL,
+                                        float vace_strength                 = 1.f) {
             struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, WAN_GRAPH_SIZE, false);
 
             x               = to_backend(x);
@@ -2024,6 +2158,7 @@ namespace WAN {
             clip_fea        = to_backend(clip_fea);
             c_concat        = to_backend(c_concat);
             time_dim_concat = to_backend(time_dim_concat);
+            vace_context    = to_backend(vace_context);
 
             pe_vec      = Rope::gen_wan_pe(x->ne[2],
                                            x->ne[1],
@@ -2053,7 +2188,9 @@ namespace WAN {
                                                   context,
                                                   pe,
                                                   clip_fea,
-                                                  time_dim_concat);
+                                                  time_dim_concat,
+                                                  vace_context,
+                                                  vace_strength);
 
             ggml_build_forward_expand(gf, out);
 
@@ -2067,10 +2204,12 @@ namespace WAN {
                      struct ggml_tensor* clip_fea        = NULL,
                      struct ggml_tensor* c_concat        = NULL,
                      struct ggml_tensor* time_dim_concat = NULL,
+                     struct ggml_tensor* vace_context    = NULL,
+                     float vace_strength                 = 1.f,
                      struct ggml_tensor** output         = NULL,
                      struct ggml_context* output_ctx     = NULL) {
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, clip_fea, c_concat, time_dim_concat);
+                return build_graph(x, timesteps, context, clip_fea, c_concat, time_dim_concat, vace_context, vace_strength);
             };
 
             GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -2108,7 +2247,7 @@ namespace WAN {
                 struct ggml_tensor* out = NULL;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, NULL, NULL, NULL, &out, work_ctx);
+                compute(8, x, timesteps, context, NULL, NULL, NULL, NULL, 1.f, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

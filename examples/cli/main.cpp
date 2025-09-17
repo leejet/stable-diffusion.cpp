@@ -35,6 +35,8 @@
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
+namespace fs = std::filesystem;
+
 const char* modes_str[] = {
     "img_gen",
     "vid_gen",
@@ -64,8 +66,6 @@ struct SDParams {
     std::string esrgan_path;
     std::string control_net_path;
     std::string embedding_dir;
-    std::string stacked_id_embed_dir;
-    std::string input_id_images_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
     std::string lora_model_dir;
@@ -75,15 +75,15 @@ struct SDParams {
     std::string mask_image_path;
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
+    std::string control_video_path;
     bool increase_ref_index = false;
 
     std::string prompt;
     std::string negative_prompt;
-    float style_ratio = 20.f;
-    int clip_skip     = -1;  // <= 0 represents unspecified
-    int width         = 512;
-    int height        = 512;
-    int batch_count   = 1;
+    int clip_skip   = -1;  // <= 0 represents unspecified
+    int width       = 512;
+    int height      = 512;
+    int batch_count = 1;
 
     std::vector<int> skip_layers = {7, 8, 9};
     sd_sample_params_t sample_params;
@@ -91,17 +91,16 @@ struct SDParams {
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
     sd_sample_params_t high_noise_sample_params;
 
-    float moe_boundary = 0.875f;
-
-    int video_frames = 1;
-    int fps          = 16;
+    float moe_boundary  = 0.875f;
+    int video_frames    = 1;
+    int fps             = 16;
+    float vace_strength = 1.f;
 
     float strength             = 0.75f;
     float control_strength     = 0.9f;
     rng_type_t rng_type        = CUDA_RNG;
     int64_t seed               = 42;
     bool verbose               = false;
-    bool vae_tiling            = false;
     bool offload_params_to_cpu = false;
     bool control_net_cpu       = false;
     bool normalize_input       = false;
@@ -114,10 +113,18 @@ struct SDParams {
     bool color                 = false;
     int upscale_repeats        = 1;
 
+    // Photo Maker
+    std::string photo_maker_path;
+    std::string pm_id_images_dir;
+    std::string pm_id_embed_path;
+    float pm_style_strength = 20.f;
+
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
     float flow_shift         = INFINITY;
+
+    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 
     SDParams() {
         sd_sample_params_init(&sample_params);
@@ -145,9 +152,10 @@ void print_params(SDParams params) {
     printf("    esrgan_path:                       %s\n", params.esrgan_path.c_str());
     printf("    control_net_path:                  %s\n", params.control_net_path.c_str());
     printf("    embedding_dir:                     %s\n", params.embedding_dir.c_str());
-    printf("    stacked_id_embed_dir:              %s\n", params.stacked_id_embed_dir.c_str());
-    printf("    input_id_images_path:              %s\n", params.input_id_images_path.c_str());
-    printf("    style ratio:                       %.2f\n", params.style_ratio);
+    printf("    photo_maker_path:                  %s\n", params.photo_maker_path.c_str());
+    printf("    pm_id_images_dir:                  %s\n", params.pm_id_images_dir.c_str());
+    printf("    pm_id_embed_path:                  %s\n", params.pm_id_embed_path.c_str());
+    printf("    pm_style_strength:                 %.2f\n", params.pm_style_strength);
     printf("    normalize input image:             %s\n", params.normalize_input ? "true" : "false");
     printf("    output_path:                       %s\n", params.output_path.c_str());
     printf("    init_image_path:                   %s\n", params.init_image_path.c_str());
@@ -158,6 +166,7 @@ void print_params(SDParams params) {
     for (auto& path : params.ref_image_paths) {
         printf("        %s\n", path.c_str());
     };
+    printf("    control_video_path:                %s\n", params.control_video_path.c_str());
     printf("    increase_ref_index:                %s\n", params.increase_ref_index ? "true" : "false");
     printf("    offload_params_to_cpu:             %s\n", params.offload_params_to_cpu ? "true" : "false");
     printf("    clip_on_cpu:                       %s\n", params.clip_on_cpu ? "true" : "false");
@@ -178,14 +187,15 @@ void print_params(SDParams params) {
     printf("    flow_shift:                        %.2f\n", params.flow_shift);
     printf("    strength(img2img):                 %.2f\n", params.strength);
     printf("    rng:                               %s\n", sd_rng_type_name(params.rng_type));
-    printf("    seed:                              %ld\n", params.seed);
+    printf("    seed:                              %zd\n", params.seed);
     printf("    batch_count:                       %d\n", params.batch_count);
-    printf("    vae_tiling:                        %s\n", params.vae_tiling ? "true" : "false");
+    printf("    vae_tiling:                        %s\n", params.vae_tiling_params.enabled ? "true" : "false");
     printf("    upscale_repeats:                   %d\n", params.upscale_repeats);
     printf("    chroma_use_dit_mask:               %s\n", params.chroma_use_dit_mask ? "true" : "false");
     printf("    chroma_use_t5_mask:                %s\n", params.chroma_use_t5_mask ? "true" : "false");
     printf("    chroma_t5_mask_pad:                %d\n", params.chroma_t5_mask_pad);
     printf("    video_frames:                      %d\n", params.video_frames);
+    printf("    vace_strength:                     %.2f\n", params.vace_strength);
     printf("    fps:                               %d\n", params.fps);
     free(sample_params_str);
     free(high_noise_sample_params_str);
@@ -211,9 +221,6 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
     printf("  --control-net [CONTROL_PATH]       path to control net model\n");
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
-    printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings\n");
-    printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir\n");
-    printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now\n");
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
     printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
@@ -225,6 +232,9 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -i, --end-img [IMAGE]              path to the end image, required by flf2v\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
     printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
+    printf("  --control-video [PATH]             path to control video frames, It must be a directory path.\n");
+    printf("                                     The video frames inside should be stored as images in lexicographical (character) order\n");
+    printf("                                     For example, if the control video path is `frames`, the directory contain images such as 00.png, 01.png, … etc.\n");
     printf("  --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
@@ -238,9 +248,10 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
     printf("  --skip-layer-start START           SLG enabling point: (default: 0.01)\n");
     printf("  --skip-layer-end END               SLG disabling point: (default: 0.2)\n");
-    printf("  --scheduler {discrete, karras, exponential, ays, gits, smoothstep} Denoiser sigma scheduler (default: discrete)\n");
+    printf("  --scheduler {discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple} Denoiser sigma scheduler (default: discrete)\n");
     printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
-    printf("                                     sampling method (default: \"euler_a\")\n");
+    printf("                                     sampling method (default: \"euler\" for Flux/SD3/Wan, \"euler_a\" otherwise)\n");
+    printf("  --timestep-shift N                 shift timestep for NitroFusion models, default: 0, recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant\n");
     printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
     printf("  --high-noise-cfg-scale SCALE       (high noise) unconditional guidance scale: (default: 7.0)\n");
     printf("  --high-noise-img-cfg-scale SCALE   (high noise) image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)\n");
@@ -251,13 +262,12 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --high-noise-skip-layers LAYERS    (high noise) Layers to skip for SLG steps: (default: [7,8,9])\n");
     printf("  --high-noise-skip-layer-start      (high noise) SLG enabling point: (default: 0.01)\n");
     printf("  --high-noise-skip-layer-end END    (high noise) SLG disabling point: (default: 0.2)\n");
-    printf("  --high-noise-scheduler {discrete, karras, exponential, ays, gits, smoothstep} Denoiser sigma scheduler (default: discrete)\n");
+    printf("  --high-noise-scheduler {discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple} Denoiser sigma scheduler (default: discrete)\n");
     printf("  --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}\n");
     printf("                                     (high noise) sampling method (default: \"euler_a\")\n");
     printf("  --high-noise-steps  STEPS          (high noise) number of sample steps (default: -1 = auto)\n");
     printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
     printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
-    printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20)\n");
     printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
     printf("                                     1.0 corresponds to full destruction of information in init image\n");
     printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
@@ -265,9 +275,12 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
     printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
     printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --clip-skip N                      ignore last_dot_pos layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
+    printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
     printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
     printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
+    printf("  --vae-tile-size [X]x[Y]            tile size for vae tiling (default: 32x32)\n");
+    printf("  --vae-relative-tile-size [X]x[Y]   relative tile size for vae tiling, in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)\n");
+    printf("  --vae-tile-overlap OVERLAP         tile overlap for vae tiling, in fraction of tile size (default: 0.5)\n");
     printf("  --vae-on-cpu                       keep vae in cpu (for low vram)\n");
     printf("  --clip-on-cpu                      keep clip in cpu (for low vram)\n");
     printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
@@ -288,6 +301,12 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --moe-boundary BOUNDARY            timestep boundary for Wan2.2 MoE model. (default: 0.875)\n");
     printf("                                     only enabled if `--high-noise-steps` is set to -1\n");
     printf("  --flow-shift SHIFT                 shift value for Flow models like SD3.x or WAN (default: auto)\n");
+    printf("  --vace-strength                    wan vace strength\n");
+    printf("  --photo-maker                      path to PHOTOMAKER model\n");
+    printf("  --pm-id-images-dir [DIR]           path to PHOTOMAKER input id images dir\n");
+    printf("  --pm-id-embed-path [PATH]          path to PHOTOMAKER v2 id embed\n");
+    printf("  --pm-style-strength                strength for keeping PHOTOMAKER input identity (default: 20)\n");
+    printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -474,18 +493,19 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--taesd", "", &params.taesd_path},
         {"", "--control-net", "", &params.control_net_path},
         {"", "--embd-dir", "", &params.embedding_dir},
-        {"", "--stacked-id-embd-dir", "", &params.stacked_id_embed_dir},
         {"", "--lora-model-dir", "", &params.lora_model_dir},
         {"-i", "--init-img", "", &params.init_image_path},
         {"", "--end-img", "", &params.end_image_path},
         {"", "--tensor-type-rules", "", &params.tensor_type_rules},
-        {"", "--input-id-images-dir", "", &params.input_id_images_path},
+        {"", "--photo-maker", "", &params.photo_maker_path},
+        {"", "--pm-id-images-dir", "", &params.pm_id_images_dir},
+        {"", "--pm-id-embed-path", "", &params.pm_id_embed_path},
         {"", "--mask", "", &params.mask_image_path},
         {"", "--control-image", "", &params.control_image_path},
+        {"", "--control-video", "", &params.control_video_path},
         {"-o", "--output", "", &params.output_path},
         {"-p", "--prompt", "", &params.prompt},
         {"-n", "--negative-prompt", "", &params.negative_prompt},
-
         {"", "--upscale-model", "", &params.esrgan_path},
     };
 
@@ -501,6 +521,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--chroma-t5-mask-pad", "", &params.chroma_t5_mask_pad},
         {"", "--video-frames", "", &params.video_frames},
         {"", "--fps", "", &params.fps},
+        {"", "--timestep-shift", "", &params.sample_params.shifted_timestep},
     };
 
     options.float_options = {
@@ -519,14 +540,16 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--high-noise-skip-layer-end", "", &params.high_noise_sample_params.guidance.slg.layer_end},
         {"", "--high-noise-eta", "", &params.high_noise_sample_params.eta},
         {"", "--strength", "", &params.strength},
-        {"", "--style-ratio", "", &params.style_ratio},
+        {"", "--pm-style-strength", "", &params.pm_style_strength},
         {"", "--control-strength", "", &params.control_strength},
         {"", "--moe-boundary", "", &params.moe_boundary},
         {"", "--flow-shift", "", &params.flow_shift},
+        {"", "--vace-strength", "", &params.vace_strength},
+        {"", "--vae-tile-overlap", "", &params.vae_tiling_params.target_overlap},
     };
 
     options.bool_options = {
-        {"", "--vae-tiling", "", true, &params.vae_tiling},
+        {"", "--vae-tiling", "", true, &params.vae_tiling_params.enabled},
         {"", "--offload-to-cpu", "", true, &params.offload_params_to_cpu},
         {"", "--control-net-cpu", "", true, &params.control_net_cpu},
         {"", "--normalize-input", "", true, &params.normalize_input},
@@ -726,6 +749,52 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_tile_size_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        std::string tile_size_str = argv[index];
+        size_t x_pos              = tile_size_str.find('x');
+        try {
+            if (x_pos != std::string::npos) {
+                std::string tile_x_str               = tile_size_str.substr(0, x_pos);
+                std::string tile_y_str               = tile_size_str.substr(x_pos + 1);
+                params.vae_tiling_params.tile_size_x = std::stoi(tile_x_str);
+                params.vae_tiling_params.tile_size_y = std::stoi(tile_y_str);
+            } else {
+                params.vae_tiling_params.tile_size_x = params.vae_tiling_params.tile_size_y = std::stoi(tile_size_str);
+            }
+        } catch (const std::invalid_argument& e) {
+            return -1;
+        } catch (const std::out_of_range& e) {
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_relative_tile_size_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        std::string rel_size_str = argv[index];
+        size_t x_pos             = rel_size_str.find('x');
+        try {
+            if (x_pos != std::string::npos) {
+                std::string rel_x_str               = rel_size_str.substr(0, x_pos);
+                std::string rel_y_str               = rel_size_str.substr(x_pos + 1);
+                params.vae_tiling_params.rel_size_x = std::stof(rel_x_str);
+                params.vae_tiling_params.rel_size_y = std::stof(rel_y_str);
+            } else {
+                params.vae_tiling_params.rel_size_x = params.vae_tiling_params.rel_size_y = std::stof(rel_size_str);
+            }
+        } catch (const std::invalid_argument& e) {
+            return -1;
+        } catch (const std::out_of_range& e) {
+            return -1;
+        }
+        return 1;
+    };
+
     options.manual_options = {
         {"-M", "--mode", "", on_mode_arg},
         {"", "--type", "", on_type_arg},
@@ -739,6 +808,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--high-noise-skip-layers", "", on_high_noise_skip_layers_arg},
         {"-r", "--ref-image", "", on_ref_image_arg},
         {"-h", "--help", "", on_help_arg},
+        {"", "--vae-tile-size", "", on_tile_size_arg},
+        {"", "--vae-relative-tile-size", "", on_relative_tile_size_arg},
     };
 
     if (!parse_options(argc, argv, options)) {
@@ -803,6 +874,11 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     if (params.mode == VID_GEN && params.fps <= 0) {
         fprintf(stderr, "warning: --fps must be at least 1\n");
+        exit(1);
+    }
+
+    if (params.sample_params.shifted_timestep < 0 || params.sample_params.shifted_timestep > 1000) {
+        fprintf(stderr, "error: timestep-shift must be between 0 and 1000\n");
         exit(1);
     }
 
@@ -1012,12 +1088,56 @@ uint8_t* load_image(const char* image_path, int& width, int& height, int expecte
                      STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
                      STBIR_FILTER_BOX, STBIR_FILTER_BOX,
                      STBIR_COLORSPACE_SRGB, nullptr);
-
-        // Save resized result
+        width  = resized_width;
+        height = resized_height;
         free(image_buffer);
         image_buffer = resized_image_buffer;
     }
     return image_buffer;
+}
+
+bool load_images_from_dir(const std::string dir,
+                          std::vector<sd_image_t>& images,
+                          int expected_width  = 0,
+                          int expected_height = 0,
+                          int max_image_num   = 0,
+                          bool verbose        = false) {
+    if (!fs::exists(dir) || !fs::is_directory(dir)) {
+        fprintf(stderr, "'%s' is not a valid directory\n", dir.c_str());
+        return false;
+    }
+
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (!entry.is_regular_file())
+            continue;
+
+        std::string path = entry.path().string();
+        std::string ext  = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+        if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp") {
+            if (verbose) {
+                printf("load image %zu from '%s'\n", images.size(), path.c_str());
+            }
+            int width             = 0;
+            int height            = 0;
+            uint8_t* image_buffer = load_image(path.c_str(), width, height, expected_width, expected_height);
+            if (image_buffer == NULL) {
+                fprintf(stderr, "load image from '%s' failed\n", path.c_str());
+                return false;
+            }
+
+            images.push_back({(uint32_t)width,
+                              (uint32_t)height,
+                              3,
+                              image_buffer});
+
+            if (max_image_num > 0 && images.size() >= max_image_num) {
+                break;
+            }
+        }
+    }
+    return true;
 }
 
 int main(int argc, const char* argv[]) {
@@ -1059,17 +1179,29 @@ int main(int argc, const char* argv[]) {
     sd_image_t control_image = {(uint32_t)params.width, (uint32_t)params.height, 3, NULL};
     sd_image_t mask_image    = {(uint32_t)params.width, (uint32_t)params.height, 1, NULL};
     std::vector<sd_image_t> ref_images;
+    std::vector<sd_image_t> pmid_images;
+    std::vector<sd_image_t> control_frames;
 
     auto release_all_resources = [&]() {
         free(init_image.data);
         free(end_image.data);
         free(control_image.data);
         free(mask_image.data);
-        for (auto ref_image : ref_images) {
-            free(ref_image.data);
-            ref_image.data = NULL;
+        for (auto image : ref_images) {
+            free(image.data);
+            image.data = NULL;
         }
         ref_images.clear();
+        for (auto image : pmid_images) {
+            free(image.data);
+            image.data = NULL;
+        }
+        pmid_images.clear();
+        for (auto image : control_frames) {
+            free(image.data);
+            image.data = NULL;
+        }
+        control_frames.clear();
     };
 
     if (params.init_image_path.size() > 0) {
@@ -1128,14 +1260,12 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
         if (params.canny_preprocess) {  // apply preprocessor
-            control_image.data = preprocess_canny(control_image.data,
-                                                  control_image.width,
-                                                  control_image.height,
-                                                  0.08f,
-                                                  0.08f,
-                                                  0.8f,
-                                                  1.0f,
-                                                  false);
+            preprocess_canny(control_image,
+                             0.08f,
+                             0.08f,
+                             0.8f,
+                             1.0f,
+                             false);
         }
     }
 
@@ -1157,6 +1287,30 @@ int main(int argc, const char* argv[]) {
         }
     }
 
+    if (!params.control_video_path.empty()) {
+        if (!load_images_from_dir(params.control_video_path,
+                                  control_frames,
+                                  params.width,
+                                  params.height,
+                                  params.video_frames,
+                                  params.verbose)) {
+            release_all_resources();
+            return 1;
+        }
+    }
+
+    if (!params.pm_id_images_dir.empty()) {
+        if (!load_images_from_dir(params.pm_id_images_dir,
+                                  pmid_images,
+                                  0,
+                                  0,
+                                  0,
+                                  params.verbose)) {
+            release_all_resources();
+            return 1;
+        }
+    }
+
     if (params.mode == VID_GEN) {
         vae_decode_only = false;
     }
@@ -1174,9 +1328,8 @@ int main(int argc, const char* argv[]) {
         params.control_net_path.c_str(),
         params.lora_model_dir.c_str(),
         params.embedding_dir.c_str(),
-        params.stacked_id_embed_dir.c_str(),
+        params.photo_maker_path.c_str(),
         vae_decode_only,
-        params.vae_tiling,
         true,
         params.n_threads,
         params.wtype,
@@ -1202,6 +1355,10 @@ int main(int argc, const char* argv[]) {
         return 1;
     }
 
+    if (params.sample_params.sample_method == SAMPLE_METHOD_DEFAULT) {
+        params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
+    }
+
     sd_image_t* results;
     int num_results = 1;
     if (params.mode == IMG_GEN) {
@@ -1222,9 +1379,14 @@ int main(int argc, const char* argv[]) {
             params.batch_count,
             control_image,
             params.control_strength,
-            params.style_ratio,
             params.normalize_input,
-            params.input_id_images_path.c_str(),
+            {
+                pmid_images.data(),
+                (int)pmid_images.size(),
+                params.pm_id_embed_path.c_str(),
+                params.pm_style_strength,
+            },  // pm_params
+            params.vae_tiling_params,
         };
 
         results     = generate_image(sd_ctx, &img_gen_params);
@@ -1236,6 +1398,8 @@ int main(int argc, const char* argv[]) {
             params.clip_skip,
             init_image,
             end_image,
+            control_frames.data(),
+            (int)control_frames.size(),
             params.width,
             params.height,
             params.sample_params,
@@ -1244,6 +1408,7 @@ int main(int argc, const char* argv[]) {
             params.strength,
             params.seed,
             params.video_frames,
+            params.vace_strength,
         };
 
         results = generate_video(sd_ctx, &vid_gen_params, &num_results);
@@ -1286,7 +1451,6 @@ int main(int argc, const char* argv[]) {
 
     // create directory if not exists
     {
-        namespace fs            = std::filesystem;
         const fs::path out_path = params.output_path;
         if (const fs::path out_dir = out_path.parent_path(); !out_dir.empty()) {
             std::error_code ec;

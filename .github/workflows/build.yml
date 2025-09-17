@@ -254,7 +254,7 @@ jobs:
 
       - name: Copy and pack Cuda runtime
         id: pack_cuda_runtime
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.build == 'cuda12' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ matrix.build == 'cuda12' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
         run: |
           echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
           $dst='.\build\bin\cudart\'
@@ -262,7 +262,7 @@ jobs:
           7z a cudart-sd-bin-win-cu12-x64.zip $dst\*
 
       - name: Upload Cuda runtime
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.build == 'cuda12' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ matrix.build == 'cuda12' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
         uses: actions/upload-artifact@v4
         with:
           name: sd-cudart-sd-bin-win-cu12-x64.zip
@@ -288,6 +288,11 @@ jobs:
       - windows-latest-cmake
 
     steps:
+      - name: Clone
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
       - name: Download artifacts
         id: download-artifact
         uses: actions/download-artifact@v4
@@ -296,20 +301,27 @@ jobs:
           pattern: sd-*
           merge-multiple: true
 
+      - name: Get commit count
+        id: commit_count
+        run: |
+          echo "count=$(git rev-list --count HEAD)" >> $GITHUB_OUTPUT
+
       - name: Get commit hash
         id: commit
         uses: pr-mpt/actions-commit-hash@v2
 
       - name: Create release
         id: create_release
+        if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'master' }}
         uses: anzz1/action-create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}
+          tag_name: ${{ format('{0}-{1}-{2}', env.BRANCH_NAME, steps.commit_count.outputs.count, steps.commit.outputs.short) }}
 
       - name: Upload release
         id: upload_release
+        if: ${{ github.event_name == 'workflow_dispatch' || github.ref_name == 'master' }}
         uses: actions/github-script@v3
         with:
           github-token: ${{secrets.GITHUB_TOKEN}}

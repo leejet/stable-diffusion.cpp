@@ -119,7 +119,7 @@ struct TensorStorage {
 
     size_t file_index = 0;
     int index_in_zip  = -1;  // >= means stored in a zip file
-    size_t offset     = 0;   // offset in file
+    uint64_t offset   = 0;   // offset in file
 
     TensorStorage() = default;
 
@@ -164,10 +164,10 @@ struct TensorStorage {
 
     std::vector<TensorStorage> chunk(size_t n) {
         std::vector<TensorStorage> chunks;
-        size_t chunk_size = nbytes_to_read() / n;
+        uint64_t chunk_size = nbytes_to_read() / n;
         // printf("%d/%d\n", chunk_size, nbytes_to_read());
         reverse_ne();
-        for (int i = 0; i < n; i++) {
+        for (size_t i = 0; i < n; i++) {
             TensorStorage chunk_i = *this;
             chunk_i.ne[0]         = ne[0] / n;
             chunk_i.offset        = offset + i * chunk_size;
@@ -247,9 +247,10 @@ public:
     ggml_type get_diffusion_model_wtype();
     ggml_type get_vae_wtype();
     void set_wtype_override(ggml_type wtype, std::string prefix = "");
-    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb);
+    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
-                      std::set<std::string> ignore_tensors = {});
+                      std::set<std::string> ignore_tensors = {},
+                      int n_threads                        = 0);
 
     bool save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules);
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
