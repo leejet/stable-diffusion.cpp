@@ -384,7 +384,6 @@ arguments:
   --pm-id-images-dir [DIR]           path to PHOTOMAKER input id images dir
   --pm-id-embed-path [PATH]          path to PHOTOMAKER v2 id embed
   --pm-style-strength                strength for keeping PHOTOMAKER input identity (default: 20)
-  --normalize-input                  normalize PHOTOMAKER input id images
   -v, --verbose                      print extra info
 ```
 

@@ -1794,7 +1794,6 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->seed              = -1;
     sd_img_gen_params->batch_count       = 1;
     sd_img_gen_params->control_strength  = 0.9f;
-    sd_img_gen_params->normalize_input   = false;
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
     sd_img_gen_params->vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 }
@@ -1820,7 +1819,6 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "ref_images_count: %d\n"
              "increase_ref_index: %s\n"
              "control_strength: %.2f\n"
-             "normalize_input: %s\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
              "VAE tiling: %s\n",
              SAFE_STR(sd_img_gen_params->prompt),
@@ -1835,7 +1833,6 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->ref_images_count,
              BOOL_STR(sd_img_gen_params->increase_ref_index),
              sd_img_gen_params->control_strength,
-             BOOL_STR(sd_img_gen_params->normalize_input),
              sd_img_gen_params->pm_params.style_strength,
              sd_img_gen_params->pm_params.id_images_count,
              SAFE_STR(sd_img_gen_params->pm_params.id_embed_path),
@@ -1919,7 +1916,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     int batch_count,
                                     sd_image_t control_image,
                                     float control_strength,
-                                    bool normalize_input,
                                     sd_pm_params_t pm_params,
                                     std::vector<ggml_tensor*> ref_latents,
                                     bool increase_ref_index,
@@ -2468,7 +2464,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->batch_count,
                                                         sd_img_gen_params->control_image,
                                                         sd_img_gen_params->control_strength,
-                                                        sd_img_gen_params->normalize_input,
                                                         sd_img_gen_params->pm_params,
                                                         ref_latents,
                                                         sd_img_gen_params->increase_ref_index,
