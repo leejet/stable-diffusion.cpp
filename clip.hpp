@@ -554,11 +554,11 @@ protected:
         enum ggml_type token_wtype = GGML_TYPE_F32;
         if (!force_clip_f32) {
             auto tensor_type = tensor_types.find(prefix + "token_embedding.weight");
-            if (tensor_type != tensor_types.end())
+            if (tensor_type != tensor_types.end() && tensor_type->second == GGML_TYPE_F16) {
                 token_wtype = tensor_type->second;
+            }
         }
         enum ggml_type position_wtype = GGML_TYPE_F32;
-
         params["token_embedding.weight"]    = ggml_new_tensor_2d(ctx, token_wtype, embed_dim, vocab_size);
         params["position_embedding.weight"] = ggml_new_tensor_2d(ctx, position_wtype, embed_dim, num_positions);
     }
