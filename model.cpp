@@ -2211,26 +2211,23 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                             i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)read_buffer.data(), tensor_storage.nelements());
                         }
 
-                        if (tensor_storage.type == dst_tensor->type) {
-                            // copy to device memory
-                            t1 = ggml_time_ms();
-                            convert_time_ms.fetch_add(t1 - t0);
-                            t0 = ggml_time_ms();
-                            ggml_backend_tensor_set(dst_tensor, read_buffer.data(), 0, ggml_nbytes(dst_tensor));
-                            t1 = ggml_time_ms();
-                            copy_to_backend_time_ms.fetch_add(t1 - t0);
-                        } else {
-                            // convert first, then copy to device memory
+                        auto* tensor_buffer = &read_buffer;
 
+                        if (tensor_storage.type != dst_tensor->type) {
+                            // convert first
                             convert_buffer.resize(ggml_nbytes(dst_tensor));
                             convert_tensor((void*)read_buffer.data(), tensor_storage.type, (void*)convert_buffer.data(), dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
-                            t1 = ggml_time_ms();
-                            convert_time_ms.fetch_add(t1 - t0);
-                            t0 = ggml_time_ms();
-                            ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
-                            t1 = ggml_time_ms();
-                            copy_to_backend_time_ms.fetch_add(t1 - t0);
+                            tensor_buffer = &convert_buffer;
                         }
+
+                        t1 = ggml_time_ms();
+                        convert_time_ms.fetch_add(t1 - t0);
+
+                        // copy to device memory
+                        t0 = ggml_time_ms();
+                        ggml_backend_tensor_set(dst_tensor, tensor_buffer->data(), 0, ggml_nbytes(dst_tensor));
+                        t1 = ggml_time_ms();
+                        copy_to_backend_time_ms.fetch_add(t1 - t0);
                     }
                 }
                 if (zip != NULL) {
