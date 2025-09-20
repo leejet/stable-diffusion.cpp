@@ -1,7 +1,7 @@
+#include <algorithm>
 #include <iostream>
 #include <string>
 #include <vector>
-#include <algorithm>
 
 #include "tokenize_util.h"
 
@@ -697,36 +697,37 @@ bool is_letter(char32_t ch) {
         {0x31350, 0x33479},
     };
 
-    for (const auto &r : ranges) {
-        if (ch >= r.start && ch <= r.end) return true;
+    for (const auto& r : ranges) {
+        if (ch >= r.start && ch <= r.end)
+            return true;
     }
     return false;
 }
 
 bool is_space(char32_t cp) {
     switch (cp) {
-        case 0x0009: // TAB \t
-        case 0x000A: // LF \n
-        case 0x000B: // VT
-        case 0x000C: // FF
-        case 0x000D: // CR \r
-        case 0x0020: // Space
-        case 0x00A0: // No-Break Space
-        case 0x1680: // Ogham Space Mark
-        case 0x2000: // En Quad
-        case 0x2001: // Em Quad
-        case 0x2002: // En Space
-        case 0x2003: // Em Space
-        case 0x2004: // Three-Per-Em Space
-        case 0x2005: // Four-Per-Em Space
-        case 0x2006: // Six-Per-Em Space
-        case 0x2007: // Figure Space
-        case 0x2008: // Punctuation Space
-        case 0x2009: // Thin Space
-        case 0x200A: // Hair Space
-        case 0x202F: // Narrow No-Break Space
-        case 0x205F: // Medium Mathematical Space
-        case 0x3000: // Ideographic Space
+        case 0x0009:  // TAB \t
+        case 0x000A:  // LF \n
+        case 0x000B:  // VT
+        case 0x000C:  // FF
+        case 0x000D:  // CR \r
+        case 0x0020:  // Space
+        case 0x00A0:  // No-Break Space
+        case 0x1680:  // Ogham Space Mark
+        case 0x2000:  // En Quad
+        case 0x2001:  // Em Quad
+        case 0x2002:  // En Space
+        case 0x2003:  // Em Space
+        case 0x2004:  // Three-Per-Em Space
+        case 0x2005:  // Four-Per-Em Space
+        case 0x2006:  // Six-Per-Em Space
+        case 0x2007:  // Figure Space
+        case 0x2008:  // Punctuation Space
+        case 0x2009:  // Thin Space
+        case 0x200A:  // Hair Space
+        case 0x202F:  // Narrow No-Break Space
+        case 0x205F:  // Medium Mathematical Space
+        case 0x3000:  // Ideographic Space
             return true;
         default:
             return false;
@@ -736,7 +737,7 @@ bool is_space(char32_t cp) {
 std::string str_to_lower(const std::string& input) {
     std::string result = input;
     std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
+                   [](unsigned char c) { return std::tolower(c); });
     return result;
 }
 
@@ -745,17 +746,28 @@ std::vector<char32_t> utf8_to_codepoints(const std::string& str) {
     std::vector<char32_t> codepoints;
     size_t i = 0;
     while (i < str.size()) {
-        unsigned char c = str[i];
-        char32_t cp = 0;
+        unsigned char c    = str[i];
+        char32_t cp        = 0;
         size_t extra_bytes = 0;
 
-        if ((c & 0x80) == 0) cp = c;
-        else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; extra_bytes = 1; }
-        else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; extra_bytes = 2; }
-        else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; extra_bytes = 3; }
-        else { ++i; continue; } // Invalid UTF-8
+        if ((c & 0x80) == 0)
+            cp = c;
+        else if ((c & 0xE0) == 0xC0) {
+            cp          = c & 0x1F;
+            extra_bytes = 1;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp          = c & 0x0F;
+            extra_bytes = 2;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp          = c & 0x07;
+            extra_bytes = 3;
+        } else {
+            ++i;
+            continue;
+        }  // Invalid UTF-8
 
-        if (i + extra_bytes >= str.size()) break;
+        if (i + extra_bytes >= str.size())
+            break;
 
         for (size_t j = 1; j <= extra_bytes; ++j)
             cp = (cp << 6) | (str[i + j] & 0x3F);
@@ -769,7 +781,8 @@ std::vector<char32_t> utf8_to_codepoints(const std::string& str) {
 // Unicode code point -> UTF-8
 std::string codepoint_to_utf8(char32_t cp) {
     std::string out;
-    if (cp <= 0x7F) out.push_back(static_cast<char>(cp));
+    if (cp <= 0x7F)
+        out.push_back(static_cast<char>(cp));
     else if (cp <= 0x7FF) {
         out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
         out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
@@ -786,6 +799,17 @@ std::string codepoint_to_utf8(char32_t cp) {
     return out;
 }
 
+bool starts_with(const std::vector<char32_t>& text,
+                 const std::vector<char32_t>& prefix,
+                 std::size_t index) {
+    if (index > text.size()) {
+        return false;
+    }
+    if (prefix.size() > text.size() - index) {
+        return false;
+    }
+    return std::equal(prefix.begin(), prefix.end(), text.begin() + index);
+}
 
 std::vector<std::string> token_split(const std::string& text) {
     std::vector<std::string> tokens;
@@ -797,14 +821,14 @@ std::vector<std::string> token_split(const std::string& text) {
 
         // `(?i:'s|'t|'re|'ve|'m|'ll|'d)`
         if (cp == U'\'' && i + 1 < cps.size()) {
-            std::string next = str_to_lower(codepoint_to_utf8(cps[i+1]));
+            std::string next = str_to_lower(codepoint_to_utf8(cps[i + 1]));
             if (next == "s" || next == "t" || next == "m") {
                 tokens.push_back("'" + next);
                 i += 2;
                 continue;
             }
             if (i + 2 < cps.size()) {
-                next += str_to_lower(codepoint_to_utf8(cps[i+2]));
+                next += str_to_lower(codepoint_to_utf8(cps[i + 2]));
                 if (next == "re" || next == "ve" || next == "ll" || next == "d") {
                     tokens.push_back("'" + next);
                     i += 3;
@@ -823,7 +847,7 @@ std::vector<std::string> token_split(const std::string& text) {
         // `[^\r\n\p{L}\p{N}]?\p{L}+`
         {
             // `[^\r\n\p{L}\p{N}]\p{L}+`
-            if (!is_letter(cp) && cp != U'\r' && cp != U'\n' && i + 1 < cps.size() && is_letter(cps[i+1])) {
+            if (!is_letter(cp) && cp != U'\r' && cp != U'\n' && i + 1 < cps.size() && is_letter(cps[i + 1])) {
                 std::string token = codepoint_to_utf8(cp);
                 ++i;
 
@@ -847,14 +871,14 @@ std::vector<std::string> token_split(const std::string& text) {
                 continue;
             }
         }
-        
+
         // ` ?[^\s\p{L}\p{N}]+[\r\n]*`
         {
             // ` [^\s\p{L}\p{N}]+[\r\n]*`
-            if (cp == U' ' && i + 1 < cps.size() && !isspace(cps[i+1]) && !is_letter(cps[i+1]) && !is_number(cps[i+1])) {
+            if (cp == U' ' && i + 1 < cps.size() && !isspace(cps[i + 1]) && !is_letter(cps[i + 1]) && !is_number(cps[i + 1])) {
                 std::string token = codepoint_to_utf8(cp);
-                token += codepoint_to_utf8(cps[i+1]);
-                i+=2;
+                token += codepoint_to_utf8(cps[i + 1]);
+                i += 2;
 
                 while (i < cps.size() && !is_letter(cps[i]) && !is_number(cps[i]) && !isspace(cps[i])) {
                     token += codepoint_to_utf8(cps[i]);
@@ -913,6 +937,40 @@ std::vector<std::string> token_split(const std::string& text) {
     }
 
     return tokens;
+}
+
+std::vector<std::string> split_with_special_tokens(
+    const std::string& text,
+    const std::vector<std::string>& special_tokens) {
+    std::vector<std::string> result;
+    size_t pos      = 0;
+    size_t text_len = text.size();
+
+    while (pos < text_len) {
+        size_t next_pos = text_len;
+        std::string matched_token;
+
+        for (const auto& token : special_tokens) {
+            size_t token_pos = text.find(token, pos);
+            if (token_pos != std::string::npos && token_pos < next_pos) {
+                next_pos      = token_pos;
+                matched_token = token;
+            }
+        }
+
+        if (next_pos > pos) {
+            result.push_back(text.substr(pos, next_pos - pos));
+        }
+
+        if (!matched_token.empty()) {
+            result.push_back(matched_token);
+            pos = next_pos + matched_token.size();
+        } else {
+            break;
+        }
+    }
+
+    return result;
 }
 
 // int main() {

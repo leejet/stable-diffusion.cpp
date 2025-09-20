@@ -110,6 +110,9 @@ const char* unused_tensors[] = {
     "embedding_manager",
     "denoiser.sigmas",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
+    "qwen2vl.output.weight",
+    "qwen2vl.lm_head.",
+    "qwen2vl.visual.",
 };
 
 bool is_unused_tensor(std::string name) {
@@ -193,6 +196,21 @@ std::unordered_map<std::string, std::string> pmid_v2_name_map = {
      "pmid.qformer_perceiver.token_proj.fc2.weight"},
 };
 
+std::unordered_map<std::string, std::string> qwenvl_name_map{
+    {"token_embd.", "model.embed_tokens."},
+    {"blk.", "model.layers."},
+    {"attn_q.", "self_attn.q_proj."},
+    {"attn_k.", "self_attn.k_proj."},
+    {"attn_v.", "self_attn.v_proj."},
+    {"attn_output.", "self_attn.o_proj."},
+    {"attn_norm.", "input_layernorm."},
+    {"ffn_down.", "mlp.down_proj."},
+    {"ffn_gate.", "mlp.gate_proj."},
+    {"ffn_up.", "mlp.up_proj."},
+    {"ffn_norm.", "post_attention_layernorm."},
+    {"output_norm.", "model.norm."},
+};
+
 std::string convert_cond_model_name(const std::string& name) {
     std::string new_name = name;
     std::string prefix;
@@ -249,6 +267,13 @@ std::string convert_cond_model_name(const std::string& name) {
         pos = new_name.find("attn_rel_b.");
         if (pos != std::string::npos) {
             new_name.replace(pos, 11, "layer.0.SelfAttention.relative_attention_bias.");
+        }
+    } else if (contains(name, "qwen2vl")) {
+        for (auto kv : qwenvl_name_map) {
+            size_t pos = new_name.find(kv.first);
+            if (pos != std::string::npos) {
+                new_name.replace(pos, kv.first.size(), kv.second);
+            }
         }
     } else if (name == "text_encoders.t5xxl.transformer.token_embd.weight") {
         new_name = "text_encoders.t5xxl.transformer.shared.weight";
@@ -580,7 +605,11 @@ std::string convert_tensor_name(std::string name) {
     //     name.replace(pos, strlen("lora_B"), "lora_down");
     // }
     std::string new_name = name;
-    if (starts_with(name, "cond_stage_model.") || starts_with(name, "conditioner.embedders.") || starts_with(name, "text_encoders.") || ends_with(name, ".vision_model.visual_projection.weight")) {
+    if (starts_with(name, "cond_stage_model.") ||
+        starts_with(name, "conditioner.embedders.") ||
+        starts_with(name, "text_encoders.") ||
+        ends_with(name, ".vision_model.visual_projection.weight") ||
+        starts_with(name, "qwen2vl")) {
         new_name = convert_cond_model_name(name);
     } else if (starts_with(name, "first_stage_model.decoder")) {
         new_name = convert_vae_decoder_name(name);

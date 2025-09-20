@@ -1119,9 +1119,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx
     return kqv;
 }
 
-// q: [N, L_q, C] or [N*n_head, L_q, d_head]
-// k: [N, L_k, C] or [N*n_head, L_k, d_head]
-// v: [N, L_k, C] or [N, L_k, n_head, d_head]
+// q: [N, L_q, C(n_head*d_head)] or [N*n_head, L_q, d_head]
+// k: [N, L_k, n_kv_head*d_head] or [N*n_kv_head, L_k, d_head]
+// v: [N, L_k, n_kv_head*d_head] or [N, L_k, n_kv_head, d_head]
 // mask: [N, L_q, L_k]
 // return: [N, L_q, C]
 __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context* ctx,
@@ -1139,27 +1139,31 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
     int64_t C;
     int64_t N;
     int64_t d_head;
+    int64_t n_kv_head;
     if (!skip_reshape) {
-        L_q    = q->ne[1];
-        L_k    = k->ne[1];
-        C      = q->ne[0];
-        N      = q->ne[2];
-        d_head = C / n_head;
-        q      = ggml_reshape_4d(ctx, q, d_head, n_head, L_q, N);      // [N, L_q, n_head, d_head]
-        q      = ggml_nn_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));  // [N, n_head, L_q, d_head]
-        q      = ggml_reshape_3d(ctx, q, d_head, L_q, n_head * N);     // [N * n_head, L_q, d_head]
+        L_q       = q->ne[1];
+        L_k       = k->ne[1];
+        C         = q->ne[0];
+        N         = q->ne[2];
+        d_head    = C / n_head;
+        n_kv_head = k->ne[0] / d_head;
 
-        k = ggml_reshape_4d(ctx, k, d_head, n_head, L_k, N);      // [N, L_k, n_head, d_head]
-        k = ggml_nn_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
-        k = ggml_reshape_3d(ctx, k, d_head, L_k, n_head * N);     // [N * n_head, L_k, d_head]
+        q = ggml_reshape_4d(ctx, q, d_head, n_head, L_q, N);      // [N, L_q, n_head, d_head]
+        q = ggml_nn_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));  // [N, n_head, L_q, d_head]
+        q = ggml_reshape_3d(ctx, q, d_head, L_q, n_head * N);     // [N * n_head, L_q, d_head]
 
-        v = ggml_reshape_4d(ctx, v, d_head, n_head, L_k, N);  // [N, L_k, n_head, d_head]
+        k = ggml_reshape_4d(ctx, k, d_head, n_kv_head, L_k, N);   // [N, L_k, n_kv_head, d_head]
+        k = ggml_nn_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));  // [N, n_kv_head, L_k, d_head]
+        k = ggml_reshape_3d(ctx, k, d_head, L_k, n_kv_head * N);  // [N * n_kv_head, L_k, d_head]
+
+        v = ggml_reshape_4d(ctx, v, d_head, n_kv_head, L_k, N);  // [N, L_k, n_kv_head, d_head]
     } else {
-        L_q    = q->ne[1];
-        L_k    = k->ne[1];
-        d_head = v->ne[0];
-        N      = v->ne[3];
-        C      = d_head * n_head;
+        L_q       = q->ne[1];
+        L_k       = k->ne[1];
+        d_head    = v->ne[0];
+        N         = v->ne[3];
+        n_kv_head = k->ne[2] / N;
+        C         = d_head * n_head;
     }
 
     float scale = (1.0f / sqrt((float)d_head));
@@ -1174,7 +1178,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         k_in = ggml_cast(ctx, k_in, GGML_TYPE_F16);
 
         v_in = ggml_nn_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
-        v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_head * N);
+        v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
         if (kv_pad != 0) {
             v_in = ggml_pad(ctx, v_in, 0, kv_pad, 0, 0);
         }
@@ -1232,8 +1236,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         // if (flash_attn) {
         //     LOG_DEBUG("fallback to default attention, L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         // }
-        v = ggml_nn_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_head, d_head, L_k]
-        v = ggml_reshape_3d(ctx, v, L_k, d_head, n_head * N);     // [N * n_head, d_head, L_k]
+        v = ggml_nn_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_kv_head, d_head, L_k]
+        v = ggml_reshape_3d(ctx, v, L_k, d_head, n_kv_head * N);  // [N * n_kv_head, d_head, L_k]
 
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
         kq      = ggml_scale_inplace(ctx, kq, scale);

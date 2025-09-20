@@ -1142,17 +1142,7 @@ int main(int argc, const char* argv[]) {
     SDParams params;
     params.verbose = true;
     sd_set_log_callback(sd_log_cb, (void*)&params);
-    auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-        return false;
-    };
-    // auto tokenizer = CLIPTokenizer();
-    auto tokenizer = Qwen::Qwen2Tokenizer();
-    std::string text("a lovely cat");
-    auto tokens = tokenizer.encode(text, on_new_token_cb);
-    for (auto token : tokens) {
-        std::cout << token << " ";
-    }
-    std::cout << std::endl;
+    Qwen::Qwen2_5_VLEmbedder::load_from_file_and_test(argv[1]);
     exit(1);
     parse_args(argc, argv, params);
     params.sample_params.guidance.slg.layers                 = params.skip_layers.data();
