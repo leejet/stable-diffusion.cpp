@@ -16,6 +16,7 @@
 #include "stable-diffusion.h"
 #include "util.h"
 #include "vocab.hpp"
+#include "vocab_qwen.hpp"
 #include "vocab_umt5.hpp"
 
 #include "ggml-alloc.h"
@@ -1936,6 +1937,11 @@ void ModelLoader::set_wtype_override(ggml_type wtype, std::string prefix) {
 
 std::string ModelLoader::load_merges() {
     std::string merges_utf8_str(reinterpret_cast<const char*>(merges_utf8_c_str), sizeof(merges_utf8_c_str));
+    return merges_utf8_str;
+}
+
+std::string ModelLoader::load_qwen2_merges() {
+    std::string merges_utf8_str(reinterpret_cast<const char*>(qwen2_merges_utf8_c_str), sizeof(qwen2_merges_utf8_c_str));
     return merges_utf8_str;
 }
 

@@ -258,6 +258,7 @@ public:
     ~ModelLoader() = default;
 
     static std::string load_merges();
+    static std::string load_qwen2_merges();
     static std::string load_t5_tokenizer_json();
     static std::string load_umt5_tokenizer_json();
 };
