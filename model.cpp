@@ -728,6 +728,7 @@ void preprocess_tensor(TensorStorage tensor_storage,
 
     // convert unet transformer linear to conv2d 1x1
     if (starts_with(new_name, "model.diffusion_model.") &&
+        !starts_with(new_name, "model.diffusion_model.proj_out.") &&
         (ends_with(new_name, "proj_in.weight") || ends_with(new_name, "proj_out.weight"))) {
         tensor_storage.unsqueeze();
     }

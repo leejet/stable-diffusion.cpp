@@ -1353,15 +1353,13 @@ __STATIC_INLINE__ std::vector<float> arange(float start, float end, float step =
 // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
 __STATIC_INLINE__ std::vector<float> timestep_embedding(std::vector<float> timesteps,
                                                         int dim,
-                                                        int max_period = 10000) {
+                                                        int max_period       = 10000,
+                                                        bool flip_sin_to_cos = true,
+                                                        float scale          = 1.f) {
     // timesteps: [N,]
     // embedding: [N, dim]
-    size_t N        = timesteps.size();
-    int acutual_dim = dim;
-    if (dim % 2 != 0) {
-        acutual_dim = dim + 1;
-    }
-    std::vector<float> embedding(N * acutual_dim, 0.f);
+    size_t N = timesteps.size();
+    std::vector<float> embedding(N * dim, 0.f);
     int half = dim / 2;
     std::vector<float> freqs(half);
     for (int i = 0; i < half; ++i) {
@@ -1369,9 +1367,14 @@ __STATIC_INLINE__ std::vector<float> timestep_embedding(std::vector<float> times
     }
     for (int i = 0; i < N; ++i) {
         for (int j = 0; j < half; ++j) {
-            float arg                             = timesteps[i] * freqs[j];
-            embedding[i * acutual_dim + j]        = std::cos(arg);
-            embedding[i * acutual_dim + j + half] = std::sin(arg);
+            float arg = timesteps[i] * freqs[j] * scale;
+            if (flip_sin_to_cos) {
+                embedding[i * dim + j]        = std::cos(arg);
+                embedding[i * dim + j + half] = std::sin(arg);
+            } else {
+                embedding[i * dim + j]        = std::sin(arg);
+                embedding[i * dim + j + half] = std::cos(arg);
+            }
         }
     }
     return embedding;
@@ -1392,11 +1395,7 @@ __STATIC_INLINE__ struct ggml_tensor* new_timestep_embedding(struct ggml_context
     // timesteps: [N,]
     // embedding: [N, dim]
     std::vector<float> embedding_vec = timestep_embedding(timesteps, dim, max_period);
-    int acutual_dim                  = dim;
-    if (dim % 2 != 0) {
-        acutual_dim = dim + 1;
-    }
-    struct ggml_tensor* embedding = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, acutual_dim, timesteps.size());
+    struct ggml_tensor* embedding    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, timesteps.size());
     if (embedding->data != NULL) {
         memcpy(((char*)embedding->data), ((char*)embedding_vec.data()), ggml_nbytes(embedding));
     } else {

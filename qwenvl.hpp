@@ -1,8 +1,6 @@
 #ifndef __QWENVL_HPP__
 #define __QWENVL_HPP__
 
-#include "ggml_extend.hpp"
-
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -15,6 +13,7 @@
 #include <vector>
 
 #include "clip.hpp"
+#include "ggml_extend.hpp"
 #include "json.hpp"
 #include "tokenize_util.h"
 
@@ -360,7 +359,7 @@ namespace Qwen {
         }
     };
 
-    class Qwen2_5_VLAttention : public GGMLBlock {
+    struct Qwen2_5_VLAttention : public GGMLBlock {
     protected:
         int64_t head_dim;
         int64_t num_heads;

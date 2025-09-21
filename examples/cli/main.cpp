@@ -27,7 +27,7 @@
 
 #include "avi_writer.h"
 
-#include "qwen.hpp"
+#include "qwen_image.hpp"
 
 #if defined(_WIN32)
 #define NOMINMAX
@@ -1142,7 +1142,7 @@ int main(int argc, const char* argv[]) {
     SDParams params;
     params.verbose = true;
     sd_set_log_callback(sd_log_cb, (void*)&params);
-    Qwen::Qwen2_5_VLEmbedder::load_from_file_and_test(argv[1]);
+    Qwen::QwenImageRunner::load_from_file_and_test(argv[1]);
     exit(1);
     parse_args(argc, argv, params);
     params.sample_params.guidance.slg.layers                 = params.skip_layers.data();
