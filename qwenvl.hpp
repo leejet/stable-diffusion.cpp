@@ -1,5 +1,5 @@
-#ifndef __QWEN_HPP__
-#define __QWEN_HPP__
+#ifndef __QWENVL_HPP__
+#define __QWENVL_HPP__
 
 #include "ggml_extend.hpp"
 
@@ -729,4 +729,4 @@ namespace Qwen {
 
 };  // Qwen
 
-#endif  // __QWEN_HPP__
+#endif  // __QWENVL_HPP__
