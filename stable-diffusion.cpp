@@ -1007,7 +1007,7 @@ public:
                     ggml_tensor_scale(noise, augmentation_level);
                     ggml_tensor_add(init_img, noise);
                 }
-                ggml_tensor* moments = encode_first_stage(work_ctx, init_img);
+                ggml_tensor* moments = vae_encode(work_ctx, init_img);
                 c_concat             = get_first_stage_encoding(work_ctx, moments);
             }
         }
@@ -1316,116 +1316,6 @@ public:
         return x;
     }
 
-    // ldm.models.diffusion.ddpm.LatentDiffusion.get_first_stage_encoding
-    ggml_tensor* get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* moments) {
-        // ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample
-        ggml_tensor* latent       = ggml_new_tensor_4d(work_ctx, moments->type, moments->ne[0], moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
-        struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, latent);
-        ggml_tensor_set_f32_randn(noise, rng);
-        {
-            float mean   = 0;
-            float logvar = 0;
-            float value  = 0;
-            float std_   = 0;
-            for (int i = 0; i < latent->ne[3]; i++) {
-                for (int j = 0; j < latent->ne[2]; j++) {
-                    for (int k = 0; k < latent->ne[1]; k++) {
-                        for (int l = 0; l < latent->ne[0]; l++) {
-                            mean   = ggml_tensor_get_f32(moments, l, k, j, i);
-                            logvar = ggml_tensor_get_f32(moments, l, k, j + (int)latent->ne[2], i);
-                            logvar = std::max(-30.0f, std::min(logvar, 20.0f));
-                            std_   = std::exp(0.5f * logvar);
-                            value  = mean + std_ * ggml_tensor_get_f32(noise, l, k, j, i);
-                            value  = value * scale_factor;
-                            // printf("%d %d %d %d -> %f\n", i, j, k, l, value);
-                            ggml_tensor_set_f32(latent, value, l, k, j, i);
-                        }
-                    }
-                }
-            }
-        }
-        return latent;
-    }
-
-    void get_tile_sizes(int& tile_size_x,
-                        int& tile_size_y,
-                        float& tile_overlap,
-                        const sd_tiling_params_t& params,
-                        int latent_x,
-                        int latent_y,
-                        float encoding_factor = 1.0f) {
-        tile_overlap       = std::max(std::min(params.target_overlap, 0.5f), 0.0f);
-        auto get_tile_size = [&](int requested_size, float factor, int latent_size) {
-            const int default_tile_size  = 32;
-            const int min_tile_dimension = 4;
-            int tile_size                = default_tile_size;
-            // factor <= 1 means simple fraction of the latent dimension
-            // factor > 1 means number of tiles across that dimension
-            if (factor > 0.f) {
-                if (factor > 1.0)
-                    factor = 1 / (factor - factor * tile_overlap + tile_overlap);
-                tile_size = std::round(latent_size * factor);
-            } else if (requested_size >= min_tile_dimension) {
-                tile_size = requested_size;
-            }
-            tile_size *= encoding_factor;
-            return std::max(std::min(tile_size, latent_size), min_tile_dimension);
-        };
-
-        tile_size_x = get_tile_size(params.tile_size_x, params.rel_size_x, latent_x);
-        tile_size_y = get_tile_size(params.tile_size_y, params.rel_size_y, latent_y);
-    }
-
-    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
-        int64_t t0          = ggml_time_ms();
-        ggml_tensor* result = NULL;
-        int W               = x->ne[0] / 8;
-        int H               = x->ne[1] / 8;
-        if (vae_tiling_params.enabled && !encode_video) {
-            // TODO wan2.2 vae support?
-            int C = sd_version_is_dit(version) ? 16 : 4;
-            if (!use_tiny_autoencoder) {
-                C *= 2;
-            }
-            result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, x->ne[3]);
-        }
-
-        if (!use_tiny_autoencoder) {
-            process_vae_input_tensor(x);
-            if (vae_tiling_params.enabled && !encode_video) {
-                float tile_overlap;
-                int tile_size_x, tile_size_y;
-                // multiply tile size for encode to keep the compute buffer size consistent
-                get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H, 1.30539f);
-
-                LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
-
-                auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    first_stage_model->compute(n_threads, in, false, &out, work_ctx);
-                };
-                sd_tiling_non_square(x, result, 8, tile_size_x, tile_size_y, tile_overlap, on_tiling);
-            } else {
-                first_stage_model->compute(n_threads, x, false, &result, work_ctx);
-            }
-            first_stage_model->free_compute_buffer();
-        } else {
-            if (vae_tiling_params.enabled && !encode_video) {
-                // split latent in 32x32 tiles and compute in several steps
-                auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    tae_first_stage->compute(n_threads, in, false, &out, NULL);
-                };
-                sd_tiling(x, result, 8, 64, 0.5f, on_tiling);
-            } else {
-                tae_first_stage->compute(n_threads, x, false, &result, work_ctx);
-            }
-            tae_first_stage->free_compute_buffer();
-        }
-
-        int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("computing vae encode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-        return result;
-    }
-
     void process_latent_in(ggml_tensor* latent) {
         if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
             GGML_ASSERT(latent->ne[3] == 16 || latent->ne[3] == 48);
@@ -1504,6 +1394,146 @@ public:
         } else {
             ggml_tensor_scale(latent, 1.0f / scale_factor);
         }
+    }
+
+    void get_tile_sizes(int& tile_size_x,
+                        int& tile_size_y,
+                        float& tile_overlap,
+                        const sd_tiling_params_t& params,
+                        int latent_x,
+                        int latent_y,
+                        float encoding_factor = 1.0f) {
+        tile_overlap       = std::max(std::min(params.target_overlap, 0.5f), 0.0f);
+        auto get_tile_size = [&](int requested_size, float factor, int latent_size) {
+            const int default_tile_size  = 32;
+            const int min_tile_dimension = 4;
+            int tile_size                = default_tile_size;
+            // factor <= 1 means simple fraction of the latent dimension
+            // factor > 1 means number of tiles across that dimension
+            if (factor > 0.f) {
+                if (factor > 1.0)
+                    factor = 1 / (factor - factor * tile_overlap + tile_overlap);
+                tile_size = std::round(latent_size * factor);
+            } else if (requested_size >= min_tile_dimension) {
+                tile_size = requested_size;
+            }
+            tile_size *= encoding_factor;
+            return std::max(std::min(tile_size, latent_size), min_tile_dimension);
+        };
+
+        tile_size_x = get_tile_size(params.tile_size_x, params.rel_size_x, latent_x);
+        tile_size_y = get_tile_size(params.tile_size_y, params.rel_size_y, latent_y);
+    }
+
+    ggml_tensor* vae_encode(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
+        int64_t t0          = ggml_time_ms();
+        ggml_tensor* result = NULL;
+        int W               = x->ne[0] / 8;
+        int H               = x->ne[1] / 8;
+        if (vae_tiling_params.enabled && !encode_video) {
+            // TODO wan2.2 vae support?
+            int C = sd_version_is_dit(version) ? 16 : 4;
+            if (!use_tiny_autoencoder) {
+                C *= 2;
+            }
+            result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, x->ne[3]);
+        }
+
+        if (sd_version_is_qwen_image(version)) {
+            x = ggml_reshape_4d(work_ctx, x, x->ne[0], x->ne[1], 1, x->ne[2] * x->ne[3]);
+        }
+
+        if (!use_tiny_autoencoder) {
+            process_vae_input_tensor(x);
+            if (vae_tiling_params.enabled && !encode_video) {
+                float tile_overlap;
+                int tile_size_x, tile_size_y;
+                // multiply tile size for encode to keep the compute buffer size consistent
+                get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, W, H, 1.30539f);
+
+                LOG_DEBUG("VAE Tile size: %dx%d", tile_size_x, tile_size_y);
+
+                auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+                    first_stage_model->compute(n_threads, in, false, &out, work_ctx);
+                };
+                sd_tiling_non_square(x, result, 8, tile_size_x, tile_size_y, tile_overlap, on_tiling);
+            } else {
+                first_stage_model->compute(n_threads, x, false, &result, work_ctx);
+            }
+            first_stage_model->free_compute_buffer();
+        } else {
+            if (vae_tiling_params.enabled && !encode_video) {
+                // split latent in 32x32 tiles and compute in several steps
+                auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+                    tae_first_stage->compute(n_threads, in, false, &out, NULL);
+                };
+                sd_tiling(x, result, 8, 64, 0.5f, on_tiling);
+            } else {
+                tae_first_stage->compute(n_threads, x, false, &result, work_ctx);
+            }
+            tae_first_stage->free_compute_buffer();
+        }
+
+        int64_t t1 = ggml_time_ms();
+        LOG_DEBUG("computing vae encode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+        return result;
+    }
+
+    ggml_tensor* gaussian_latent_sample(ggml_context* work_ctx, ggml_tensor* moments) {
+        // ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample
+        ggml_tensor* latent       = ggml_new_tensor_4d(work_ctx, moments->type, moments->ne[0], moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
+        struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, latent);
+        ggml_tensor_set_f32_randn(noise, rng);
+        {
+            float mean   = 0;
+            float logvar = 0;
+            float value  = 0;
+            float std_   = 0;
+            for (int i = 0; i < latent->ne[3]; i++) {
+                for (int j = 0; j < latent->ne[2]; j++) {
+                    for (int k = 0; k < latent->ne[1]; k++) {
+                        for (int l = 0; l < latent->ne[0]; l++) {
+                            mean   = ggml_tensor_get_f32(moments, l, k, j, i);
+                            logvar = ggml_tensor_get_f32(moments, l, k, j + (int)latent->ne[2], i);
+                            logvar = std::max(-30.0f, std::min(logvar, 20.0f));
+                            std_   = std::exp(0.5f * logvar);
+                            value  = mean + std_ * ggml_tensor_get_f32(noise, l, k, j, i);
+                            // printf("%d %d %d %d -> %f\n", i, j, k, l, value);
+                            ggml_tensor_set_f32(latent, value, l, k, j, i);
+                        }
+                    }
+                }
+            }
+        }
+        return latent;
+    }
+
+    ggml_tensor* get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* vae_output) {
+        ggml_tensor* latent;
+        if (use_tiny_autoencoder || sd_version_is_qwen_image(version)) {
+            latent = vae_output;
+        } else if (version == VERSION_SD1_PIX2PIX) {
+            latent = ggml_view_3d(work_ctx,
+                                  vae_output,
+                                  vae_output->ne[0],
+                                  vae_output->ne[1],
+                                  vae_output->ne[2] / 2,
+                                  vae_output->nb[1],
+                                  vae_output->nb[2],
+                                  0);
+        } else {
+            latent = gaussian_latent_sample(work_ctx, vae_output);
+        }
+        process_latent_in(latent);
+        if (sd_version_is_qwen_image(version)) {
+            latent = ggml_reshape_4d(work_ctx, latent, latent->ne[0], latent->ne[1], latent->ne[3], 1);
+        }
+        return latent;
+    }
+
+    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
+        ggml_tensor* vae_output = vae_encode(work_ctx, x, encode_video);
+        return get_first_stage_encoding(work_ctx, vae_output);
     }
 
     ggml_tensor* decode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode_video = false) {
@@ -1959,6 +1989,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         seed = rand();
     }
 
+    print_ggml_tensor(init_latent, true, "init");
+
     // for (auto v : sigmas) {
     //     std::cout << v << " ";
     // }
@@ -2352,12 +2384,9 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
             ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
             sd_apply_mask(init_img, mask_img, masked_img);
             ggml_tensor* masked_latent = NULL;
-            if (!sd_ctx->sd->use_tiny_autoencoder) {
-                ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
-                masked_latent        = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
-            } else {
-                masked_latent = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
-            }
+
+            masked_latent = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
+
             concat_latent = ggml_new_tensor_4d(work_ctx,
                                                GGML_TYPE_F32,
                                                masked_latent->ne[0],
@@ -2407,12 +2436,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
             }
         }
 
-        if (!sd_ctx->sd->use_tiny_autoencoder) {
-            ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
-            init_latent          = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
-        } else {
-            init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
-        }
+        init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
     } else {
         LOG_INFO("TXT2IMG");
         if (sd_version_is_inpaint(sd_ctx->sd->version)) {
@@ -2451,23 +2475,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                               1);
         sd_image_to_tensor(*ref_images[i], img);
 
-        ggml_tensor* latent = NULL;
-        if (sd_ctx->sd->use_tiny_autoencoder) {
-            latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
-        } else if (sd_ctx->sd->version == VERSION_SD1_PIX2PIX) {
-            latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
-            latent = ggml_view_3d(work_ctx,
-                                  latent,
-                                  latent->ne[0],
-                                  latent->ne[1],
-                                  latent->ne[2] / 2,
-                                  latent->nb[1],
-                                  latent->nb[2],
-                                  0);
-        } else {
-            ggml_tensor* moments = sd_ctx->sd->encode_first_stage(work_ctx, img);
-            latent               = sd_ctx->sd->get_first_stage_encoding(work_ctx, moments);
-        }
+        ggml_tensor* latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
         ref_latents.push_back(latent);
     }
 
@@ -2629,8 +2637,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         int64_t t2 = ggml_time_ms();
         LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);
 
-        sd_ctx->sd->process_latent_in(concat_latent);
-
         ggml_tensor* concat_mask = ggml_new_tensor_4d(work_ctx,
                                                       GGML_TYPE_F32,
                                                       concat_latent->ne[0],
@@ -2656,7 +2662,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         sd_image_to_tensor(sd_vid_gen_params->init_image, init_img);
         init_img = ggml_reshape_4d(work_ctx, init_img, width, height, 1, 3);
 
-        auto init_image_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);  // [b*c, 1, h/16, w/16]
+        auto init_image_latent = sd_ctx->sd->vae_encode(work_ctx, init_img);  // [b*c, 1, h/16, w/16]
 
         init_latent  = generate_init_latent(sd_ctx, work_ctx, width, height, frames, true);
         denoise_mask = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2], 1);
@@ -2687,7 +2693,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             ref_img = ggml_reshape_4d(work_ctx, ref_img, width, height, 1, 3);
 
             ref_image_latent = sd_ctx->sd->encode_first_stage(work_ctx, ref_img);  // [b*c, 1, h/16, w/16]
-            sd_ctx->sd->process_latent_in(ref_image_latent);
             auto zero_latent = ggml_dup_tensor(work_ctx, ref_image_latent);
             ggml_set_f32(zero_latent, 0.f);
             ref_image_latent = ggml_tensor_concat(work_ctx, ref_image_latent, zero_latent, 3);  // [b*2*c, 1, h/16, w/16]
@@ -2718,9 +2723,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
         inactive = sd_ctx->sd->encode_first_stage(work_ctx, inactive);  // [b*c, t, h/8, w/8]
         reactive = sd_ctx->sd->encode_first_stage(work_ctx, reactive);  // [b*c, t, h/8, w/8]
-
-        sd_ctx->sd->process_latent_in(inactive);
-        sd_ctx->sd->process_latent_in(reactive);
 
         int64_t length = inactive->ne[2];
         if (ref_image_latent) {
