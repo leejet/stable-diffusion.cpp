@@ -2,9 +2,7 @@ ARG UBUNTU_VERSION=22.04
 
 FROM ubuntu:$UBUNTU_VERSION AS build
 
-RUN apt-get update && \
-    apt-get install --yes --no-install-recommends build-essential git cmake && \
-    apt-get clean
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git cmake
 
 WORKDIR /sd.cpp
 
