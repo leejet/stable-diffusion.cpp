@@ -1133,7 +1133,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
                                                             struct ggml_tensor* mask = NULL,
                                                             bool diag_mask_inf       = false,
                                                             bool skip_reshape        = false,
-                                                            bool flash_attn          = false) {
+                                                            bool flash_attn          = false,  // avoid overflow
+                                                            float kv_scale           = 1.0f) {
     int64_t L_q;
     int64_t L_k;
     int64_t C;
@@ -1175,12 +1176,18 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         if (kv_pad != 0) {
             k_in = ggml_pad(ctx, k_in, 0, kv_pad, 0, 0);
         }
+        if (kv_scale != 1.0f) {
+            k_in = ggml_scale(ctx, k_in, kv_scale);
+        }
         k_in = ggml_cast(ctx, k_in, GGML_TYPE_F16);
 
         v_in = ggml_nn_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
         v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
         if (kv_pad != 0) {
             v_in = ggml_pad(ctx, v_in, 0, kv_pad, 0, 0);
+        }
+        if (kv_scale != 1.0f) {
+            v_in = ggml_scale(ctx, v_in, kv_scale);
         }
         v_in = ggml_cast(ctx, v_in, GGML_TYPE_F16);
 
@@ -1205,8 +1212,11 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
             mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
         }
 
-        auto out = ggml_flash_attn_ext(ctx, q_in, k_in, v_in, mask_in, scale, 0, 0);
+        auto out = ggml_flash_attn_ext(ctx, q_in, k_in, v_in, mask_in, scale / kv_scale, 0, 0);
         ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
+        if (kv_scale != 1.0f) {
+            out = ggml_scale(ctx, out, 1.0f / kv_scale);
+        }
         return out;
     };
 
