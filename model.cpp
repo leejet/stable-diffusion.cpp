@@ -110,9 +110,9 @@ const char* unused_tensors[] = {
     "embedding_manager",
     "denoiser.sigmas",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
-    "qwen2vl.output.weight",
-    "qwen2vl.lm_head.",
-    "qwen2vl.visual.",
+    "text_encoders.qwen2vl.output.weight",
+    "text_encoders.qwen2vl.lm_head.",
+    "text_encoders.qwen2vl.visual.",
 };
 
 bool is_unused_tensor(std::string name) {
@@ -1761,6 +1761,9 @@ SDVersion ModelLoader::get_sd_version() {
             }
             if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
                 return VERSION_SD3;
+            }
+            if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
+                return VERSION_QWEN_IMAGE;
             }
             if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
                 is_wan = true;

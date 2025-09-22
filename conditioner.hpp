@@ -2,6 +2,7 @@
 #define __CONDITIONER_HPP__
 
 #include "clip.hpp"
+#include "qwenvl.hpp"
 #include "t5.hpp"
 
 struct SDCondition {
@@ -22,11 +23,11 @@ struct Conditioner {
                                               int width,
                                               int height,
                                               int adm_in_channels  = -1,
-                                              bool zero_out_masked = false)                                             = 0;
-    virtual void alloc_params_buffer()                                                                                  = 0;
-    virtual void free_params_buffer()                                                                                   = 0;
-    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors)                                 = 0;
-    virtual size_t get_params_buffer_size()                                                                             = 0;
+                                              bool zero_out_masked = false)             = 0;
+    virtual void alloc_params_buffer()                                                  = 0;
+    virtual void free_params_buffer()                                                   = 0;
+    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) = 0;
+    virtual size_t get_params_buffer_size()                                             = 0;
     virtual std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
                                                                                           int n_threads,
                                                                                           const std::string& text,
@@ -35,9 +36,13 @@ struct Conditioner {
                                                                                           int height,
                                                                                           int num_input_imgs,
                                                                                           int adm_in_channels  = -1,
-                                                                                          bool zero_out_masked = false) = 0;
+                                                                                          bool zero_out_masked = false) {
+        GGML_ABORT("Not implemented yet!");
+    }
     virtual std::string remove_trigger_from_prompt(ggml_context* work_ctx,
-                                                   const std::string& prompt)                                           = 0;
+                                                   const std::string& prompt) {
+        GGML_ABORT("Not implemented yet!");
+    }
 };
 
 // ldm.modules.encoders.modules.FrozenCLIPEmbedder
@@ -978,23 +983,6 @@ struct SD3CLIPEmbedder : public Conditioner {
         auto tokens_and_weights = tokenize(text, 77, true);
         return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
     }
-
-    std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
-                                                                                  int n_threads,
-                                                                                  const std::string& text,
-                                                                                  int clip_skip,
-                                                                                  int width,
-                                                                                  int height,
-                                                                                  int num_input_imgs,
-                                                                                  int adm_in_channels  = -1,
-                                                                                  bool zero_out_masked = false) {
-        GGML_ASSERT(0 && "Not implemented yet!");
-    }
-
-    std::string remove_trigger_from_prompt(ggml_context* work_ctx,
-                                           const std::string& prompt) {
-        GGML_ASSERT(0 && "Not implemented yet!");
-    }
 };
 
 struct FluxCLIPEmbedder : public Conditioner {
@@ -1195,23 +1183,6 @@ struct FluxCLIPEmbedder : public Conditioner {
         auto tokens_and_weights = tokenize(text, chunk_len, true);
         return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
     }
-
-    std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
-                                                                                  int n_threads,
-                                                                                  const std::string& text,
-                                                                                  int clip_skip,
-                                                                                  int width,
-                                                                                  int height,
-                                                                                  int num_input_imgs,
-                                                                                  int adm_in_channels  = -1,
-                                                                                  bool zero_out_masked = false) {
-        GGML_ASSERT(0 && "Not implemented yet!");
-    }
-
-    std::string remove_trigger_from_prompt(ggml_context* work_ctx,
-                                           const std::string& prompt) {
-        GGML_ASSERT(0 && "Not implemented yet!");
-    }
 };
 
 struct T5CLIPEmbedder : public Conditioner {
@@ -1398,22 +1369,135 @@ struct T5CLIPEmbedder : public Conditioner {
         auto tokens_and_weights = tokenize(text, chunk_len, true);
         return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
     }
+};
 
-    std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
-                                                                                  int n_threads,
-                                                                                  const std::string& text,
-                                                                                  int clip_skip,
-                                                                                  int width,
-                                                                                  int height,
-                                                                                  int num_input_imgs,
-                                                                                  int adm_in_channels  = -1,
-                                                                                  bool zero_out_masked = false) {
-        GGML_ASSERT(0 && "Not implemented yet!");
+struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
+    Qwen::Qwen2Tokenizer tokenizer;
+    std::shared_ptr<Qwen::Qwen2_5_VLRunner> qwenvl;
+    int prompt_template_encode_start_idx = 34;
+
+    Qwen2_5_VLCLIPEmbedder(ggml_backend_t backend,
+                           bool offload_params_to_cpu,
+                           const String2GGMLType& tensor_types = {},
+                           const std::string prefix            = "") {
+        qwenvl = std::make_shared<Qwen::Qwen2_5_VLRunner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.qwen2vl");
     }
 
-    std::string remove_trigger_from_prompt(ggml_context* work_ctx,
-                                           const std::string& prompt) {
-        GGML_ASSERT(0 && "Not implemented yet!");
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
+        qwenvl->get_param_tensors(tensors, "text_encoders.qwen2vl");
+    }
+
+    void alloc_params_buffer() {
+        qwenvl->alloc_params_buffer();
+    }
+
+    void free_params_buffer() {
+        qwenvl->free_params_buffer();
+    }
+
+    size_t get_params_buffer_size() {
+        size_t buffer_size = 0;
+        buffer_size += qwenvl->get_params_buffer_size();
+        return buffer_size;
+    }
+
+    std::tuple<std::vector<int>, std::vector<float>> tokenize(std::string text,
+                                                              size_t max_length = 0,
+                                                              bool padding      = false) {
+        auto parsed_attention = parse_prompt_attention(text);
+
+        {
+            std::stringstream ss;
+            ss << "[";
+            for (const auto& item : parsed_attention) {
+                ss << "['" << item.first << "', " << item.second << "], ";
+            }
+            ss << "]";
+            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+        }
+
+        std::vector<int> tokens;
+        std::vector<float> weights;
+        for (const auto& item : parsed_attention) {
+            const std::string& curr_text = item.first;
+            float curr_weight            = item.second;
+            std::vector<int> curr_tokens = tokenizer.tokenize(curr_text, nullptr);
+            tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
+            weights.insert(weights.end(), curr_tokens.size(), curr_weight);
+        }
+
+        tokenizer.pad_tokens(tokens, weights, max_length, padding);
+
+        // for (int i = 0; i < tokens.size(); i++) {
+        //     std::cout << tokens[i] << ":" << weights[i] << ", ";
+        // }
+        // std::cout << std::endl;
+
+        return {tokens, weights};
+    }
+
+    SDCondition get_learned_condition_common(ggml_context* work_ctx,
+                                             int n_threads,
+                                             std::tuple<std::vector<int>, std::vector<float>> token_and_weights,
+                                             int clip_skip,
+                                             bool zero_out_masked = false) {
+        auto& tokens  = std::get<0>(token_and_weights);
+        auto& weights = std::get<1>(token_and_weights);
+
+        int64_t t0                        = ggml_time_ms();
+        struct ggml_tensor* hidden_states = NULL;  // [N, n_token, 3584]
+
+        auto input_ids = vector_to_ggml_tensor_i32(work_ctx, tokens);
+
+        qwenvl->compute(n_threads,
+                        input_ids,
+                        &hidden_states,
+                        work_ctx);
+        {
+            auto tensor         = hidden_states;
+            float original_mean = ggml_tensor_mean(tensor);
+            for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
+                for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
+                    for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
+                        float value = ggml_tensor_get_f32(tensor, i0, i1, i2);
+                        value *= weights[i1];
+                        ggml_tensor_set_f32(tensor, value, i0, i1, i2);
+                    }
+                }
+            }
+            float new_mean = ggml_tensor_mean(tensor);
+            ggml_tensor_scale(tensor, (original_mean / new_mean));
+        }
+
+        GGML_ASSERT(hidden_states->ne[1] > prompt_template_encode_start_idx);
+
+        ggml_tensor* new_hidden_states = ggml_new_tensor_3d(work_ctx,
+                                                            GGML_TYPE_F32,
+                                                            hidden_states->ne[0],
+                                                            hidden_states->ne[1] - prompt_template_encode_start_idx,
+                                                            hidden_states->ne[2]);
+
+        ggml_tensor_iter(new_hidden_states, [&](ggml_tensor* new_hidden_states, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+            float value = ggml_tensor_get_f32(hidden_states, i0, i1 + prompt_template_encode_start_idx, i2, i3);
+            ggml_tensor_set_f32(new_hidden_states, value, i0, i1, i2, i3);
+        });
+
+        int64_t t1 = ggml_time_ms();
+        LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+        return SDCondition(new_hidden_states, nullptr, nullptr);
+    }
+
+    SDCondition get_learned_condition(ggml_context* work_ctx,
+                                      int n_threads,
+                                      const std::string& text,
+                                      int clip_skip,
+                                      int width,
+                                      int height,
+                                      int adm_in_channels  = -1,
+                                      bool zero_out_masked = false) {
+        std::string prompt      = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n" + text + "<|im_end|>\n<|im_start|>assistant\n";
+        auto tokens_and_weights = tokenize(prompt, 0, false);
+        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
     }
 };
 

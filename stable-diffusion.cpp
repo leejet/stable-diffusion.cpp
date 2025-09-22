@@ -40,6 +40,7 @@ const char* model_version_to_str[] = {
     "Wan 2.x",
     "Wan 2.2 I2V",
     "Wan 2.2 TI2V",
+    "Qwen Image",
 };
 
 const char* sampling_methods_str[] = {
@@ -251,6 +252,13 @@ public:
             }
         }
 
+        if (strlen(SAFE_STR(sd_ctx_params->qwen2vl_path)) > 0) {
+            LOG_INFO("loading qwen2vl from '%s'", sd_ctx_params->qwen2vl_path);
+            if (!model_loader.init_from_file(sd_ctx_params->qwen2vl_path, "text_encoders.qwen2vl.")) {
+                LOG_WARN("loading qwen2vl from '%s' failed", sd_ctx_params->qwen2vl_path);
+            }
+        }
+
         if (strlen(SAFE_STR(sd_ctx_params->vae_path)) > 0) {
             LOG_INFO("loading vae from '%s'", sd_ctx_params->vae_path);
             if (!model_loader.init_from_file(sd_ctx_params->vae_path, "vae.")) {
@@ -316,7 +324,7 @@ public:
         } else if (sd_version_is_flux(version)) {
             scale_factor = 0.3611f;
             // TODO: shift_factor
-        } else if (sd_version_is_wan(version)) {
+        } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
             scale_factor = 1.0f;
         }
 
@@ -325,7 +333,7 @@ public:
         {
             clip_backend   = backend;
             bool use_t5xxl = false;
-            if (sd_version_is_dit(version)) {
+            if (sd_version_is_dit(version) && !sd_version_is_qwen_image(version)) {
                 use_t5xxl = true;
             }
             if (!clip_on_cpu && !ggml_backend_is_cpu(backend) && use_t5xxl) {
@@ -411,6 +419,16 @@ public:
                     clip_vision->alloc_params_buffer();
                     clip_vision->get_param_tensors(tensors);
                 }
+            } else if (sd_version_is_qwen_image(version)) {
+                cond_stage_model = std::make_shared<Qwen2_5_VLCLIPEmbedder>(clip_backend,
+                                                                            offload_params_to_cpu,
+                                                                            model_loader.tensor_storages_types);
+                diffusion_model  = std::make_shared<QwenImageModel>(backend,
+                                                                   offload_params_to_cpu,
+                                                                   model_loader.tensor_storages_types,
+                                                                   "model.diffusion_model",
+                                                                   version,
+                                                                   sd_ctx_params->diffusion_flash_attn);
             } else {  // SD1.x SD2.x SDXL
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
@@ -459,7 +477,7 @@ public:
                 vae_backend = backend;
             }
 
-            if (sd_version_is_wan(version)) {
+            if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
                 first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
                                                                         offload_params_to_cpu,
                                                                         model_loader.tensor_storages_types,
@@ -702,6 +720,13 @@ public:
             float shift = sd_ctx_params->flow_shift;
             if (shift == INFINITY) {
                 shift = 5.0;
+            }
+            denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
+        } else if (sd_version_is_qwen_image(version)) {
+            LOG_INFO("running in FLOW mode");
+            float shift = sd_ctx_params->flow_shift;
+            if (shift == INFINITY) {
+                shift = 3.0;
             }
             denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
         } else if (is_using_v_parameterization) {
@@ -1402,7 +1427,7 @@ public:
     }
 
     void process_latent_in(ggml_tensor* latent) {
-        if (sd_version_is_wan(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
             GGML_ASSERT(latent->ne[3] == 16 || latent->ne[3] == 48);
             std::vector<float> latents_mean_vec = {-0.7571f, -0.7089f, -0.9113f, 0.1075f, -0.1745f, 0.9653f, -0.1517f, 1.5508f,
                                                    0.4134f, -0.0715f, 0.5517f, -0.3632f, -0.1922f, -0.9497f, 0.2503f, -0.2921f};
@@ -1442,7 +1467,7 @@ public:
     }
 
     void process_latent_out(ggml_tensor* latent) {
-        if (sd_version_is_wan(version)) {
+        if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
             GGML_ASSERT(latent->ne[3] == 16 || latent->ne[3] == 48);
             std::vector<float> latents_mean_vec = {-0.7571f, -0.7089f, -0.9113f, 0.1075f, -0.1745f, 0.9653f, -0.1517f, 1.5508f,
                                                    0.4134f, -0.0715f, 0.5517f, -0.3632f, -0.1922f, -0.9497f, 0.2503f, -0.2921f};
@@ -1511,6 +1536,9 @@ public:
         }
         int64_t t0 = ggml_time_ms();
         if (!use_tiny_autoencoder) {
+            if (sd_version_is_qwen_image(version)) {
+                x = ggml_reshape_4d(work_ctx, x, x->ne[0], x->ne[1], 1, x->ne[2] * x->ne[3]);
+            }
             process_latent_out(x);
             // x = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
             if (vae_tiling_params.enabled && !decode_video) {
@@ -1682,6 +1710,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "clip_g_path: %s\n"
              "clip_vision_path: %s\n"
              "t5xxl_path: %s\n"
+             "qwen2vl_path: %s\n"
              "diffusion_model_path: %s\n"
              "high_noise_diffusion_model_path: %s\n"
              "vae_path: %s\n"
@@ -1709,6 +1738,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->clip_g_path),
              SAFE_STR(sd_ctx_params->clip_vision_path),
              SAFE_STR(sd_ctx_params->t5xxl_path),
+             SAFE_STR(sd_ctx_params->qwen2vl_path),
              SAFE_STR(sd_ctx_params->diffusion_model_path),
              SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path),
              SAFE_STR(sd_ctx_params->vae_path),
@@ -2066,6 +2096,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         C = 16;
     } else if (sd_version_is_flux(sd_ctx->sd->version)) {
         C = 16;
+    } else if (sd_version_is_qwen_image(sd_ctx->sd->version)) {
+        C = 16;
     }
     int W = width / 8;
     int H = height / 8;
@@ -2214,6 +2246,8 @@ ggml_tensor* generate_init_latent(sd_ctx_t* sd_ctx,
     if (sd_version_is_sd3(sd_ctx->sd->version)) {
         C = 16;
     } else if (sd_version_is_flux(sd_ctx->sd->version)) {
+        C = 16;
+    } else if (sd_version_is_qwen_image(sd_ctx->sd->version)) {
         C = 16;
     } else if (sd_version_is_wan(sd_ctx->sd->version)) {
         C = 16;

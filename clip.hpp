@@ -398,7 +398,6 @@ public:
             }
             for (auto& token : matches) {
                 std::string token_str = token.str();
-                LOG_DEBUG("%s", token_str.c_str());
                 std::u32string utf32_token;
                 for (int i = 0; i < token_str.length(); i++) {
                     unsigned char b = token_str[i];

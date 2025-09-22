@@ -54,7 +54,7 @@ namespace Qwen {
             // return: [N, embedding_dim]
             auto timestep_embedder = std::dynamic_pointer_cast<TimestepEmbedding>(blocks["timestep_embedder"]);
 
-            auto timesteps_proj = ggml_nn_timestep_embedding(ctx, timesteps, 256, 10000, 1000.f);
+            auto timesteps_proj = ggml_nn_timestep_embedding(ctx, timesteps, 256, 10000, 1.f);
             auto timesteps_emb  = timestep_embedder->forward(ctx, timesteps_proj);
             return timesteps_emb;
         }
@@ -423,13 +423,9 @@ namespace Qwen {
             auto proj_out        = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
 
             auto t_emb = time_text_embed->forward(ctx, timestep);
-            LOG_DEBUG("xxx");
-            auto img = img_in->forward(ctx, x);
-            LOG_DEBUG("xxx");
-            auto txt = txt_norm->forward(ctx, context);
-            LOG_DEBUG("xxx");
-            txt = txt_in->forward(ctx, txt);
-            LOG_DEBUG("xxx");
+            auto img   = img_in->forward(ctx, x);
+            auto txt   = txt_norm->forward(ctx, context);
+            txt        = txt_in->forward(ctx, txt);
 
             for (int i = 0; i < params.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<QwenImageTransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
@@ -492,7 +488,7 @@ namespace Qwen {
                         bool offload_params_to_cpu,
                         const String2GGMLType& tensor_types = {},
                         const std::string prefix            = "",
-                        SDVersion version                   = VERSION_FLUX,
+                        SDVersion version                   = VERSION_QWEN_IMAGE,
                         bool flash_attn                     = false)
             : GGMLRunner(backend, offload_params_to_cpu) {
             qwen_image_params.flash_attn = flash_attn;
@@ -571,13 +567,12 @@ namespace Qwen {
             GGML_ASSERT(work_ctx != NULL);
 
             {
-                // cpu f16:
                 // auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 16, 16, 16, 1);
                 // ggml_set_f32(x, 0.01f);
                 auto x = load_tensor_from_file(work_ctx, "./qwen_image_x.bin");
                 print_ggml_tensor(x);
 
-                std::vector<float> timesteps_vec(1, 1.f);
+                std::vector<float> timesteps_vec(1, 1000.f);
                 auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
 
                 // auto context = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 3584, 256, 1);
@@ -598,6 +593,7 @@ namespace Qwen {
 
         static void load_from_file_and_test(const std::string& file_path) {
             // cuda q8: pass
+            // cuda q8 fa: nan
             // ggml_backend_t backend    = ggml_backend_cuda_init(0);
             ggml_backend_t backend    = ggml_backend_cpu_init();
             ggml_type model_data_type = GGML_TYPE_Q8_0;
@@ -619,7 +615,9 @@ namespace Qwen {
             std::shared_ptr<QwenImageRunner> qwen_image = std::shared_ptr<QwenImageRunner>(new QwenImageRunner(backend,
                                                                                                                false,
                                                                                                                tensor_types,
-                                                                                                               "model.diffusion_model"));
+                                                                                                               "model.diffusion_model",
+                                                                                                               VERSION_QWEN_IMAGE,
+                                                                                                               true));
 
             qwen_image->alloc_params_buffer();
             std::map<std::string, ggml_tensor*> tensors;
