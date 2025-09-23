@@ -151,17 +151,11 @@ struct Rope {
         return flatten(emb);
     }
 
-    static std::vector<std::vector<float>> gen_flux_ids(int h,
-                                                        int w,
-                                                        int patch_size,
+    static std::vector<std::vector<float>> gen_refs_ids(int patch_size,
                                                         int bs,
-                                                        int context_len,
-                                                        std::vector<ggml_tensor*> ref_latents,
+                                                        const std::vector<ggml_tensor*>& ref_latents,
                                                         bool increase_ref_index) {
-        auto txt_ids = gen_txt_ids(bs, context_len);
-        auto img_ids = gen_img_ids(h, w, patch_size, bs);
-
-        auto ids               = concat_ids(txt_ids, img_ids, bs);
+        std::vector<std::vector<float>> ids;
         uint64_t curr_h_offset = 0;
         uint64_t curr_w_offset = 0;
         int index              = 1;
@@ -189,13 +183,31 @@ struct Rope {
         return ids;
     }
 
+    static std::vector<std::vector<float>> gen_flux_ids(int h,
+                                                        int w,
+                                                        int patch_size,
+                                                        int bs,
+                                                        int context_len,
+                                                        const std::vector<ggml_tensor*>& ref_latents,
+                                                        bool increase_ref_index) {
+        auto txt_ids = gen_txt_ids(bs, context_len);
+        auto img_ids = gen_img_ids(h, w, patch_size, bs);
+
+        auto ids = concat_ids(txt_ids, img_ids, bs);
+        if (ref_latents.size() > 0) {
+            auto refs_ids = gen_refs_ids(patch_size, bs, ref_latents, increase_ref_index);
+            ids           = concat_ids(ids, refs_ids, bs);
+        }
+        return ids;
+    }
+
     // Generate flux positional embeddings
     static std::vector<float> gen_flux_pe(int h,
                                           int w,
                                           int patch_size,
                                           int bs,
                                           int context_len,
-                                          std::vector<ggml_tensor*> ref_latents,
+                                          const std::vector<ggml_tensor*>& ref_latents,
                                           bool increase_ref_index,
                                           int theta,
                                           const std::vector<int>& axes_dim) {
@@ -207,7 +219,9 @@ struct Rope {
                                                               int w,
                                                               int patch_size,
                                                               int bs,
-                                                              int context_len) {
+                                                              int context_len,
+                                                              const std::vector<ggml_tensor*>& ref_latents,
+                                                              bool increase_ref_index) {
         int h_len        = (h + (patch_size / 2)) / patch_size;
         int w_len        = (w + (patch_size / 2)) / patch_size;
         int txt_id_start = std::max(h_len, w_len);
@@ -220,6 +234,10 @@ struct Rope {
         }
         auto img_ids = gen_img_ids(h, w, patch_size, bs);
         auto ids     = concat_ids(txt_ids_repeated, img_ids, bs);
+        if (ref_latents.size() > 0) {
+            auto refs_ids = gen_refs_ids(patch_size, bs, ref_latents, increase_ref_index);
+            ids           = concat_ids(ids, refs_ids, bs);
+        }
         return ids;
     }
 
@@ -229,9 +247,11 @@ struct Rope {
                                                 int patch_size,
                                                 int bs,
                                                 int context_len,
+                                                const std::vector<ggml_tensor*>& ref_latents,
+                                                bool increase_ref_index,
                                                 int theta,
                                                 const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_qwen_image_ids(h, w, patch_size, bs, context_len);
+        std::vector<std::vector<float>> ids = gen_qwen_image_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
         return embed_nd(ids, bs, theta, axes_dim);
     }
 
