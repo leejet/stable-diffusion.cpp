@@ -1510,7 +1510,7 @@ public:
 
     ggml_tensor* get_first_stage_encoding(ggml_context* work_ctx, ggml_tensor* vae_output) {
         ggml_tensor* latent;
-        if (use_tiny_autoencoder || sd_version_is_qwen_image(version)) {
+        if (use_tiny_autoencoder || sd_version_is_qwen_image(version) || sd_version_is_wan(version)) {
             latent = vae_output;
         } else if (version == VERSION_SD1_PIX2PIX) {
             latent = ggml_view_3d(work_ctx,
