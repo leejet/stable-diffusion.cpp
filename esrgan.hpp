@@ -177,7 +177,7 @@ struct ESRGAN : public GGMLRunner {
         return "esrgan";
     }
 
-    bool load_from_file(const std::string& file_path) {
+    bool load_from_file(const std::string& file_path, int n_threads) {
         LOG_INFO("loading esrgan from '%s'", file_path.c_str());
 
         ModelLoader model_loader;
@@ -334,10 +334,10 @@ struct ESRGAN : public GGMLRunner {
                 }
             }
 
-            success = model_loader.load_tensors(model_tensors);
+            success = model_loader.load_tensors(model_tensors,{}, n_threads);
         } else {
             
-            success = model_loader.load_tensors(esrgan_tensors);
+            success = model_loader.load_tensors(esrgan_tensors,{}, n_threads);
         }
 
         if (!success) {
