@@ -125,13 +125,14 @@ cmake --build . --config Release
 
 ##### Using HipBLAS
 This provides BLAS acceleration using the ROCm cores of your AMD GPU. Make sure to have the ROCm toolkit installed.
+To build for another GPU architecture than installed in your system, set `$GFX_NAME` manually to the desired architecture (replace first command). This is also necessary if your GPU is not officially supported by ROCm, for example you have to set `$GFX_NAME` manually to `gfx1030` for consumer RDNA2 cards.
 
 Windows User Refer to [docs/hipBLAS_on_Windows.md](docs%2FhipBLAS_on_Windows.md) for a comprehensive guide.
 
 ```
-export GFX_NAME=$(rocminfo | grep -m 1 -E "gfx[^0]{1}" | sed -e 's/ *Name: *//' | awk '{$1=$1; print}' || echo "rocminfo missing")
-echo $GFX_NAME
-cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DGPU_TARGETS=$GFX_NAME -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+if command -v rocminfo; then export GFX_NAME=$(rocminfo | awk '/ *Name: +gfx[1-9]/ {print $2; exit}'); else echo "rocminfo missing!"; fi
+if [ -z "${GFX_NAME}" ]; then echo "Error: Couldn't detect GPU!"; else echo "Building for GPU: ${GFX_NAME}"; fi
+cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DGPU_TARGETS=$GFX_NAME -DAMDGPU_TARGETS=$GFX_NAME -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
 cmake --build . --config Release
 ```
 
