@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <fstream>
@@ -2006,13 +2007,25 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             w.join();
         }
 
-        std::unordered_map<std::string, IndexedStorage> latest_map;
+        std::vector<IndexedStorage> deduplicated;
+        deduplicated.reserve(all_results.size());
+        std::unordered_map<std::string, size_t> name_to_pos;
         for (auto& entry : all_results) {
-            latest_map[entry.ts.name] = entry;
+            auto it = name_to_pos.find(entry.ts.name);
+            if (it == name_to_pos.end()) {
+                name_to_pos.emplace(entry.ts.name, deduplicated.size());
+                deduplicated.push_back(entry);
+            } else if (deduplicated[it->second].index < entry.index) {
+                deduplicated[it->second] = entry;
+            }
         }
 
-        processed_tensor_storages.reserve(latest_map.size());
-        for (auto& [name, entry] : latest_map) {
+        std::sort(deduplicated.begin(), deduplicated.end(), [](const IndexedStorage& a, const IndexedStorage& b) {
+            return a.index < b.index;
+        });
+
+        processed_tensor_storages.reserve(deduplicated.size());
+        for (auto& entry : deduplicated) {
             processed_tensor_storages.push_back(entry.ts);
         }
     }
