@@ -283,6 +283,8 @@ SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
                           sd_image_t input_image,
                           uint32_t upscale_factor);
 
+SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
+
 SD_API bool convert(const char* input_path,
                     const char* vae_path,
                     const char* output_path,
