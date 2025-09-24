@@ -1958,6 +1958,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     std::atomic<int64_t> convert_time_ms(0);
 
     int num_threads_to_use = n_threads_p > 0 ? n_threads_p : (int)std::thread::hardware_concurrency();
+    LOG_DEBUG("using %d threads for model loading", num_threads_to_use);
 
     int64_t start_time = ggml_time_ms();
     std::vector<TensorStorage> processed_tensor_storages;
