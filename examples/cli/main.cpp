@@ -103,7 +103,6 @@ struct SDParams {
     bool verbose               = false;
     bool offload_params_to_cpu = false;
     bool control_net_cpu       = false;
-    bool normalize_input       = false;
     bool clip_on_cpu           = false;
     bool vae_on_cpu            = false;
     bool diffusion_flash_attn  = false;
@@ -156,7 +155,6 @@ void print_params(SDParams params) {
     printf("    pm_id_images_dir:                  %s\n", params.pm_id_images_dir.c_str());
     printf("    pm_id_embed_path:                  %s\n", params.pm_id_embed_path.c_str());
     printf("    pm_style_strength:                 %.2f\n", params.pm_style_strength);
-    printf("    normalize input image:             %s\n", params.normalize_input ? "true" : "false");
     printf("    output_path:                       %s\n", params.output_path.c_str());
     printf("    init_image_path:                   %s\n", params.init_image_path.c_str());
     printf("    end_image_path:                    %s\n", params.end_image_path.c_str());
@@ -306,7 +304,6 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --pm-id-images-dir [DIR]           path to PHOTOMAKER input id images dir\n");
     printf("  --pm-id-embed-path [PATH]          path to PHOTOMAKER v2 id embed\n");
     printf("  --pm-style-strength                strength for keeping PHOTOMAKER input identity (default: 20)\n");
-    printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
     printf("  -v, --verbose                      print extra info\n");
 }
 
@@ -552,7 +549,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--vae-tiling", "", true, &params.vae_tiling_params.enabled},
         {"", "--offload-to-cpu", "", true, &params.offload_params_to_cpu},
         {"", "--control-net-cpu", "", true, &params.control_net_cpu},
-        {"", "--normalize-input", "", true, &params.normalize_input},
         {"", "--clip-on-cpu", "", true, &params.clip_on_cpu},
         {"", "--vae-on-cpu", "", true, &params.vae_on_cpu},
         {"", "--diffusion-fa", "", true, &params.diffusion_flash_attn},
@@ -1379,7 +1375,6 @@ int main(int argc, const char* argv[]) {
             params.batch_count,
             control_image,
             params.control_strength,
-            params.normalize_input,
             {
                 pmid_images.data(),
                 (int)pmid_images.size(),
