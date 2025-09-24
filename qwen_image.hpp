@@ -256,7 +256,7 @@ namespace Qwen {
             auto txt_gate1     = txt_mod_param_vec[2];
 
             auto [img_attn_output, txt_attn_output] = attn->forward(ctx, backend, img_modulated, txt_modulated, pe);
-            
+
             img = ggml_add(ctx, img, ggml_mul(ctx, img_attn_output, img_gate1));
             txt = ggml_add(ctx, txt, ggml_mul(ctx, txt_attn_output, txt_gate1));
 
@@ -564,7 +564,7 @@ namespace Qwen {
                                                          timesteps,
                                                          context,
                                                          pe,
-                                                        ref_latents);
+                                                         ref_latents);
 
             ggml_build_forward_expand(gf, out);
 

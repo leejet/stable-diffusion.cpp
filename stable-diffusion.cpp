@@ -952,7 +952,7 @@ public:
             ggml_set_f32(output, 0.f);
         } else {
             sd_image_f32_t image         = sd_image_t_to_sd_image_f32_t(init_image);
-            sd_image_f32_t resized_image = clip_preprocess(image, clip_vision->vision_model.image_size);
+            sd_image_f32_t resized_image = clip_preprocess(image, clip_vision->vision_model.image_size, clip_vision->vision_model.image_size);
             free(image.data);
             image.data = NULL;
 
@@ -2029,7 +2029,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
             std::vector<sd_image_f32_t> processed_id_images;
             for (int i = 0; i < pm_params.id_images_count; i++) {
                 sd_image_f32_t id_image           = sd_image_t_to_sd_image_f32_t(pm_params.id_images[i]);
-                sd_image_f32_t processed_id_image = clip_preprocess(id_image, clip_image_size);
+                sd_image_f32_t processed_id_image = clip_preprocess(id_image, clip_image_size, clip_image_size);
                 free(id_image.data);
                 id_image.data = NULL;
                 processed_id_images.push_back(processed_id_image);
