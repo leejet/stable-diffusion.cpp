@@ -1967,13 +1967,24 @@ public:
     }
 };
 
+__STATIC_INLINE__ bool support_get_rows(ggml_type wtype) {
+    std::set<ggml_type> allow_types = {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
+    if (allow_types.find(wtype) != allow_types.end()) {
+        return true;
+    }
+    return false;
+}
+
 class Embedding : public UnaryBlock {
 protected:
     int64_t embedding_dim;
     int64_t num_embeddings;
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") {
         enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
-        params["weight"]     = ggml_new_tensor_2d(ctx, wtype, embedding_dim, num_embeddings);
+        if (!support_get_rows(wtype)) {
+            wtype = GGML_TYPE_F32;
+        }
+        params["weight"] = ggml_new_tensor_2d(ctx, wtype, embedding_dim, num_embeddings);
     }
 
 public:
