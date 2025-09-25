@@ -1119,9 +1119,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention(struct ggml_context* ctx
     return kqv;
 }
 
-// q: [N, L_q, C] or [N*n_head, L_q, d_head]
-// k: [N, L_k, C] or [N*n_head, L_k, d_head]
-// v: [N, L_k, C] or [N, L_k, n_head, d_head]
+// q: [N, L_q, C(n_head*d_head)] or [N*n_head, L_q, d_head]
+// k: [N, L_k, n_kv_head*d_head] or [N*n_kv_head, L_k, d_head]
+// v: [N, L_k, n_kv_head*d_head] or [N, L_k, n_kv_head, d_head]
 // mask: [N, L_q, L_k]
 // return: [N, L_q, C]
 __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context* ctx,
@@ -1133,33 +1133,38 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
                                                             struct ggml_tensor* mask = NULL,
                                                             bool diag_mask_inf       = false,
                                                             bool skip_reshape        = false,
-                                                            bool flash_attn          = false) {
+                                                            bool flash_attn          = false,  // avoid overflow
+                                                            float kv_scale           = 1.0f) {
     int64_t L_q;
     int64_t L_k;
     int64_t C;
     int64_t N;
     int64_t d_head;
+    int64_t n_kv_head;
     if (!skip_reshape) {
-        L_q    = q->ne[1];
-        L_k    = k->ne[1];
-        C      = q->ne[0];
-        N      = q->ne[2];
-        d_head = C / n_head;
-        q      = ggml_reshape_4d(ctx, q, d_head, n_head, L_q, N);      // [N, L_q, n_head, d_head]
-        q      = ggml_nn_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));  // [N, n_head, L_q, d_head]
-        q      = ggml_reshape_3d(ctx, q, d_head, L_q, n_head * N);     // [N * n_head, L_q, d_head]
+        L_q       = q->ne[1];
+        L_k       = k->ne[1];
+        C         = q->ne[0];
+        N         = q->ne[2];
+        d_head    = C / n_head;
+        n_kv_head = k->ne[0] / d_head;
 
-        k = ggml_reshape_4d(ctx, k, d_head, n_head, L_k, N);      // [N, L_k, n_head, d_head]
-        k = ggml_nn_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));  // [N, n_head, L_k, d_head]
-        k = ggml_reshape_3d(ctx, k, d_head, L_k, n_head * N);     // [N * n_head, L_k, d_head]
+        q = ggml_reshape_4d(ctx, q, d_head, n_head, L_q, N);      // [N, L_q, n_head, d_head]
+        q = ggml_nn_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));  // [N, n_head, L_q, d_head]
+        q = ggml_reshape_3d(ctx, q, d_head, L_q, n_head * N);     // [N * n_head, L_q, d_head]
 
-        v = ggml_reshape_4d(ctx, v, d_head, n_head, L_k, N);  // [N, L_k, n_head, d_head]
+        k = ggml_reshape_4d(ctx, k, d_head, n_kv_head, L_k, N);   // [N, L_k, n_kv_head, d_head]
+        k = ggml_nn_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));  // [N, n_kv_head, L_k, d_head]
+        k = ggml_reshape_3d(ctx, k, d_head, L_k, n_kv_head * N);  // [N * n_kv_head, L_k, d_head]
+
+        v = ggml_reshape_4d(ctx, v, d_head, n_kv_head, L_k, N);  // [N, L_k, n_kv_head, d_head]
     } else {
-        L_q    = q->ne[1];
-        L_k    = k->ne[1];
-        d_head = v->ne[0];
-        N      = v->ne[3];
-        C      = d_head * n_head;
+        L_q       = q->ne[1];
+        L_k       = k->ne[1];
+        d_head    = v->ne[0];
+        N         = v->ne[3];
+        n_kv_head = k->ne[2] / N;
+        C         = d_head * n_head;
     }
 
     float scale = (1.0f / sqrt((float)d_head));
@@ -1171,12 +1176,18 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         if (kv_pad != 0) {
             k_in = ggml_pad(ctx, k_in, 0, kv_pad, 0, 0);
         }
+        if (kv_scale != 1.0f) {
+            k_in = ggml_scale(ctx, k_in, kv_scale);
+        }
         k_in = ggml_cast(ctx, k_in, GGML_TYPE_F16);
 
         v_in = ggml_nn_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
-        v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_head * N);
+        v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
         if (kv_pad != 0) {
             v_in = ggml_pad(ctx, v_in, 0, kv_pad, 0, 0);
+        }
+        if (kv_scale != 1.0f) {
+            v_in = ggml_scale(ctx, v_in, kv_scale);
         }
         v_in = ggml_cast(ctx, v_in, GGML_TYPE_F16);
 
@@ -1201,8 +1212,11 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
             mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
         }
 
-        auto out = ggml_flash_attn_ext(ctx, q_in, k_in, v_in, mask_in, scale, 0, 0);
+        auto out = ggml_flash_attn_ext(ctx, q_in, k_in, v_in, mask_in, scale / kv_scale, 0, 0);
         ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
+        if (kv_scale != 1.0f) {
+            out = ggml_scale(ctx, out, 1.0f / kv_scale);
+        }
         return out;
     };
 
@@ -1232,8 +1246,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         // if (flash_attn) {
         //     LOG_DEBUG("fallback to default attention, L_q:%d L_k:%d n_head:%d C:%d d_head:%d N:%d", L_q, L_k, n_head, C, d_head, N);
         // }
-        v = ggml_nn_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_head, d_head, L_k]
-        v = ggml_reshape_3d(ctx, v, L_k, d_head, n_head * N);     // [N * n_head, d_head, L_k]
+        v = ggml_nn_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));  // [N, n_kv_head, d_head, L_k]
+        v = ggml_reshape_3d(ctx, v, L_k, d_head, n_kv_head * N);  // [N * n_kv_head, d_head, L_k]
 
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
         kq      = ggml_scale_inplace(ctx, kq, scale);
@@ -1349,15 +1363,13 @@ __STATIC_INLINE__ std::vector<float> arange(float start, float end, float step =
 // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
 __STATIC_INLINE__ std::vector<float> timestep_embedding(std::vector<float> timesteps,
                                                         int dim,
-                                                        int max_period = 10000) {
+                                                        int max_period       = 10000,
+                                                        bool flip_sin_to_cos = true,
+                                                        float scale          = 1.f) {
     // timesteps: [N,]
     // embedding: [N, dim]
-    size_t N        = timesteps.size();
-    int acutual_dim = dim;
-    if (dim % 2 != 0) {
-        acutual_dim = dim + 1;
-    }
-    std::vector<float> embedding(N * acutual_dim, 0.f);
+    size_t N = timesteps.size();
+    std::vector<float> embedding(N * dim, 0.f);
     int half = dim / 2;
     std::vector<float> freqs(half);
     for (int i = 0; i < half; ++i) {
@@ -1365,9 +1377,14 @@ __STATIC_INLINE__ std::vector<float> timestep_embedding(std::vector<float> times
     }
     for (int i = 0; i < N; ++i) {
         for (int j = 0; j < half; ++j) {
-            float arg                             = timesteps[i] * freqs[j];
-            embedding[i * acutual_dim + j]        = std::cos(arg);
-            embedding[i * acutual_dim + j + half] = std::sin(arg);
+            float arg = timesteps[i] * freqs[j] * scale;
+            if (flip_sin_to_cos) {
+                embedding[i * dim + j]        = std::cos(arg);
+                embedding[i * dim + j + half] = std::sin(arg);
+            } else {
+                embedding[i * dim + j]        = std::sin(arg);
+                embedding[i * dim + j + half] = std::cos(arg);
+            }
         }
     }
     return embedding;
@@ -1388,11 +1405,7 @@ __STATIC_INLINE__ struct ggml_tensor* new_timestep_embedding(struct ggml_context
     // timesteps: [N,]
     // embedding: [N, dim]
     std::vector<float> embedding_vec = timestep_embedding(timesteps, dim, max_period);
-    int acutual_dim                  = dim;
-    if (dim % 2 != 0) {
-        acutual_dim = dim + 1;
-    }
-    struct ggml_tensor* embedding = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, acutual_dim, timesteps.size());
+    struct ggml_tensor* embedding    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dim, timesteps.size());
     if (embedding->data != NULL) {
         memcpy(((char*)embedding->data), ((char*)embedding_vec.data()), ggml_nbytes(embedding));
     } else {

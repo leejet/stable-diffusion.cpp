@@ -1833,7 +1833,7 @@ namespace WAN {
                                               struct ggml_tensor* x) {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
-            int64_t T = x->ne[1];
+            int64_t T = x->ne[2];
 
             int pad_t = (std::get<0>(params.patch_size) - T % std::get<0>(params.patch_size)) % std::get<0>(params.patch_size);
             int pad_h = (std::get<1>(params.patch_size) - H % std::get<1>(params.patch_size)) % std::get<1>(params.patch_size);

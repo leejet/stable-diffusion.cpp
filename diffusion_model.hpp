@@ -3,6 +3,7 @@
 
 #include "flux.hpp"
 #include "mmdit.hpp"
+#include "qwen_image.hpp"
 #include "unet.hpp"
 #include "wan.hpp"
 
@@ -260,6 +261,60 @@ struct WanModel : public DiffusionModel {
                            diffusion_params.vace_strength,
                            output,
                            output_ctx);
+    }
+};
+
+struct QwenImageModel : public DiffusionModel {
+    std::string prefix;
+    Qwen::QwenImageRunner qwen_image;
+
+    QwenImageModel(ggml_backend_t backend,
+                   bool offload_params_to_cpu,
+                   const String2GGMLType& tensor_types = {},
+                   const std::string prefix            = "model.diffusion_model",
+                   SDVersion version                   = VERSION_QWEN_IMAGE,
+                   bool flash_attn                     = false)
+        : prefix(prefix), qwen_image(backend, offload_params_to_cpu, tensor_types, prefix, version, flash_attn) {
+    }
+
+    std::string get_desc() {
+        return qwen_image.get_desc();
+    }
+
+    void alloc_params_buffer() {
+        qwen_image.alloc_params_buffer();
+    }
+
+    void free_params_buffer() {
+        qwen_image.free_params_buffer();
+    }
+
+    void free_compute_buffer() {
+        qwen_image.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
+        qwen_image.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() {
+        return qwen_image.get_params_buffer_size();
+    }
+
+    int64_t get_adm_in_channels() {
+        return 768;
+    }
+
+    void compute(int n_threads,
+                 DiffusionParams diffusion_params,
+                 struct ggml_tensor** output     = NULL,
+                 struct ggml_context* output_ctx = NULL) {
+        return qwen_image.compute(n_threads,
+                                  diffusion_params.x,
+                                  diffusion_params.timesteps,
+                                  diffusion_params.context,
+                                  output,
+                                  output_ctx);
     }
 };
 

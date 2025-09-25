@@ -131,6 +131,7 @@ typedef struct {
     const char* clip_g_path;
     const char* clip_vision_path;
     const char* t5xxl_path;
+    const char* qwen2vl_path;
     const char* diffusion_model_path;
     const char* high_noise_diffusion_model_path;
     const char* vae_path;

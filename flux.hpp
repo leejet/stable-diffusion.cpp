@@ -120,14 +120,15 @@ namespace Flux {
                                                     struct ggml_tensor* v,
                                                     struct ggml_tensor* pe,
                                                     struct ggml_tensor* mask,
-                                                    bool flash_attn) {
+                                                    bool flash_attn,
+                                                    float kv_scale = 1.0f) {
         // q,k,v: [N, L, n_head, d_head]
         // pe: [L, d_head/2, 2, 2]
         // return: [N, L, n_head*d_head]
         q = apply_rope(ctx, q, pe);  // [N*n_head, L, d_head]
         k = apply_rope(ctx, k, pe);  // [N*n_head, L, d_head]
 
-        auto x = ggml_nn_attention_ext(ctx, backend, q, k, v, v->ne[1], mask, false, true, flash_attn);  // [N, L, n_head*d_head]
+        auto x = ggml_nn_attention_ext(ctx, backend, q, k, v, v->ne[1], mask, false, true, flash_attn, kv_scale);  // [N, L, n_head*d_head]
         return x;
     }
 

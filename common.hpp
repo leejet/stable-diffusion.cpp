@@ -177,7 +177,7 @@ public:
     }
 };
 
-class GEGLU : public GGMLBlock {
+class GEGLU : public UnaryBlock {
 protected:
     int64_t dim_in;
     int64_t dim_out;
@@ -216,14 +216,41 @@ public:
     }
 };
 
+class GELU : public UnaryBlock {
+public:
+    GELU(int64_t dim_in, int64_t dim_out, bool bias = true) {
+        blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim_in, dim_out, bias));
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        // x: [ne3, ne2, ne1, dim_in]
+        // return: [ne3, ne2, ne1, dim_out]
+        auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
+
+        x = proj->forward(ctx, x);
+        x = ggml_gelu_inplace(ctx, x);
+        return x;
+    }
+};
+
 class FeedForward : public GGMLBlock {
 public:
+    enum class Activation {
+        GEGLU,
+        GELU
+    };
     FeedForward(int64_t dim,
                 int64_t dim_out,
-                int64_t mult = 4) {
+                int64_t mult          = 4,
+                Activation activation = Activation::GEGLU) {
         int64_t inner_dim = dim * mult;
 
-        blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GEGLU(dim, inner_dim));
+        if (activation == Activation::GELU) {
+            blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GELU(dim, inner_dim));
+        } else {
+            blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GEGLU(dim, inner_dim));
+        }
+
         // net_1 is nn.Dropout(), skip for inference
         blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out));
     }
@@ -232,7 +259,7 @@ public:
         // x: [ne3, ne2, ne1, dim]
         // return: [ne3, ne2, ne1, dim_out]
 
-        auto net_0 = std::dynamic_pointer_cast<GEGLU>(blocks["net.0"]);
+        auto net_0 = std::dynamic_pointer_cast<UnaryBlock>(blocks["net.0"]);
         auto net_2 = std::dynamic_pointer_cast<Linear>(blocks["net.2"]);
 
         x = net_0->forward(ctx, x);  // [ne3, ne2, ne1, inner_dim]
