@@ -252,6 +252,14 @@ public:
                       std::set<std::string> ignore_tensors = {},
                       int n_threads                        = 0);
 
+    std::vector<std::string> get_tensor_names() const {
+        std::vector<std::string> names;
+        for (const auto& ts : tensor_storages) {
+            names.push_back(ts.name);
+        }
+        return names;
+    }
+
     bool save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules);
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
     int64_t get_params_mem_size(ggml_backend_t backend, ggml_type type = GGML_TYPE_COUNT);
