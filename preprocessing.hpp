@@ -218,9 +218,7 @@ bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold,
             ggml_tensor_set_f32(image, gray, ix, iy, 2);
         }
     }
-    uint8_t* output = sd_tensor_to_image(image);
-    free(img.data);
-    img.data = output;
+    sd_tensor_to_image(image, img.data);
     ggml_free(work_ctx);
     return true;
 }

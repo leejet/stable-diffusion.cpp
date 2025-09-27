@@ -372,12 +372,14 @@ __STATIC_INLINE__ float sigmoid(float x) {
 
 // SPECIAL OPERATIONS WITH TENSORS
 
-__STATIC_INLINE__ uint8_t* sd_tensor_to_image(struct ggml_tensor* input) {
+__STATIC_INLINE__ uint8_t* sd_tensor_to_image(struct ggml_tensor* input, uint8_t* image_data = nullptr) {
     int64_t width    = input->ne[0];
     int64_t height   = input->ne[1];
     int64_t channels = input->ne[2];
     GGML_ASSERT(channels == 3 && input->type == GGML_TYPE_F32);
-    uint8_t* image_data = (uint8_t*)malloc(width * height * channels);
+    if (image_data == nullptr) {
+        image_data = (uint8_t*)malloc(width * height * channels);
+    }
     for (int iy = 0; iy < height; iy++) {
         for (int ix = 0; ix < width; ix++) {
             for (int k = 0; k < channels; k++) {
