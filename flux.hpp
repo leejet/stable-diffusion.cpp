@@ -81,57 +81,6 @@ namespace Flux {
         }
     };
 
-    __STATIC_INLINE__ struct ggml_tensor* apply_rope(struct ggml_context* ctx,
-                                                     struct ggml_tensor* x,
-                                                     struct ggml_tensor* pe) {
-        // x: [N, L, n_head, d_head]
-        // pe: [L, d_head/2, 2, 2]
-        int64_t d_head = x->ne[0];
-        int64_t n_head = x->ne[1];
-        int64_t L      = x->ne[2];
-        int64_t N      = x->ne[3];
-        x              = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));       // [N, n_head, L, d_head]
-        x              = ggml_reshape_4d(ctx, x, 2, d_head / 2, L, n_head * N);  // [N * n_head, L, d_head/2, 2]
-        x              = ggml_cont(ctx, ggml_permute(ctx, x, 3, 0, 1, 2));       // [2, N * n_head, L, d_head/2]
-
-        int64_t offset = x->nb[2] * x->ne[2];
-        auto x_0       = ggml_view_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2], x->nb[1], x->nb[2], offset * 0);  // [N * n_head, L, d_head/2]
-        auto x_1       = ggml_view_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2], x->nb[1], x->nb[2], offset * 1);  // [N * n_head, L, d_head/2]
-        x_0            = ggml_reshape_4d(ctx, x_0, 1, x_0->ne[0], x_0->ne[1], x_0->ne[2]);                    // [N * n_head, L, d_head/2, 1]
-        x_1            = ggml_reshape_4d(ctx, x_1, 1, x_1->ne[0], x_1->ne[1], x_1->ne[2]);                    // [N * n_head, L, d_head/2, 1]
-        auto temp_x    = ggml_new_tensor_4d(ctx, x_0->type, 2, x_0->ne[1], x_0->ne[2], x_0->ne[3]);
-        x_0            = ggml_repeat(ctx, x_0, temp_x);  // [N * n_head, L, d_head/2, 2]
-        x_1            = ggml_repeat(ctx, x_1, temp_x);  // [N * n_head, L, d_head/2, 2]
-
-        pe        = ggml_cont(ctx, ggml_permute(ctx, pe, 3, 0, 1, 2));  // [2, L, d_head/2, 2]
-        offset    = pe->nb[2] * pe->ne[2];
-        auto pe_0 = ggml_view_3d(ctx, pe, pe->ne[0], pe->ne[1], pe->ne[2], pe->nb[1], pe->nb[2], offset * 0);  // [L, d_head/2, 2]
-        auto pe_1 = ggml_view_3d(ctx, pe, pe->ne[0], pe->ne[1], pe->ne[2], pe->nb[1], pe->nb[2], offset * 1);  // [L, d_head/2, 2]
-
-        auto x_out = ggml_add_inplace(ctx, ggml_mul(ctx, x_0, pe_0), ggml_mul(ctx, x_1, pe_1));  // [N * n_head, L, d_head/2, 2]
-        x_out      = ggml_reshape_3d(ctx, x_out, d_head, L, n_head * N);                         // [N*n_head, L, d_head]
-        return x_out;
-    }
-
-    __STATIC_INLINE__ struct ggml_tensor* attention(struct ggml_context* ctx,
-                                                    ggml_backend_t backend,
-                                                    struct ggml_tensor* q,
-                                                    struct ggml_tensor* k,
-                                                    struct ggml_tensor* v,
-                                                    struct ggml_tensor* pe,
-                                                    struct ggml_tensor* mask,
-                                                    bool flash_attn,
-                                                    float kv_scale = 1.0f) {
-        // q,k,v: [N, L, n_head, d_head]
-        // pe: [L, d_head/2, 2, 2]
-        // return: [N, L, n_head*d_head]
-        q = apply_rope(ctx, q, pe);  // [N*n_head, L, d_head]
-        k = apply_rope(ctx, k, pe);  // [N*n_head, L, d_head]
-
-        auto x = ggml_nn_attention_ext(ctx, backend, q, k, v, v->ne[1], mask, false, true, flash_attn, kv_scale);  // [N, L, n_head*d_head]
-        return x;
-    }
-
     struct SelfAttention : public GGMLBlock {
     public:
         int64_t num_heads;
@@ -179,9 +128,9 @@ namespace Flux {
             // x: [N, n_token, dim]
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
-            auto qkv = pre_attention(ctx, x);                                                  // q,k,v: [N, n_token, n_head, d_head]
-            x        = attention(ctx, backend, qkv[0], qkv[1], qkv[2], pe, mask, flash_attn);  // [N, n_token, dim]
-            x        = post_attention(ctx, x);                                                 // [N, n_token, dim]
+            auto qkv = pre_attention(ctx, x);                                                        // q,k,v: [N, n_token, n_head, d_head]
+            x        = Rope::attention(ctx, backend, qkv[0], qkv[1], qkv[2], pe, mask, flash_attn);  // [N, n_token, dim]
+            x        = post_attention(ctx, x);                                                       // [N, n_token, dim]
             return x;
         }
     };
@@ -369,8 +318,8 @@ namespace Flux {
             auto k = ggml_concat(ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_txt_token + n_img_token, n_head*d_head]
-            attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));     // [n_txt_token + n_img_token, N, hidden_size]
+            auto attn         = Rope::attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_txt_token + n_img_token, n_head*d_head]
+            attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));           // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx,
                                              attn,
                                              attn->ne[0],
@@ -504,7 +453,7 @@ namespace Flux {
             auto v           = ggml_reshape_4d(ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
             q                = norm->query_norm(ctx, q);
             k                = norm->key_norm(ctx, k);
-            auto attn        = attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_token, hidden_size]
+            auto attn        = Rope::attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_token, hidden_size]
 
             auto attn_mlp = ggml_concat(ctx, attn, ggml_gelu_inplace(ctx, mlp), 0);  // [N, n_token, hidden_size + mlp_hidden_dim]
             auto output   = linear2->forward(ctx, attn_mlp);                         // [N, n_token, hidden_size]

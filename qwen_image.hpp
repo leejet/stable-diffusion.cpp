@@ -156,7 +156,7 @@ namespace Qwen {
             auto k = ggml_concat(ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = Flux::attention(ctx, backend, q, k, v, pe, mask, flash_attn, (1.0f / 128.f));  // [N, n_txt_token + n_img_token, n_head*d_head]
+            auto attn         = Rope::attention(ctx, backend, q, k, v, pe, mask, flash_attn, (1.0f / 128.f));  // [N, n_txt_token + n_img_token, n_head*d_head]
             attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));                           // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx,
                                              attn,

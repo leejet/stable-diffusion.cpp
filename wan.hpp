@@ -1333,7 +1333,7 @@ namespace WAN {
             k = ggml_reshape_4d(ctx, k, head_dim, num_heads, n_token, N);  // [N, n_token, n_head, d_head]
             v = ggml_reshape_4d(ctx, v, head_dim, num_heads, n_token, N);  // [N, n_token, n_head, d_head]
 
-            x = Flux::attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_token, dim]
+            x = Rope::attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
