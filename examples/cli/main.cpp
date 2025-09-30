@@ -894,13 +894,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         }
     }
 
-    if (!isfinite(params.sample_params.guidance.img_cfg)) {
-        params.sample_params.guidance.img_cfg = params.sample_params.guidance.txt_cfg;
-    }
-
-    if (!isfinite(params.high_noise_sample_params.guidance.img_cfg)) {
-        params.high_noise_sample_params.guidance.img_cfg = params.high_noise_sample_params.guidance.txt_cfg;
-    }
 }
 
 static std::string sd_basename(const std::string& path) {
