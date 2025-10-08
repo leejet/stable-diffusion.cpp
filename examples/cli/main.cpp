@@ -1144,10 +1144,6 @@ bool load_images_from_dir(const std::string dir,
 
 int main(int argc, const char* argv[]) {
     SDParams params;
-    params.verbose = true;
-    sd_set_log_callback(sd_log_cb, (void*)&params);
-    Qwen::Qwen2_5_VLEmbedder::load_from_file_and_test(argv[1]);
-    return 1;
     parse_args(argc, argv, params);
     params.sample_params.guidance.slg.layers                 = params.skip_layers.data();
     params.sample_params.guidance.slg.layer_count            = params.skip_layers.size();

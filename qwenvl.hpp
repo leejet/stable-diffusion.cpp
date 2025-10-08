@@ -692,7 +692,8 @@ namespace Qwen {
         struct ggml_tensor* forward(struct ggml_context* ctx,
                                     ggml_backend_t backend,
                                     struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos) {
+                                    struct ggml_tensor* input_pos,
+                                    std::vector<std::pair<int, ggml_tensor*>> image_embeds) {
             // input_ids: [N, n_token]
             // return: [N, n_token, hidden_size]
 
@@ -700,6 +701,46 @@ namespace Qwen {
             auto norm         = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
 
             auto x = embed_tokens->forward(ctx, input_ids);
+
+            if (image_embeds.size() > 0) {
+                GGML_ASSERT(x->ne[2] == 1);  // N == 1
+
+                auto raw_x              = ggml_cast(ctx, x, image_embeds[0].second->type);
+                int64_t txt_token_start = 0;
+                int64_t txt_token_end   = 0;
+
+                ggml_tensor* input_embed = nullptr;
+
+                for (int i = 0; i < image_embeds.size(); i++) {
+                    if (i == 0) {
+                        txt_token_start = 0;
+                    } else {
+                        txt_token_start = image_embeds[i - 1].first + image_embeds[i - 1].second->ne[1];
+                    }
+                    txt_token_end = image_embeds[i].first;
+
+                    auto txt_embed = ggml_slice(ctx, raw_x, 1, txt_token_start, txt_token_end);
+                    if (input_embed == nullptr) {
+                        input_embed = txt_embed;
+                    } else {
+                        input_embed = ggml_concat(ctx, input_embed, txt_embed, 1);
+                    }
+
+                    auto image_embed = image_embeds[i].second;
+                    input_embed      = ggml_concat(ctx, input_embed, image_embed, 1);
+                }
+
+                auto final_txt_embed = ggml_slice(ctx,
+                                                  raw_x,
+                                                  1,
+                                                  image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1],
+                                                  raw_x->ne[1]);
+
+                input_embed = ggml_concat(ctx, input_embed, final_txt_embed, 1);
+                GGML_ASSERT(raw_x->ne[1] == input_embed->ne[1]);
+
+                x = input_embed;
+            }
 
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<Qwen2_5_VLBlock>(blocks["layers." + std::to_string(i)]);
@@ -770,11 +811,12 @@ namespace Qwen {
         struct ggml_tensor* forward(struct ggml_context* ctx,
                                     ggml_backend_t backend,
                                     struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos) {
+                                    struct ggml_tensor* input_pos,
+                                    std::vector<std::pair<int, ggml_tensor*>> image_embeds) {
             // input_ids: [N, n_token]
             auto model = std::dynamic_pointer_cast<Qwen2_5_VLTextModel>(blocks["model"]);
 
-            auto x = model->forward(ctx, backend, input_ids, input_pos);
+            auto x = model->forward(ctx, backend, input_ids, input_pos, image_embeds);
             return x;
         }
 
@@ -793,6 +835,7 @@ namespace Qwen {
 
     struct Qwen2_5_VLRunner : public GGMLRunner {
         Qwen2_5_VLParams params;
+        bool enable_vision;
         Qwen2_5_VL model;
 
         std::vector<int> input_pos_vec;
@@ -805,8 +848,27 @@ namespace Qwen {
                          bool offload_params_to_cpu,
                          const String2GGMLType& tensor_types,
                          const std::string prefix,
-                         bool enable_vision = false)
-            : GGMLRunner(backend, offload_params_to_cpu), model(params, enable_vision) {
+                         bool enable_vision_ = false)
+            : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
+            bool have_vision_weight = false;
+            for (auto pair : tensor_types) {
+                std::string tensor_name = pair.first;
+                if (tensor_name.find(prefix) == std::string::npos)
+                    continue;
+                size_t pos = tensor_name.find("visual.");
+                if (pos != std::string::npos) {
+                    have_vision_weight = true;
+                    break;
+                }
+            }
+            if (enable_vision && !have_vision_weight) {
+                LOG_WARN("no vision weights detected, vision disabled");
+                enable_vision = false;
+            }
+            if (enable_vision) {
+                LOG_DEBUG("enable qwen2vl vision");
+            }
+            model = Qwen2_5_VL(params, enable_vision);
             model.init(params_ctx, tensor_types, prefix);
         }
 
@@ -821,8 +883,9 @@ namespace Qwen {
         struct ggml_tensor* forward(struct ggml_context* ctx,
                                     ggml_backend_t backend,
                                     struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos) {
-            auto hidden_states = model.forward(ctx, backend, input_ids, input_pos);  // [N, n_token, hidden_size]
+                                    struct ggml_tensor* input_pos,
+                                    std::vector<std::pair<int, ggml_tensor*>> image_embeds) {
+            auto hidden_states = model.forward(ctx, backend, input_ids, input_pos, image_embeds);  // [N, n_token, hidden_size]
             return hidden_states;
         }
 
@@ -837,10 +900,14 @@ namespace Qwen {
             return hidden_states;
         }
 
-        struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids) {
+        struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids, std::vector<std::pair<int, ggml_tensor*>> image_embeds) {
             struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
             input_ids = to_backend(input_ids);
+
+            for (auto& image_embed : image_embeds) {
+                image_embed.second = to_backend(image_embed.second);
+            }
 
             int64_t n_tokens = input_ids->ne[0];
             input_pos_vec.resize(n_tokens * 4);
@@ -856,7 +923,7 @@ namespace Qwen {
                                                 n_tokens * 4);
             set_backend_tensor_data(input_pos, input_pos_vec.data());
 
-            struct ggml_tensor* hidden_states = forward(compute_ctx, runtime_backend, input_ids, input_pos);
+            struct ggml_tensor* hidden_states = forward(compute_ctx, runtime_backend, input_ids, input_pos, image_embeds);
 
             ggml_build_forward_expand(gf, hidden_states);
 
@@ -865,12 +932,22 @@ namespace Qwen {
 
         void compute(const int n_threads,
                      struct ggml_tensor* input_ids,
+                     std::vector<std::pair<int, ggml_tensor*>> image_embeds,
                      ggml_tensor** output,
                      ggml_context* output_ctx = NULL) {
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(input_ids);
+                return build_graph(input_ids, image_embeds);
             };
             GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+        }
+
+        int64_t get_num_image_tokens(int64_t t, int64_t h, int64_t w) {
+            int grid_t     = 1;
+            int grid_h     = h / params.vision.patch_size;
+            int grid_w     = w / params.vision.patch_size;
+            int llm_grid_h = grid_h / params.vision.spatial_merge_size;
+            int llm_grid_w = grid_w / params.vision.spatial_merge_size;
+            return grid_t * grid_h * grid_w;
         }
 
         struct ggml_tensor* process_image(struct ggml_context* ctx, struct ggml_tensor* image) {
@@ -1030,7 +1107,7 @@ namespace Qwen {
             auto get_graph = [&]() -> struct ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
-            GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+            GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
         }
     };
 
@@ -1097,9 +1174,59 @@ namespace Qwen {
 
             struct ggml_context* work_ctx = ggml_init(params);
             GGML_ASSERT(work_ctx != NULL);
-            bool test_vit = true;
+            bool test_vit              = true;
+            bool test_decoder_with_vit = true;
 
-            if (test_vit) {
+            if (test_decoder_with_vit) {
+                ggml_tensor* image_embed = nullptr;
+                {
+                    auto image = load_tensor_from_file(work_ctx, "qwen2vl_normalized.bin");
+                    print_ggml_tensor(image, false, "image");
+                    struct ggml_tensor* out = NULL;
+
+                    int t0 = ggml_time_ms();
+                    model.encode_image(8, image, &out, work_ctx);
+                    int t1 = ggml_time_ms();
+
+                    print_ggml_tensor(out, false, "image_embed");
+                    image_embed = out;
+                    LOG_DEBUG("qwen2vl encode_image test done in %dms", t1 - t0);
+                }
+
+                std::string placeholder  = "<|image_pad|>";
+                std::string img_prompt   = "Picture 1: <|vision_start|>";  // [24669, 220, 16, 25, 220, 151652]
+                int64_t num_image_tokens = image_embed->ne[1];
+                img_prompt.reserve(num_image_tokens * placeholder.size());
+                for (int i = 0; i < num_image_tokens; i++) {
+                    img_prompt += placeholder;
+                }
+                img_prompt += "<|vision_end|>";
+
+                std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+                image_embeds.emplace_back(64, image_embed);
+
+                std::string text = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n";
+                text += img_prompt;
+                text += "change 'flux.cpp' to 'edit.cpp'";
+                text += "<|im_end|>\n<|im_start|>assistant\n";
+
+                auto tokens_and_weights     = tokenize(text, 0, false);
+                std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
+                std::vector<float>& weights = std::get<1>(tokens_and_weights);
+                for (auto token : tokens) {
+                    printf("%d ", token);
+                }
+                printf("\n");
+                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
+                struct ggml_tensor* out = NULL;
+
+                int t0 = ggml_time_ms();
+                model.compute(8, input_ids, image_embeds, &out, work_ctx);
+                int t1 = ggml_time_ms();
+
+                print_ggml_tensor(out);
+                LOG_DEBUG("qwen2vl test done in %dms", t1 - t0);
+            } else if (test_vit) {
                 // auto image = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 280, 280, 3);
                 // ggml_set_f32(image, 0.f);
                 auto image = load_tensor_from_file(work_ctx, "qwen2vl_normalized.bin");
@@ -1129,7 +1256,7 @@ namespace Qwen {
                 struct ggml_tensor* out = NULL;
 
                 int t0 = ggml_time_ms();
-                model.compute(8, input_ids, &out, work_ctx);
+                model.compute(8, input_ids, {}, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

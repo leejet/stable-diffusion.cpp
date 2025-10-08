@@ -113,7 +113,6 @@ const char* unused_tensors[] = {
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
     "text_encoders.qwen2vl.output.weight",
     "text_encoders.qwen2vl.lm_head.",
-    "text_encoders.qwen2vl.visual.",
 };
 
 bool is_unused_tensor(std::string name) {
