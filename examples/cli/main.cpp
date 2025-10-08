@@ -27,8 +27,6 @@
 
 #include "avi_writer.h"
 
-#include "qwenvl.hpp"
-
 #if defined(_WIN32)
 #define NOMINMAX
 #include <windows.h>

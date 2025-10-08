@@ -730,11 +730,10 @@ namespace Qwen {
                     input_embed      = ggml_concat(ctx, input_embed, image_embed, 1);
                 }
 
-                auto final_txt_embed = ggml_slice(ctx,
-                                                  raw_x,
-                                                  1,
-                                                  image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1],
-                                                  raw_x->ne[1]);
+                txt_token_start = image_embeds[image_embeds.size() - 1].first + image_embeds[image_embeds.size() - 1].second->ne[1];
+                txt_token_end   = raw_x->ne[1];
+
+                auto final_txt_embed = ggml_slice(ctx, raw_x, 1, txt_token_start, txt_token_end);
 
                 input_embed = ggml_concat(ctx, input_embed, final_txt_embed, 1);
                 GGML_ASSERT(raw_x->ne[1] == input_embed->ne[1]);

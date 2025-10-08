@@ -1409,9 +1409,19 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
     }
 
     std::tuple<std::vector<int>, std::vector<float>> tokenize(std::string text,
-                                                              size_t max_length = 0,
-                                                              bool padding      = false) {
-        auto parsed_attention = parse_prompt_attention(text);
+                                                              size_t max_length           = 0,
+                                                              size_t system_prompt_length = 0,
+                                                              bool padding                = false) {
+        std::vector<std::pair<std::string, float>> parsed_attention;
+        if (system_prompt_length > 0) {
+            parsed_attention.emplace_back(text.substr(0, system_prompt_length), 1.f);
+            auto new_parsed_attention = parse_prompt_attention(text.substr(system_prompt_length, text.size() - system_prompt_length));
+            parsed_attention.insert(parsed_attention.end(),
+                                    new_parsed_attention.begin(),
+                                    new_parsed_attention.end());
+        } else {
+            parsed_attention = parse_prompt_attention(text);
+        }
 
         {
             std::stringstream ss;
@@ -1436,7 +1446,7 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
         tokenizer.pad_tokens(tokens, weights, max_length, padding);
 
         // for (int i = 0; i < tokens.size(); i++) {
-        //     std::cout << tokens[i] << ":" << weights[i] << ", ";
+        //     std::cout << tokens[i] << ":" << weights[i] << ", " << i << std::endl;
         // }
         // std::cout << std::endl;
 
@@ -1448,12 +1458,13 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
                                       const ConditionerParams& conditioner_params) {
         std::string prompt;
         std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+        size_t system_prompt_length = 0;
         if (qwenvl->enable_vision && conditioner_params.ref_images.size() > 0) {
             LOG_INFO("QwenImageEditPlusPipeline");
             prompt_template_encode_start_idx = 64;
             int image_embed_idx              = 64 + 6;
 
-            int min_pixels          = 56 * 56;
+            int min_pixels          = 384 * 384;
             int max_pixels          = 560 * 560;
             std::string placeholder = "<|image_pad|>";
             std::string img_prompt;
@@ -1485,7 +1496,7 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
                 image.data = nullptr;
 
                 ggml_tensor* image_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
-                sd_image_f32_to_tensor(resized_image.data, image_tensor, false);
+                sd_image_f32_to_tensor(resized_image, image_tensor, false);
                 free(resized_image.data);
                 resized_image.data = nullptr;
 
@@ -1505,6 +1516,8 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
 
             prompt = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n";
 
+            system_prompt_length = prompt.size();
+
             prompt += img_prompt;
             prompt += conditioner_params.text;
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
@@ -1512,7 +1525,7 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
             prompt = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n" + conditioner_params.text + "<|im_end|>\n<|im_start|>assistant\n";
         }
 
-        auto tokens_and_weights = tokenize(prompt, 0, false);
+        auto tokens_and_weights = tokenize(prompt, 0, system_prompt_length, false);
         auto& tokens            = std::get<0>(tokens_and_weights);
         auto& weights           = std::get<1>(tokens_and_weights);
 

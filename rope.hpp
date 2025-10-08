@@ -222,8 +222,8 @@ namespace Rope {
                                                                          int context_len,
                                                                          const std::vector<ggml_tensor*>& ref_latents,
                                                                          bool increase_ref_index) {
-        int h_len        = (h + (patch_size / 2)) / patch_size;
-        int w_len        = (w + (patch_size / 2)) / patch_size;
+        int h_len        = (h + (patch_size / 2)) / patch_size / 2;
+        int w_len        = (w + (patch_size / 2)) / patch_size / 2;
         int txt_id_start = std::max(h_len, w_len);
         auto txt_ids     = linspace<float>(txt_id_start, context_len + txt_id_start, context_len);
         std::vector<std::vector<float>> txt_ids_repeated(bs * context_len, std::vector<float>(3));

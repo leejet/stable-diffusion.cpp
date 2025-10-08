@@ -314,7 +314,7 @@ struct QwenImageModel : public DiffusionModel {
                                   diffusion_params.timesteps,
                                   diffusion_params.context,
                                   diffusion_params.ref_latents,
-                                  diffusion_params.increase_ref_index,
+                                  true,  // increase_ref_index
                                   output,
                                   output_ctx);
     }

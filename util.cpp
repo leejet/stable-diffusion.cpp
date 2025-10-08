@@ -299,7 +299,7 @@ std::string trim(const std::string& s) {
 static sd_log_cb_t sd_log_cb = NULL;
 void* sd_log_cb_data         = NULL;
 
-#define LOG_BUFFER_SIZE 1024
+#define LOG_BUFFER_SIZE 4096
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
     va_list args;
@@ -388,10 +388,10 @@ sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int
             float original_x = (float)x * image.width / target_width;
             float original_y = (float)y * image.height / target_height;
 
-            int x1 = (int)original_x;
-            int y1 = (int)original_y;
-            int x2 = x1 + 1;
-            int y2 = y1 + 1;
+            uint32_t x1 = (uint32_t)original_x;
+            uint32_t y1 = (uint32_t)original_y;
+            uint32_t x2 = std::min(x1 + 1, image.width - 1);
+            uint32_t y2 = std::min(y1 + 1, image.height - 1);
 
             for (int k = 0; k < image.channel; k++) {
                 float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
@@ -444,10 +444,10 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int targe
             float original_x = (float)x * image.width / resized_width;
             float original_y = (float)y * image.height / resized_height;
 
-            int x1 = (int)original_x;
-            int y1 = (int)original_y;
-            int x2 = x1 + 1;
-            int y2 = y1 + 1;
+            uint32_t x1 = (uint32_t)original_x;
+            uint32_t y1 = (uint32_t)original_y;
+            uint32_t x2 = std::min(x1 + 1, image.width - 1);
+            uint32_t y2 = std::min(y1 + 1, image.height - 1);
 
             for (int k = 0; k < image.channel; k++) {
                 float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
@@ -478,8 +478,10 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int targe
     for (int k = 0; k < image.channel; k++) {
         for (int i = 0; i < result.height; i++) {
             for (int j = 0; j < result.width; j++) {
+                int src_y = std::min(i + h_offset, resized_height - 1);
+                int src_x = std::min(j + w_offset, resized_width - 1);
                 *(result.data + i * result.width * image.channel + j * image.channel + k) =
-                    fmin(fmax(*(resized_data + (i + h_offset) * resized_width * image.channel + (j + w_offset) * image.channel + k), 0.0f), 255.0f) / 255.0f;
+                    fmin(fmax(*(resized_data + src_y * resized_width * image.channel + src_x * image.channel + k), 0.0f), 255.0f) / 255.0f;
             }
         }
     }

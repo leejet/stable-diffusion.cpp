@@ -973,7 +973,7 @@ public:
             image.data = NULL;
 
             ggml_tensor* pixel_values = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
-            sd_image_f32_to_tensor(resized_image.data, pixel_values, false);
+            sd_image_f32_to_tensor(resized_image, pixel_values, false);
             free(resized_image.data);
             resized_image.data = NULL;
 
@@ -1010,7 +1010,7 @@ public:
                     sd_image_f32_t resized_image = resize_sd_image_f32_t(image, width, height);
                     free(image.data);
                     image.data = NULL;
-                    sd_image_f32_to_tensor(resized_image.data, init_img, false);
+                    sd_image_f32_to_tensor(resized_image, init_img, false);
                     free(resized_image.data);
                     resized_image.data = NULL;
                 } else {
@@ -2006,8 +2006,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         seed = rand();
     }
 
-    print_ggml_tensor(init_latent, true, "init");
-
     // for (auto v : sigmas) {
     //     std::cout << v << " ";
     // }
@@ -2485,13 +2483,42 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
 
     std::vector<ggml_tensor*> ref_latents;
     for (int i = 0; i < ref_images.size(); i++) {
-        ggml_tensor* img = ggml_new_tensor_4d(work_ctx,
-                                              GGML_TYPE_F32,
-                                              ref_images[i]->width,
-                                              ref_images[i]->height,
-                                              3,
-                                              1);
-        sd_image_to_tensor(*ref_images[i], img);
+        ggml_tensor* img;
+        if (sd_version_is_qwen_image(sd_ctx->sd->version)) {
+            sd_image_f32_t ref_image = sd_image_t_to_sd_image_f32_t(*ref_images[i]);
+            int VAE_IMAGE_SIZE       = std::min(1024 * 1024, width * height);
+            double vae_width         = sqrt(VAE_IMAGE_SIZE * ref_image.width / ref_image.height);
+            double vae_height        = vae_width * ref_image.height / ref_image.width;
+
+            vae_height = round(vae_height / 32) * 32;
+            vae_width  = round(vae_width / 32) * 32;
+
+            sd_image_f32_t resized_image = resize_sd_image_f32_t(ref_image, static_cast<int>(vae_width), static_cast<int>(vae_height));
+            free(ref_image.data);
+            ref_image.data = nullptr;
+
+            LOG_DEBUG("resize vae ref image %d from %dx%d to %dx%d", i, ref_image.height, ref_image.width, resized_image.height, resized_image.width);
+
+            img = ggml_new_tensor_4d(work_ctx,
+                                     GGML_TYPE_F32,
+                                     resized_image.width,
+                                     resized_image.height,
+                                     3,
+                                     1);
+            sd_image_f32_to_tensor(resized_image, img);
+            free(resized_image.data);
+            resized_image.data = nullptr;
+        } else {
+            img = ggml_new_tensor_4d(work_ctx,
+                                     GGML_TYPE_F32,
+                                     ref_images[i]->width,
+                                     ref_images[i]->height,
+                                     3,
+                                     1);
+            sd_image_to_tensor(*ref_images[i], img);
+        }
+
+        // print_ggml_tensor(img, false, "img");
 
         ggml_tensor* latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
         ref_latents.push_back(latent);
