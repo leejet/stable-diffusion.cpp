@@ -363,38 +363,79 @@ namespace Qwen {
 
     struct Qwen2_5_VisionPatchEmbed : public GGMLBlock {
     protected:
-        int64_t patch_size;
-        int64_t temporal_patch_size;
+        bool llama_cpp_style;
+        int patch_size;
+        int temporal_patch_size;
+        int64_t in_channels;
         int64_t embed_dim;
 
     public:
-        Qwen2_5_VisionPatchEmbed(int64_t patch_size          = 14,
-                                 int64_t temporal_patch_size = 2,
-                                 int64_t in_channels         = 3,
-                                 int64_t embed_dim           = 1152)
-            : patch_size(patch_size), temporal_patch_size(temporal_patch_size), embed_dim(embed_dim) {
-            std::tuple<int, int, int> kernel_size = {(int)temporal_patch_size, (int)patch_size, (int)patch_size};
-            blocks["proj"]                        = std::shared_ptr<GGMLBlock>(new Conv3d(in_channels,
-                                                                                          embed_dim,
-                                                                                          kernel_size,
-                                                                                          kernel_size,  // stride
-                                                                                          {0, 0, 0},    // padding
-                                                                                          {1, 1, 1},    // dilation
-                                                                                          false));
+        Qwen2_5_VisionPatchEmbed(bool llama_cpp_style,
+                                 int patch_size          = 14,
+                                 int temporal_patch_size = 2,
+                                 int64_t in_channels     = 3,
+                                 int64_t embed_dim       = 1152)
+            : llama_cpp_style(llama_cpp_style),
+              patch_size(patch_size),
+              temporal_patch_size(temporal_patch_size),
+              in_channels(in_channels),
+              embed_dim(embed_dim) {
+            if (llama_cpp_style) {
+                blocks["proj.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels,
+                                                                         embed_dim,
+                                                                         {patch_size, patch_size},
+                                                                         {patch_size, patch_size},  // stride
+                                                                         {0, 0},                    // padding
+                                                                         {1, 1},                    // dilation
+                                                                         false));
+                blocks["proj.1"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels,
+                                                                         embed_dim,
+                                                                         {patch_size, patch_size},
+                                                                         {patch_size, patch_size},  // stride
+                                                                         {0, 0},                    // padding
+                                                                         {1, 1},                    // dilation
+                                                                         false));
+            } else {
+                std::tuple<int, int, int> kernel_size = {(int)temporal_patch_size, (int)patch_size, (int)patch_size};
+                blocks["proj"]                        = std::shared_ptr<GGMLBlock>(new Conv3d(in_channels,
+                                                                                              embed_dim,
+                                                                                              kernel_size,
+                                                                                              kernel_size,  // stride
+                                                                                              {0, 0, 0},    // padding
+                                                                                              {1, 1, 1},    // dilation
+                                                                                              false));
+            }
         }
 
         struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
             // x: [N*grid_t*grid_h*grid_w, in_channels, temporal_patch_size*patch_size*patch_size]
             // return: [N*grid_t*grid_h*grid_w, embed_dim]
-            auto proj = std::dynamic_pointer_cast<Conv3d>(blocks["proj"]);
-
             x = ggml_reshape_4d(ctx,
                                 x,
                                 patch_size,
                                 patch_size,
                                 temporal_patch_size,
                                 ggml_nelements(x) / (temporal_patch_size * patch_size * patch_size));
-            x = proj->forward(ctx, x);
+
+            if (llama_cpp_style) {
+                auto proj_0 = std::dynamic_pointer_cast<Conv2d>(blocks["proj.0"]);
+                auto proj_1 = std::dynamic_pointer_cast<Conv2d>(blocks["proj.1"]);
+
+                auto x0 = ggml_slice(ctx, x, 2, 0, 1);
+                x0      = ggml_reshape_4d(ctx, x0, x0->ne[0], x0->ne[1], in_channels, x0->ne[3] / in_channels);
+                x0      = proj_0->forward(ctx, x0);
+
+                auto x1 = ggml_slice(ctx, x, 2, 1, 2);
+                x1      = ggml_reshape_4d(ctx, x1, x1->ne[0], x1->ne[1], in_channels, x1->ne[3] / in_channels);
+                x1      = proj_1->forward(ctx, x1);
+
+                x = ggml_add(ctx, x0, x1);
+            } else {
+                auto proj = std::dynamic_pointer_cast<Conv3d>(blocks["proj"]);
+
+                x = proj->forward(ctx, x);
+            }
+
             x = ggml_reshape_2d(ctx, x, embed_dim, ggml_nelements(x) / embed_dim);
             return x;
         }
@@ -431,16 +472,24 @@ namespace Qwen {
 
     struct Qwen2_5_VLVisionAttention : public GGMLBlock {
     protected:
+        bool llama_cpp_style;
         int64_t head_dim;
         int64_t num_heads;
 
     public:
-        Qwen2_5_VLVisionAttention(int64_t hidden_size,
+        Qwen2_5_VLVisionAttention(bool llama_cpp_style,
+                                  int64_t hidden_size,
                                   int64_t num_heads)
-            : num_heads(num_heads) {
+            : llama_cpp_style(llama_cpp_style), num_heads(num_heads) {
             head_dim = hidden_size / num_heads;
             GGML_ASSERT(num_heads * head_dim == hidden_size);
-            blocks["qkv"]  = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size * 3));
+            if (llama_cpp_style) {
+                blocks["q_proj"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
+                blocks["k_proj"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
+                blocks["v_proj"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
+            } else {
+                blocks["qkv"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size * 3));
+            }
             blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
         }
 
@@ -452,14 +501,28 @@ namespace Qwen {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
-            auto qkv_proj   = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
             auto proj       = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
-            auto qkv     = qkv_proj->forward(ctx, x);
-            auto qkv_vec = split_qkv(ctx, qkv);
-            auto q       = ggml_reshape_4d(ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
-            auto k       = ggml_reshape_4d(ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
-            auto v       = ggml_reshape_4d(ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
+            std::vector<ggml_tensor*> qkv_vec;
+            if (llama_cpp_style) {
+                auto q_proj = std::dynamic_pointer_cast<Linear>(blocks["q_proj"]);
+                auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["k_proj"]);
+                auto v_proj = std::dynamic_pointer_cast<Linear>(blocks["v_proj"]);
+
+                auto q = q_proj->forward(ctx, x);
+                auto k = k_proj->forward(ctx, x);
+                auto v = v_proj->forward(ctx, x);
+
+                qkv_vec = {q, k, v};
+            } else {
+                auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
+                auto qkv      = qkv_proj->forward(ctx, x);
+                qkv_vec       = split_qkv(ctx, qkv);
+            }
+
+            auto q = ggml_reshape_4d(ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
+            auto k = ggml_reshape_4d(ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
+            auto v = ggml_reshape_4d(ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
 
             x = Rope::attention(ctx, backend, q, k, v, pe, mask, false, 1.f, false);  // [N, n_token, hidden_size]
 
@@ -470,11 +533,12 @@ namespace Qwen {
 
     struct Qwen2_5_VLVisionBlock : public GGMLBlock {
     public:
-        Qwen2_5_VLVisionBlock(int64_t hidden_size,
+        Qwen2_5_VLVisionBlock(bool llama_cpp_style,
+                              int64_t hidden_size,
                               int64_t intermediate_size,
                               int64_t num_heads,
                               float eps = 1e-6f) {
-            blocks["attn"]  = std::shared_ptr<GGMLBlock>(new Qwen2_5_VLVisionAttention(hidden_size, num_heads));
+            blocks["attn"]  = std::shared_ptr<GGMLBlock>(new Qwen2_5_VLVisionAttention(llama_cpp_style, hidden_size, num_heads));
             blocks["mlp"]   = std::shared_ptr<GGMLBlock>(new Qwen2_5_VLMLP(hidden_size, intermediate_size, true));
             blocks["norm1"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
             blocks["norm2"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
@@ -512,7 +576,8 @@ namespace Qwen {
         std::set<int> fullatt_block_indexes;
 
     public:
-        Qwen2_5_VLVisionModel(int64_t num_layers,
+        Qwen2_5_VLVisionModel(bool llama_cpp_style,
+                              int64_t num_layers,
                               int64_t in_channels,
                               int64_t hidden_size,
                               int64_t out_hidden_size,
@@ -525,9 +590,14 @@ namespace Qwen {
                               std::set<int> fullatt_block_indexes = {7, 15, 23, 31},
                               float eps                           = 1e-6f)
             : num_layers(num_layers), fullatt_block_indexes(fullatt_block_indexes), spatial_merge_size(spatial_merge_size) {
-            blocks["patch_embed"] = std::shared_ptr<GGMLBlock>(new Qwen2_5_VisionPatchEmbed(patch_size, temporal_patch_size, in_channels, hidden_size));
+            blocks["patch_embed"] = std::shared_ptr<GGMLBlock>(new Qwen2_5_VisionPatchEmbed(llama_cpp_style,
+                                                                                            patch_size,
+                                                                                            temporal_patch_size,
+                                                                                            in_channels,
+                                                                                            hidden_size));
             for (int i = 0; i < num_layers; i++) {
-                blocks["blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new Qwen2_5_VLVisionBlock(hidden_size,
+                blocks["blocks." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new Qwen2_5_VLVisionBlock(llama_cpp_style,
+                                                                                                             hidden_size,
                                                                                                              intermediate_size,
                                                                                                              num_heads,
                                                                                                              eps));
@@ -783,7 +853,7 @@ namespace Qwen {
 
     public:
         Qwen2_5_VL() {}
-        Qwen2_5_VL(Qwen2_5_VLParams params, bool enable_vision = false)
+        Qwen2_5_VL(Qwen2_5_VLParams params, bool enable_vision = false, bool llama_cpp_style = false)
             : enable_vision(enable_vision), params(params) {
             blocks["model"] = std::shared_ptr<GGMLBlock>(new Qwen2_5_VLTextModel(params.num_layers,
                                                                                  params.vocab_size,
@@ -793,7 +863,8 @@ namespace Qwen {
                                                                                  params.num_kv_heads,
                                                                                  params.rms_norm_eps));
             if (enable_vision) {
-                blocks["visual"] = std::shared_ptr<GGMLBlock>(new Qwen2_5_VLVisionModel(params.vision.num_layers,
+                blocks["visual"] = std::shared_ptr<GGMLBlock>(new Qwen2_5_VLVisionModel(llama_cpp_style,
+                                                                                        params.vision.num_layers,
                                                                                         params.vision.in_channels,
                                                                                         params.vision.hidden_size,
                                                                                         params.vision.out_hidden_size,
@@ -850,6 +921,7 @@ namespace Qwen {
                          bool enable_vision_ = false)
             : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
             bool have_vision_weight = false;
+            bool llama_cpp_style    = false;
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find(prefix) == std::string::npos)
@@ -857,7 +929,10 @@ namespace Qwen {
                 size_t pos = tensor_name.find("visual.");
                 if (pos != std::string::npos) {
                     have_vision_weight = true;
-                    break;
+                    if (contains(tensor_name, "attn.q_proj")) {
+                        llama_cpp_style = true;
+                        break;
+                    }
                 }
             }
             if (enable_vision && !have_vision_weight) {
@@ -866,8 +941,11 @@ namespace Qwen {
             }
             if (enable_vision) {
                 LOG_DEBUG("enable qwen2vl vision");
+                if (llama_cpp_style) {
+                    LOG_DEBUG("llama.cpp style vision weight");
+                }
             }
-            model = Qwen2_5_VL(params, enable_vision);
+            model = Qwen2_5_VL(params, enable_vision, llama_cpp_style);
             model.init(params_ctx, tensor_types, prefix);
         }
 
