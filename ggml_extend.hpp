@@ -431,18 +431,24 @@ __STATIC_INLINE__ void sd_image_to_tensor(sd_image_t image,
 
 __STATIC_INLINE__ void sd_apply_mask(struct ggml_tensor* image_data,
                                      struct ggml_tensor* mask,
-                                     struct ggml_tensor* output) {
+                                     struct ggml_tensor* output,
+                                     float masked_value = 0.5f) {
     int64_t width    = output->ne[0];
     int64_t height   = output->ne[1];
     int64_t channels = output->ne[2];
+    float rescale_mx = mask->ne[0] / output->ne[0];
+    float rescale_my = mask->ne[1] / output->ne[1];
     GGML_ASSERT(output->type == GGML_TYPE_F32);
     for (int ix = 0; ix < width; ix++) {
         for (int iy = 0; iy < height; iy++) {
-            float m = ggml_tensor_get_f32(mask, ix, iy);
+            int mx  = (int)(ix * rescale_mx);
+            int my  = (int)(iy * rescale_my);
+            float m = ggml_tensor_get_f32(mask, mx, my);
             m       = round(m);  // inpaint models need binary masks
-            ggml_tensor_set_f32(mask, m, ix, iy);
+            ggml_tensor_set_f32(mask, m, mx, my);
             for (int k = 0; k < channels; k++) {
-                float value = (1 - m) * (ggml_tensor_get_f32(image_data, ix, iy, k) - .5) + .5;
+                float value = ggml_tensor_get_f32(image_data, ix, iy, k);
+                value       = (1 - m) * (value - masked_value) + masked_value;
                 ggml_tensor_set_f32(output, value, ix, iy, k);
             }
         }
@@ -930,8 +936,12 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_group_norm_32(struct ggml_context* ct
 __STATIC_INLINE__ struct ggml_tensor* ggml_nn_linear(struct ggml_context* ctx,
                                                      struct ggml_tensor* x,
                                                      struct ggml_tensor* w,
-                                                     struct ggml_tensor* b) {
+                                                     struct ggml_tensor* b,
+                                                     bool force_prec_f32 = false) {
     x = ggml_mul_mat(ctx, w, x);
+    if (force_prec_f32) {
+        ggml_mul_mat_set_prec(x, GGML_PREC_F32);
+    }
     if (b != NULL) {
         x = ggml_add_inplace(ctx, x, b);
     }
@@ -1944,6 +1954,7 @@ protected:
     int64_t out_features;
     bool bias;
     bool force_f32;
+    bool force_prec_f32;
 
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
         enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
@@ -1960,12 +1971,14 @@ protected:
 public:
     Linear(int64_t in_features,
            int64_t out_features,
-           bool bias      = true,
-           bool force_f32 = false)
+           bool bias           = true,
+           bool force_f32      = false,
+           bool force_prec_f32 = false)
         : in_features(in_features),
           out_features(out_features),
           bias(bias),
-          force_f32(force_f32) {}
+          force_f32(force_f32),
+          force_prec_f32(force_prec_f32) {}
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
@@ -1973,7 +1986,7 @@ public:
         if (bias) {
             b = params["bias"];
         }
-        return ggml_nn_linear(ctx, x, w, b);
+        return ggml_nn_linear(ctx, x, w, b, force_prec_f32);
     }
 };
 

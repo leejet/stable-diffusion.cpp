@@ -242,7 +242,8 @@ public:
     FeedForward(int64_t dim,
                 int64_t dim_out,
                 int64_t mult          = 4,
-                Activation activation = Activation::GEGLU) {
+                Activation activation = Activation::GEGLU,
+                bool force_prec_f32   = false) {
         int64_t inner_dim = dim * mult;
 
         if (activation == Activation::GELU) {
@@ -252,7 +253,7 @@ public:
         }
 
         // net_1 is nn.Dropout(), skip for inference
-        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out));
+        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out, true, false, force_prec_f32));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {

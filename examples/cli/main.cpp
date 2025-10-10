@@ -1111,10 +1111,19 @@ bool load_images_from_dir(const std::string dir,
         return false;
     }
 
+    std::vector<fs::directory_entry> entries;
     for (const auto& entry : fs::directory_iterator(dir)) {
-        if (!entry.is_regular_file())
-            continue;
+        if (entry.is_regular_file()) {
+            entries.push_back(entry);
+        }
+    }
 
+    std::sort(entries.begin(), entries.end(),
+              [](const fs::directory_entry& a, const fs::directory_entry& b) {
+                  return a.path().filename().string() < b.path().filename().string();
+              });
+
+    for (const auto& entry : entries) {
         std::string path = entry.path().string();
         std::string ext  = entry.path().extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -1254,7 +1263,7 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    if (params.control_net_path.size() > 0 && params.control_image_path.size() > 0) {
+    if (params.control_image_path.size() > 0) {
         int width          = 0;
         int height         = 0;
         control_image.data = load_image(params.control_image_path.c_str(), width, height, params.width, params.height);
