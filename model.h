@@ -104,7 +104,7 @@ static inline bool sd_version_is_control(SDVersion version) {
 }
 
 static bool sd_version_is_inpaint_or_unet_edit(SDVersion version) {
-    return sd_version_is_unet_edit(version) || sd_version_is_inpaint(version)|| sd_version_is_control(version);
+    return sd_version_is_unet_edit(version) || sd_version_is_inpaint(version) || sd_version_is_control(version);
 }
 
 enum PMVersion {

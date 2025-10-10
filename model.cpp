@@ -1809,7 +1809,7 @@ SDVersion ModelLoader::get_sd_version() {
         if (input_block_weight.ne[0] == 128) {
             return VERSION_FLUX_CONTROLS;
         }
-        if(input_block_weight.ne[0] == 196){
+        if (input_block_weight.ne[0] == 196) {
             return VERSION_FLEX_2;
         }
         return VERSION_FLUX;

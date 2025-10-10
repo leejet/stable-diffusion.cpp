@@ -433,19 +433,19 @@ __STATIC_INLINE__ void sd_apply_mask(struct ggml_tensor* image_data,
     int64_t width    = output->ne[0];
     int64_t height   = output->ne[1];
     int64_t channels = output->ne[2];
-    float rescale_mx = mask->ne[0]/output->ne[0];
-    float rescale_my = mask->ne[1]/output->ne[1];
+    float rescale_mx = mask->ne[0] / output->ne[0];
+    float rescale_my = mask->ne[1] / output->ne[1];
     GGML_ASSERT(output->type == GGML_TYPE_F32);
     for (int ix = 0; ix < width; ix++) {
         for (int iy = 0; iy < height; iy++) {
-            int mx = (int)(ix * rescale_mx);
-            int my = (int)(iy * rescale_my);
+            int mx  = (int)(ix * rescale_mx);
+            int my  = (int)(iy * rescale_my);
             float m = ggml_tensor_get_f32(mask, mx, my);
             m       = round(m);  // inpaint models need binary masks
             ggml_tensor_set_f32(mask, m, mx, my);
             for (int k = 0; k < channels; k++) {
                 float value = ggml_tensor_get_f32(image_data, ix, iy, k);
-                value = (1 - m) * (value - masked_value) + masked_value;
+                value       = (1 - m) * (value - masked_value) + masked_value;
                 ggml_tensor_set_f32(output, value, ix, iy, k);
             }
         }

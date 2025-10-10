@@ -719,7 +719,7 @@ namespace Flux {
             auto img_in      = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
             auto txt_in      = std::dynamic_pointer_cast<Linear>(blocks["txt_in"]);
             auto final_layer = std::dynamic_pointer_cast<LastLayer>(blocks["final_layer"]);
-            
+
             img = img_in->forward(ctx, img);
 
             struct ggml_tensor* vec;
@@ -879,8 +879,8 @@ namespace Flux {
                 GGML_ASSERT(c_concat != NULL);
 
                 ggml_tensor* control = ggml_pad(ctx, c_concat, pad_w, pad_h, 0, 0);
-                control = patchify(ctx, control, patch_size);
-                img = ggml_concat(ctx, img, control, 0);
+                control              = patchify(ctx, control, patch_size);
+                img                  = ggml_concat(ctx, img, control, 0);
             }
 
             if (ref_latents.size() > 0) {
@@ -922,7 +922,7 @@ namespace Flux {
                    bool flash_attn                     = false,
                    bool use_mask                       = false)
             : GGMLRunner(backend, offload_params_to_cpu), version(version), use_mask(use_mask) {
-            flux_params.version = version;
+            flux_params.version             = version;
             flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
