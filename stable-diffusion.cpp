@@ -615,6 +615,7 @@ public:
 
         if (vae_decode_only) {
             ignore_tensors.insert("first_stage_model.encoder");
+            ignore_tensors.insert("first_stage_model.conv1");
             ignore_tensors.insert("first_stage_model.quant");
             ignore_tensors.insert("text_encoders.qwen2vl.visual.");
         }

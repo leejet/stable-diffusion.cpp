@@ -513,6 +513,25 @@ namespace Qwen {
                         bool flash_attn                     = false)
             : GGMLRunner(backend, offload_params_to_cpu) {
             qwen_image_params.flash_attn = flash_attn;
+            qwen_image_params.num_layers = 0;
+            for (auto pair : tensor_types) {
+                std::string tensor_name = pair.first;
+                if (tensor_name.find(prefix) == std::string::npos)
+                    continue;
+                size_t pos = tensor_name.find("transformer_blocks.");
+                if (pos != std::string::npos) {
+                    tensor_name = tensor_name.substr(pos);  // remove prefix
+                    auto items  = split_string(tensor_name, '.');
+                    if (items.size() > 1) {
+                        int block_index = atoi(items[1].c_str());
+                        if (block_index + 1 > qwen_image_params.num_layers) {
+                            qwen_image_params.num_layers = block_index + 1;
+                        }
+                    }
+                    continue;
+                }
+            }
+            LOG_ERROR("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
             qwen_image                   = QwenImageModel(qwen_image_params);
             qwen_image.init(params_ctx, tensor_types, prefix);
         }
