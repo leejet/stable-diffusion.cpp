@@ -1246,7 +1246,7 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    if (params.control_net_path.size() > 0 && params.control_image_path.size() > 0) {
+    if (params.control_image_path.size() > 0) {
         int width          = 0;
         int height         = 0;
         control_image.data = load_image(params.control_image_path.c_str(), width, height, params.width, params.height);
