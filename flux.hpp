@@ -721,7 +721,6 @@ namespace Flux {
             auto final_layer = std::dynamic_pointer_cast<LastLayer>(blocks["final_layer"]);
 
             img = img_in->forward(ctx, img);
-
             struct ggml_tensor* vec;
             struct ggml_tensor* txt_img_mask = NULL;
             if (params.is_chroma) {
