@@ -1376,7 +1376,6 @@ struct T5CLIPEmbedder : public Conditioner {
 struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
     Qwen::Qwen2Tokenizer tokenizer;
     std::shared_ptr<Qwen::Qwen2_5_VLRunner> qwenvl;
-    int prompt_template_encode_start_idx = 34;
 
     Qwen2_5_VLCLIPEmbedder(ggml_backend_t backend,
                            bool offload_params_to_cpu,
@@ -1459,6 +1458,7 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
         std::string prompt;
         std::vector<std::pair<int, ggml_tensor*>> image_embeds;
         size_t system_prompt_length = 0;
+        int prompt_template_encode_start_idx = 34;
         if (qwenvl->enable_vision && conditioner_params.ref_images.size() > 0) {
             LOG_INFO("QwenImageEditPlusPipeline");
             prompt_template_encode_start_idx = 64;
