@@ -1289,7 +1289,7 @@ public:
             }
 
             int64_t t1 = ggml_time_us();
-            if (step != 0) {
+            if (step > 0 || step == -(int)steps) {
                 int showstep = std::abs(step);
                 pretty_progress(showstep, (int)steps, (t1 - t0) / 1000000.f / showstep);
                 // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
