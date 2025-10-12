@@ -819,7 +819,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         params.n_threads = get_num_physical_cores();
     }
 
-    if (params.mode == IMG_GEN && params.prompt.length() == 0) {
+    if ((params.mode == IMG_GEN || params.mode == VID_GEN) && params.prompt.length() == 0) {
         fprintf(stderr, "error: the following arguments are required: prompt\n");
         print_usage(argc, argv);
         exit(1);
