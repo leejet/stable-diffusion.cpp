@@ -1449,10 +1449,6 @@ public:
             x = ggml_reshape_4d(work_ctx, x, x->ne[0], x->ne[1], 1, x->ne[2] * x->ne[3]);
         }
 
-        if (sd_version_is_qwen_image(version)) {
-            x = ggml_reshape_4d(work_ctx, x, x->ne[0], x->ne[1], 1, x->ne[2] * x->ne[3]);
-        }
-
         if (!use_tiny_autoencoder) {
             process_vae_input_tensor(x);
             if (vae_tiling_params.enabled && !encode_video) {
