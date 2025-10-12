@@ -56,6 +56,10 @@
 #define __STATIC_INLINE__ static inline
 #endif
 
+#ifndef SD_UNUSED
+#define SD_UNUSED(x) (void)(x)
+#endif
+
 __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void*) {
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG:
