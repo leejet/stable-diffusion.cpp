@@ -890,7 +890,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             fprintf(stderr, "error: upscale mode needs an upscaler model (--upscale-model)\n");
             exit(1);
         }
-        if( params.init_image_path.length() == 0) {
+        if (params.init_image_path.length() == 0) {
             fprintf(stderr, "error: upscale mode needs an init image (--init-img)\n");
             exit(1);
         }
@@ -1356,25 +1356,21 @@ int main(int argc, const char* argv[]) {
         params.flow_shift,
     };
 
-    sd_image_t* results;
-    int num_results = 1;
+    sd_image_t* results = nullptr;
+    int num_results     = 0;
 
     if (params.mode == UPSCALE) {
-        // TODO image metadata should come from the original file
-
         num_results = 1;
-        results = (sd_image_t*)calloc(num_results, sizeof(sd_image_t));
+        results     = (sd_image_t*)calloc(num_results, sizeof(sd_image_t));
         if (results == NULL) {
             printf("failed to allocate results array\n");
             release_all_resources();
             return 1;
         }
 
-        results[0] = init_image;
+        results[0]      = init_image;
         init_image.data = NULL;
-
     } else {
-
         sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
 
         if (sd_ctx == NULL) {
