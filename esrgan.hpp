@@ -137,10 +137,10 @@ public:
         // upsample
         if (scale >= 2) {
             auto conv_up1 = std::dynamic_pointer_cast<Conv2d>(blocks["conv_up1"]);
-            feat = lrelu(ctx, conv_up1->forward(ctx, ggml_upscale(ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
+            feat          = lrelu(ctx, conv_up1->forward(ctx, ggml_upscale(ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
             if (scale == 4) {
                 auto conv_up2 = std::dynamic_pointer_cast<Conv2d>(blocks["conv_up2"]);
-                feat = lrelu(ctx, conv_up2->forward(ctx, ggml_upscale(ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
+                feat          = lrelu(ctx, conv_up2->forward(ctx, ggml_upscale(ctx, feat, 2, GGML_SCALE_MODE_NEAREST)));
             }
         }
         // for all scales
@@ -162,7 +162,8 @@ struct ESRGAN : public GGMLRunner {
     }
 
     void enable_conv2d_direct() {
-        if (!rrdb_net) return;
+        if (!rrdb_net)
+            return;
         std::vector<GGMLBlock*> blocks;
         rrdb_net->get_all_blocks(blocks);
         for (auto block : blocks) {
@@ -202,9 +203,10 @@ struct ESRGAN : public GGMLRunner {
                         size_t second_dot = name.find('.', first_dot + 1);
                         if (second_dot != std::string::npos && name.substr(first_dot + 1, 3) == "RDB") {
                             try {
-                                int idx = std::stoi(name.substr(12, first_dot - 12));
+                                int idx            = std::stoi(name.substr(12, first_dot - 12));
                                 detected_num_block = std::max(detected_num_block, idx + 1);
-                            } catch (...) {}
+                            } catch (...) {
+                            }
                         }
                     }
                 }
@@ -216,9 +218,10 @@ struct ESRGAN : public GGMLRunner {
                     size_t pos = name.find('.', 5);
                     if (pos != std::string::npos) {
                         try {
-                            int idx = std::stoi(name.substr(5, pos - 5));
+                            int idx            = std::stoi(name.substr(5, pos - 5));
                             detected_num_block = std::max(detected_num_block, idx + 1);
-                        } catch (...) {}
+                        } catch (...) {
+                        }
                     }
                 }
             }
@@ -233,9 +236,10 @@ struct ESRGAN : public GGMLRunner {
                     size_t dot_pos = name.find('.', 6);
                     if (dot_pos != std::string::npos) {
                         try {
-                            int num = std::stoi(name.substr(6, dot_pos - 6));
+                            int num       = std::stoi(name.substr(6, dot_pos - 6));
                             max_model_num = std::max(max_model_num, num);
-                        } catch (...) {}
+                        } catch (...) {
+                        }
                     }
                 }
             }
@@ -263,9 +267,9 @@ struct ESRGAN : public GGMLRunner {
             }
         }
 
-        int detected_num_in_ch = 3;
-        int detected_num_out_ch = 3;
-        int detected_num_feat = 64;
+        int detected_num_in_ch   = 3;
+        int detected_num_out_ch  = 3;
+        int detected_num_feat    = 64;
         int detected_num_grow_ch = 32;
 
         // Create RRDBNet with detected parameters
@@ -281,17 +285,17 @@ struct ESRGAN : public GGMLRunner {
             // Build name mapping for ESRGAN format
             std::map<std::string, std::string> expected_to_model;
             expected_to_model["conv_first.weight"] = "model.0.weight";
-            expected_to_model["conv_first.bias"] = "model.0.bias";
+            expected_to_model["conv_first.bias"]   = "model.0.bias";
 
             for (int i = 0; i < detected_num_block; i++) {
                 for (int j = 1; j <= 3; j++) {
                     for (int k = 1; k <= 5; k++) {
-                        std::string expected_weight = "body." + std::to_string(i) + ".rdb" + std::to_string(j) + ".conv" + std::to_string(k) + ".weight";
-                        std::string model_weight = "model.1.sub." + std::to_string(i) + ".RDB" + std::to_string(j) + ".conv" + std::to_string(k) + ".0.weight";
+                        std::string expected_weight        = "body." + std::to_string(i) + ".rdb" + std::to_string(j) + ".conv" + std::to_string(k) + ".weight";
+                        std::string model_weight           = "model.1.sub." + std::to_string(i) + ".RDB" + std::to_string(j) + ".conv" + std::to_string(k) + ".0.weight";
                         expected_to_model[expected_weight] = model_weight;
 
-                        std::string expected_bias = "body." + std::to_string(i) + ".rdb" + std::to_string(j) + ".conv" + std::to_string(k) + ".bias";
-                        std::string model_bias = "model.1.sub." + std::to_string(i) + ".RDB" + std::to_string(j) + ".conv" + std::to_string(k) + ".0.bias";
+                        std::string expected_bias        = "body." + std::to_string(i) + ".rdb" + std::to_string(j) + ".conv" + std::to_string(k) + ".bias";
+                        std::string model_bias           = "model.1.sub." + std::to_string(i) + ".RDB" + std::to_string(j) + ".conv" + std::to_string(k) + ".0.bias";
                         expected_to_model[expected_bias] = model_bias;
                     }
                 }
@@ -299,30 +303,30 @@ struct ESRGAN : public GGMLRunner {
 
             if (detected_scale == 1) {
                 expected_to_model["conv_body.weight"] = "model.1.sub." + std::to_string(detected_num_block) + ".weight";
-                expected_to_model["conv_body.bias"] = "model.1.sub." + std::to_string(detected_num_block) + ".bias";
-                expected_to_model["conv_hr.weight"] = "model.2.weight";
-                expected_to_model["conv_hr.bias"] = "model.2.bias";
+                expected_to_model["conv_body.bias"]   = "model.1.sub." + std::to_string(detected_num_block) + ".bias";
+                expected_to_model["conv_hr.weight"]   = "model.2.weight";
+                expected_to_model["conv_hr.bias"]     = "model.2.bias";
                 expected_to_model["conv_last.weight"] = "model.4.weight";
-                expected_to_model["conv_last.bias"] = "model.4.bias";
+                expected_to_model["conv_last.bias"]   = "model.4.bias";
             } else {
                 expected_to_model["conv_body.weight"] = "model.1.sub." + std::to_string(detected_num_block) + ".weight";
-                expected_to_model["conv_body.bias"] = "model.1.sub." + std::to_string(detected_num_block) + ".bias";
+                expected_to_model["conv_body.bias"]   = "model.1.sub." + std::to_string(detected_num_block) + ".bias";
                 if (detected_scale >= 2) {
                     expected_to_model["conv_up1.weight"] = "model.3.weight";
-                    expected_to_model["conv_up1.bias"] = "model.3.bias";
+                    expected_to_model["conv_up1.bias"]   = "model.3.bias";
                 }
                 if (detected_scale == 4) {
-                    expected_to_model["conv_up2.weight"] = "model.6.weight";
-                    expected_to_model["conv_up2.bias"] = "model.6.bias";
-                    expected_to_model["conv_hr.weight"] = "model.8.weight";
-                    expected_to_model["conv_hr.bias"] = "model.8.bias";
+                    expected_to_model["conv_up2.weight"]  = "model.6.weight";
+                    expected_to_model["conv_up2.bias"]    = "model.6.bias";
+                    expected_to_model["conv_hr.weight"]   = "model.8.weight";
+                    expected_to_model["conv_hr.bias"]     = "model.8.bias";
                     expected_to_model["conv_last.weight"] = "model.10.weight";
-                    expected_to_model["conv_last.bias"] = "model.10.bias";
+                    expected_to_model["conv_last.bias"]   = "model.10.bias";
                 } else if (detected_scale == 2) {
-                    expected_to_model["conv_hr.weight"] = "model.5.weight";
-                    expected_to_model["conv_hr.bias"] = "model.5.bias";
+                    expected_to_model["conv_hr.weight"]   = "model.5.weight";
+                    expected_to_model["conv_hr.bias"]     = "model.5.bias";
                     expected_to_model["conv_last.weight"] = "model.7.weight";
-                    expected_to_model["conv_last.bias"] = "model.7.bias";
+                    expected_to_model["conv_last.bias"]   = "model.7.bias";
                 }
             }
 
@@ -334,10 +338,9 @@ struct ESRGAN : public GGMLRunner {
                 }
             }
 
-            success = model_loader.load_tensors(model_tensors,{}, n_threads);
+            success = model_loader.load_tensors(model_tensors, {}, n_threads);
         } else {
-            
-            success = model_loader.load_tensors(esrgan_tensors,{}, n_threads);
+            success = model_loader.load_tensors(esrgan_tensors, {}, n_threads);
         }
 
         if (!success) {
@@ -351,11 +354,12 @@ struct ESRGAN : public GGMLRunner {
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* x) {
-        if (!rrdb_net) return nullptr;
-        constexpr int kGraphNodes = 1 << 16; // 65k
-        struct ggml_cgraph* gf  = ggml_new_graph_custom(compute_ctx, kGraphNodes, /*grads*/ false);
-        x                       = to_backend(x);
-        struct ggml_tensor* out = rrdb_net->forward(compute_ctx, x);
+        if (!rrdb_net)
+            return nullptr;
+        constexpr int kGraphNodes = 1 << 16;  // 65k
+        struct ggml_cgraph* gf    = ggml_new_graph_custom(compute_ctx, kGraphNodes, /*grads*/ false);
+        x                         = to_backend(x);
+        struct ggml_tensor* out   = rrdb_net->forward(compute_ctx, x);
         ggml_build_forward_expand(gf, out);
         return gf;
     }
