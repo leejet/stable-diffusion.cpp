@@ -504,7 +504,9 @@ public:
     T5DenseGatedActDense(int64_t model_dim, int64_t ff_dim) {
         blocks["wi_0"] = std::shared_ptr<GGMLBlock>(new Linear(model_dim, ff_dim, false));
         blocks["wi_1"] = std::shared_ptr<GGMLBlock>(new Linear(model_dim, ff_dim, false));
-        blocks["wo"]   = std::shared_ptr<GGMLBlock>(new Linear(ff_dim, model_dim, false));
+        float scale    = 1.f / 32.f;
+        // The purpose of the scale here is to prevent NaN issues on some backends(CUDA, ...).
+        blocks["wo"] = std::shared_ptr<GGMLBlock>(new Linear(ff_dim, model_dim, false, false, false, scale));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {

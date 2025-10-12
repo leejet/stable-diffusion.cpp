@@ -354,17 +354,7 @@ public:
         bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
 
         {
-            clip_backend   = backend;
-            bool use_t5xxl = false;
-            if (sd_version_is_dit(version) && !sd_version_is_qwen_image(version)) {
-                use_t5xxl = true;
-            }
-            if (!clip_on_cpu && !ggml_backend_is_cpu(backend) && use_t5xxl) {
-                LOG_WARN(
-                    "!!!It appears that you are using the T5 model. Some backends may encounter issues with it."
-                    "If you notice that the generated images are completely black,"
-                    "try running the T5 model on the CPU using the --clip-on-cpu parameter.");
-            }
+            clip_backend = backend;
             if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
                 LOG_INFO("CLIP: Using CPU backend");
                 clip_backend = ggml_backend_cpu_init();
@@ -1120,7 +1110,7 @@ public:
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
         float cfg_scale     = guidance.txt_cfg;
-        float img_cfg_scale = guidance.img_cfg;
+        float img_cfg_scale = isfinite(guidance.img_cfg) ? guidance.img_cfg : guidance.txt_cfg;
         float slg_scale     = guidance.slg.scale;
 
         if (img_cfg_scale != cfg_scale && !sd_version_is_inpaint_or_unet_edit(version)) {
@@ -1464,10 +1454,19 @@ public:
         if (vae_tiling_params.enabled && !encode_video) {
             // TODO wan2.2 vae support?
             int C = sd_version_is_dit(version) ? 16 : 4;
-            if (!use_tiny_autoencoder) {
-                C *= 2;
+            int ne2;
+            int ne3;
+            if (sd_version_is_qwen_image(version)) {
+                ne2 = 1;
+                ne3 = C*x->ne[3];
+            } else {
+                if (!use_tiny_autoencoder) {
+                    C *= 2;
+                }
+                ne2 = C;
+                ne3 = x->ne[3];
             }
-            result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, x->ne[3]);
+            result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, ne2, ne3);
         }
 
         if (sd_version_is_qwen_image(version)) {
@@ -1861,7 +1860,9 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              "eta: %.2f, "
              "shifted_timestep: %d)",
              sample_params->guidance.txt_cfg,
-             sample_params->guidance.img_cfg,
+             isfinite(sample_params->guidance.img_cfg)
+                 ? sample_params->guidance.img_cfg
+                 : sample_params->guidance.txt_cfg,
              sample_params->guidance.distilled_guidance,
              sample_params->guidance.slg.layer_count,
              sample_params->guidance.slg.layer_start,
@@ -2021,6 +2022,10 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         // by a third party with a seed <0, let's incorporate randomization here.
         srand((int)time(NULL));
         seed = rand();
+    }
+
+    if (!isfinite(guidance.img_cfg)) {
+        guidance.img_cfg = guidance.txt_cfg;
     }
 
     // for (auto v : sigmas) {
