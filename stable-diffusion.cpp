@@ -338,17 +338,7 @@ public:
         bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
 
         {
-            clip_backend   = backend;
-            bool use_t5xxl = false;
-            if (sd_version_is_dit(version) && !sd_version_is_qwen_image(version)) {
-                use_t5xxl = true;
-            }
-            if (!clip_on_cpu && !ggml_backend_is_cpu(backend) && use_t5xxl) {
-                LOG_WARN(
-                    "!!!It appears that you are using the T5 model. Some backends may encounter issues with it."
-                    "If you notice that the generated images are completely black,"
-                    "try running the T5 model on the CPU using the --clip-on-cpu parameter.");
-            }
+            clip_backend = backend;
             if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
                 LOG_INFO("CLIP: Using CPU backend");
                 clip_backend = ggml_backend_cpu_init();
