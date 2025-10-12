@@ -326,11 +326,12 @@ arguments:
   --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)
                                      0 means disabled, a value of 2.5 is nice for sd3.5 medium
   --eta SCALE                        eta in DDIM, only for DDIM and TCD: (default: 0)
+  --ge-gamma SCALE                   gamma for gradient estimation sampler: (default: 2.0)
   --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])
   --skip-layer-start START           SLG enabling point: (default: 0.01)
   --skip-layer-end END               SLG disabling point: (default: 0.2)
   --scheduler {discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple} Denoiser sigma scheduler (default: discrete)
-  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}
+  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, gradient_estimation}
                                      sampling method (default: "euler" for Flux/SD3/Wan, "euler_a" otherwise)
   --timestep-shift N                 shift timestep for NitroFusion models, default: 0, recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant
   --steps  STEPS                     number of sample steps (default: 20)
@@ -344,7 +345,7 @@ arguments:
   --high-noise-skip-layer-start      (high noise) SLG enabling point: (default: 0.01)
   --high-noise-skip-layer-end END    (high noise) SLG disabling point: (default: 0.2)
   --high-noise-scheduler {discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple} Denoiser sigma scheduler (default: discrete)
-  --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd}
+  --high-noise-sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, gradient_estimation}
                                      (high noise) sampling method (default: "euler_a")
   --high-noise-steps  STEPS          (high noise) number of sample steps (default: -1 = auto)
                                      SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])

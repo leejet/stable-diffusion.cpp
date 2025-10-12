@@ -576,7 +576,8 @@ static void sample_k_diffusion(sample_method_t method,
                                ggml_tensor* x,
                                std::vector<float> sigmas,
                                std::shared_ptr<RNG> rng,
-                               float eta) {
+                               float eta,
+                               float ge_gamma) {
     size_t steps = sigmas.size() - 1;
     // sample_euler_ancestral
     switch (method) {
@@ -1462,7 +1463,52 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
+        case GRADIENT_ESTIMATION: {
+            struct ggml_tensor* d      = ggml_dup_tensor(work_ctx, x);
+            struct ggml_tensor* old_d  = ggml_dup_tensor(work_ctx, x);
+            bool has_old_d             = false;
 
+            for (int i = 0; i < steps; i++) {
+                float sigma = sigmas[i];
+
+                ggml_tensor* denoised = model(x, sigma, i + 1);
+
+                // d = (x - denoised) / sigma
+                float* vec_d        = (float*)d->data;
+                float* vec_x        = (float*)x->data;
+                float* vec_denoised = (float*)denoised->data;
+
+                for (int j = 0; j < ggml_nelements(d); j++) {
+                    vec_d[j] = (vec_x[j] - vec_denoised[j]) / sigma;
+                }
+
+                float dt = sigmas[i + 1] - sigma;
+
+                if (sigmas[i + 1] == 0) {
+                    // Denoising step
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = vec_denoised[j];
+                    }
+                } else {
+                    // Euler method
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = vec_x[j] + vec_d[j] * dt;
+                    }
+                }
+
+                if (has_old_d) {
+                    // Gradient estimation
+                    float* vec_old_d = (float*)old_d->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        float d_bar = (ge_gamma - 1.f) * (vec_d[j] - vec_old_d[j]);
+                        vec_x[j]    = vec_x[j] + d_bar * dt;
+                    }
+                }
+                // old_d = d
+                copy_ggml_tensor(old_d, d);
+                has_old_d = true;
+            }
+        } break;
         default:
             LOG_ERROR("Attempting to sample with nonexisting sample method %i", method);
             abort();
