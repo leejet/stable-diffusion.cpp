@@ -21,6 +21,7 @@ API and command-line option may change frequently.***
     - [SD3/SD3.5](./docs/sd3.md)
     - [Flux-dev/Flux-schnell](./docs/flux.md)
     - [Chroma](./docs/chroma.md)
+    - [Qwen Image](./docs/qwen_image.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
   - Video Models
@@ -296,6 +297,7 @@ arguments:
   --clip_g                           path to the clip-g text encoder
   --clip_vision                      path to the clip-vision encoder
   --t5xxl                            path to the t5xxl text encoder
+  --qwen2vl                          path to the qwen2vl text encoder
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
@@ -464,6 +466,7 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 ## References
 
 - [ggml](https://github.com/ggerganov/ggml)
+- [diffusers](https://github.com/huggingface/diffusers)
 - [stable-diffusion](https://github.com/CompVis/stable-diffusion)
 - [sd3-ref](https://github.com/Stability-AI/sd3-ref)
 - [stable-diffusion-stability-ai](https://github.com/Stability-AI/stablediffusion)
