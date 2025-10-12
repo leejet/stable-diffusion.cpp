@@ -243,9 +243,8 @@ public:
                 int64_t dim_out,
                 int64_t mult          = 4,
                 Activation activation = Activation::GEGLU,
-                bool force_prec_f32   = false) {
+                bool precision_fix    = false) {
         int64_t inner_dim = dim * mult;
-        SD_UNUSED(force_prec_f32);
         if (activation == Activation::GELU) {
             blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GELU(dim, inner_dim));
         } else {
@@ -253,7 +252,14 @@ public:
         }
 
         // net_1 is nn.Dropout(), skip for inference
-        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out));
+        float scale = 1.f;
+        if (precision_fix) {
+            scale = 1.f / 128.f;
+        }
+        // The purpose of the scale here is to prevent NaN issues in certain situations.
+        // For example, when using Vulkan without enabling force_prec_f32,
+        // or when using CUDA but the weights are k-quants.
+        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out, true, false, false, scale));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
@@ -264,13 +270,7 @@ public:
         auto net_2 = std::dynamic_pointer_cast<Linear>(blocks["net.2"]);
 
         x = net_0->forward(ctx, x);  // [ne3, ne2, ne1, inner_dim]
-        // The purpose of the scale here is to prevent NaN issues in certain situations.
-        // For example, when using Vulkan without enabling force_prec_f32,
-        // or when using CUDA but the weights are k-quants.
-        float scale = 1.f / 128.f;
-        x           = ggml_scale(ctx, x, scale);
-        x           = net_2->forward(ctx, x);  // [ne3, ne2, ne1, dim_out]
-        x           = ggml_scale(ctx, x, 1.f / scale);
+        x = net_2->forward(ctx, x);  // [ne3, ne2, ne1, dim_out]
         return x;
     }
 };
