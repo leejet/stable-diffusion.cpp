@@ -286,7 +286,7 @@ usage: ./bin/sd [arguments]
 
 arguments:
   -h, --help                         show this help message and exit
-  -M, --mode [MODE]                  run mode, one of: [img_gen, vid_gen, convert], default: img_gen
+  -M, --mode [MODE]                  run mode, one of: [img_gen, vid_gen, upscale, convert], default: img_gen
   -t, --threads N                    number of threads to use during computation (default: -1)
                                      If threads <= 0, then threads will be set to the number of CPU physical cores
   --offload-to-cpu                   place the weights in RAM to save VRAM, and automatically load them into VRAM when needed
@@ -302,7 +302,7 @@ arguments:
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
   --embd-dir [EMBEDDING_PATH]        path to embeddings
-  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now
+  --upscale-model [ESRGAN_PATH]      path to esrgan model. For img_gen mode, upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now
   --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)
   --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)
                                      If not specified, the default is the type of the weight file

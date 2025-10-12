@@ -1096,7 +1096,7 @@ public:
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
         float cfg_scale     = guidance.txt_cfg;
-        float img_cfg_scale = guidance.img_cfg;
+        float img_cfg_scale = isfinite(guidance.img_cfg) ? guidance.img_cfg : guidance.txt_cfg;
         float slg_scale     = guidance.slg.scale;
 
         if (img_cfg_scale != cfg_scale && !sd_version_is_inpaint_or_unet_edit(version)) {
@@ -1835,7 +1835,9 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              "eta: %.2f, "
              "shifted_timestep: %d)",
              sample_params->guidance.txt_cfg,
-             sample_params->guidance.img_cfg,
+             isfinite(sample_params->guidance.img_cfg)
+                 ? sample_params->guidance.img_cfg
+                 : sample_params->guidance.txt_cfg,
              sample_params->guidance.distilled_guidance,
              sample_params->guidance.slg.layer_count,
              sample_params->guidance.slg.layer_start,
@@ -1996,7 +1998,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         seed = rand();
     }
 
-    print_ggml_tensor(init_latent, true, "init");
+    if (!isfinite(guidance.img_cfg)) {
+        guidance.img_cfg = guidance.txt_cfg;
+    }
 
     // for (auto v : sigmas) {
     //     std::cout << v << " ";
