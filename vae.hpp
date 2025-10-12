@@ -583,6 +583,7 @@ struct AutoEncoderKL : public VAE {
                  bool decode_graph,
                  struct ggml_tensor** output,
                  struct ggml_context* output_ctx = NULL) {
+        GGML_ASSERT(!decode_only || decode_graph);
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
