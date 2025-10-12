@@ -1440,18 +1440,19 @@ public:
         if (vae_tiling_params.enabled && !encode_video) {
             // TODO wan2.2 vae support?
             int C = sd_version_is_dit(version) ? 16 : 4;
-            int NE2, NE3;
+            int ne2;
+            int ne3;
             if (sd_version_is_qwen_image(version)) {
-                NE2 = x->ne[3];
-                NE3 = C;
+                ne2 = 1;
+                ne3 = C*x->ne[3];
             } else {
                 if (!use_tiny_autoencoder) {
                     C *= 2;
                 }
-                NE2 = C;
-                NE3 = x->ne[3];
+                ne2 = C;
+                ne3 = x->ne[3];
             }
-            result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, NE2, NE3);
+            result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, ne2, ne3);
         }
 
         if (sd_version_is_qwen_image(version)) {
