@@ -6,7 +6,7 @@
 
 void convolve(struct ggml_tensor* input, struct ggml_tensor* output, struct ggml_tensor* kernel, int padding) {
     struct ggml_init_params params;
-    params.mem_size                 = 80 * input->ne[0] * input->ne[1]; // 20M for 512x512
+    params.mem_size                 = 80 * input->ne[0] * input->ne[1];  // 20M for 512x512
     params.mem_buffer               = NULL;
     params.no_alloc                 = false;
     struct ggml_context* ctx0       = ggml_init(params);
