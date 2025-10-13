@@ -6,7 +6,7 @@
 
 void convolve(struct ggml_tensor* input, struct ggml_tensor* output, struct ggml_tensor* kernel, int padding) {
     struct ggml_init_params params;
-    params.mem_size                 = 20 * 1024 * 1024;  // 10
+    params.mem_size                 = 80 * input->ne[0] * input->ne[1];  // 20M for 512x512
     params.mem_buffer               = NULL;
     params.no_alloc                 = false;
     struct ggml_context* ctx0       = ggml_init(params);
@@ -164,7 +164,7 @@ void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float lo
 
 bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold, float weak, float strong, bool inverse) {
     struct ggml_init_params params;
-    params.mem_size               = static_cast<size_t>(10 * 1024 * 1024);  // 10MB
+    params.mem_size               = static_cast<size_t>(40 * img.width * img.height);  // 10MB for 512x512
     params.mem_buffer             = NULL;
     params.no_alloc               = false;
     struct ggml_context* work_ctx = ggml_init(params);
@@ -218,9 +218,7 @@ bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold,
             ggml_tensor_set_f32(image, gray, ix, iy, 2);
         }
     }
-    uint8_t* output = sd_tensor_to_image(image);
-    free(img.data);
-    img.data = output;
+    sd_tensor_to_image(image, img.data);
     ggml_free(work_ctx);
     return true;
 }

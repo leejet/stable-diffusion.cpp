@@ -1434,7 +1434,7 @@ public:
             int ne3;
             if (sd_version_is_qwen_image(version)) {
                 ne2 = 1;
-                ne3 = C*x->ne[3];
+                ne3 = C * x->ne[3];
             } else {
                 if (!use_tiny_autoencoder) {
                     C *= 2;
