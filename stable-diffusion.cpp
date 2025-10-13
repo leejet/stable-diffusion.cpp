@@ -1130,11 +1130,12 @@ public:
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
 
+        int64_t t0 = ggml_time_us();
+
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
-            if (step == 1) {
+            if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
             }
-            int64_t t0 = ggml_time_us();
 
             std::vector<float> scaling = denoiser->get_scalings(sigma);
             GGML_ASSERT(scaling.size() == 3);
@@ -1288,8 +1289,9 @@ public:
             }
 
             int64_t t1 = ggml_time_us();
-            if (step > 0) {
-                pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
+            if (step > 0 || step == -(int)steps) {
+                int showstep = std::abs(step);
+                pretty_progress(showstep, (int)steps, (t1 - t0) / 1000000.f / showstep);
                 // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
             if (denoise_mask != nullptr) {
