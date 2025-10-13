@@ -84,6 +84,7 @@ int round_up_to(int value, int base) {
 }
 
 #ifdef _WIN32  // code for windows
+#define NOMINMAX
 #include <windows.h>
 
 bool file_exists(const std::string& filename) {
@@ -298,7 +299,7 @@ std::string trim(const std::string& s) {
 static sd_log_cb_t sd_log_cb = NULL;
 void* sd_log_cb_data         = NULL;
 
-#define LOG_BUFFER_SIZE 1024
+#define LOG_BUFFER_SIZE 4096
 
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
     va_list args;
@@ -387,10 +388,10 @@ sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int
             float original_x = (float)x * image.width / target_width;
             float original_y = (float)y * image.height / target_height;
 
-            int x1 = (int)original_x;
-            int y1 = (int)original_y;
-            int x2 = x1 + 1;
-            int y2 = y1 + 1;
+            uint32_t x1 = (uint32_t)original_x;
+            uint32_t y1 = (uint32_t)original_y;
+            uint32_t x2 = std::min(x1 + 1, image.width - 1);
+            uint32_t y2 = std::min(y1 + 1, image.height - 1);
 
             for (int k = 0; k < image.channel; k++) {
                 float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
@@ -427,23 +428,26 @@ float means[3] = {0.48145466, 0.4578275, 0.40821073};
 float stds[3]  = {0.26862954, 0.26130258, 0.27577711};
 
 // Function to clip and preprocess sd_image_f32_t
-sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size) {
-    float scale = (float)size / fmin(image.width, image.height);
+sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int target_height) {
+    float width_scale  = (float)target_width / image.width;
+    float height_scale = (float)target_height / image.height;
+
+    float scale = std::fmax(width_scale, height_scale);
 
     // Interpolation
-    int new_width       = (int)(scale * image.width);
-    int new_height      = (int)(scale * image.height);
-    float* resized_data = (float*)malloc(new_width * new_height * image.channel * sizeof(float));
+    int resized_width   = (int)(scale * image.width);
+    int resized_height  = (int)(scale * image.height);
+    float* resized_data = (float*)malloc(resized_width * resized_height * image.channel * sizeof(float));
 
-    for (int y = 0; y < new_height; y++) {
-        for (int x = 0; x < new_width; x++) {
-            float original_x = (float)x * image.width / new_width;
-            float original_y = (float)y * image.height / new_height;
+    for (int y = 0; y < resized_height; y++) {
+        for (int x = 0; x < resized_width; x++) {
+            float original_x = (float)x * image.width / resized_width;
+            float original_y = (float)y * image.height / resized_height;
 
-            int x1 = (int)original_x;
-            int y1 = (int)original_y;
-            int x2 = x1 + 1;
-            int y2 = y1 + 1;
+            uint32_t x1 = (uint32_t)original_x;
+            uint32_t y1 = (uint32_t)original_y;
+            uint32_t x2 = std::min(x1 + 1, image.width - 1);
+            uint32_t y2 = std::min(y1 + 1, image.height - 1);
 
             for (int k = 0; k < image.channel; k++) {
                 float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
@@ -456,26 +460,28 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size) {
 
                 float value = interpolate(v1, v2, v3, v4, x_ratio, y_ratio);
 
-                *(resized_data + y * new_width * image.channel + x * image.channel + k) = value;
+                *(resized_data + y * resized_width * image.channel + x * image.channel + k) = value;
             }
         }
     }
 
     // Clip and preprocess
-    int h = (new_height - size) / 2;
-    int w = (new_width - size) / 2;
+    int h_offset = std::max((int)(resized_height - target_height) / 2, 0);
+    int w_offset = std::max((int)(resized_width - target_width) / 2, 0);
 
     sd_image_f32_t result;
-    result.width   = size;
-    result.height  = size;
+    result.width   = target_width;
+    result.height  = target_height;
     result.channel = image.channel;
-    result.data    = (float*)malloc(size * size * image.channel * sizeof(float));
+    result.data    = (float*)malloc(target_height * target_width * image.channel * sizeof(float));
 
     for (int k = 0; k < image.channel; k++) {
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
-                *(result.data + i * size * image.channel + j * image.channel + k) =
-                    fmin(fmax(*(resized_data + (i + h) * new_width * image.channel + (j + w) * image.channel + k), 0.0f), 255.0f) / 255.0f;
+        for (int i = 0; i < result.height; i++) {
+            for (int j = 0; j < result.width; j++) {
+                int src_y = std::min(i + h_offset, resized_height - 1);
+                int src_x = std::min(j + w_offset, resized_width - 1);
+                *(result.data + i * result.width * image.channel + j * image.channel + k) =
+                    fmin(fmax(*(resized_data + src_y * resized_width * image.channel + src_x * image.channel + k), 0.0f), 255.0f) / 255.0f;
             }
         }
     }
@@ -485,10 +491,10 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size) {
 
     // Normalize
     for (int k = 0; k < image.channel; k++) {
-        for (int i = 0; i < size; i++) {
-            for (int j = 0; j < size; j++) {
+        for (int i = 0; i < result.height; i++) {
+            for (int j = 0; j < result.width; j++) {
                 // *(result.data + i * size * image.channel + j * image.channel + k) = 0.5f;
-                int offset  = i * size * image.channel + j * image.channel + k;
+                int offset  = i * result.width * image.channel + j * image.channel + k;
                 float value = *(result.data + offset);
                 value       = (value - means[k]) / stds[k];
                 // value = 0.5f;

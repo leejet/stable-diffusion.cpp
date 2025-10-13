@@ -113,7 +113,6 @@ const char* unused_tensors[] = {
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
     "text_encoders.qwen2vl.output.weight",
     "text_encoders.qwen2vl.lm_head.",
-    "text_encoders.qwen2vl.visual.",
 };
 
 bool is_unused_tensor(std::string name) {
@@ -212,6 +211,24 @@ std::unordered_map<std::string, std::string> qwenvl_name_map{
     {"output_norm.", "model.norm."},
 };
 
+std::unordered_map<std::string, std::string> qwenvl_vision_name_map{
+    {"mm.", "merger.mlp."},
+    {"v.post_ln.", "merger.ln_q."},
+    {"v.patch_embd.weight", "patch_embed.proj.0.weight"},
+    {"patch_embed.proj.0.weight.1", "patch_embed.proj.1.weight"},
+    {"v.patch_embd.weight.1", "patch_embed.proj.1.weight"},
+    {"v.blk.", "blocks."},
+    {"attn_q.", "attn.q_proj."},
+    {"attn_k.", "attn.k_proj."},
+    {"attn_v.", "attn.v_proj."},
+    {"attn_out.", "attn.proj."},
+    {"ffn_down.", "mlp.down_proj."},
+    {"ffn_gate.", "mlp.gate_proj."},
+    {"ffn_up.", "mlp.up_proj."},
+    {"ln1.", "norm1."},
+    {"ln2.", "norm2."},
+};
+
 std::string convert_cond_model_name(const std::string& name) {
     std::string new_name = name;
     std::string prefix;
@@ -270,10 +287,19 @@ std::string convert_cond_model_name(const std::string& name) {
             new_name.replace(pos, 11, "layer.0.SelfAttention.relative_attention_bias.");
         }
     } else if (contains(name, "qwen2vl")) {
-        for (auto kv : qwenvl_name_map) {
-            size_t pos = new_name.find(kv.first);
-            if (pos != std::string::npos) {
-                new_name.replace(pos, kv.first.size(), kv.second);
+        if (contains(name, "qwen2vl.visual")) {
+            for (auto kv : qwenvl_vision_name_map) {
+                size_t pos = new_name.find(kv.first);
+                if (pos != std::string::npos) {
+                    new_name.replace(pos, kv.first.size(), kv.second);
+                }
+            }
+        } else {
+            for (auto kv : qwenvl_name_map) {
+                size_t pos = new_name.find(kv.first);
+                if (pos != std::string::npos) {
+                    new_name.replace(pos, kv.first.size(), kv.second);
+                }
             }
         }
     } else if (name == "text_encoders.t5xxl.transformer.token_embd.weight") {

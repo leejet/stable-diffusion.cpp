@@ -15,28 +15,28 @@ struct SDCondition {
         : c_crossattn(c_crossattn), c_vector(c_vector), c_concat(c_concat) {}
 };
 
+struct ConditionerParams {
+    std::string text;
+    int clip_skip                       = -1;
+    int width                           = -1;
+    int height                          = -1;
+    int adm_in_channels                 = -1;
+    bool zero_out_masked                = false;
+    int num_input_imgs                  = 0;   // for photomaker
+    std::vector<sd_image_t*> ref_images = {};  // for qwen image edit
+};
+
 struct Conditioner {
     virtual SDCondition get_learned_condition(ggml_context* work_ctx,
                                               int n_threads,
-                                              const std::string& text,
-                                              int clip_skip,
-                                              int width,
-                                              int height,
-                                              int adm_in_channels  = -1,
-                                              bool zero_out_masked = false)             = 0;
-    virtual void alloc_params_buffer()                                                  = 0;
-    virtual void free_params_buffer()                                                   = 0;
-    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) = 0;
-    virtual size_t get_params_buffer_size()                                             = 0;
+                                              const ConditionerParams& conditioner_params) = 0;
+    virtual void alloc_params_buffer()                                                     = 0;
+    virtual void free_params_buffer()                                                      = 0;
+    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors)    = 0;
+    virtual size_t get_params_buffer_size()                                                = 0;
     virtual std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
                                                                                           int n_threads,
-                                                                                          const std::string& text,
-                                                                                          int clip_skip,
-                                                                                          int width,
-                                                                                          int height,
-                                                                                          int num_input_imgs,
-                                                                                          int adm_in_channels  = -1,
-                                                                                          bool zero_out_masked = false) {
+                                                                                          const ConditionerParams& conditioner_params) {
         GGML_ABORT("Not implemented yet!");
     }
     virtual std::string remove_trigger_from_prompt(ggml_context* work_ctx,
@@ -555,20 +555,14 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     std::tuple<SDCondition, std::vector<bool>>
     get_learned_condition_with_trigger(ggml_context* work_ctx,
                                        int n_threads,
-                                       const std::string& text,
-                                       int clip_skip,
-                                       int width,
-                                       int height,
-                                       int num_input_imgs,
-                                       int adm_in_channels  = -1,
-                                       bool zero_out_masked = false) {
+                                       const ConditionerParams& conditioner_params) {
         auto image_tokens = convert_token_to_id(trigger_word);
         // if(image_tokens.size() == 1){
         //     printf(" image token id is: %d \n", image_tokens[0]);
         // }
         GGML_ASSERT(image_tokens.size() == 1);
-        auto tokens_and_weights     = tokenize_with_trigger_token(text,
-                                                                  num_input_imgs,
+        auto tokens_and_weights     = tokenize_with_trigger_token(conditioner_params.text,
+                                                                  conditioner_params.num_input_imgs,
                                                                   image_tokens[0],
                                                                   true);
         std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
@@ -582,7 +576,15 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         // for(int i = 0; i < clsm.size(); ++i)
         //    printf("%d ", clsm[i]?1:0);
         // printf("\n");
-        auto cond = get_learned_condition_common(work_ctx, n_threads, tokens, weights, clip_skip, width, height, adm_in_channels, zero_out_masked);
+        auto cond = get_learned_condition_common(work_ctx,
+                                                 n_threads,
+                                                 tokens,
+                                                 weights,
+                                                 conditioner_params.clip_skip,
+                                                 conditioner_params.width,
+                                                 conditioner_params.height,
+                                                 conditioner_params.adm_in_channels,
+                                                 conditioner_params.zero_out_masked);
         return std::make_tuple(cond, clsm);
     }
 
@@ -600,16 +602,19 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
     SDCondition get_learned_condition(ggml_context* work_ctx,
                                       int n_threads,
-                                      const std::string& text,
-                                      int clip_skip,
-                                      int width,
-                                      int height,
-                                      int adm_in_channels  = -1,
-                                      bool zero_out_masked = false) {
-        auto tokens_and_weights     = tokenize(text, true);
+                                      const ConditionerParams& conditioner_params) {
+        auto tokens_and_weights     = tokenize(conditioner_params.text, true);
         std::vector<int>& tokens    = tokens_and_weights.first;
         std::vector<float>& weights = tokens_and_weights.second;
-        return get_learned_condition_common(work_ctx, n_threads, tokens, weights, clip_skip, width, height, adm_in_channels, zero_out_masked);
+        return get_learned_condition_common(work_ctx,
+                                            n_threads,
+                                            tokens,
+                                            weights,
+                                            conditioner_params.clip_skip,
+                                            conditioner_params.width,
+                                            conditioner_params.height,
+                                            conditioner_params.adm_in_channels,
+                                            conditioner_params.zero_out_masked);
     }
 };
 
@@ -974,14 +979,13 @@ struct SD3CLIPEmbedder : public Conditioner {
 
     SDCondition get_learned_condition(ggml_context* work_ctx,
                                       int n_threads,
-                                      const std::string& text,
-                                      int clip_skip,
-                                      int width,
-                                      int height,
-                                      int adm_in_channels  = -1,
-                                      bool zero_out_masked = false) {
-        auto tokens_and_weights = tokenize(text, 77, true);
-        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
+                                      const ConditionerParams& conditioner_params) {
+        auto tokens_and_weights = tokenize(conditioner_params.text, 77, true);
+        return get_learned_condition_common(work_ctx,
+                                            n_threads,
+                                            tokens_and_weights,
+                                            conditioner_params.clip_skip,
+                                            conditioner_params.zero_out_masked);
     }
 };
 
@@ -1174,14 +1178,13 @@ struct FluxCLIPEmbedder : public Conditioner {
 
     SDCondition get_learned_condition(ggml_context* work_ctx,
                                       int n_threads,
-                                      const std::string& text,
-                                      int clip_skip,
-                                      int width,
-                                      int height,
-                                      int adm_in_channels  = -1,
-                                      bool zero_out_masked = false) {
-        auto tokens_and_weights = tokenize(text, chunk_len, true);
-        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
+                                      const ConditionerParams& conditioner_params) {
+        auto tokens_and_weights = tokenize(conditioner_params.text, chunk_len, true);
+        return get_learned_condition_common(work_ctx,
+                                            n_threads,
+                                            tokens_and_weights,
+                                            conditioner_params.clip_skip,
+                                            conditioner_params.zero_out_masked);
     }
 };
 
@@ -1360,27 +1363,30 @@ struct T5CLIPEmbedder : public Conditioner {
 
     SDCondition get_learned_condition(ggml_context* work_ctx,
                                       int n_threads,
-                                      const std::string& text,
-                                      int clip_skip,
-                                      int width,
-                                      int height,
-                                      int adm_in_channels  = -1,
-                                      bool zero_out_masked = false) {
-        auto tokens_and_weights = tokenize(text, chunk_len, true);
-        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
+                                      const ConditionerParams& conditioner_params) {
+        auto tokens_and_weights = tokenize(conditioner_params.text, chunk_len, true);
+        return get_learned_condition_common(work_ctx,
+                                            n_threads,
+                                            tokens_and_weights,
+                                            conditioner_params.clip_skip,
+                                            conditioner_params.zero_out_masked);
     }
 };
 
 struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
     Qwen::Qwen2Tokenizer tokenizer;
     std::shared_ptr<Qwen::Qwen2_5_VLRunner> qwenvl;
-    int prompt_template_encode_start_idx = 34;
 
     Qwen2_5_VLCLIPEmbedder(ggml_backend_t backend,
                            bool offload_params_to_cpu,
                            const String2GGMLType& tensor_types = {},
-                           const std::string prefix            = "") {
-        qwenvl = std::make_shared<Qwen::Qwen2_5_VLRunner>(backend, offload_params_to_cpu, tensor_types, "text_encoders.qwen2vl");
+                           const std::string prefix            = "",
+                           bool enable_vision                  = false) {
+        qwenvl = std::make_shared<Qwen::Qwen2_5_VLRunner>(backend,
+                                                          offload_params_to_cpu,
+                                                          tensor_types,
+                                                          "text_encoders.qwen2vl",
+                                                          enable_vision);
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
@@ -1402,9 +1408,19 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
     }
 
     std::tuple<std::vector<int>, std::vector<float>> tokenize(std::string text,
-                                                              size_t max_length = 0,
-                                                              bool padding      = false) {
-        auto parsed_attention = parse_prompt_attention(text);
+                                                              size_t max_length           = 0,
+                                                              size_t system_prompt_length = 0,
+                                                              bool padding                = false) {
+        std::vector<std::pair<std::string, float>> parsed_attention;
+        if (system_prompt_length > 0) {
+            parsed_attention.emplace_back(text.substr(0, system_prompt_length), 1.f);
+            auto new_parsed_attention = parse_prompt_attention(text.substr(system_prompt_length, text.size() - system_prompt_length));
+            parsed_attention.insert(parsed_attention.end(),
+                                    new_parsed_attention.begin(),
+                                    new_parsed_attention.end());
+        } else {
+            parsed_attention = parse_prompt_attention(text);
+        }
 
         {
             std::stringstream ss;
@@ -1429,20 +1445,89 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
         tokenizer.pad_tokens(tokens, weights, max_length, padding);
 
         // for (int i = 0; i < tokens.size(); i++) {
-        //     std::cout << tokens[i] << ":" << weights[i] << ", ";
+        //     std::cout << tokens[i] << ":" << weights[i] << ", " << i << std::endl;
         // }
         // std::cout << std::endl;
 
         return {tokens, weights};
     }
 
-    SDCondition get_learned_condition_common(ggml_context* work_ctx,
-                                             int n_threads,
-                                             std::tuple<std::vector<int>, std::vector<float>> token_and_weights,
-                                             int clip_skip,
-                                             bool zero_out_masked = false) {
-        auto& tokens  = std::get<0>(token_and_weights);
-        auto& weights = std::get<1>(token_and_weights);
+    SDCondition get_learned_condition(ggml_context* work_ctx,
+                                      int n_threads,
+                                      const ConditionerParams& conditioner_params) {
+        std::string prompt;
+        std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+        size_t system_prompt_length = 0;
+        int prompt_template_encode_start_idx = 34;
+        if (qwenvl->enable_vision && conditioner_params.ref_images.size() > 0) {
+            LOG_INFO("QwenImageEditPlusPipeline");
+            prompt_template_encode_start_idx = 64;
+            int image_embed_idx              = 64 + 6;
+
+            int min_pixels          = 384 * 384;
+            int max_pixels          = 560 * 560;
+            std::string placeholder = "<|image_pad|>";
+            std::string img_prompt;
+
+            for (int i = 0; i < conditioner_params.ref_images.size(); i++) {
+                sd_image_f32_t image = sd_image_t_to_sd_image_f32_t(*conditioner_params.ref_images[i]);
+                double factor        = qwenvl->params.vision.patch_size * qwenvl->params.vision.spatial_merge_size;
+                int height           = image.height;
+                int width            = image.width;
+                int h_bar            = static_cast<int>(std::round(height / factor)) * factor;
+                int w_bar            = static_cast<int>(std::round(width / factor)) * factor;
+
+                if (static_cast<double>(h_bar) * w_bar > max_pixels) {
+                    double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
+                    h_bar       = std::max(static_cast<int>(factor),
+                                           static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                    w_bar       = std::max(static_cast<int>(factor),
+                                           static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+                } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
+                    double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
+                    h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                    w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                }
+
+                LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, image.height, image.width, h_bar, w_bar);
+
+                sd_image_f32_t resized_image = clip_preprocess(image, w_bar, h_bar);
+                free(image.data);
+                image.data = nullptr;
+
+                ggml_tensor* image_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
+                sd_image_f32_to_tensor(resized_image, image_tensor, false);
+                free(resized_image.data);
+                resized_image.data = nullptr;
+
+                ggml_tensor* image_embed = nullptr;
+                qwenvl->encode_image(n_threads, image_tensor, &image_embed, work_ctx);
+                image_embeds.emplace_back(image_embed_idx, image_embed);
+                image_embed_idx += 1 + image_embed->ne[1] + 6;
+
+                img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";  // [24669, 220, index, 25, 220, 151652]
+                int64_t num_image_tokens = image_embed->ne[1];
+                img_prompt.reserve(num_image_tokens * placeholder.size());
+                for (int j = 0; j < num_image_tokens; j++) {
+                    img_prompt += placeholder;
+                }
+                img_prompt += "<|vision_end|>";
+            }
+
+            prompt = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n";
+
+            system_prompt_length = prompt.size();
+
+            prompt += img_prompt;
+            prompt += conditioner_params.text;
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
+        } else {
+            prompt = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n" + conditioner_params.text + "<|im_end|>\n<|im_start|>assistant\n";
+        }
+
+        auto tokens_and_weights = tokenize(prompt, 0, system_prompt_length, false);
+        auto& tokens            = std::get<0>(tokens_and_weights);
+        auto& weights           = std::get<1>(tokens_and_weights);
 
         int64_t t0                        = ggml_time_ms();
         struct ggml_tensor* hidden_states = NULL;  // [N, n_token, 3584]
@@ -1451,6 +1536,7 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
 
         qwenvl->compute(n_threads,
                         input_ids,
+                        image_embeds,
                         &hidden_states,
                         work_ctx);
         {
@@ -1485,19 +1571,6 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
         return SDCondition(new_hidden_states, nullptr, nullptr);
-    }
-
-    SDCondition get_learned_condition(ggml_context* work_ctx,
-                                      int n_threads,
-                                      const std::string& text,
-                                      int clip_skip,
-                                      int width,
-                                      int height,
-                                      int adm_in_channels  = -1,
-                                      bool zero_out_masked = false) {
-        std::string prompt      = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n" + text + "<|im_end|>\n<|im_start|>assistant\n";
-        auto tokens_and_weights = tokenize(prompt, 0, false);
-        return get_learned_condition_common(work_ctx, n_threads, tokens_and_weights, clip_skip, zero_out_masked);
     }
 };
 

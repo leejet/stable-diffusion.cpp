@@ -4,9 +4,9 @@
 #include <vector>
 #include "ggml_extend.hpp"
 
-struct Rope {
+namespace Rope {
     template <class T>
-    static std::vector<T> linspace(T start, T end, int num) {
+    __STATIC_INLINE__ std::vector<T> linspace(T start, T end, int num) {
         std::vector<T> result(num);
         if (num == 1) {
             result[0] = start;
@@ -19,7 +19,7 @@ struct Rope {
         return result;
     }
 
-    static std::vector<std::vector<float>> transpose(const std::vector<std::vector<float>>& mat) {
+    __STATIC_INLINE__ std::vector<std::vector<float>> transpose(const std::vector<std::vector<float>>& mat) {
         int rows = mat.size();
         int cols = mat[0].size();
         std::vector<std::vector<float>> transposed(cols, std::vector<float>(rows));
@@ -31,7 +31,7 @@ struct Rope {
         return transposed;
     }
 
-    static std::vector<float> flatten(const std::vector<std::vector<float>>& vec) {
+    __STATIC_INLINE__ std::vector<float> flatten(const std::vector<std::vector<float>>& vec) {
         std::vector<float> flat_vec;
         for (const auto& sub_vec : vec) {
             flat_vec.insert(flat_vec.end(), sub_vec.begin(), sub_vec.end());
@@ -39,7 +39,7 @@ struct Rope {
         return flat_vec;
     }
 
-    static std::vector<std::vector<float>> rope(const std::vector<float>& pos, int dim, int theta) {
+    __STATIC_INLINE__ std::vector<std::vector<float>> rope(const std::vector<float>& pos, int dim, int theta) {
         assert(dim % 2 == 0);
         int half_dim = dim / 2;
 
@@ -72,11 +72,11 @@ struct Rope {
     }
 
     // Generate IDs for image patches and text
-    static std::vector<std::vector<float>> gen_txt_ids(int bs, int context_len) {
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_txt_ids(int bs, int context_len) {
         return std::vector<std::vector<float>>(bs * context_len, std::vector<float>(3, 0.0));
     }
 
-    static std::vector<std::vector<float>> gen_img_ids(int h, int w, int patch_size, int bs, int index = 0, int h_offset = 0, int w_offset = 0) {
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_img_ids(int h, int w, int patch_size, int bs, int index = 0, int h_offset = 0, int w_offset = 0) {
         int h_len = (h + (patch_size / 2)) / patch_size;
         int w_len = (w + (patch_size / 2)) / patch_size;
 
@@ -102,9 +102,9 @@ struct Rope {
         return img_ids_repeated;
     }
 
-    static std::vector<std::vector<float>> concat_ids(const std::vector<std::vector<float>>& a,
-                                                      const std::vector<std::vector<float>>& b,
-                                                      int bs) {
+    __STATIC_INLINE__ std::vector<std::vector<float>> concat_ids(const std::vector<std::vector<float>>& a,
+                                                                 const std::vector<std::vector<float>>& b,
+                                                                 int bs) {
         size_t a_len = a.size() / bs;
         size_t b_len = b.size() / bs;
         std::vector<std::vector<float>> ids(a.size() + b.size(), std::vector<float>(3));
@@ -119,10 +119,10 @@ struct Rope {
         return ids;
     }
 
-    static std::vector<float> embed_nd(const std::vector<std::vector<float>>& ids,
-                                       int bs,
-                                       int theta,
-                                       const std::vector<int>& axes_dim) {
+    __STATIC_INLINE__ std::vector<float> embed_nd(const std::vector<std::vector<float>>& ids,
+                                                  int bs,
+                                                  int theta,
+                                                  const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> trans_ids = transpose(ids);
         size_t pos_len                            = ids.size() / bs;
         int num_axes                              = axes_dim.size();
@@ -151,17 +151,11 @@ struct Rope {
         return flatten(emb);
     }
 
-    static std::vector<std::vector<float>> gen_flux_ids(int h,
-                                                        int w,
-                                                        int patch_size,
-                                                        int bs,
-                                                        int context_len,
-                                                        std::vector<ggml_tensor*> ref_latents,
-                                                        bool increase_ref_index) {
-        auto txt_ids = gen_txt_ids(bs, context_len);
-        auto img_ids = gen_img_ids(h, w, patch_size, bs);
-
-        auto ids               = concat_ids(txt_ids, img_ids, bs);
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_refs_ids(int patch_size,
+                                                                   int bs,
+                                                                   const std::vector<ggml_tensor*>& ref_latents,
+                                                                   bool increase_ref_index) {
+        std::vector<std::vector<float>> ids;
         uint64_t curr_h_offset = 0;
         uint64_t curr_w_offset = 0;
         int index              = 1;
@@ -189,25 +183,45 @@ struct Rope {
         return ids;
     }
 
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_flux_ids(int h,
+                                                                   int w,
+                                                                   int patch_size,
+                                                                   int bs,
+                                                                   int context_len,
+                                                                   const std::vector<ggml_tensor*>& ref_latents,
+                                                                   bool increase_ref_index) {
+        auto txt_ids = gen_txt_ids(bs, context_len);
+        auto img_ids = gen_img_ids(h, w, patch_size, bs);
+
+        auto ids = concat_ids(txt_ids, img_ids, bs);
+        if (ref_latents.size() > 0) {
+            auto refs_ids = gen_refs_ids(patch_size, bs, ref_latents, increase_ref_index);
+            ids           = concat_ids(ids, refs_ids, bs);
+        }
+        return ids;
+    }
+
     // Generate flux positional embeddings
-    static std::vector<float> gen_flux_pe(int h,
-                                          int w,
-                                          int patch_size,
-                                          int bs,
-                                          int context_len,
-                                          std::vector<ggml_tensor*> ref_latents,
-                                          bool increase_ref_index,
-                                          int theta,
-                                          const std::vector<int>& axes_dim) {
+    __STATIC_INLINE__ std::vector<float> gen_flux_pe(int h,
+                                                     int w,
+                                                     int patch_size,
+                                                     int bs,
+                                                     int context_len,
+                                                     const std::vector<ggml_tensor*>& ref_latents,
+                                                     bool increase_ref_index,
+                                                     int theta,
+                                                     const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_flux_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
         return embed_nd(ids, bs, theta, axes_dim);
     }
 
-    static std::vector<std::vector<float>> gen_qwen_image_ids(int h,
-                                                              int w,
-                                                              int patch_size,
-                                                              int bs,
-                                                              int context_len) {
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int h,
+                                                                         int w,
+                                                                         int patch_size,
+                                                                         int bs,
+                                                                         int context_len,
+                                                                         const std::vector<ggml_tensor*>& ref_latents,
+                                                                         bool increase_ref_index) {
         int h_len        = (h + (patch_size / 2)) / patch_size;
         int w_len        = (w + (patch_size / 2)) / patch_size;
         int txt_id_start = std::max(h_len, w_len);
@@ -220,31 +234,37 @@ struct Rope {
         }
         auto img_ids = gen_img_ids(h, w, patch_size, bs);
         auto ids     = concat_ids(txt_ids_repeated, img_ids, bs);
+        if (ref_latents.size() > 0) {
+            auto refs_ids = gen_refs_ids(patch_size, bs, ref_latents, increase_ref_index);
+            ids           = concat_ids(ids, refs_ids, bs);
+        }
         return ids;
     }
 
     // Generate qwen_image positional embeddings
-    static std::vector<float> gen_qwen_image_pe(int h,
-                                                int w,
-                                                int patch_size,
-                                                int bs,
-                                                int context_len,
-                                                int theta,
-                                                const std::vector<int>& axes_dim) {
-        std::vector<std::vector<float>> ids = gen_qwen_image_ids(h, w, patch_size, bs, context_len);
+    __STATIC_INLINE__ std::vector<float> gen_qwen_image_pe(int h,
+                                                           int w,
+                                                           int patch_size,
+                                                           int bs,
+                                                           int context_len,
+                                                           const std::vector<ggml_tensor*>& ref_latents,
+                                                           bool increase_ref_index,
+                                                           int theta,
+                                                           const std::vector<int>& axes_dim) {
+        std::vector<std::vector<float>> ids = gen_qwen_image_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
         return embed_nd(ids, bs, theta, axes_dim);
     }
 
-    static std::vector<std::vector<float>> gen_vid_ids(int t,
-                                                       int h,
-                                                       int w,
-                                                       int pt,
-                                                       int ph,
-                                                       int pw,
-                                                       int bs,
-                                                       int t_offset = 0,
-                                                       int h_offset = 0,
-                                                       int w_offset = 0) {
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_vid_ids(int t,
+                                                                  int h,
+                                                                  int w,
+                                                                  int pt,
+                                                                  int ph,
+                                                                  int pw,
+                                                                  int bs,
+                                                                  int t_offset = 0,
+                                                                  int h_offset = 0,
+                                                                  int w_offset = 0) {
         int t_len = (t + (pt / 2)) / pt;
         int h_len = (h + (ph / 2)) / ph;
         int w_len = (w + (pw / 2)) / pw;
@@ -276,18 +296,115 @@ struct Rope {
     }
 
     // Generate wan positional embeddings
-    static std::vector<float> gen_wan_pe(int t,
-                                         int h,
-                                         int w,
-                                         int pt,
-                                         int ph,
-                                         int pw,
-                                         int bs,
-                                         int theta,
-                                         const std::vector<int>& axes_dim) {
+    __STATIC_INLINE__ std::vector<float> gen_wan_pe(int t,
+                                                    int h,
+                                                    int w,
+                                                    int pt,
+                                                    int ph,
+                                                    int pw,
+                                                    int bs,
+                                                    int theta,
+                                                    const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_vid_ids(t, h, w, pt, ph, pw, bs);
         return embed_nd(ids, bs, theta, axes_dim);
     }
-};  // struct Rope
+
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen2vl_ids(int grid_h,
+                                                                      int grid_w,
+                                                                      int merge_size,
+                                                                      const std::vector<int>& window_index) {
+        std::vector<std::vector<float>> ids(grid_h * grid_w, std::vector<float>(2, 0.0));
+        int index = 0;
+        for (int ih = 0; ih < grid_h; ih += merge_size) {
+            for (int iw = 0; iw < grid_w; iw += merge_size) {
+                for (int iy = 0; iy < merge_size; iy++) {
+                    for (int ix = 0; ix < merge_size; ix++) {
+                        int inverse_index = window_index[index / (merge_size * merge_size)];
+                        int i             = inverse_index * (merge_size * merge_size) + index % (merge_size * merge_size);
+
+                        GGML_ASSERT(i < grid_h * grid_w);
+
+                        ids[i][0] = ih + iy;
+                        ids[i][1] = iw + ix;
+                        index++;
+                    }
+                }
+            }
+        }
+        return ids;
+    }
+
+    // Generate qwen2vl positional embeddings
+    __STATIC_INLINE__ std::vector<float> gen_qwen2vl_pe(int grid_h,
+                                                        int grid_w,
+                                                        int merge_size,
+                                                        const std::vector<int>& window_index,
+                                                        int theta,
+                                                        const std::vector<int>& axes_dim) {
+        std::vector<std::vector<float>> ids = gen_qwen2vl_ids(grid_h, grid_w, merge_size, window_index);
+        return embed_nd(ids, 1, theta, axes_dim);
+    }
+
+    __STATIC_INLINE__ struct ggml_tensor* apply_rope(struct ggml_context* ctx,
+                                                     struct ggml_tensor* x,
+                                                     struct ggml_tensor* pe,
+                                                     bool rope_interleaved = true) {
+        // x: [N, L, n_head, d_head]
+        // pe: [L, d_head/2, 2, 2], [[cos, -sin], [sin, cos]]
+        int64_t d_head = x->ne[0];
+        int64_t n_head = x->ne[1];
+        int64_t L      = x->ne[2];
+        int64_t N      = x->ne[3];
+        x              = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, n_head, L, d_head]
+        if (rope_interleaved) {
+            x = ggml_reshape_4d(ctx, x, 2, d_head / 2, L, n_head * N);  // [N * n_head, L, d_head/2, 2]
+            x = ggml_cont(ctx, ggml_permute(ctx, x, 3, 0, 1, 2));       // [2, N * n_head, L, d_head/2]
+        } else {
+            x = ggml_reshape_4d(ctx, x, d_head / 2, 2, L, n_head * N);   // [N * n_head, L, 2, d_head/2]
+            x = ggml_cont(ctx, ggml_torch_permute(ctx, x, 0, 2, 3, 1));  // [2, N * n_head, L, d_head/2]
+        }
+
+        int64_t offset = x->nb[2] * x->ne[2];
+        auto x_0       = ggml_view_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2], x->nb[1], x->nb[2], offset * 0);  // [N * n_head, L, d_head/2]
+        auto x_1       = ggml_view_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2], x->nb[1], x->nb[2], offset * 1);  // [N * n_head, L, d_head/2]
+        x_0            = ggml_reshape_4d(ctx, x_0, 1, x_0->ne[0], x_0->ne[1], x_0->ne[2]);                    // [N * n_head, L, d_head/2, 1]
+        x_1            = ggml_reshape_4d(ctx, x_1, 1, x_1->ne[0], x_1->ne[1], x_1->ne[2]);                    // [N * n_head, L, d_head/2, 1]
+        auto temp_x    = ggml_new_tensor_4d(ctx, x_0->type, 2, x_0->ne[1], x_0->ne[2], x_0->ne[3]);
+        x_0            = ggml_repeat(ctx, x_0, temp_x);  // [N * n_head, L, d_head/2, 2]
+        x_1            = ggml_repeat(ctx, x_1, temp_x);  // [N * n_head, L, d_head/2, 2]
+
+        pe        = ggml_cont(ctx, ggml_permute(ctx, pe, 3, 0, 1, 2));  // [2, L, d_head/2, 2]
+        offset    = pe->nb[2] * pe->ne[2];
+        auto pe_0 = ggml_view_3d(ctx, pe, pe->ne[0], pe->ne[1], pe->ne[2], pe->nb[1], pe->nb[2], offset * 0);  // [L, d_head/2, 2]
+        auto pe_1 = ggml_view_3d(ctx, pe, pe->ne[0], pe->ne[1], pe->ne[2], pe->nb[1], pe->nb[2], offset * 1);  // [L, d_head/2, 2]
+
+        auto x_out = ggml_add_inplace(ctx, ggml_mul(ctx, x_0, pe_0), ggml_mul(ctx, x_1, pe_1));  // [N * n_head, L, d_head/2, 2]
+        if (!rope_interleaved) {
+            x_out = ggml_cont(ctx, ggml_permute(ctx, x_out, 1, 0, 2, 3));  // [N * n_head, L, x, d_head/2]
+        }
+        x_out = ggml_reshape_3d(ctx, x_out, d_head, L, n_head * N);  // [N*n_head, L, d_head]
+        return x_out;
+    }
+
+    __STATIC_INLINE__ struct ggml_tensor* attention(struct ggml_context* ctx,
+                                                    ggml_backend_t backend,
+                                                    struct ggml_tensor* q,
+                                                    struct ggml_tensor* k,
+                                                    struct ggml_tensor* v,
+                                                    struct ggml_tensor* pe,
+                                                    struct ggml_tensor* mask,
+                                                    bool flash_attn,
+                                                    float kv_scale        = 1.0f,
+                                                    bool rope_interleaved = true) {
+        // q,k,v: [N, L, n_head, d_head]
+        // pe: [L, d_head/2, 2, 2]
+        // return: [N, L, n_head*d_head]
+        q = apply_rope(ctx, q, pe, rope_interleaved);  // [N*n_head, L, d_head]
+        k = apply_rope(ctx, k, pe, rope_interleaved);  // [N*n_head, L, d_head]
+
+        auto x = ggml_nn_attention_ext(ctx, backend, q, k, v, v->ne[1], mask, false, true, flash_attn, kv_scale);  // [N, L, n_head*d_head]
+        return x;
+    }
+};  // namespace Rope
 
 #endif  // __ROPE_HPP__

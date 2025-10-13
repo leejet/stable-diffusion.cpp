@@ -42,7 +42,7 @@ sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image);
 
 sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int target_height);
 
-sd_image_f32_t clip_preprocess(sd_image_f32_t image, int size);
+sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int target_height);
 
 std::string path_join(const std::string& p1, const std::string& p2);
 std::vector<std::string> split_string(const std::string& str, char delimiter);

@@ -24,6 +24,7 @@ API and command-line option may change frequently.***
     - [Qwen Image](./docs/qwen_image.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
+    - [Qwen Image Edit/Qwen Image Edit 2509](./docs/qwen_image_edit.md)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
   - [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
@@ -298,6 +299,7 @@ arguments:
   --clip_vision                      path to the clip-vision encoder
   --t5xxl                            path to the t5xxl text encoder
   --qwen2vl                          path to the qwen2vl text encoder
+  --qwen2vl_vision                   path to the qwen2vl vit
   --vae [VAE]                        path to vae
   --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
   --control-net [CONTROL_PATH]       path to control net model
