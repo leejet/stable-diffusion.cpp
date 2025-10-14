@@ -17,7 +17,6 @@ API and command-line option may change frequently.***
   - Image Models
     - SD1.x, SD2.x, [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)
     - SDXL, [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo)
-      - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
     - [SD3/SD3.5](./docs/sd3.md)
     - [Flux-dev/Flux-schnell](./docs/flux.md)
     - [Chroma](./docs/chroma.md)
