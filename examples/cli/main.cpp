@@ -131,6 +131,7 @@ struct SDParams {
     prediction_t prediction = DEFAULT_PRED;
 
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
+    bool force_sdxl_vae_conv_scale       = false;
 
     SDParams() {
         sd_sample_params_init(&sample_params);
@@ -198,6 +199,7 @@ void print_params(SDParams params) {
     printf("    seed:                              %zd\n", params.seed);
     printf("    batch_count:                       %d\n", params.batch_count);
     printf("    vae_tiling:                        %s\n", params.vae_tiling_params.enabled ? "true" : "false");
+    printf("    force_sdxl_vae_conv_scale:         %s\n", params.force_sdxl_vae_conv_scale ? "true" : "false");
     printf("    upscale_repeats:                   %d\n", params.upscale_repeats);
     printf("    chroma_use_dit_mask:               %s\n", params.chroma_use_dit_mask ? "true" : "false");
     printf("    chroma_use_t5_mask:                %s\n", params.chroma_use_t5_mask ? "true" : "false");
@@ -292,6 +294,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --vae-tile-size [X]x[Y]            tile size for vae tiling (default: 32x32)\n");
     printf("  --vae-relative-tile-size [X]x[Y]   relative tile size for vae tiling, in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)\n");
     printf("  --vae-tile-overlap OVERLAP         tile overlap for vae tiling, in fraction of tile size (default: 0.5)\n");
+    printf("  --force-sdxl-vae-conv-scale        force use of conv scale on sdxl vae\n");
     printf("  --vae-on-cpu                       keep vae in cpu (for low vram)\n");
     printf("  --clip-on-cpu                      keep clip in cpu (for low vram)\n");
     printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
@@ -562,6 +565,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     options.bool_options = {
         {"", "--vae-tiling", "", true, &params.vae_tiling_params.enabled},
+        {"", "--force-sdxl-vae-conv-scale", "", true, &params.force_sdxl_vae_conv_scale},
         {"", "--offload-to-cpu", "", true, &params.offload_params_to_cpu},
         {"", "--control-net-cpu", "", true, &params.control_net_cpu},
         {"", "--clip-on-cpu", "", true, &params.clip_on_cpu},
@@ -1382,6 +1386,7 @@ int main(int argc, const char* argv[]) {
         params.diffusion_flash_attn,
         params.diffusion_conv_direct,
         params.vae_conv_direct,
+        params.force_sdxl_vae_conv_scale,
         params.chroma_use_dit_mask,
         params.chroma_use_t5_mask,
         params.chroma_t5_mask_pad,
