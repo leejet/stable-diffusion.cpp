@@ -1136,7 +1136,7 @@ public:
                 } else if (sd_version_is_flux(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
                     latent_rgb_bias = flux_latent_rgb_bias;
-                } else if (sd_version_is_wan(version)) {
+                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
                     latent_rgb_proj = wan_21_latent_rgb_proj;
                     latent_rgb_bias = wan_21_latent_rgb_bias;
                 } else {
