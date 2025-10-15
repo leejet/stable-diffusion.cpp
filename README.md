@@ -363,6 +363,7 @@ arguments:
   --vae-tile-size [X]x[Y]            tile size for vae tiling (default: 32x32)
   --vae-relative-tile-size [X]x[Y]   relative tile size for vae tiling, in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)
   --vae-tile-overlap OVERLAP         tile overlap for vae tiling, in fraction of tile size (default: 0.5)
+  --force-sdxl-vae-conv-scale        force use of conv scale on sdxl vae
   --vae-on-cpu                       keep vae in cpu (for low vram)
   --clip-on-cpu                      keep clip in cpu (for low vram)
   --diffusion-fa                     use flash attention in the diffusion model (for low vram)
