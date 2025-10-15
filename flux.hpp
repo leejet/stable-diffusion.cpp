@@ -81,56 +81,6 @@ namespace Flux {
         }
     };
 
-    __STATIC_INLINE__ struct ggml_tensor* apply_rope(struct ggml_context* ctx,
-                                                     struct ggml_tensor* x,
-                                                     struct ggml_tensor* pe) {
-        // x: [N, L, n_head, d_head]
-        // pe: [L, d_head/2, 2, 2]
-        int64_t d_head = x->ne[0];
-        int64_t n_head = x->ne[1];
-        int64_t L      = x->ne[2];
-        int64_t N      = x->ne[3];
-        x              = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));       // [N, n_head, L, d_head]
-        x              = ggml_reshape_4d(ctx, x, 2, d_head / 2, L, n_head * N);  // [N * n_head, L, d_head/2, 2]
-        x              = ggml_cont(ctx, ggml_permute(ctx, x, 3, 0, 1, 2));       // [2, N * n_head, L, d_head/2]
-
-        int64_t offset = x->nb[2] * x->ne[2];
-        auto x_0       = ggml_view_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2], x->nb[1], x->nb[2], offset * 0);  // [N * n_head, L, d_head/2]
-        auto x_1       = ggml_view_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2], x->nb[1], x->nb[2], offset * 1);  // [N * n_head, L, d_head/2]
-        x_0            = ggml_reshape_4d(ctx, x_0, 1, x_0->ne[0], x_0->ne[1], x_0->ne[2]);                    // [N * n_head, L, d_head/2, 1]
-        x_1            = ggml_reshape_4d(ctx, x_1, 1, x_1->ne[0], x_1->ne[1], x_1->ne[2]);                    // [N * n_head, L, d_head/2, 1]
-        auto temp_x    = ggml_new_tensor_4d(ctx, x_0->type, 2, x_0->ne[1], x_0->ne[2], x_0->ne[3]);
-        x_0            = ggml_repeat(ctx, x_0, temp_x);  // [N * n_head, L, d_head/2, 2]
-        x_1            = ggml_repeat(ctx, x_1, temp_x);  // [N * n_head, L, d_head/2, 2]
-
-        pe        = ggml_cont(ctx, ggml_permute(ctx, pe, 3, 0, 1, 2));  // [2, L, d_head/2, 2]
-        offset    = pe->nb[2] * pe->ne[2];
-        auto pe_0 = ggml_view_3d(ctx, pe, pe->ne[0], pe->ne[1], pe->ne[2], pe->nb[1], pe->nb[2], offset * 0);  // [L, d_head/2, 2]
-        auto pe_1 = ggml_view_3d(ctx, pe, pe->ne[0], pe->ne[1], pe->ne[2], pe->nb[1], pe->nb[2], offset * 1);  // [L, d_head/2, 2]
-
-        auto x_out = ggml_add_inplace(ctx, ggml_mul(ctx, x_0, pe_0), ggml_mul(ctx, x_1, pe_1));  // [N * n_head, L, d_head/2, 2]
-        x_out      = ggml_reshape_3d(ctx, x_out, d_head, L, n_head * N);                         // [N*n_head, L, d_head]
-        return x_out;
-    }
-
-    __STATIC_INLINE__ struct ggml_tensor* attention(struct ggml_context* ctx,
-                                                    ggml_backend_t backend,
-                                                    struct ggml_tensor* q,
-                                                    struct ggml_tensor* k,
-                                                    struct ggml_tensor* v,
-                                                    struct ggml_tensor* pe,
-                                                    struct ggml_tensor* mask,
-                                                    bool flash_attn) {
-        // q,k,v: [N, L, n_head, d_head]
-        // pe: [L, d_head/2, 2, 2]
-        // return: [N, L, n_head*d_head]
-        q = apply_rope(ctx, q, pe);  // [N*n_head, L, d_head]
-        k = apply_rope(ctx, k, pe);  // [N*n_head, L, d_head]
-
-        auto x = ggml_nn_attention_ext(ctx, backend, q, k, v, v->ne[1], mask, false, true, flash_attn);  // [N, L, n_head*d_head]
-        return x;
-    }
-
     struct SelfAttention : public GGMLBlock {
     public:
         int64_t num_heads;
@@ -178,9 +128,9 @@ namespace Flux {
             // x: [N, n_token, dim]
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
-            auto qkv = pre_attention(ctx, x);                                                  // q,k,v: [N, n_token, n_head, d_head]
-            x        = attention(ctx, backend, qkv[0], qkv[1], qkv[2], pe, mask, flash_attn);  // [N, n_token, dim]
-            x        = post_attention(ctx, x);                                                 // [N, n_token, dim]
+            auto qkv = pre_attention(ctx, x);                                                        // q,k,v: [N, n_token, n_head, d_head]
+            x        = Rope::attention(ctx, backend, qkv[0], qkv[1], qkv[2], pe, mask, flash_attn);  // [N, n_token, dim]
+            x        = post_attention(ctx, x);                                                       // [N, n_token, dim]
             return x;
         }
     };
@@ -368,8 +318,8 @@ namespace Flux {
             auto k = ggml_concat(ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_txt_token + n_img_token, n_head*d_head]
-            attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));     // [n_txt_token + n_img_token, N, hidden_size]
+            auto attn         = Rope::attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_txt_token + n_img_token, n_head*d_head]
+            attn              = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));           // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx,
                                              attn,
                                              attn->ne[0],
@@ -503,7 +453,7 @@ namespace Flux {
             auto v           = ggml_reshape_4d(ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
             q                = norm->query_norm(ctx, q);
             k                = norm->key_norm(ctx, k);
-            auto attn        = attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_token, hidden_size]
+            auto attn        = Rope::attention(ctx, backend, q, k, v, pe, mask, flash_attn);  // [N, n_token, hidden_size]
 
             auto attn_mlp = ggml_concat(ctx, attn, ggml_gelu_inplace(ctx, mlp), 0);  // [N, n_token, hidden_size + mlp_hidden_dim]
             auto output   = linear2->forward(ctx, attn_mlp);                         // [N, n_token, hidden_size]
@@ -615,6 +565,7 @@ namespace Flux {
         bool guidance_embed         = true;
         bool flash_attn             = true;
         bool is_chroma              = false;
+        SDVersion version           = VERSION_FLUX;
     };
 
     struct Flux : public GGMLBlock {
@@ -849,7 +800,8 @@ namespace Flux {
             auto img            = process_img(ctx, x);
             uint64_t img_tokens = img->ne[1];
 
-            if (c_concat != NULL) {
+            if (params.version == VERSION_FLUX_FILL) {
+                GGML_ASSERT(c_concat != NULL);
                 ggml_tensor* masked = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], 0);
                 ggml_tensor* mask   = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 8 * 8, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
 
@@ -857,6 +809,27 @@ namespace Flux {
                 mask   = process_img(ctx, mask);
 
                 img = ggml_concat(ctx, img, ggml_concat(ctx, masked, mask, 0), 0);
+            } else if (params.version == VERSION_FLEX_2) {
+                GGML_ASSERT(c_concat != NULL);
+                ggml_tensor* masked  = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], 0);
+                ggml_tensor* mask    = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 1, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
+                ggml_tensor* control = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * (C + 1));
+
+                masked  = ggml_pad(ctx, masked, pad_w, pad_h, 0, 0);
+                mask    = ggml_pad(ctx, mask, pad_w, pad_h, 0, 0);
+                control = ggml_pad(ctx, control, pad_w, pad_h, 0, 0);
+
+                masked  = patchify(ctx, masked, patch_size);
+                mask    = patchify(ctx, mask, patch_size);
+                control = patchify(ctx, control, patch_size);
+
+                img = ggml_concat(ctx, img, ggml_concat(ctx, ggml_concat(ctx, masked, mask, 0), control, 0), 0);
+            } else if (params.version == VERSION_FLUX_CONTROLS) {
+                GGML_ASSERT(c_concat != NULL);
+
+                ggml_tensor* control = ggml_pad(ctx, c_concat, pad_w, pad_h, 0, 0);
+                control              = patchify(ctx, control, patch_size);
+                img                  = ggml_concat(ctx, img, control, 0);
             }
 
             if (ref_latents.size() > 0) {
@@ -867,6 +840,7 @@ namespace Flux {
             }
 
             auto out = forward_orig(ctx, backend, img, context, timestep, y, guidance, pe, mod_index_arange, skip_layers);  // [N, num_tokens, C * patch_size * patch_size]
+
             if (out->ne[1] > img_tokens) {
                 out = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));  // [num_tokens, N, C * patch_size * patch_size]
                 out = ggml_view_3d(ctx, out, out->ne[0], out->ne[1], img_tokens, out->nb[1], out->nb[2], 0);
@@ -896,13 +870,18 @@ namespace Flux {
                    SDVersion version                   = VERSION_FLUX,
                    bool flash_attn                     = false,
                    bool use_mask                       = false)
-            : GGMLRunner(backend, offload_params_to_cpu), use_mask(use_mask) {
+            : GGMLRunner(backend, offload_params_to_cpu), version(version), use_mask(use_mask) {
+            flux_params.version             = version;
             flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
             flux_params.depth_single_blocks = 0;
             if (version == VERSION_FLUX_FILL) {
                 flux_params.in_channels = 384;
+            } else if (version == VERSION_FLUX_CONTROLS) {
+                flux_params.in_channels = 128;
+            } else if (version == VERSION_FLEX_2) {
+                flux_params.in_channels = 196;
             }
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;

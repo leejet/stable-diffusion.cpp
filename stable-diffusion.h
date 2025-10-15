@@ -35,7 +35,7 @@ enum rng_type_t {
 };
 
 enum sample_method_t {
-    EULER_A,
+    SAMPLE_METHOD_DEFAULT,
     EULER,
     HEUN,
     DPM2,
@@ -47,6 +47,7 @@ enum sample_method_t {
     LCM,
     DDIM_TRAILING,
     TCD,
+    EULER_A,
     SAMPLE_METHOD_COUNT
 };
 
@@ -57,6 +58,8 @@ enum scheduler_t {
     EXPONENTIAL,
     AYS,
     GITS,
+    SGM_UNIFORM,
+    SIMPLE,
     SMOOTHSTEP,
     SCHEDULE_COUNT
 };
@@ -122,11 +125,22 @@ enum preview_t {
 };
 
 typedef struct {
+    bool enabled;
+    int tile_size_x;
+    int tile_size_y;
+    float target_overlap;
+    float rel_size_x;
+    float rel_size_y;
+} sd_tiling_params_t;
+
+typedef struct {
     const char* model_path;
     const char* clip_l_path;
     const char* clip_g_path;
     const char* clip_vision_path;
     const char* t5xxl_path;
+    const char* qwen2vl_path;
+    const char* qwen2vl_vision_path;
     const char* diffusion_model_path;
     const char* high_noise_diffusion_model_path;
     const char* vae_path;
@@ -134,9 +148,8 @@ typedef struct {
     const char* control_net_path;
     const char* lora_model_dir;
     const char* embedding_dir;
-    const char* stacked_id_embed_dir;
+    const char* photo_maker_path;
     bool vae_decode_only;
-    bool vae_tiling;
     bool free_params_immediately;
     int n_threads;
     enum sd_type_t wtype;
@@ -183,7 +196,15 @@ typedef struct {
     enum sample_method_t sample_method;
     int sample_steps;
     float eta;
+    int shifted_timestep;
 } sd_sample_params_t;
+
+typedef struct {
+    sd_image_t* id_images;
+    int id_images_count;
+    const char* id_embed_path;
+    float style_strength;
+} sd_pm_params_t;  // photo maker
 
 typedef struct {
     const char* prompt;
@@ -202,9 +223,8 @@ typedef struct {
     int batch_count;
     sd_image_t control_image;
     float control_strength;
-    float style_strength;
-    bool normalize_input;
-    const char* input_id_images_path;
+    sd_pm_params_t pm_params;
+    sd_tiling_params_t vae_tiling_params;
 } sd_img_gen_params_t;
 
 typedef struct {
@@ -213,6 +233,8 @@ typedef struct {
     int clip_skip;
     sd_image_t init_image;
     sd_image_t end_image;
+    sd_image_t* control_frames;
+    int control_frames_size;
     int width;
     int height;
     sd_sample_params_t sample_params;
@@ -221,6 +243,7 @@ typedef struct {
     float strength;
     int64_t seed;
     int video_frames;
+    float vace_strength;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
@@ -251,6 +274,7 @@ SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
 
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
+SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
 
 SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
 SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
@@ -274,20 +298,20 @@ SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
                           sd_image_t input_image,
                           uint32_t upscale_factor);
 
+SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
+
 SD_API bool convert(const char* input_path,
                     const char* vae_path,
                     const char* output_path,
                     enum sd_type_t output_type,
                     const char* tensor_type_rules);
 
-SD_API uint8_t* preprocess_canny(uint8_t* img,
-                                 int width,
-                                 int height,
-                                 float high_threshold,
-                                 float low_threshold,
-                                 float weak,
-                                 float strong,
-                                 bool inverse);
+SD_API bool preprocess_canny(sd_image_t image,
+                             float high_threshold,
+                             float low_threshold,
+                             float weak,
+                             float strong,
+                             bool inverse);
 
 #ifdef __cplusplus
 }

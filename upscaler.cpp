@@ -18,7 +18,8 @@ struct UpscalerGGML {
     }
 
     bool load_from_file(const std::string& esrgan_path,
-                        bool offload_params_to_cpu) {
+                        bool offload_params_to_cpu,
+                        int n_threads) {
         ggml_log_set(ggml_log_callback_default, nullptr);
 #ifdef SD_USE_CUDA
         LOG_DEBUG("Using CUDA backend");
@@ -54,7 +55,7 @@ struct UpscalerGGML {
         if (direct) {
             esrgan_upscaler->enable_conv2d_direct();
         }
-        if (!esrgan_upscaler->load_from_file(esrgan_path)) {
+        if (!esrgan_upscaler->load_from_file(esrgan_path, n_threads)) {
             return false;
         }
         return true;
@@ -69,8 +70,7 @@ struct UpscalerGGML {
                  input_image.width, input_image.height, output_width, output_height);
 
         struct ggml_init_params params;
-        params.mem_size = output_width * output_height * 3 * sizeof(float) * 2;
-        params.mem_size += 2 * ggml_tensor_overhead();
+        params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
         params.mem_buffer = NULL;
         params.no_alloc   = false;
 
@@ -80,9 +80,9 @@ struct UpscalerGGML {
             LOG_ERROR("ggml_init() failed");
             return upscaled_image;
         }
-        LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
+        // LOG_DEBUG("upscale work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
         ggml_tensor* input_image_tensor = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, input_image.width, input_image.height, 3, 1);
-        sd_image_to_tensor(input_image.data, input_image_tensor);
+        sd_image_to_tensor(input_image, input_image_tensor);
 
         ggml_tensor* upscaled = ggml_new_tensor_4d(upscale_ctx, GGML_TYPE_F32, output_width, output_height, 3, 1);
         auto on_tiling        = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
@@ -125,7 +125,7 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
         return NULL;
     }
 
-    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu)) {
+    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu, n_threads)) {
         delete upscaler_ctx->upscaler;
         upscaler_ctx->upscaler = NULL;
         free(upscaler_ctx);
@@ -136,6 +136,13 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
 
 sd_image_t upscale(upscaler_ctx_t* upscaler_ctx, sd_image_t input_image, uint32_t upscale_factor) {
     return upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
+}
+
+int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {
+    if (upscaler_ctx == NULL || upscaler_ctx->upscaler == NULL || upscaler_ctx->upscaler->esrgan_upscaler == NULL) {
+        return 1;
+    }
+    return upscaler_ctx->upscaler->esrgan_upscaler->scale;
 }
 
 void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx) {

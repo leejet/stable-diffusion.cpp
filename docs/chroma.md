@@ -24,7 +24,7 @@ You can download the preconverted gguf weights from [silveroxides/Chroma-GGUF](h
 For example:
 
 ```
- .\bin\Release\sd.exe --diffusion-model  ..\models\chroma-unlocked-v40-q8_0.gguf --vae ..\models\ae.sft --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'chroma.cpp'" --cfg-scale 4.0 --sampling-method euler -v --chroma-disable-dit-mask
+ .\bin\Release\sd.exe --diffusion-model  ..\models\chroma-unlocked-v40-q8_0.gguf --vae ..\models\ae.sft --t5xxl ..\models\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'chroma.cpp'" --cfg-scale 4.0 --sampling-method euler -v --chroma-disable-dit-mask --clip-on-cpu
 ```
 
 ![](../assets/flux/chroma_v40.png)
