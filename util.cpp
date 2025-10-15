@@ -548,6 +548,8 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int targe
 //   (abc) - increases attention to abc by a multiplier of 1.1
 //   (abc:3.12) - increases attention to abc by a multiplier of 3.12
 //   [abc] - decreases attention to abc by a multiplier of 1.1
+//   BREAK - separates the prompt into conceptually distinct parts for sequential processing
+//   B - internal helper pattern; prevents 'B' in 'BREAK' from being consumed as normal text
 //   \( - literal character '('
 //   \[ - literal character '['
 //   \) - literal character ')'
