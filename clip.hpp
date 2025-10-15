@@ -6,7 +6,7 @@
 
 /*================================================== CLIPTokenizer ===================================================*/
 
-std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remove_lora(std::string text) {
+__STATIC_INLINE__ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remove_lora(std::string text) {
     std::regex re("<lora:([^:]+):([^>]+)>");
     std::smatch matches;
     std::unordered_map<std::string, float> filename2multiplier;
@@ -31,7 +31,7 @@ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remov
     return std::make_pair(filename2multiplier, text);
 }
 
-std::vector<std::pair<int, std::u32string>> bytes_to_unicode() {
+__STATIC_INLINE__ std::vector<std::pair<int, std::u32string>> bytes_to_unicode() {
     std::vector<std::pair<int, std::u32string>> byte_unicode_pairs;
     std::set<int> byte_set;
     for (int b = static_cast<int>('!'); b <= static_cast<int>('~'); ++b) {
@@ -179,9 +179,9 @@ public:
 
         auto it = encoder.find(utf8_to_utf32("img</w>"));
         if (it != encoder.end()) {
-            LOG_DEBUG(" trigger word img already in vocab");
+            LOG_DEBUG("trigger word img already in vocab");
         } else {
-            LOG_DEBUG(" trigger word img not in vocab yet");
+            LOG_DEBUG("trigger word img not in vocab yet");
         }
 
         int rank = 0;
@@ -343,6 +343,13 @@ public:
         }
     }
 
+    std::string clean_up_tokenization(std::string& text) {
+        std::regex pattern(R"( ,)");
+        // Replace " ," with ","
+        std::string result = std::regex_replace(text, pattern, ",");
+        return result;
+    }
+
     std::string decode(const std::vector<int>& tokens) {
         std::string text = "";
         for (int t : tokens) {
@@ -351,8 +358,12 @@ public:
             std::u32string ts = decoder[t];
             // printf("%d, %s \n", t,  utf32_to_utf8(ts).c_str());
             std::string s = utf32_to_utf8(ts);
-            if (s.length() >= 4 && ends_with(s, "</w>")) {
-                text += " " + s.replace(s.length() - 4, s.length() - 1, "");
+            if (s.length() >= 4) {
+                if (ends_with(s, "</w>")) {
+                    text += s.replace(s.length() - 4, s.length() - 1, "") + " ";
+                } else {
+                    text += s;
+                }
             } else {
                 text += " " + s;
             }
@@ -364,6 +375,7 @@ public:
 
         // std::string s((char *)bytes.data());
         // std::string s = "";
+        text = clean_up_tokenization(text);
         return trim(text);
     }
 
@@ -476,14 +488,14 @@ public:
         blocks["mlp"] = std::shared_ptr<GGMLBlock>(new CLIPMLP(d_model, intermediate_size));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, bool mask = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, ggml_backend_t backend, struct ggml_tensor* x, bool mask = true) {
         // x: [N, n_token, d_model]
         auto self_attn   = std::dynamic_pointer_cast<MultiheadAttention>(blocks["self_attn"]);
         auto layer_norm1 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm1"]);
         auto layer_norm2 = std::dynamic_pointer_cast<LayerNorm>(blocks["layer_norm2"]);
         auto mlp         = std::dynamic_pointer_cast<CLIPMLP>(blocks["mlp"]);
 
-        x = ggml_add(ctx, x, self_attn->forward(ctx, layer_norm1->forward(ctx, x), mask));
+        x = ggml_add(ctx, x, self_attn->forward(ctx, backend, layer_norm1->forward(ctx, x), mask));
         x = ggml_add(ctx, x, mlp->forward(ctx, layer_norm2->forward(ctx, x)));
         return x;
     }
@@ -505,7 +517,11 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, int clip_skip = -1, bool mask = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* x,
+                                int clip_skip = -1,
+                                bool mask     = true) {
         // x: [N, n_token, d_model]
         int layer_idx = n_layer - 1;
         // LOG_DEBUG("clip_skip %d", clip_skip);
@@ -520,7 +536,7 @@ public:
             }
             std::string name = "layers." + std::to_string(i);
             auto layer       = std::dynamic_pointer_cast<CLIPLayer>(blocks[name]);
-            x                = layer->forward(ctx, x, mask);  // [N, n_token, d_model]
+            x                = layer->forward(ctx, backend, x, mask);  // [N, n_token, d_model]
             // LOG_DEBUG("layer %d", i);
         }
         return x;
@@ -532,19 +548,30 @@ protected:
     int64_t embed_dim;
     int64_t vocab_size;
     int64_t num_positions;
+    bool force_clip_f32;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["token_embedding.weight"]    = ggml_new_tensor_2d(ctx, wtype, embed_dim, vocab_size);
-        params["position_embedding.weight"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, embed_dim, num_positions);
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type token_wtype = GGML_TYPE_F32;
+        if (!force_clip_f32) {
+            token_wtype = get_type(prefix + "token_embedding.weight", tensor_types, GGML_TYPE_F32);
+            if (!support_get_rows(token_wtype)) {
+                token_wtype = GGML_TYPE_F32;
+            }
+        }
+        enum ggml_type position_wtype       = GGML_TYPE_F32;
+        params["token_embedding.weight"]    = ggml_new_tensor_2d(ctx, token_wtype, embed_dim, vocab_size);
+        params["position_embedding.weight"] = ggml_new_tensor_2d(ctx, position_wtype, embed_dim, num_positions);
     }
 
 public:
     CLIPEmbeddings(int64_t embed_dim,
                    int64_t vocab_size    = 49408,
-                   int64_t num_positions = 77)
+                   int64_t num_positions = 77,
+                   bool force_clip_f32   = false)
         : embed_dim(embed_dim),
           vocab_size(vocab_size),
-          num_positions(num_positions) {
+          num_positions(num_positions),
+          force_clip_f32(force_clip_f32) {
     }
 
     struct ggml_tensor* get_token_embed_weight() {
@@ -579,11 +606,14 @@ protected:
     int64_t image_size;
     int64_t num_patches;
     int64_t num_positions;
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type patch_wtype    = GGML_TYPE_F16;
+        enum ggml_type class_wtype    = GGML_TYPE_F32;
+        enum ggml_type position_wtype = GGML_TYPE_F32;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["patch_embedding.weight"]    = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, patch_size, patch_size, num_channels, embed_dim);
-        params["class_embedding"]           = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, embed_dim);
-        params["position_embedding.weight"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, embed_dim, num_positions);
+        params["patch_embedding.weight"]    = ggml_new_tensor_4d(ctx, patch_wtype, patch_size, patch_size, num_channels, embed_dim);
+        params["class_embedding"]           = ggml_new_tensor_1d(ctx, class_wtype, embed_dim);
+        params["position_embedding.weight"] = ggml_new_tensor_2d(ctx, position_wtype, embed_dim, num_positions);
     }
 
 public:
@@ -639,9 +669,10 @@ enum CLIPVersion {
 
 class CLIPTextModel : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
         if (version == OPEN_CLIP_VIT_BIGG_14) {
-            params["text_projection"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, projection_dim, hidden_size);
+            enum ggml_type wtype      = GGML_TYPE_F32;
+            params["text_projection"] = ggml_new_tensor_2d(ctx, wtype, projection_dim, hidden_size);
         }
     }
 
@@ -655,12 +686,11 @@ public:
     int32_t n_head            = 12;
     int32_t n_layer           = 12;    // num_hidden_layers
     int32_t projection_dim    = 1280;  // only for OPEN_CLIP_VIT_BIGG_14
-    int32_t clip_skip         = -1;
     bool with_final_ln        = true;
 
     CLIPTextModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                  int clip_skip_value = -1,
-                  bool with_final_ln  = true)
+                  bool with_final_ln  = true,
+                  bool force_clip_f32 = false)
         : version(version), with_final_ln(with_final_ln) {
         if (version == OPEN_CLIP_VIT_H_14) {
             hidden_size       = 1024;
@@ -673,18 +703,10 @@ public:
             n_head            = 20;
             n_layer           = 32;
         }
-        set_clip_skip(clip_skip_value);
 
-        blocks["embeddings"]       = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token));
+        blocks["embeddings"]       = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token, force_clip_f32));
         blocks["encoder"]          = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
         blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
-    }
-
-    void set_clip_skip(int skip) {
-        if (skip <= 0) {
-            return;
-        }
-        clip_skip = skip;
     }
 
     struct ggml_tensor* get_token_embed_weight() {
@@ -693,17 +715,19 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* tkn_embeddings,
                                 size_t max_token_idx = 0,
-                                bool return_pooled   = false) {
+                                bool return_pooled   = false,
+                                int clip_skip        = -1) {
         // input_ids: [N, n_token]
         auto embeddings       = std::dynamic_pointer_cast<CLIPEmbeddings>(blocks["embeddings"]);
         auto encoder          = std::dynamic_pointer_cast<CLIPEncoder>(blocks["encoder"]);
         auto final_layer_norm = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer_norm"]);
 
         auto x = embeddings->forward(ctx, input_ids, tkn_embeddings);  // [N, n_token, hidden_size]
-        x      = encoder->forward(ctx, x, return_pooled ? -1 : clip_skip, true);
+        x      = encoder->forward(ctx, backend, x, return_pooled ? -1 : clip_skip, true);
         if (return_pooled || with_final_ln) {
             x = final_layer_norm->forward(ctx, x);
         }
@@ -711,8 +735,12 @@ public:
         if (return_pooled) {
             auto text_projection = params["text_projection"];
             ggml_tensor* pooled  = ggml_view_1d(ctx, x, hidden_size, x->nb[1] * max_token_idx);
-            pooled               = ggml_mul_mat(ctx, ggml_cont(ctx, ggml_transpose(ctx, text_projection)), pooled);
-            return pooled;
+            if (text_projection != NULL) {
+                pooled = ggml_nn_linear(ctx, pooled, text_projection, NULL);
+            } else {
+                LOG_DEBUG("identity projection");
+            }
+            return pooled;  // [hidden_size, 1, 1]
         }
 
         return x;  // [N, n_token, hidden_size]
@@ -751,7 +779,11 @@ public:
         blocks["post_layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values, bool return_pooled = true) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* pixel_values,
+                                bool return_pooled = true,
+                                int clip_skip      = -1) {
         // pixel_values: [N, num_channels, image_size, image_size]
         auto embeddings     = std::dynamic_pointer_cast<CLIPVisionEmbeddings>(blocks["embeddings"]);
         auto pre_layernorm  = std::dynamic_pointer_cast<LayerNorm>(blocks["pre_layernorm"]);
@@ -760,15 +792,18 @@ public:
 
         auto x = embeddings->forward(ctx, pixel_values);  // [N, num_positions, embed_dim]
         x      = pre_layernorm->forward(ctx, x);
-        x      = encoder->forward(ctx, x, -1, false);
-        x      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
+        x      = encoder->forward(ctx, backend, x, clip_skip, false);
+        // print_ggml_tensor(x, true, "ClipVisionModel x: ");
+        auto last_hidden_state = x;
+        x                      = post_layernorm->forward(ctx, x);  // [N, n_token, hidden_size]
 
         GGML_ASSERT(x->ne[3] == 1);
         if (return_pooled) {
             ggml_tensor* pooled = ggml_cont(ctx, ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], 0));
             return pooled;  // [N, hidden_size]
         } else {
-            return x;  // [N, n_token, hidden_size]
+            // return x;  // [N, n_token, hidden_size]
+            return last_hidden_state;  // [N, n_token, hidden_size]
         }
     }
 };
@@ -779,9 +814,9 @@ protected:
     int64_t out_features;
     bool transpose_weight;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
         if (transpose_weight) {
-            LOG_ERROR("transpose_weight");
             params["weight"] = ggml_new_tensor_2d(ctx, wtype, out_features, in_features);
         } else {
             params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
@@ -825,16 +860,23 @@ public:
         blocks["visual_projection"] = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, projection_dim, transpose_proj_w));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* pixel_values) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* pixel_values,
+                                bool return_pooled = true,
+                                int clip_skip      = -1) {
         // pixel_values: [N, num_channels, image_size, image_size]
-        // return: [N, projection_dim]
+        // return: [N, projection_dim] if return_pooled else [N, n_token, hidden_size]
         auto vision_model      = std::dynamic_pointer_cast<CLIPVisionModel>(blocks["vision_model"]);
         auto visual_projection = std::dynamic_pointer_cast<CLIPProjection>(blocks["visual_projection"]);
 
-        auto x = vision_model->forward(ctx, pixel_values);  // [N, hidden_size]
-        x      = visual_projection->forward(ctx, x);        // [N, projection_dim]
+        auto x = vision_model->forward(ctx, backend, pixel_values, return_pooled, clip_skip);  // [N, hidden_size] or [N, n_token, hidden_size]
 
-        return x;  // [N, projection_dim]
+        if (return_pooled) {
+            x = visual_projection->forward(ctx, x);  // [N, projection_dim]
+        }
+
+        return x;
     }
 };
 
@@ -842,20 +884,18 @@ struct CLIPTextModelRunner : public GGMLRunner {
     CLIPTextModel model;
 
     CLIPTextModelRunner(ggml_backend_t backend,
-                        ggml_type wtype,
+                        bool offload_params_to_cpu,
+                        const String2GGMLType& tensor_types,
+                        const std::string prefix,
                         CLIPVersion version = OPENAI_CLIP_VIT_L_14,
-                        int clip_skip_value = 1,
-                        bool with_final_ln  = true)
-        : GGMLRunner(backend, wtype), model(version, clip_skip_value, with_final_ln) {
-        model.init(params_ctx, wtype);
+                        bool with_final_ln  = true,
+                        bool force_clip_f32 = false)
+        : GGMLRunner(backend, offload_params_to_cpu), model(version, with_final_ln, force_clip_f32) {
+        model.init(params_ctx, tensor_types, prefix);
     }
 
     std::string get_desc() {
         return "clip";
-    }
-
-    void set_clip_skip(int clip_skip) {
-        model.set_clip_skip(clip_skip);
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -863,10 +903,12 @@ struct CLIPTextModelRunner : public GGMLRunner {
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* input_ids,
                                 struct ggml_tensor* embeddings,
                                 size_t max_token_idx = 0,
-                                bool return_pooled   = false) {
+                                bool return_pooled   = false,
+                                int clip_skip        = -1) {
         size_t N       = input_ids->ne[1];
         size_t n_token = input_ids->ne[0];
         if (input_ids->ne[0] > model.n_token) {
@@ -874,14 +916,15 @@ struct CLIPTextModelRunner : public GGMLRunner {
             input_ids = ggml_reshape_2d(ctx, input_ids, model.n_token, input_ids->ne[0] / model.n_token);
         }
 
-        return model.forward(ctx, input_ids, embeddings, max_token_idx, return_pooled);
+        return model.forward(ctx, backend, input_ids, embeddings, max_token_idx, return_pooled, clip_skip);
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
                                     int num_custom_embeddings    = 0,
                                     void* custom_embeddings_data = NULL,
                                     size_t max_token_idx         = 0,
-                                    bool return_pooled           = false) {
+                                    bool return_pooled           = false,
+                                    int clip_skip                = -1) {
         struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
         input_ids = to_backend(input_ids);
@@ -889,18 +932,18 @@ struct CLIPTextModelRunner : public GGMLRunner {
         struct ggml_tensor* embeddings = NULL;
 
         if (num_custom_embeddings > 0 && custom_embeddings_data != NULL) {
-            auto custom_embeddings = ggml_new_tensor_2d(compute_ctx,
-                                                        wtype,
-                                                        model.hidden_size,
-                                                        num_custom_embeddings);
+            auto token_embed_weight = model.get_token_embed_weight();
+            auto custom_embeddings  = ggml_new_tensor_2d(compute_ctx,
+                                                         token_embed_weight->type,
+                                                         model.hidden_size,
+                                                         num_custom_embeddings);
             set_backend_tensor_data(custom_embeddings, custom_embeddings_data);
 
-            auto token_embed_weight = model.get_token_embed_weight();
             // concatenate custom embeddings
             embeddings = ggml_concat(compute_ctx, token_embed_weight, custom_embeddings, 1);
         }
 
-        struct ggml_tensor* hidden_states = forward(compute_ctx, input_ids, embeddings, max_token_idx, return_pooled);
+        struct ggml_tensor* hidden_states = forward(compute_ctx, runtime_backend, input_ids, embeddings, max_token_idx, return_pooled, clip_skip);
 
         ggml_build_forward_expand(gf, hidden_states);
 
@@ -913,10 +956,11 @@ struct CLIPTextModelRunner : public GGMLRunner {
                  void* custom_embeddings_data,
                  size_t max_token_idx,
                  bool return_pooled,
+                 int clip_skip,
                  ggml_tensor** output,
                  ggml_context* output_ctx = NULL) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
-            return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled);
+            return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled, clip_skip);
         };
         GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
     }

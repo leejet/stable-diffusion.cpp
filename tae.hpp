@@ -62,7 +62,8 @@ class TinyEncoder : public UnaryBlock {
     int num_blocks  = 3;
 
 public:
-    TinyEncoder() {
+    TinyEncoder(int z_channels = 4)
+        : z_channels(z_channels) {
         int index                       = 0;
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, channels, {3, 3}, {1, 1}, {1, 1}));
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
@@ -106,7 +107,10 @@ class TinyDecoder : public UnaryBlock {
     int num_blocks   = 3;
 
 public:
-    TinyDecoder(int index = 0) {
+    TinyDecoder(int z_channels = 4)
+        : z_channels(z_channels) {
+        int index = 0;
+
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, channels, {3, 3}, {1, 1}, {1, 1}));
         index++;  // nn.ReLU()
 
@@ -145,7 +149,7 @@ public:
                 if (i == 1) {
                     h = ggml_relu_inplace(ctx, h);
                 } else {
-                    h = ggml_upscale(ctx, h, 2);
+                    h = ggml_upscale(ctx, h, 2, GGML_SCALE_MODE_NEAREST);
                 }
                 continue;
             }
@@ -163,12 +167,16 @@ protected:
     bool decode_only;
 
 public:
-    TAESD(bool decode_only = true)
+    TAESD(bool decode_only = true, SDVersion version = VERSION_SD1)
         : decode_only(decode_only) {
-        blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyDecoder());
+        int z_channels = 4;
+        if (sd_version_is_dit(version)) {
+            z_channels = 16;
+        }
+        blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyDecoder(z_channels));
 
         if (!decode_only) {
-            blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyEncoder());
+            blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyEncoder(z_channels));
         }
     }
 
@@ -188,19 +196,33 @@ struct TinyAutoEncoder : public GGMLRunner {
     bool decode_only = false;
 
     TinyAutoEncoder(ggml_backend_t backend,
-                    ggml_type wtype,
-                    bool decoder_only = true)
+                    bool offload_params_to_cpu,
+                    const String2GGMLType& tensor_types,
+                    const std::string prefix,
+                    bool decoder_only = true,
+                    SDVersion version = VERSION_SD1)
         : decode_only(decoder_only),
-          taesd(decode_only),
-          GGMLRunner(backend, wtype) {
-        taesd.init(params_ctx, wtype);
+          taesd(decoder_only, version),
+          GGMLRunner(backend, offload_params_to_cpu) {
+        taesd.init(params_ctx, tensor_types, prefix);
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        taesd.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {
         return "taesd";
     }
 
-    bool load_from_file(const std::string& file_path) {
+    bool load_from_file(const std::string& file_path, int n_threads) {
         LOG_INFO("loading taesd from '%s', decode_only = %s", file_path.c_str(), decode_only ? "true" : "false");
         alloc_params_buffer();
         std::map<std::string, ggml_tensor*> taesd_tensors;
@@ -216,7 +238,7 @@ struct TinyAutoEncoder : public GGMLRunner {
             return false;
         }
 
-        bool success = model_loader.load_tensors(taesd_tensors, backend, ignore_tensors);
+        bool success = model_loader.load_tensors(taesd_tensors, ignore_tensors, n_threads);
 
         if (!success) {
             LOG_ERROR("load tae tensors from model loader failed");

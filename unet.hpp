@@ -61,6 +61,7 @@ public:
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* context,
                                 int timesteps) {
@@ -127,7 +128,7 @@ public:
             auto block     = std::dynamic_pointer_cast<BasicTransformerBlock>(blocks[transformer_name]);
             auto mix_block = std::dynamic_pointer_cast<BasicTransformerBlock>(blocks[time_stack_name]);
 
-            x = block->forward(ctx, x, spatial_context);  // [N, h * w, inner_dim]
+            x = block->forward(ctx, backend, x, spatial_context);  // [N, h * w, inner_dim]
 
             // in_channels == inner_dim
             auto x_mix = x;
@@ -143,7 +144,7 @@ public:
             x_mix = ggml_cont(ctx, ggml_permute(ctx, x_mix, 0, 2, 1, 3));  // b t s c -> b s t c
             x_mix = ggml_reshape_3d(ctx, x_mix, C, T, S * B);              // b s t c -> (b s) t c
 
-            x_mix = mix_block->forward(ctx, x_mix, time_context);  // [B * h * w, T, inner_dim]
+            x_mix = mix_block->forward(ctx, backend, x_mix, time_context);  // [B * h * w, T, inner_dim]
 
             x_mix = ggml_reshape_4d(ctx, x_mix, C, T, S, B);               // (b s) t c -> b s t c
             x_mix = ggml_cont(ctx, ggml_permute(ctx, x_mix, 0, 2, 1, 3));  // b s t c -> b t s c
@@ -183,13 +184,13 @@ public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1)
+    UnetModelBlock(SDVersion version = VERSION_SD1, const String2GGMLType& tensor_types = {}, bool flash_attn = false)
         : version(version) {
-        if (version == VERSION_SD2) {
+        if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
             num_head_channels = 64;
             num_heads         = -1;
-        } else if (version == VERSION_SDXL) {
+        } else if (sd_version_is_sdxl(version)) {
             context_dim           = 2048;
             attention_resolutions = {4, 2};
             channel_mult          = {1, 2, 4};
@@ -204,6 +205,12 @@ public:
             num_head_channels = 64;
             num_heads         = -1;
         }
+        if (sd_version_is_inpaint(version)) {
+            in_channels = 9;
+        } else if (sd_version_is_unet_edit(version)) {
+            in_channels = 8;
+        }
+
         // dims is always 2
         // use_temporal_attention is always True for SVD
 
@@ -211,7 +218,7 @@ public:
         // time_embed_1 is nn.SiLU()
         blocks["time_embed.2"] = std::shared_ptr<GGMLBlock>(new Linear(time_embed_dim, time_embed_dim));
 
-        if (version == VERSION_SDXL || version == VERSION_SVD) {
+        if (sd_version_is_sdxl(version) || version == VERSION_SVD) {
             blocks["label_emb.0.0"] = std::shared_ptr<GGMLBlock>(new Linear(adm_in_channels, time_embed_dim));
             // label_emb_1 is nn.SiLU()
             blocks["label_emb.0.2"] = std::shared_ptr<GGMLBlock>(new Linear(time_embed_dim, time_embed_dim));
@@ -242,7 +249,7 @@ public:
             if (version == VERSION_SVD) {
                 return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim);
             } else {
-                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim);
+                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, flash_attn);
             }
         };
 
@@ -357,21 +364,23 @@ public:
 
     struct ggml_tensor* attention_layer_forward(std::string name,
                                                 struct ggml_context* ctx,
+                                                ggml_backend_t backend,
                                                 struct ggml_tensor* x,
                                                 struct ggml_tensor* context,
                                                 int timesteps) {
         if (version == VERSION_SVD) {
             auto block = std::dynamic_pointer_cast<SpatialVideoTransformer>(blocks[name]);
 
-            return block->forward(ctx, x, context, timesteps);
+            return block->forward(ctx, backend, x, context, timesteps);
         } else {
             auto block = std::dynamic_pointer_cast<SpatialTransformer>(blocks[name]);
 
-            return block->forward(ctx, x, context);
+            return block->forward(ctx, backend, x, context);
         }
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
                                 struct ggml_tensor* x,
                                 struct ggml_tensor* timesteps,
                                 struct ggml_tensor* context,
@@ -450,7 +459,7 @@ public:
                 h                = resblock_forward(name, ctx, h, emb, num_video_frames);  // [N, mult*model_channels, h, w]
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
-                    h                = attention_layer_forward(name, ctx, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
+                    h                = attention_layer_forward(name, ctx, backend, h, context, num_video_frames);  // [N, mult*model_channels, h, w]
                 }
                 hs.push_back(h);
             }
@@ -468,9 +477,9 @@ public:
         // [N, 4*model_channels, h/8, w/8]
 
         // middle_block
-        h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
-        h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
-        h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);                      // [N, 4*model_channels, h/8, w/8]
+        h = attention_layer_forward("middle_block.1", ctx, backend, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
+        h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);                      // [N, 4*model_channels, h/8, w/8]
 
         if (controls.size() > 0) {
             auto cs = ggml_scale_inplace(ctx, controls[controls.size() - 1], control_strength);
@@ -501,7 +510,7 @@ public:
                 if (std::find(attention_resolutions.begin(), attention_resolutions.end(), ds) != attention_resolutions.end()) {
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + ".1";
 
-                    h = attention_layer_forward(name, ctx, h, context, num_video_frames);
+                    h = attention_layer_forward(name, ctx, backend, h, context, num_video_frames);
 
                     up_sample_idx++;
                 }
@@ -532,10 +541,25 @@ struct UNetModelRunner : public GGMLRunner {
     UnetModelBlock unet;
 
     UNetModelRunner(ggml_backend_t backend,
-                    ggml_type wtype,
-                    SDVersion version = VERSION_SD1)
-        : GGMLRunner(backend, wtype), unet(version) {
-        unet.init(params_ctx, wtype);
+                    bool offload_params_to_cpu,
+                    const String2GGMLType& tensor_types,
+                    const std::string prefix,
+                    SDVersion version = VERSION_SD1,
+                    bool flash_attn   = false)
+        : GGMLRunner(backend, offload_params_to_cpu), unet(version, tensor_types, flash_attn) {
+        unet.init(params_ctx, tensor_types, prefix);
+    }
+
+    void enable_conv2d_direct() {
+        std::vector<GGMLBlock*> blocks;
+        unet.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                LOG_DEBUG("block %s", block->get_desc().c_str());
+                auto conv_block = (Conv2d*)block;
+                conv_block->enable_direct();
+            }
+        }
     }
 
     std::string get_desc() {
@@ -564,12 +588,14 @@ struct UNetModelRunner : public GGMLRunner {
         context   = to_backend(context);
         y         = to_backend(y);
         timesteps = to_backend(timesteps);
+        c_concat  = to_backend(c_concat);
 
         for (int i = 0; i < controls.size(); i++) {
             controls[i] = to_backend(controls[i]);
         }
 
         struct ggml_tensor* out = unet.forward(compute_ctx,
+                                               runtime_backend,
                                                x,
                                                timesteps,
                                                context,

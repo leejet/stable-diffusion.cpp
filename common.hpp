@@ -56,8 +56,8 @@ public:
         // x: [N, channels, h, w]
         auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-        x = ggml_upscale(ctx, x, 2);  // [N, channels, h*2, w*2]
-        x = conv->forward(ctx, x);    // [N, out_channels, h*2, w*2]
+        x = ggml_upscale(ctx, x, 2, GGML_SCALE_MODE_NEAREST);  // [N, channels, h*2, w*2]
+        x = conv->forward(ctx, x);                             // [N, out_channels, h*2, w*2]
         return x;
     }
 };
@@ -177,14 +177,16 @@ public:
     }
 };
 
-class GEGLU : public GGMLBlock {
+class GEGLU : public UnaryBlock {
 protected:
     int64_t dim_in;
     int64_t dim_out;
 
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["proj.weight"] = ggml_new_tensor_2d(ctx, wtype, dim_in, dim_out * 2);
-        params["proj.bias"]   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dim_out * 2);
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+        enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_types, GGML_TYPE_F32);
+        enum ggml_type bias_wtype = GGML_TYPE_F32;
+        params["proj.weight"]     = ggml_new_tensor_2d(ctx, wtype, dim_in, dim_out * 2);
+        params["proj.bias"]       = ggml_new_tensor_1d(ctx, bias_wtype, dim_out * 2);
     }
 
 public:
@@ -214,23 +216,57 @@ public:
     }
 };
 
+class GELU : public UnaryBlock {
+public:
+    GELU(int64_t dim_in, int64_t dim_out, bool bias = true) {
+        blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim_in, dim_out, bias));
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+        // x: [ne3, ne2, ne1, dim_in]
+        // return: [ne3, ne2, ne1, dim_out]
+        auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
+
+        x = proj->forward(ctx, x);
+        x = ggml_gelu_inplace(ctx, x);
+        return x;
+    }
+};
+
 class FeedForward : public GGMLBlock {
 public:
+    enum class Activation {
+        GEGLU,
+        GELU
+    };
     FeedForward(int64_t dim,
                 int64_t dim_out,
-                int64_t mult = 4) {
+                int64_t mult          = 4,
+                Activation activation = Activation::GEGLU,
+                bool precision_fix    = false) {
         int64_t inner_dim = dim * mult;
+        if (activation == Activation::GELU) {
+            blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GELU(dim, inner_dim));
+        } else {
+            blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GEGLU(dim, inner_dim));
+        }
 
-        blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GEGLU(dim, inner_dim));
         // net_1 is nn.Dropout(), skip for inference
-        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out));
+        float scale = 1.f;
+        if (precision_fix) {
+            scale = 1.f / 128.f;
+        }
+        // The purpose of the scale here is to prevent NaN issues in certain situations.
+        // For example, when using Vulkan without enabling force_prec_f32,
+        // or when using CUDA but the weights are k-quants.
+        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out, true, false, false, scale));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [ne3, ne2, ne1, dim]
         // return: [ne3, ne2, ne1, dim_out]
 
-        auto net_0 = std::dynamic_pointer_cast<GEGLU>(blocks["net.0"]);
+        auto net_0 = std::dynamic_pointer_cast<UnaryBlock>(blocks["net.0"]);
         auto net_2 = std::dynamic_pointer_cast<Linear>(blocks["net.2"]);
 
         x = net_0->forward(ctx, x);  // [ne3, ne2, ne1, inner_dim]
@@ -245,16 +281,19 @@ protected:
     int64_t context_dim;
     int64_t n_head;
     int64_t d_head;
+    bool flash_attn;
 
 public:
     CrossAttention(int64_t query_dim,
                    int64_t context_dim,
                    int64_t n_head,
-                   int64_t d_head)
+                   int64_t d_head,
+                   bool flash_attn = false)
         : n_head(n_head),
           d_head(d_head),
           query_dim(query_dim),
-          context_dim(context_dim) {
+          context_dim(context_dim),
+          flash_attn(flash_attn) {
         int64_t inner_dim = d_head * n_head;
 
         blocks["to_q"] = std::shared_ptr<GGMLBlock>(new Linear(query_dim, inner_dim, false));
@@ -265,7 +304,10 @@ public:
         // to_out_1 is nn.Dropout(), skip for inference
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* x,
+                                struct ggml_tensor* context) {
         // x: [N, n_token, query_dim]
         // context: [N, n_context, context_dim]
         // return: [N, n_token, query_dim]
@@ -283,7 +325,7 @@ public:
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
         auto v = to_v->forward(ctx, context);  // [N, n_context, inner_dim]
 
-        x = ggml_nn_attention_ext(ctx, q, k, v, n_head, NULL, false);  // [N, n_token, inner_dim]
+        x = ggml_nn_attention_ext(ctx, backend, q, k, v, n_head, NULL, false, false, flash_attn);  // [N, n_token, inner_dim]
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]
         return x;
@@ -301,15 +343,16 @@ public:
                           int64_t n_head,
                           int64_t d_head,
                           int64_t context_dim,
-                          bool ff_in = false)
+                          bool ff_in      = false,
+                          bool flash_attn = false)
         : n_head(n_head), d_head(d_head), ff_in(ff_in) {
         // disable_self_attn is always False
         // disable_temporal_crossattention is always False
         // switch_temporal_ca_to_sa is always False
         // inner_dim is always None or equal to dim
         // gated_ff is always True
-        blocks["attn1"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, dim, n_head, d_head));
-        blocks["attn2"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, context_dim, n_head, d_head));
+        blocks["attn1"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, dim, n_head, d_head, flash_attn));
+        blocks["attn2"] = std::shared_ptr<GGMLBlock>(new CrossAttention(dim, context_dim, n_head, d_head, flash_attn));
         blocks["ff"]    = std::shared_ptr<GGMLBlock>(new FeedForward(dim, dim));
         blocks["norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
         blocks["norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
@@ -321,7 +364,10 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
+    struct ggml_tensor* forward(struct ggml_context* ctx,
+                                ggml_backend_t backend,
+                                struct ggml_tensor* x,
+                                struct ggml_tensor* context) {
         // x: [N, n_token, query_dim]
         // context: [N, n_context, context_dim]
         // return: [N, n_token, query_dim]
@@ -346,11 +392,11 @@ public:
 
         auto r = x;
         x      = norm1->forward(ctx, x);
-        x      = attn1->forward(ctx, x, x);  // self-attention
+        x      = attn1->forward(ctx, backend, x, x);  // self-attention
         x      = ggml_add(ctx, x, r);
         r      = x;
         x      = norm2->forward(ctx, x);
-        x      = attn2->forward(ctx, x, context);  // cross-attention
+        x      = attn2->forward(ctx, backend, x, context);  // cross-attention
         x      = ggml_add(ctx, x, r);
         r      = x;
         x      = norm3->forward(ctx, x);
@@ -374,7 +420,8 @@ public:
                        int64_t n_head,
                        int64_t d_head,
                        int64_t depth,
-                       int64_t context_dim)
+                       int64_t context_dim,
+                       bool flash_attn = false)
         : in_channels(in_channels),
           n_head(n_head),
           d_head(d_head),
@@ -388,13 +435,16 @@ public:
 
         for (int i = 0; i < depth; i++) {
             std::string name = "transformer_blocks." + std::to_string(i);
-            blocks[name]     = std::shared_ptr<GGMLBlock>(new BasicTransformerBlock(inner_dim, n_head, d_head, context_dim));
+            blocks[name]     = std::shared_ptr<GGMLBlock>(new BasicTransformerBlock(inner_dim, n_head, d_head, context_dim, false, flash_attn));
         }
 
         blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}));
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* context) {
+    virtual struct ggml_tensor* forward(struct ggml_context* ctx,
+                                        ggml_backend_t backend,
+                                        struct ggml_tensor* x,
+                                        struct ggml_tensor* context) {
         // x: [N, in_channels, h, w]
         // context: [N, max_position(aka n_token), hidden_size(aka context_dim)]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
@@ -417,7 +467,7 @@ public:
             std::string name       = "transformer_blocks." + std::to_string(i);
             auto transformer_block = std::dynamic_pointer_cast<BasicTransformerBlock>(blocks[name]);
 
-            x = transformer_block->forward(ctx, x, context);
+            x = transformer_block->forward(ctx, backend, x, context);
         }
 
         x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
@@ -433,8 +483,10 @@ public:
 
 class AlphaBlender : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, ggml_type wtype) {
-        params["mix_factor"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+        // Get the type of the "mix_factor" tensor from the input tensors map with the specified prefix
+        enum ggml_type wtype = GGML_TYPE_F32;
+        params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 
     float get_alpha() {
