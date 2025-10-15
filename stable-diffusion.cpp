@@ -510,9 +510,13 @@ public:
                     LOG_INFO("Using Conv2d direct in the vae model");
                     first_stage_model->enable_conv2d_direct();
                 }
-                if (version == VERSION_SDXL && strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0) {
+                if (version == VERSION_SDXL &&
+                    (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale)) {
                     float vae_conv_2d_scale = 1.f / 32.f;
-                    LOG_WARN("No VAE specified with --vae, using Conv2D scale %.3f", vae_conv_2d_scale);
+                    LOG_WARN(
+                        "No VAE specified with --vae or --force-sdxl-vae-conv-scale flag set, "
+                        "using Conv2D scale %.3f",
+                        vae_conv_2d_scale);
                     first_stage_model->set_conv2d_scale(vae_conv_2d_scale);
                 }
                 first_stage_model->alloc_params_buffer();
