@@ -156,9 +156,10 @@ struct ESRGAN : public GGMLRunner {
 
     ESRGAN(ggml_backend_t backend,
            bool offload_params_to_cpu,
+           int tile_size = 128,
            const String2GGMLType& tensor_types = {})
         : GGMLRunner(backend, offload_params_to_cpu) {
-        // rrdb_net will be created in load_from_file
+        this->tile_size = tile_size;
     }
 
     void enable_conv2d_direct() {
