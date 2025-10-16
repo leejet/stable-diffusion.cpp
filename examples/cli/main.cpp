@@ -116,6 +116,7 @@ struct SDParams {
     bool canny_preprocess      = false;
     bool color                 = false;
     int upscale_repeats        = 1;
+    int upscale_tile           = 128;
 
     // Photo Maker
     std::string photo_maker_path;
@@ -201,6 +202,7 @@ void print_params(SDParams params) {
     printf("    vae_tiling:                        %s\n", params.vae_tiling_params.enabled ? "true" : "false");
     printf("    force_sdxl_vae_conv_scale:         %s\n", params.force_sdxl_vae_conv_scale ? "true" : "false");
     printf("    upscale_repeats:                   %d\n", params.upscale_repeats);
+    printf("    upscale_tile:                      %d\n", params.upscale_tile);
     printf("    chroma_use_dit_mask:               %s\n", params.chroma_use_dit_mask ? "true" : "false");
     printf("    chroma_use_t5_mask:                %s\n", params.chroma_use_t5_mask ? "true" : "false");
     printf("    chroma_t5_mask_pad:                %d\n", params.chroma_t5_mask_pad);
@@ -235,6 +237,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
     printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. For img_gen mode, upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now\n");
     printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
+    printf("  --upscale-tile                     Tile size for the ESRGAN upscaler (default 128)\n");
     printf("  --type [TYPE]                      weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K)\n");
     printf("                                     If not specified, the default is the type of the weight file\n");
     printf("  --tensor-type-rules [EXPRESSION]   weight type per tensor pattern (example: \"^vae\\.=f16,model\\.=q8_0\")\n");
@@ -527,6 +530,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     options.int_options = {
         {"-t", "--threads", "", &params.n_threads},
         {"", "--upscale-repeats", "", &params.upscale_repeats},
+        {"","--upscale-tile", "", &params.upscale_tile},
         {"-H", "--height", "", &params.height},
         {"-W", "--width", "", &params.width},
         {"", "--steps", "", &params.sample_params.sample_steps},
@@ -914,6 +918,11 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     if (params.upscale_repeats < 1) {
         fprintf(stderr, "error: upscale multiplier must be at least 1\n");
+        exit(1);
+    }
+
+    if (params.upscale_tile < 1) {
+        fprintf(stderr, "error: upscale tile size must be at least 1\n");
         exit(1);
     }
 
@@ -1486,7 +1495,8 @@ int main(int argc, const char* argv[]) {
         upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(params.esrgan_path.c_str(),
                                                         params.offload_params_to_cpu,
                                                         params.diffusion_conv_direct,
-                                                        params.n_threads);
+                                                        params.n_threads,
+                                                        params.upscale_tile);
 
         if (upscaler_ctx == NULL) {
             printf("new_upscaler_ctx failed\n");
