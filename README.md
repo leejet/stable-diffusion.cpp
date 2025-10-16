@@ -17,7 +17,6 @@ API and command-line option may change frequently.***
   - Image Models
     - SD1.x, SD2.x, [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)
     - SDXL, [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo)
-      - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
     - [SD3/SD3.5](./docs/sd3.md)
     - [Flux-dev/Flux-schnell](./docs/flux.md)
     - [Chroma](./docs/chroma.md)
@@ -358,12 +357,14 @@ arguments:
   --rng {std_default, cuda}          RNG (default: cuda)
   -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
   -b, --batch-count COUNT            number of images to generate
+  --prediction {eps, v, edm_v, sd3_flow, flux_flow} Prediction type override
   --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
                                      <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
   --vae-tiling                       process vae in tiles to reduce memory usage
   --vae-tile-size [X]x[Y]            tile size for vae tiling (default: 32x32)
   --vae-relative-tile-size [X]x[Y]   relative tile size for vae tiling, in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)
   --vae-tile-overlap OVERLAP         tile overlap for vae tiling, in fraction of tile size (default: 0.5)
+  --force-sdxl-vae-conv-scale        force use of conv scale on sdxl vae
   --vae-on-cpu                       keep vae in cpu (for low vram)
   --clip-on-cpu                      keep clip in cpu (for low vram)
   --diffusion-fa                     use flash attention in the diffusion model (for low vram)

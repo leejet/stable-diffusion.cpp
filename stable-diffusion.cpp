@@ -340,13 +340,6 @@ public:
 
         if (sd_version_is_sdxl(version)) {
             scale_factor = 0.13025f;
-            if (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 && strlen(SAFE_STR(sd_ctx_params->taesd_path)) == 0) {
-                LOG_WARN(
-                    "!!!It looks like you are using SDXL model. "
-                    "If you find that the generated images are completely black, "
-                    "try specifying SDXL VAE FP16 Fix with the --vae parameter. "
-                    "You can find it here: https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors");
-            }
         } else if (sd_version_is_sd3(version)) {
             scale_factor = 1.5305f;
         } else if (sd_version_is_flux(version)) {
@@ -526,6 +519,15 @@ public:
                 if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the vae model");
                     first_stage_model->enable_conv2d_direct();
+                }
+                if (version == VERSION_SDXL &&
+                    (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale)) {
+                    float vae_conv_2d_scale = 1.f / 32.f;
+                    LOG_WARN(
+                        "No VAE specified with --vae or --force-sdxl-vae-conv-scale flag set, "
+                        "using Conv2D scale %.3f",
+                        vae_conv_2d_scale);
+                    first_stage_model->set_conv2d_scale(vae_conv_2d_scale);
                 }
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
@@ -712,64 +714,102 @@ public:
                 ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM");
         }
 
-        // check is_using_v_parameterization_for_sd2
-        if (sd_version_is_sd2(version)) {
-            if (is_using_v_parameterization_for_sd2(ctx, sd_version_is_inpaint(version))) {
-                is_using_v_parameterization = true;
-            }
-        } else if (sd_version_is_sdxl(version)) {
-            if (model_loader.tensor_storages_types.find("edm_vpred.sigma_max") != model_loader.tensor_storages_types.end()) {
-                // CosXL models
-                // TODO: get sigma_min and sigma_max values from file
-                is_using_edm_v_parameterization = true;
-            }
-            if (model_loader.tensor_storages_types.find("v_pred") != model_loader.tensor_storages_types.end()) {
-                is_using_v_parameterization = true;
-            }
-        } else if (version == VERSION_SVD) {
-            // TODO: V_PREDICTION_EDM
-            is_using_v_parameterization = true;
-        }
-
-        if (sd_version_is_sd3(version)) {
-            LOG_INFO("running in FLOW mode");
-            float shift = sd_ctx_params->flow_shift;
-            if (shift == INFINITY) {
-                shift = 3.0;
-            }
-            denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
-        } else if (sd_version_is_flux(version)) {
-            LOG_INFO("running in Flux FLOW mode");
-            float shift = 1.0f;  // TODO: validate
-            for (auto pair : model_loader.tensor_storages_types) {
-                if (pair.first.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
-                    shift = 1.15f;
+        if (sd_ctx_params->prediction != DEFAULT_PRED) {
+            switch (sd_ctx_params->prediction) {
+                case EPS_PRED:
+                    LOG_INFO("running in eps-prediction mode");
+                    break;
+                case V_PRED:
+                    LOG_INFO("running in v-prediction mode");
+                    denoiser = std::make_shared<CompVisVDenoiser>();
+                    break;
+                case EDM_V_PRED:
+                    LOG_INFO("running in v-prediction EDM mode");
+                    denoiser = std::make_shared<EDMVDenoiser>();
+                    break;
+                case SD3_FLOW_PRED: {
+                    LOG_INFO("running in FLOW mode");
+                    float shift = sd_ctx_params->flow_shift;
+                    if (shift == INFINITY) {
+                        shift = 3.0;
+                    }
+                    denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
                     break;
                 }
+                case FLUX_FLOW_PRED: {
+                    LOG_INFO("running in Flux FLOW mode");
+                    float shift = sd_ctx_params->flow_shift;
+                    if (shift == INFINITY) {
+                        shift = 3.0;
+                    }
+                    denoiser = std::make_shared<FluxFlowDenoiser>(shift);
+                    break;
+                }
+                default: {
+                    LOG_ERROR("Unknown parametrization %i", sd_ctx_params->prediction);
+                    return false;
+                }
             }
-            denoiser = std::make_shared<FluxFlowDenoiser>(shift);
-        } else if (sd_version_is_wan(version)) {
-            LOG_INFO("running in FLOW mode");
-            float shift = sd_ctx_params->flow_shift;
-            if (shift == INFINITY) {
-                shift = 5.0;
-            }
-            denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
-        } else if (sd_version_is_qwen_image(version)) {
-            LOG_INFO("running in FLOW mode");
-            float shift = sd_ctx_params->flow_shift;
-            if (shift == INFINITY) {
-                shift = 3.0;
-            }
-            denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
-        } else if (is_using_v_parameterization) {
-            LOG_INFO("running in v-prediction mode");
-            denoiser = std::make_shared<CompVisVDenoiser>();
-        } else if (is_using_edm_v_parameterization) {
-            LOG_INFO("running in v-prediction EDM mode");
-            denoiser = std::make_shared<EDMVDenoiser>();
         } else {
-            LOG_INFO("running in eps-prediction mode");
+            if (sd_version_is_sd2(version)) {
+                // check is_using_v_parameterization_for_sd2
+                if (is_using_v_parameterization_for_sd2(ctx, sd_version_is_inpaint(version))) {
+                    is_using_v_parameterization = true;
+                }
+            } else if (sd_version_is_sdxl(version)) {
+                if (model_loader.tensor_storages_types.find("edm_vpred.sigma_max") != model_loader.tensor_storages_types.end()) {
+                    // CosXL models
+                    // TODO: get sigma_min and sigma_max values from file
+                    is_using_edm_v_parameterization = true;
+                }
+                if (model_loader.tensor_storages_types.find("v_pred") != model_loader.tensor_storages_types.end()) {
+                    is_using_v_parameterization = true;
+                }
+            } else if (version == VERSION_SVD) {
+                // TODO: V_PREDICTION_EDM
+                is_using_v_parameterization = true;
+            }
+
+            if (sd_version_is_sd3(version)) {
+                LOG_INFO("running in FLOW mode");
+                float shift = sd_ctx_params->flow_shift;
+                if (shift == INFINITY) {
+                    shift = 3.0;
+                }
+                denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
+            } else if (sd_version_is_flux(version)) {
+                LOG_INFO("running in Flux FLOW mode");
+                float shift = 1.0f;  // TODO: validate
+                for (auto pair : model_loader.tensor_storages_types) {
+                    if (pair.first.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
+                        shift = 1.15f;
+                        break;
+                    }
+                }
+                denoiser = std::make_shared<FluxFlowDenoiser>(shift);
+            } else if (sd_version_is_wan(version)) {
+                LOG_INFO("running in FLOW mode");
+                float shift = sd_ctx_params->flow_shift;
+                if (shift == INFINITY) {
+                    shift = 5.0;
+                }
+                denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
+            } else if (sd_version_is_qwen_image(version)) {
+                LOG_INFO("running in FLOW mode");
+                float shift = sd_ctx_params->flow_shift;
+                if (shift == INFINITY) {
+                    shift = 3.0;
+                }
+                denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
+            } else if (is_using_v_parameterization) {
+                LOG_INFO("running in v-prediction mode");
+                denoiser = std::make_shared<CompVisVDenoiser>();
+            } else if (is_using_edm_v_parameterization) {
+                LOG_INFO("running in v-prediction EDM mode");
+                denoiser = std::make_shared<EDMVDenoiser>();
+            } else {
+                LOG_INFO("running in eps-prediction mode");
+            }
         }
 
         auto comp_vis_denoiser = std::dynamic_pointer_cast<CompVisDenoiser>(denoiser);
@@ -1941,6 +1981,31 @@ enum scheduler_t str_to_schedule(const char* str) {
     return SCHEDULE_COUNT;
 }
 
+const char* prediction_to_str[] = {
+    "default",
+    "eps",
+    "v",
+    "edm_v",
+    "sd3_flow",
+    "flux_flow",
+};
+
+const char* sd_prediction_name(enum prediction_t prediction) {
+    if (prediction < PREDICTION_COUNT) {
+        return prediction_to_str[prediction];
+    }
+    return NONE_STR;
+}
+
+enum prediction_t str_to_prediction(const char* str) {
+    for (int i = 0; i < PREDICTION_COUNT; i++) {
+        if (!strcmp(str, prediction_to_str[i])) {
+            return (enum prediction_t)i;
+        }
+    }
+    return PREDICTION_COUNT;
+}
+
 const char* preview_to_str[] = {
     "none",
     "proj",
@@ -1971,6 +2036,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->n_threads               = get_num_physical_cores();
     sd_ctx_params->wtype                   = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                = CUDA_RNG;
+    sd_ctx_params->prediction              = DEFAULT_PRED;
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
@@ -2010,6 +2076,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "n_threads: %d\n"
              "wtype: %s\n"
              "rng_type: %s\n"
+             "prediction: %s\n"
              "offload_params_to_cpu: %s\n"
              "keep_clip_on_cpu: %s\n"
              "keep_control_net_on_cpu: %s\n"
@@ -2038,6 +2105,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_ctx_params->n_threads,
              sd_type_name(sd_ctx_params->wtype),
              sd_rng_type_name(sd_ctx_params->rng_type),
+             sd_prediction_name(sd_ctx_params->prediction),
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
              BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
              BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),

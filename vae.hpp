@@ -530,6 +530,7 @@ struct VAE : public GGMLRunner {
                          struct ggml_context* output_ctx)                                                         = 0;
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) = 0;
     virtual void enable_conv2d_direct(){};
+    virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
 };
 
 struct AutoEncoderKL : public VAE {
@@ -554,6 +555,17 @@ struct AutoEncoderKL : public VAE {
             if (block->get_desc() == "Conv2d") {
                 auto conv_block = (Conv2d*)block;
                 conv_block->enable_direct();
+            }
+        }
+    }
+
+    void set_conv2d_scale(float scale) {
+        std::vector<GGMLBlock*> blocks;
+        ae.get_all_blocks(blocks);
+        for (auto block : blocks) {
+            if (block->get_desc() == "Conv2d") {
+                auto conv_block = (Conv2d*)block;
+                conv_block->set_scale(scale);
             }
         }
     }

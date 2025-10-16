@@ -64,6 +64,16 @@ enum scheduler_t {
     SCHEDULE_COUNT
 };
 
+enum prediction_t {
+    DEFAULT_PRED,
+    EPS_PRED,
+    V_PRED,
+    EDM_V_PRED,
+    SD3_FLOW_PRED,
+    FLUX_FLOW_PRED,
+    PREDICTION_COUNT
+};
+
 // same as enum ggml_type
 enum sd_type_t {
     SD_TYPE_F32  = 0,
@@ -154,6 +164,7 @@ typedef struct {
     int n_threads;
     enum sd_type_t wtype;
     enum rng_type_t rng_type;
+    enum prediction_t prediction;
     bool offload_params_to_cpu;
     bool keep_clip_on_cpu;
     bool keep_control_net_on_cpu;
@@ -162,6 +173,7 @@ typedef struct {
     bool tae_preview_only;
     bool diffusion_conv_direct;
     bool vae_conv_direct;
+    bool force_sdxl_vae_conv_scale;
     bool chroma_use_dit_mask;
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
@@ -266,6 +278,8 @@ SD_API const char* sd_sample_method_name(enum sample_method_t sample_method);
 SD_API enum sample_method_t str_to_sample_method(const char* str);
 SD_API const char* sd_schedule_name(enum scheduler_t scheduler);
 SD_API enum scheduler_t str_to_schedule(const char* str);
+SD_API const char* sd_prediction_name(enum prediction_t prediction);
+SD_API enum prediction_t str_to_prediction(const char* str);
 SD_API const char* sd_preview_name(enum preview_t preview);
 SD_API enum preview_t str_to_preview(const char* str);
 

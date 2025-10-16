@@ -33,6 +33,7 @@ option(SD_SYCL                       "sd: sycl backend" OFF)
 option(SD_MUSA                       "sd: musa backend" OFF)
 option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
 option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
+option(SD_BUILD_SHARED_GGML_LIB      "sd: build ggml as a separate shared lib" OFF)
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
@@ -86,18 +87,21 @@ file(GLOB SD_LIB_SOURCES
     "*.hpp"
 )
 
-# we can get only one share lib
 if(SD_BUILD_SHARED_LIBS)
     message("-- Build shared library")
     message(${SD_LIB_SOURCES})
-    set(BUILD_SHARED_LIBS OFF)
+    if(NOT SD_BUILD_SHARED_GGML_LIB)
+        set(BUILD_SHARED_LIBS OFF)
+    endif()
     add_library(${SD_LIB} SHARED ${SD_LIB_SOURCES})
     add_definitions(-DSD_BUILD_SHARED_LIB)
     target_compile_definitions(${SD_LIB} PRIVATE -DSD_BUILD_DLL)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
     message("-- Build static library")
-    set(BUILD_SHARED_LIBS OFF)
+    if(NOT SD_BUILD_SHARED_GGML_LIB)
+        set(BUILD_SHARED_LIBS OFF)
+    endif()
     add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
 endif()
 
