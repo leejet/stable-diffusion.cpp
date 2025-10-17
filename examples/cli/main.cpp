@@ -80,7 +80,8 @@ struct SDParams {
     std::string control_image_path;
     std::vector<std::string> ref_image_paths;
     std::string control_video_path;
-    bool increase_ref_index = false;
+    bool auto_resize_ref_image = true;
+    bool increase_ref_index    = false;
 
     std::string prompt;
     std::string negative_prompt;
@@ -175,6 +176,7 @@ void print_params(SDParams params) {
         printf("        %s\n", path.c_str());
     };
     printf("    control_video_path:                %s\n", params.control_video_path.c_str());
+    printf("    auto_resize_ref_image:             %s\n", params.auto_resize_ref_image ? "true" : "false");
     printf("    increase_ref_index:                %s\n", params.increase_ref_index ? "true" : "false");
     printf("    offload_params_to_cpu:             %s\n", params.offload_params_to_cpu ? "true" : "false");
     printf("    clip_on_cpu:                       %s\n", params.clip_on_cpu ? "true" : "false");
@@ -244,9 +246,10 @@ void print_usage(int argc, const char* argv[]) {
     printf("  -i, --end-img [IMAGE]              path to the end image, required by flf2v\n");
     printf("  --control-image [IMAGE]            path to image condition, control net\n");
     printf("  -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times) \n");
+    printf("  --disable-auto-resize-ref-image    disable auto resize of ref images\n");
     printf("  --control-video [PATH]             path to control video frames, It must be a directory path.\n");
     printf("                                     The video frames inside should be stored as images in lexicographical (character) order\n");
-    printf("                                     For example, if the control video path is `frames`, the directory contain images such as 00.png, 01.png, … etc.\n");
+    printf("                                     For example, if the control video path is `frames`, the directory contain images such as 00.png, 01.png, ... etc.\n");
     printf("  --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).\n");
     printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
     printf("  -p, --prompt [PROMPT]              the prompt to render\n");
@@ -579,6 +582,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--chroma-disable-dit-mask", "", false, &params.chroma_use_dit_mask},
         {"", "--chroma-enable-t5-mask", "", true, &params.chroma_use_t5_mask},
         {"", "--increase-ref-index", "", true, &params.increase_ref_index},
+        {"", "--disable-auto-resize-ref-image", "", false, &params.auto_resize_ref_image},
     };
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
@@ -1428,6 +1432,7 @@ int main(int argc, const char* argv[]) {
                 init_image,
                 ref_images.data(),
                 (int)ref_images.size(),
+                params.auto_resize_ref_image,
                 params.increase_ref_index,
                 mask_image,
                 params.width,

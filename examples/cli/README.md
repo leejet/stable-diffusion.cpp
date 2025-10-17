@@ -35,8 +35,9 @@ arguments:
   -r, --ref-image [PATH]             reference image for Flux Kontext models (can be used multiple times)
   --control-video [PATH]             path to control video frames, It must be a directory path.
                                      The video frames inside should be stored as images in lexicographical (character) order
-                                     For example, if the control video path is `frames`, the directory contain images such as 00.png, 01.png, 鈥?etc.
+                                     For example, if the control video path is `frames`, the directory contain images such as 00.png, 01.png, ... etc.
   --increase-ref-index               automatically increase the indices of references images based on the order they are listed (starting with 1).
+  --disable-auto-resize-ref-image    disable auto resize of ref images
   -o, --output OUTPUT                path to write result image to (default: ./output.png)
   -p, --prompt [PROMPT]              the prompt to render
   -n, --negative-prompt PROMPT       the negative prompt (default: "")
