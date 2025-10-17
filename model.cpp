@@ -1892,24 +1892,25 @@ SDVersion ModelLoader::get_sd_version() {
     return VERSION_COUNT;
 }
 
-ggml_type ModelLoader::get_sd_wtype() {
+std::map<ggml_type, uint32_t> ModelLoader::get_wtype_stat() {
+    std::map<ggml_type, uint32_t> wtype_stat;
     for (auto& tensor_storage : tensor_storages) {
         if (is_unused_tensor(tensor_storage.name)) {
             continue;
         }
 
-        if (ggml_is_quantized(tensor_storage.type)) {
-            return tensor_storage.type;
-        }
-
-        if (tensor_should_be_converted(tensor_storage, GGML_TYPE_Q4_K)) {
-            return tensor_storage.type;
+        auto iter = wtype_stat.find(tensor_storage.type);
+        if (iter != wtype_stat.end()) {
+            iter->second++;
+        } else {
+            wtype_stat[tensor_storage.type] = 1;
         }
     }
-    return GGML_TYPE_COUNT;
+    return wtype_stat;
 }
 
-ggml_type ModelLoader::get_conditioner_wtype() {
+std::map<ggml_type, uint32_t> ModelLoader::get_conditioner_wtype_stat() {
+    std::map<ggml_type, uint32_t> wtype_stat;
     for (auto& tensor_storage : tensor_storages) {
         if (is_unused_tensor(tensor_storage.name)) {
             continue;
@@ -1922,18 +1923,18 @@ ggml_type ModelLoader::get_conditioner_wtype() {
             continue;
         }
 
-        if (ggml_is_quantized(tensor_storage.type)) {
-            return tensor_storage.type;
-        }
-
-        if (tensor_should_be_converted(tensor_storage, GGML_TYPE_Q4_K)) {
-            return tensor_storage.type;
+        auto iter = wtype_stat.find(tensor_storage.type);
+        if (iter != wtype_stat.end()) {
+            iter->second++;
+        } else {
+            wtype_stat[tensor_storage.type] = 1;
         }
     }
-    return GGML_TYPE_COUNT;
+    return wtype_stat;
 }
 
-ggml_type ModelLoader::get_diffusion_model_wtype() {
+std::map<ggml_type, uint32_t> ModelLoader::get_diffusion_model_wtype_stat() {
+    std::map<ggml_type, uint32_t> wtype_stat;
     for (auto& tensor_storage : tensor_storages) {
         if (is_unused_tensor(tensor_storage.name)) {
             continue;
@@ -1943,18 +1944,18 @@ ggml_type ModelLoader::get_diffusion_model_wtype() {
             continue;
         }
 
-        if (ggml_is_quantized(tensor_storage.type)) {
-            return tensor_storage.type;
-        }
-
-        if (tensor_should_be_converted(tensor_storage, GGML_TYPE_Q4_K)) {
-            return tensor_storage.type;
+        auto iter = wtype_stat.find(tensor_storage.type);
+        if (iter != wtype_stat.end()) {
+            iter->second++;
+        } else {
+            wtype_stat[tensor_storage.type] = 1;
         }
     }
-    return GGML_TYPE_COUNT;
+    return wtype_stat;
 }
 
-ggml_type ModelLoader::get_vae_wtype() {
+std::map<ggml_type, uint32_t> ModelLoader::get_vae_wtype_stat() {
+    std::map<ggml_type, uint32_t> wtype_stat;
     for (auto& tensor_storage : tensor_storages) {
         if (is_unused_tensor(tensor_storage.name)) {
             continue;
@@ -1965,15 +1966,14 @@ ggml_type ModelLoader::get_vae_wtype() {
             continue;
         }
 
-        if (ggml_is_quantized(tensor_storage.type)) {
-            return tensor_storage.type;
-        }
-
-        if (tensor_should_be_converted(tensor_storage, GGML_TYPE_Q4_K)) {
-            return tensor_storage.type;
+        auto iter = wtype_stat.find(tensor_storage.type);
+        if (iter != wtype_stat.end()) {
+            iter->second++;
+        } else {
+            wtype_stat[tensor_storage.type] = 1;
         }
     }
-    return GGML_TYPE_COUNT;
+    return wtype_stat;
 }
 
 void ModelLoader::set_wtype_override(ggml_type wtype, std::string prefix) {

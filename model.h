@@ -259,10 +259,10 @@ public:
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     bool model_is_unet();
     SDVersion get_sd_version();
-    ggml_type get_sd_wtype();
-    ggml_type get_conditioner_wtype();
-    ggml_type get_diffusion_model_wtype();
-    ggml_type get_vae_wtype();
+    std::map<ggml_type, uint32_t> get_wtype_stat();
+    std::map<ggml_type, uint32_t> get_conditioner_wtype_stat();
+    std::map<ggml_type, uint32_t> get_diffusion_model_wtype_stat();
+    std::map<ggml_type, uint32_t> get_vae_wtype_stat();
     void set_wtype_override(ggml_type wtype, std::string prefix = "");
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
