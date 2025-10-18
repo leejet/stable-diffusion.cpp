@@ -161,7 +161,7 @@ namespace WAN {
                     int idx = feat_idx;
                     feat_idx += 1;
                     if (chunk_idx == 0) {
-                        // feat_cache[idx] == NULL, pass
+                        // feat_cache[idx] == nullptr, pass
                     } else {
                         auto time_conv = std::dynamic_pointer_cast<CausalConv3d>(blocks["time_conv"]);
 
@@ -568,7 +568,7 @@ namespace WAN {
 
             x = ggml_nn_attention(ctx, q, k, v, false);  // [t, h * w, c]
             // v      = ggml_cont(ctx, ggml_torch_permute(ctx, v, 1, 0, 2, 3));  // [t, h * w, c]
-            // x = ggml_nn_attention_ext(ctx, q, k, v, q->ne[2], NULL, false, false, true);
+            // x = ggml_nn_attention_ext(ctx, q, k, v, q->ne[2], nullptr, false, false, true);
 
             x = ggml_nn_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));  // [t, c, h * w]
             x = ggml_reshape_4d(ctx, x, w, h, c, n);                  // [t, c, h, w]
@@ -1252,7 +1252,7 @@ namespace WAN {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             ggml_backend_t backend            = ggml_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
-            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, false, {}, "", false, VERSION_WAN2_2_TI2V);
+            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, false, String2GGMLType{}, "", false, VERSION_WAN2_2_TI2V);
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -2176,7 +2176,7 @@ namespace WAN {
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, wan_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
-            // pe->data = NULL;
+            // pe->data = nullptr;
             set_backend_tensor_data(pe, pe_vec.data());
 
             if (c_concat != nullptr) {

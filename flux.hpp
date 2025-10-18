@@ -783,7 +783,7 @@ namespace Flux {
             // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
             // timestep: (N,) tensor of diffusion timesteps
             // context: (N, L, D)
-            // c_concat: NULL, or for (N,C+M, H, W) for Fill
+            // c_concat: nullptr, or for (N,C+M, H, W) for Fill
             // y: (N, adm_in_channels) tensor of class labels
             // guidance: (N,)
             // pe: (L, d_head/2, 2, 2)
@@ -988,7 +988,7 @@ namespace Flux {
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
-            // pe->data = NULL;
+            // pe->data = nullptr;
             set_backend_tensor_data(pe, pe_vec.data());
 
             struct ggml_tensor* out = flux.forward(compute_ctx,
