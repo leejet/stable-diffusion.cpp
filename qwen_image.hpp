@@ -534,7 +534,7 @@ namespace Qwen {
                     continue;
                 }
             }
-            LOG_ERROR("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
+            LOG_INFO("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
             qwen_image = QwenImageModel(qwen_image_params);
             qwen_image.init(params_ctx, tensor_types, prefix);
         }
