@@ -23,9 +23,9 @@
 extern "C" {
 #endif
 
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
 enum rng_type_t {
     STD_DEFAULT_RNG,
