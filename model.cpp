@@ -869,7 +869,6 @@ uint16_t f8_e5m2_to_f16(uint8_t fp8) {
     }
 
     if (exponent == 0) {  // subnormal numbers
-        fp16_exponent = 0;
         fp16_mantissa = (mantissa << 8);
         return fp16_sign | fp16_mantissa;
     }

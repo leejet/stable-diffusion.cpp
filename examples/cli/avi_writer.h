@@ -130,7 +130,7 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
     write_u32_le(f, 0);                   // Colors important
 
     // 'movi' LIST (video frames)
-    long movi_list_pos = ftell(f);
+    // long movi_list_pos = ftell(f);
     fwrite("LIST", 4, 1, f);
     long movi_size_pos = ftell(f);
     write_u32_le(f, 0);  // Placeholder for movi size

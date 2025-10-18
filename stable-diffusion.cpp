@@ -2185,7 +2185,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     }
 
     // Get learned condition
-    t0                               = ggml_time_ms();
     condition_params.text            = prompt;
     condition_params.zero_out_masked = false;
     SDCondition cond                 = sd_ctx->sd->cond_stage_model->get_learned_condition(work_ctx,
@@ -2751,7 +2750,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             }
         }
         LOG_DEBUG("switching from high noise model at step %d", high_noise_sample_steps);
-        sample_steps = total_steps - high_noise_sample_steps;
     }
 
     struct ggml_init_params params;
