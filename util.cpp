@@ -1,8 +1,8 @@
 #include "util.h"
-#include <stdarg.h>
 #include <algorithm>
 #include <cmath>
 #include <codecvt>
+#include <cstdarg>
 #include <fstream>
 #include <locale>
 #include <sstream>
@@ -64,7 +64,7 @@ std::string format(const char* fmt, ...) {
     va_list ap2;
     va_start(ap, fmt);
     va_copy(ap2, ap);
-    int size = vsnprintf(NULL, 0, fmt, ap);
+    int size = vsnprintf(nullptr, 0, fmt, ap);
     std::vector<char> buf(size + 1);
     int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
     va_end(ap2);
@@ -170,11 +170,11 @@ int32_t get_num_physical_cores() {
 #elif defined(__APPLE__) && defined(__MACH__)
     int32_t num_physical_cores;
     size_t len = sizeof(num_physical_cores);
-    int result = sysctlbyname("hw.perflevel0.physicalcpu", &num_physical_cores, &len, NULL, 0);
+    int result = sysctlbyname("hw.perflevel0.physicalcpu", &num_physical_cores, &len, nullptr, 0);
     if (result == 0) {
         return num_physical_cores;
     }
-    result = sysctlbyname("hw.physicalcpu", &num_physical_cores, &len, NULL, 0);
+    result = sysctlbyname("hw.physicalcpu", &num_physical_cores, &len, nullptr, 0);
     if (result == 0) {
         return num_physical_cores;
     }
@@ -185,8 +185,8 @@ int32_t get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
-static sd_progress_cb_t sd_progress_cb = NULL;
-void* sd_progress_cb_data              = NULL;
+static sd_progress_cb_t sd_progress_cb = nullptr;
+void* sd_progress_cb_data              = nullptr;
 
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
@@ -296,8 +296,8 @@ std::string trim(const std::string& s) {
     return rtrim(ltrim(s));
 }
 
-static sd_log_cb_t sd_log_cb = NULL;
-void* sd_log_cb_data         = NULL;
+static sd_log_cb_t sd_log_cb = nullptr;
+void* sd_log_cb_data         = nullptr;
 
 #define LOG_BUFFER_SIZE 4096
 
