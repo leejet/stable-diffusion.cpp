@@ -1970,6 +1970,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "seed: %" PRId64
              "batch_count: %d\n"
              "ref_images_count: %d\n"
+             "auto_resize_ref_image: %s\n"
              "increase_ref_index: %s\n"
              "control_strength: %.2f\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
@@ -1984,6 +1985,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->seed,
              sd_img_gen_params->batch_count,
              sd_img_gen_params->ref_images_count,
+             BOOL_STR(sd_img_gen_params->auto_resize_ref_image),
              BOOL_STR(sd_img_gen_params->increase_ref_index),
              sd_img_gen_params->control_strength,
              sd_img_gen_params->pm_params.style_strength,
@@ -2624,14 +2626,20 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     std::vector<ggml_tensor*> ref_latents;
     for (int i = 0; i < ref_images.size(); i++) {
         ggml_tensor* img;
-        if (sd_version_is_qwen_image(sd_ctx->sd->version)) {
+        if (sd_img_gen_params->auto_resize_ref_image) {
+            LOG_DEBUG("auto resize ref images");
             sd_image_f32_t ref_image = sd_image_t_to_sd_image_f32_t(*ref_images[i]);
             int VAE_IMAGE_SIZE       = std::min(1024 * 1024, width * height);
             double vae_width         = sqrt(VAE_IMAGE_SIZE * ref_image.width / ref_image.height);
             double vae_height        = vae_width * ref_image.height / ref_image.width;
 
-            vae_height = round(vae_height / 32) * 32;
-            vae_width  = round(vae_width / 32) * 32;
+            int factor = 16;
+            if (sd_version_is_qwen_image(sd_ctx->sd->version)) {
+                factor = 32;
+            }
+
+            vae_height = round(vae_height / factor) * factor;
+            vae_width  = round(vae_width / factor) * factor;
 
             sd_image_f32_t resized_image = resize_sd_image_f32_t(ref_image, static_cast<int>(vae_width), static_cast<int>(vae_height));
             free(ref_image.data);
