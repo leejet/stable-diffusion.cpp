@@ -1858,7 +1858,12 @@ SDVersion ModelLoader::get_sd_version() {
         if (is_ip2p) {
             return VERSION_SDXL_PIX2PIX;
         }
-        return VERSION_SDXL;
+        for (auto& tensor_storage : tensor_storages) {
+            if (tensor_storage.name.find("model.diffusion_model.middle_block.1") != std::string::npos) {
+                return VERSION_SDXL;      // found a missing tensor in SSD1B, so it is SDXL
+            }
+        }
+       	return VERSION_SDXL_SSD1B;
     }
 
     if (is_flux) {

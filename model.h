@@ -28,6 +28,7 @@ enum SDVersion {
     VERSION_SDXL,
     VERSION_SDXL_INPAINT,
     VERSION_SDXL_PIX2PIX,
+    VERSION_SDXL_SSD1B,
     VERSION_SVD,
     VERSION_SD3,
     VERSION_FLUX,
@@ -56,7 +57,7 @@ static inline bool sd_version_is_sd2(SDVersion version) {
 }
 
 static inline bool sd_version_is_sdxl(SDVersion version) {
-    if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT || version == VERSION_SDXL_PIX2PIX) {
+    if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT || version == VERSION_SDXL_PIX2PIX || version == VERSION_SDXL_SSD1B) {
         return true;
     }
     return false;
