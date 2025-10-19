@@ -668,7 +668,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          &params.sample_params.shifted_timestep},
         {"",
          "--preview-interval",
-         "How often to save the image preview",
+         "interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at every step)",
           &params.preview_interval},
     };
 
@@ -826,7 +826,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          false, &params.auto_resize_ref_image},
         {"",
          "--taesd-preview-only",
-         "prevents usage of taesd for decoding the final image. (for use with --preview " + previews_str[PREVIEW_TAE] + ")", 
+         std::string("prevents usage of taesd for decoding the final image. (for use with --preview ") + previews_str[PREVIEW_TAE] + ")", 
          false, &params.taesd_preview},
     };
 
@@ -1157,7 +1157,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--vae-relative-tile-size",
          "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
          on_relative_tile_size_arg},
-        {"", "--preview", "preview method. must be one of " previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "(default is " + previews_str[PREVIEW_NONE] + "(disabled))\n", on_preview_arg},
+        {"",
+         "--preview",
+         std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[PREVIEW_NONE] + ")\n",
+         on_preview_arg},
     };
 
     if (!parse_options(argc, argv, options)) {
