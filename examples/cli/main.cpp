@@ -611,6 +611,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--upscale-tile",
          "tile size for ESRGAN upscaling (default: 128)",
          &params.upscale_tile_size},
+        {"","--upscale-tile", "", &params.upscale_tile_size},
         {"-H",
          "--height",
          "image height, in pixel space (default: 512)",
