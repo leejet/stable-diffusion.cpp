@@ -623,6 +623,14 @@ std::string convert_tensor_name(std::string name) {
     if (starts_with(name, "diffusion_model")) {
         name = "model." + name;
     }
+    if (starts_with(name, "model.diffusion_model.up_blocks.0.attentions.0.")) {
+        name.replace(0,sizeof("model.diffusion_model.up_blocks.0.attentions.0.") - 1,
+                       "model.diffusion_model.output_blocks.0.1.");
+    }
+    if (starts_with(name, "model.diffusion_model.up_blocks.0.attentions.1.")) {
+        name.replace(0,sizeof("model.diffusion_model.up_blocks.0.attentions.1.") - 1,
+                       "model.diffusion_model.output_blocks.1.1.");
+    }
     // size_t pos = name.find("lora_A");
     // if (pos != std::string::npos) {
     //     name.replace(pos, strlen("lora_A"), "lora_up");
@@ -1887,7 +1895,12 @@ SDVersion ModelLoader::get_sd_version() {
         if (is_ip2p) {
             return VERSION_SD1_PIX2PIX;
         }
-        return VERSION_SD1;
+        for (auto& tensor_storage : tensor_storages) {
+            if (tensor_storage.name.find("model.diffusion_model.middle_block") != std::string::npos) {
+                return VERSION_SD1;      // found a middle block, so it is SD1
+            }
+        }
+        return VERSION_SD1_TINY_UNET;
     } else if (token_embedding_weight.ne[0] == 1024) {
         if (is_inpaint) {
             return VERSION_SD2_INPAINT;

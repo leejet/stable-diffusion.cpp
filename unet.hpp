@@ -204,6 +204,9 @@ public:
             adm_in_channels   = 768;
             num_head_channels = 64;
             num_heads         = -1;
+        } else if (version == VERSION_SD1_TINY_UNET) {
+            num_res_blocks    = 1;
+            channel_mult      = {1, 2, 4};
         }
         if (sd_version_is_inpaint(version)) {
             in_channels = 9;
@@ -281,6 +284,9 @@ public:
                                                                                       context_dim));
                 }
                 input_block_chans.push_back(ch);
+                if (version == VERSION_SD1_TINY_UNET) {
+                    input_block_idx++;
+                }
             }
             if (i != len_mults - 1) {
                 input_block_idx += 1;
@@ -299,14 +305,16 @@ public:
             d_head = num_head_channels;
             n_head = ch / d_head;
         }
-        blocks["middle_block.0"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
-        if (version != VERSION_SDXL_SSD1B) {
-            blocks["middle_block.1"] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
+        if (version != VERSION_SD1_TINY_UNET) {
+            blocks["middle_block.0"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
+            if (version != VERSION_SDXL_SSD1B) {
+                blocks["middle_block.1"] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
                                                                                       n_head,
                                                                                       d_head,
                                                                                       transformer_depth[transformer_depth.size() - 1],
                                                                                       context_dim));
-            blocks["middle_block.2"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
+                blocks["middle_block.2"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
+            }
         }
         // output_blocks
         int output_block_idx = 0;
@@ -340,6 +348,12 @@ public:
                 }
 
                 if (i > 0 && j == num_res_blocks) {
+                    if (version == VERSION_SD1_TINY_UNET) {
+                        output_block_idx++;
+                        if (output_block_idx == 2) {
+                            up_sample_idx=1;
+                        }
+                    }
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx);
                     blocks[name]     = std::shared_ptr<GGMLBlock>(new UpSampleBlock(ch, ch));
 
@@ -473,6 +487,9 @@ public:
                 }
                 hs.push_back(h);
             }
+            if (version == VERSION_SD1_TINY_UNET) {
+                input_block_idx++;
+            }
             if (i != len_mults - 1) {
                 ds *= 2;
                 input_block_idx += 1;
@@ -487,10 +504,12 @@ public:
         // [N, 4*model_channels, h/8, w/8]
 
         // middle_block
-        h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);                      // [N, 4*model_channels, h/8, w/8]
-        if (version != VERSION_SDXL_SSD1B) {
-            h = attention_layer_forward("middle_block.1", ctx, backend, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
-            h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);                      // [N, 4*model_channels, h/8, w/8]
+        if (version != VERSION_SD1_TINY_UNET) {
+            h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);                      // [N, 4*model_channels, h/8, w/8]
+            if (version != VERSION_SDXL_SSD1B) {
+                h = attention_layer_forward("middle_block.1", ctx, backend, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
+                h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);                      // [N, 4*model_channels, h/8, w/8]
+            }
         }
         if (controls.size() > 0) {
             auto cs = ggml_scale_inplace(ctx, controls[controls.size() - 1], control_strength);
@@ -527,6 +546,12 @@ public:
                 }
 
                 if (i > 0 && j == num_res_blocks) {
+                    if (version == VERSION_SD1_TINY_UNET) {
+                        output_block_idx++;
+                        if (output_block_idx == 2) {
+                            up_sample_idx=1;
+                        }
+                    }
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx);
                     auto block       = std::dynamic_pointer_cast<UpSampleBlock>(blocks[name]);
 

@@ -28,6 +28,7 @@ const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
     "Instruct-Pix2Pix",
+    "SD 1.x Tiny UNet",
     "SD 2.x",
     "SD 2.x Inpaint",
     "SDXL",
