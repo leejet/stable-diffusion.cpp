@@ -1539,10 +1539,6 @@ public:
             if (denoise_mask != nullptr) {
                 apply_mask(denoised, init_latent, denoise_mask);
             }
-            if (step > 0) {
-                pretty_progress(step, (int)steps, (t1 - t0) / 1000000.f);
-                // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
-            }
             auto sd_preview_cb   = sd_get_preview_callback();
             auto sd_preview_mode = sd_get_preview_mode();
             if (sd_preview_cb != NULL) {
