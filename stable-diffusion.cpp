@@ -1251,7 +1251,7 @@ public:
             }
 
             sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
-            print_ggml_tensor(result,true);
+            // print_ggml_tensor(result,true);
             for (size_t i = 0; i < frames; i++) {
                 images[i].width   = result->ne[0];
                 images[i].height  = result->ne[1];
