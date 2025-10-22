@@ -1417,13 +1417,7 @@ public:
         } else {
             init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
         }
-        if (sd_version_is_sd3(version)) {
-            ggml_set_f32(init_latent, 0.0609f);
-        } else if (sd_version_is_flux(version)) {
-            ggml_set_f32(init_latent, 0.1159f);
-        } else {
-            ggml_set_f32(init_latent, 0.f);
-        }
+        ggml_set_f32(init_latent, shift_factor);
         return init_latent;
     }
 
