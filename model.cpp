@@ -1766,7 +1766,6 @@ bool ModelLoader::model_is_unet() {
 
 SDVersion ModelLoader::get_sd_version() {
     TensorStorage token_embedding_weight, input_block_weight;
-    bool input_block_checked = false;
 
     bool has_multiple_encoders = false;
     bool is_unet               = false;
@@ -1778,12 +1777,12 @@ SDVersion ModelLoader::get_sd_version() {
     bool has_img_emb                 = false;
 
     for (auto& tensor_storage : tensor_storages) {
-        if (!(is_xl || is_flux)) {
+        if (!(is_xl)) {
             if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
                 is_flux = true;
-                if (input_block_checked) {
-                    break;
-                }
+            }
+            if (tensor_storage.name.find("model.diffusion_model.nerf_final_layer_conv.") != std::string::npos) {
+                return VERSION_CHROMA_RADIANCE;
             }
             if (tensor_storage.name.find("model.diffusion_model.joint_blocks.") != std::string::npos) {
                 return VERSION_SD3;
@@ -1800,22 +1799,19 @@ SDVersion ModelLoader::get_sd_version() {
             if (tensor_storage.name.find("model.diffusion_model.img_emb") != std::string::npos) {
                 has_img_emb = true;
             }
-            if (tensor_storage.name.find("model.diffusion_model.input_blocks.") != std::string::npos || tensor_storage.name.find("unet.down_blocks.") != std::string::npos) {
+            if (tensor_storage.name.find("model.diffusion_model.input_blocks.") != std::string::npos ||
+                tensor_storage.name.find("unet.down_blocks.") != std::string::npos) {
                 is_unet = true;
                 if (has_multiple_encoders) {
                     is_xl = true;
-                    if (input_block_checked) {
-                        break;
-                    }
                 }
             }
-            if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos || tensor_storage.name.find("cond_stage_model.1") != std::string::npos || tensor_storage.name.find("te.1") != std::string::npos) {
+            if (tensor_storage.name.find("conditioner.embedders.1") != std::string::npos ||
+                tensor_storage.name.find("cond_stage_model.1") != std::string::npos ||
+                tensor_storage.name.find("te.1") != std::string::npos) {
                 has_multiple_encoders = true;
                 if (is_unet) {
                     is_xl = true;
-                    if (input_block_checked) {
-                        break;
-                    }
                 }
             }
             if (tensor_storage.name.find("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") != std::string::npos) {
@@ -1831,12 +1827,10 @@ SDVersion ModelLoader::get_sd_version() {
             token_embedding_weight = tensor_storage;
             // break;
         }
-        if (tensor_storage.name == "model.diffusion_model.input_blocks.0.0.weight" || tensor_storage.name == "model.diffusion_model.img_in.weight" || tensor_storage.name == "unet.conv_in.weight") {
-            input_block_weight  = tensor_storage;
-            input_block_checked = true;
-            if (is_xl || is_flux) {
-                break;
-            }
+        if (tensor_storage.name == "model.diffusion_model.input_blocks.0.0.weight" ||
+            tensor_storage.name == "model.diffusion_model.img_in.weight" ||
+            tensor_storage.name == "unet.conv_in.weight") {
+            input_block_weight = tensor_storage;
         }
     }
     if (is_wan) {
