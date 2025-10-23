@@ -958,9 +958,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_linear(struct ggml_context* ctx,
         // workaround: avoid ggml cuda error
         int64_t ne2 = x->ne[2];
         int64_t ne3 = x->ne[3];
-        x = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1]*x->ne[2]*x->ne[3]);
-        x = ggml_mul_mat(ctx, w, x);
-        x = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1]/ne2/ne3, ne2, ne3);
+        x           = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1] * x->ne[2] * x->ne[3]);
+        x           = ggml_mul_mat(ctx, w, x);
+        x           = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1] / ne2 / ne3, ne2, ne3);
     } else {
         x = ggml_mul_mat(ctx, w, x);
     }
