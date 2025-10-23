@@ -765,11 +765,14 @@ public:
                 denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
             } else if (sd_version_is_flux(version)) {
                 LOG_INFO("running in Flux FLOW mode");
-                float shift = 1.0f;  // TODO: validate
-                for (auto pair : model_loader.tensor_storages_types) {
-                    if (pair.first.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
-                        shift = 1.15f;
-                        break;
+                float shift = sd_ctx_params->flow_shift;
+                if (shift == INFINITY) {
+                    shift = 1.0f;  // TODO: validate
+                    for (auto pair : model_loader.tensor_storages_types) {
+                        if (pair.first.find("model.diffusion_model.guidance_in.in_layer.weight") != std::string::npos) {
+                            shift = 1.15f;
+                            break;
+                        }
                     }
                 }
                 denoiser = std::make_shared<FluxFlowDenoiser>(shift);
