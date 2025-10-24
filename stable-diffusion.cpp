@@ -189,7 +189,7 @@ public:
         use_tiny_autoencoder    = taesd_path.size() > 0;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
         circular_pad            = sd_ctx_params->circular_pad;
-        sd_global_circular_padding_enabled() = circular_pad;
+        sd_set_circular_padding_enabled(circular_pad);
         if (circular_pad) {
             LOG_INFO("Using circular padding for convolutions");
         }

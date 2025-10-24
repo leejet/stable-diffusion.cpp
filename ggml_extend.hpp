@@ -19,6 +19,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <atomic>
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -60,9 +61,17 @@
 #define SD_UNUSED(x) (void)(x)
 #endif
 
-inline bool& sd_global_circular_padding_enabled() {
-    static bool enabled = false;
+inline std::atomic<bool>& sd_circular_padding_flag() {
+    static std::atomic<bool> enabled{false};
     return enabled;
+}
+
+inline void sd_set_circular_padding_enabled(bool enabled) {
+    sd_circular_padding_flag().store(enabled, std::memory_order_relaxed);
+}
+
+inline bool sd_is_circular_padding_enabled() {
+    return sd_circular_padding_flag().load(std::memory_order_relaxed);
 }
 
 __STATIC_INLINE__ struct ggml_tensor* sd_pad(struct ggml_context* ctx,
@@ -71,7 +80,7 @@ __STATIC_INLINE__ struct ggml_tensor* sd_pad(struct ggml_context* ctx,
                                              int p1,
                                              int p2,
                                              int p3) {
-    if (sd_global_circular_padding_enabled()) {
+    if (sd_is_circular_padding_enabled()) {
         return ggml_pad_circular(ctx, a, 0, p0, 0, p1, 0, p2, 0, p3);
     }
     return ggml_pad(ctx, a, p0, p1, p2, p3);
@@ -87,7 +96,7 @@ __STATIC_INLINE__ struct ggml_tensor* sd_pad_ext(struct ggml_context* ctx,
                                                  int rp2,
                                                  int lp3,
                                                  int rp3) {
-    if (sd_global_circular_padding_enabled()) {
+    if (sd_is_circular_padding_enabled()) {
         return ggml_pad_circular(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
     }
     return ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
@@ -1019,7 +1028,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d(struct ggml_context* ctx,
     if (scale != 1.f) {
         x = ggml_scale(ctx, x, scale);
     }
-    const bool use_circular = sd_global_circular_padding_enabled() && (p0 != 0 || p1 != 0);
+    const bool use_circular = sd_is_circular_padding_enabled() && (p0 != 0 || p1 != 0);
     const bool is_depthwise = (w->ne[2] == 1 && x->ne[2] == w->ne[3]);
     if (direct) {
         if (use_circular) {
