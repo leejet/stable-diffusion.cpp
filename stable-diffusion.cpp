@@ -114,6 +114,7 @@ public:
     bool use_tiny_autoencoder            = false;
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
+    bool circular_pad                    = false;
     bool stacked_id                      = false;
 
     bool is_using_v_parameterization     = false;
@@ -187,6 +188,11 @@ public:
         taesd_path              = SAFE_STR(sd_ctx_params->taesd_path);
         use_tiny_autoencoder    = taesd_path.size() > 0;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
+        circular_pad            = sd_ctx_params->circular_pad;
+        sd_global_circular_padding_enabled() = circular_pad;
+        if (circular_pad) {
+            LOG_INFO("Using circular padding for convolutions");
+        }
 
         if (sd_ctx_params->rng_type == STD_DEFAULT_RNG) {
             rng = std::make_shared<STDDefaultRNG>();
@@ -1820,6 +1826,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->keep_control_net_on_cpu = false;
     sd_ctx_params->keep_vae_on_cpu         = false;
     sd_ctx_params->diffusion_flash_attn    = false;
+    sd_ctx_params->circular_pad            = false;
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
@@ -1860,6 +1867,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "keep_control_net_on_cpu: %s\n"
              "keep_vae_on_cpu: %s\n"
              "diffusion_flash_attn: %s\n"
+             "circular_pad: %s\n"
              "chroma_use_dit_mask: %s\n"
              "chroma_use_t5_mask: %s\n"
              "chroma_t5_mask_pad: %d\n",
@@ -1889,6 +1897,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
              BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
+             BOOL_STR(sd_ctx_params->circular_pad),
              BOOL_STR(sd_ctx_params->chroma_use_dit_mask),
              BOOL_STR(sd_ctx_params->chroma_use_t5_mask),
              sd_ctx_params->chroma_t5_mask_pad);

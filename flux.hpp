@@ -696,7 +696,7 @@ namespace Flux {
                 vec = approx->forward(ctx, vec);                           // [344, N, hidden_size]
 
                 if (y != NULL) {
-                    txt_img_mask = ggml_pad(ctx, y, img->ne[1], 0, 0, 0);
+                    txt_img_mask = sd_pad(ctx, y, img->ne[1], 0, 0, 0);
                 }
             } else {
                 auto time_in   = std::dynamic_pointer_cast<MLPEmbedder>(blocks["time_in"]);
@@ -759,7 +759,7 @@ namespace Flux {
             int64_t patch_size = 2;
             int pad_h          = (patch_size - H % patch_size) % patch_size;
             int pad_w          = (patch_size - W % patch_size) % patch_size;
-            x                  = ggml_pad(ctx, x, pad_w, pad_h, 0, 0);  // [N, C, H + pad_h, W + pad_w]
+            x                  = sd_pad(ctx, x, pad_w, pad_h, 0, 0);  // [N, C, H + pad_h, W + pad_w]
 
             // img = rearrange(x, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=patch_size, pw=patch_size)
             auto img = patchify(ctx, x, patch_size);  // [N, h*w, C * patch_size * patch_size]
@@ -815,9 +815,9 @@ namespace Flux {
                 ggml_tensor* mask    = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], 1, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * C);
                 ggml_tensor* control = ggml_view_4d(ctx, c_concat, c_concat->ne[0], c_concat->ne[1], C, 1, c_concat->nb[1], c_concat->nb[2], c_concat->nb[3], c_concat->nb[2] * (C + 1));
 
-                masked  = ggml_pad(ctx, masked, pad_w, pad_h, 0, 0);
-                mask    = ggml_pad(ctx, mask, pad_w, pad_h, 0, 0);
-                control = ggml_pad(ctx, control, pad_w, pad_h, 0, 0);
+                masked  = sd_pad(ctx, masked, pad_w, pad_h, 0, 0);
+                mask    = sd_pad(ctx, mask, pad_w, pad_h, 0, 0);
+                control = sd_pad(ctx, control, pad_w, pad_h, 0, 0);
 
                 masked  = patchify(ctx, masked, patch_size);
                 mask    = patchify(ctx, mask, patch_size);
@@ -827,7 +827,7 @@ namespace Flux {
             } else if (params.version == VERSION_FLUX_CONTROLS) {
                 GGML_ASSERT(c_concat != NULL);
 
-                ggml_tensor* control = ggml_pad(ctx, c_concat, pad_w, pad_h, 0, 0);
+                ggml_tensor* control = sd_pad(ctx, c_concat, pad_w, pad_h, 0, 0);
                 control              = patchify(ctx, control, patch_size);
                 img                  = ggml_concat(ctx, img, control, 0);
             }

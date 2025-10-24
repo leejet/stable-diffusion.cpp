@@ -80,7 +80,7 @@ public:
             int64_t H = x->ne[1];
             int pad_h = (patch_size - H % patch_size) % patch_size;
             int pad_w = (patch_size - W % patch_size) % patch_size;
-            x         = ggml_pad(ctx, x, pad_w, pad_h, 0, 0);  // TODO: reflect pad mode
+            x         = sd_pad(ctx, x, pad_w, pad_h, 0, 0);  // TODO: reflect pad mode
         }
         x = proj->forward(ctx, x);
 

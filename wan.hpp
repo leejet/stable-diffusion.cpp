@@ -73,7 +73,7 @@ namespace WAN {
                 lp2 -= (int)cache_x->ne[2];
             }
 
-            x = ggml_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0);
+            x = sd_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0);
             return ggml_nn_conv_3d(ctx, x, w, b, in_channels,
                                    std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                    0, 0, 0,
@@ -172,7 +172,7 @@ namespace WAN {
                                                   2);
                         }
                         if (chunk_idx == 1 && cache_x->ne[2] < 2) {  // Rep
-                            cache_x = ggml_pad_ext(ctx, cache_x, 0, 0, 0, 0, (int)cache_x->ne[2], 0, 0, 0);
+                            cache_x = sd_pad_ext(ctx, cache_x, 0, 0, 0, 0, (int)cache_x->ne[2], 0, 0, 0);
                             // aka cache_x = torch.cat([torch.zeros_like(cache_x).to(cache_x.device),cache_x],dim=2)
                         }
                         if (chunk_idx == 1) {
@@ -198,9 +198,9 @@ namespace WAN {
                 } else if (mode == "upsample3d") {
                     x = ggml_upscale(ctx, x, 2, GGML_SCALE_MODE_NEAREST);
                 } else if (mode == "downsample2d") {
-                    x = ggml_pad(ctx, x, 1, 1, 0, 0);
+                    x = sd_pad(ctx, x, 1, 1, 0, 0);
                 } else if (mode == "downsample3d") {
-                    x = ggml_pad(ctx, x, 1, 1, 0, 0);
+                    x = sd_pad(ctx, x, 1, 1, 0, 0);
                 }
                 x = resample_1->forward(ctx, x);
                 x = ggml_nn_cont(ctx, ggml_torch_permute(ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
@@ -260,7 +260,7 @@ namespace WAN {
 
             int64_t pad_t = (factor_t - T % factor_t) % factor_t;
 
-            x = ggml_pad_ext(ctx, x, 0, 0, 0, 0, pad_t, 0, 0, 0);
+            x = sd_pad_ext(ctx, x, 0, 0, 0, 0, pad_t, 0, 0, 0);
             T = x->ne[2];
 
             x = ggml_reshape_4d(ctx, x, W * H, factor_t, T / factor_t, C);                                                  // [C, T/factor_t, factor_t, H*W]
@@ -1838,7 +1838,7 @@ namespace WAN {
             int pad_t = (std::get<0>(params.patch_size) - T % std::get<0>(params.patch_size)) % std::get<0>(params.patch_size);
             int pad_h = (std::get<1>(params.patch_size) - H % std::get<1>(params.patch_size)) % std::get<1>(params.patch_size);
             int pad_w = (std::get<2>(params.patch_size) - W % std::get<2>(params.patch_size)) % std::get<2>(params.patch_size);
-            x         = ggml_pad(ctx, x, pad_w, pad_h, pad_t, 0);  // [N*C, T + pad_t, H + pad_h, W + pad_w]
+            x         = sd_pad(ctx, x, pad_w, pad_h, pad_t, 0);  // [N*C, T + pad_t, H + pad_h, W + pad_w]
 
             return x;
         }

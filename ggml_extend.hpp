@@ -60,6 +60,39 @@
 #define SD_UNUSED(x) (void)(x)
 #endif
 
+inline bool& sd_global_circular_padding_enabled() {
+    static bool enabled = false;
+    return enabled;
+}
+
+__STATIC_INLINE__ struct ggml_tensor* sd_pad(struct ggml_context* ctx,
+                                             struct ggml_tensor* a,
+                                             int p0,
+                                             int p1,
+                                             int p2,
+                                             int p3) {
+    if (sd_global_circular_padding_enabled()) {
+        return ggml_pad_circular(ctx, a, 0, p0, 0, p1, 0, p2, 0, p3);
+    }
+    return ggml_pad(ctx, a, p0, p1, p2, p3);
+}
+
+__STATIC_INLINE__ struct ggml_tensor* sd_pad_ext(struct ggml_context* ctx,
+                                                 struct ggml_tensor* a,
+                                                 int lp0,
+                                                 int rp0,
+                                                 int lp1,
+                                                 int rp1,
+                                                 int lp2,
+                                                 int rp2,
+                                                 int lp3,
+                                                 int rp3) {
+    if (sd_global_circular_padding_enabled()) {
+        return ggml_pad_circular(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+    }
+    return ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+}
+
 __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void*) {
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG:
@@ -986,10 +1019,24 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d(struct ggml_context* ctx,
     if (scale != 1.f) {
         x = ggml_scale(ctx, x, scale);
     }
+    const bool use_circular = sd_global_circular_padding_enabled() && (p0 != 0 || p1 != 0);
+    const bool is_depthwise = (w->ne[2] == 1 && x->ne[2] == w->ne[3]);
     if (direct) {
-        x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
+        if (use_circular) {
+            if (is_depthwise) {
+                x = ggml_conv_2d_dw_direct_circular(ctx, w, x, s0, s1, p0, p1, d0, d1);
+            } else {
+                x = ggml_conv_2d_direct_circular(ctx, w, x, s0, s1, p0, p1, d0, d1);
+            }
+        } else {
+            x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
+        }
     } else {
-        x = ggml_conv_2d(ctx, w, x, s0, s1, p0, p1, d0, d1);
+        if (use_circular) {
+            x = ggml_conv_2d_circular(ctx, w, x, s0, s1, p0, p1, d0, d1);
+        } else {
+            x = ggml_conv_2d(ctx, w, x, s0, s1, p0, p1, d0, d1);
+        }
     }
     if (scale != 1.f) {
         x = ggml_scale(ctx, x, 1.f / scale);
@@ -1190,7 +1237,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
 
     auto build_kqv = [&](ggml_tensor* q_in, ggml_tensor* k_in, ggml_tensor* v_in, ggml_tensor* mask_in) -> ggml_tensor* {
         if (kv_pad != 0) {
-            k_in = ggml_pad(ctx, k_in, 0, kv_pad, 0, 0);
+            k_in = sd_pad(ctx, k_in, 0, kv_pad, 0, 0);
         }
         if (kv_scale != 1.0f) {
             k_in = ggml_scale(ctx, k_in, kv_scale);
@@ -1200,7 +1247,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
         v_in = ggml_nn_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
         v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
         if (kv_pad != 0) {
-            v_in = ggml_pad(ctx, v_in, 0, kv_pad, 0, 0);
+            v_in = sd_pad(ctx, v_in, 0, kv_pad, 0, 0);
         }
         if (kv_scale != 1.0f) {
             v_in = ggml_scale(ctx, v_in, kv_scale);
@@ -1223,7 +1270,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_attention_ext(struct ggml_context*
                 mask_pad = GGML_PAD(L_q, GGML_KQ_MASK_PAD) - mask_in->ne[1];
             }
             if (mask_pad > 0) {
-                mask_in = ggml_pad(ctx, mask_in, 0, mask_pad, 0, 0);
+                mask_in = sd_pad(ctx, mask_in, 0, mask_pad, 0, 0);
             }
             mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
         }

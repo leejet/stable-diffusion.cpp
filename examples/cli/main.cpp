@@ -113,6 +113,7 @@ struct SDParams {
     bool diffusion_flash_attn  = false;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
+    bool circular_pad          = false;
     bool canny_preprocess      = false;
     bool color                 = false;
     int upscale_repeats        = 1;
@@ -183,6 +184,7 @@ void print_params(SDParams params) {
     printf("    diffusion flash attention:         %s\n", params.diffusion_flash_attn ? "true" : "false");
     printf("    diffusion Conv2d direct:           %s\n", params.diffusion_conv_direct ? "true" : "false");
     printf("    vae_conv_direct:                   %s\n", params.vae_conv_direct ? "true" : "false");
+    printf("    circular padding:                  %s\n", params.circular_pad ? "true" : "false");
     printf("    control_strength:                  %.2f\n", params.control_strength);
     printf("    prompt:                            %s\n", params.prompt.c_str());
     printf("    negative_prompt:                   %s\n", params.negative_prompt.c_str());
@@ -304,6 +306,7 @@ void print_usage(int argc, const char* argv[]) {
     printf("                                     This might crash if it is not supported by the backend.\n");
     printf("  --vae-conv-direct                  use Conv2d direct in the vae model (should improve the performance)\n");
     printf("                                     This might crash if it is not supported by the backend.\n");
+    printf("  --circular                         use circular padding for convolutions and pad ops\n");
     printf("  --control-net-cpu                  keep controlnet in cpu (for low vram)\n");
     printf("  --canny                            apply canny preprocessor (edge detection)\n");
     printf("  --color                            colors the logging tags according to level\n");
@@ -573,6 +576,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--diffusion-fa", "", true, &params.diffusion_flash_attn},
         {"", "--diffusion-conv-direct", "", true, &params.diffusion_conv_direct},
         {"", "--vae-conv-direct", "", true, &params.vae_conv_direct},
+        {"", "--circular", "", true, &params.circular_pad},
         {"", "--canny", "", true, &params.canny_preprocess},
         {"-v", "--verbose", "", true, &params.verbose},
         {"", "--color", "", true, &params.color},
@@ -1386,6 +1390,7 @@ int main(int argc, const char* argv[]) {
         params.diffusion_flash_attn,
         params.diffusion_conv_direct,
         params.vae_conv_direct,
+        params.circular_pad,
         params.force_sdxl_vae_conv_scale,
         params.chroma_use_dit_mask,
         params.chroma_use_t5_mask,
