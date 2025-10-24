@@ -63,9 +63,10 @@ namespace Rope {
                 float omega_val       = omega[j];
                 float original_angle  = position * omega_val;
                 float angle           = original_angle;
-                int wrap              = 0;
+                float wrap = 0;
                 if (wraps != nullptr && !wraps->empty()) {
                     size_t wrap_size = wraps->size();
+                    // mod batch size since we only store this for one item in the batch
                     size_t wrap_idx  = wrap_size > 0 ? (i % wrap_size) : 0;
                     wrap             = (*wraps)[wrap_idx];
                 }
@@ -73,17 +74,11 @@ namespace Rope {
                     constexpr float TWO_PI = 6.28318530717958647692f;
                     float wrap_f            = static_cast<float>(wrap);
                     float cycles            = omega_val * wrap_f / TWO_PI;
-                    float rounded           = std::round(cycles);  // closest periodic harmonic
-                    float periodic_omega    = TWO_PI * rounded / wrap_f;
-                    float periodic_angle    = position * periodic_omega;
-                    float rel_pos           = std::fmod(position, wrap_f);
-                    if (rel_pos < 0.0f) {
-                        rel_pos += wrap_f;
-                    }
-                    float t       = wrap_f > 0.0f ? rel_pos / wrap_f : 0.0f;
-                    float window  = 0.5f - 0.5f * std::cos(TWO_PI * t);  // 0 at edges, 1 in the middle
-                    window        = std::clamp(window, 0.0f, 1.0f);
-                    angle         = periodic_angle + window * (original_angle - periodic_angle);
+                    // closest periodic harmonic, necessary to ensure things neatly tile
+                    // without this round, things don't tile at the boundaries and you end up
+                    // with the model knowing what is "center"
+                    float rounded           = std::round(cycles);
+                    angle         = position * TWO_PI * rounded / wrap_f;
                 }
                 float sin_val = std::sin(angle);
                 float cos_val = std::cos(angle);
@@ -282,7 +277,9 @@ namespace Rope {
                                                            const std::vector<ggml_tensor*>& ref_latents,
                                                            bool increase_ref_index,
                                                            int theta,
-                                                           const std::vector<int>& axes_dim) {
+                                                           const std::vector<int>& axes_dim,
+                                                           bool circular = false) {
+        circular = true;
         std::vector<std::vector<float>> ids = gen_qwen_image_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
         std::vector<std::vector<int>> axes_wraps;
         if (sd_is_circular_padding_enabled() && bs > 0 && axes_dim.size() >= 3) {
@@ -294,7 +291,13 @@ namespace Rope {
                 const size_t total_tokens     = ids.size();
                 // Track per-token wrap lengths for the row/column axes so only spatial tokens become periodic.
                 axes_wraps.assign(axes_dim.size(), std::vector<int>(total_tokens / bs, 0));
-                size_t cursor = 0;
+                size_t cursor = context_len; // ignore text tokens
+                const size_t img_tokens       = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
+                for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
+                    axes_wraps[1][cursor + token_i] = h_len;
+                    axes_wraps[2][cursor + token_i] = w_len;
+                }
+                cursor += img_tokens;
                 for (ggml_tensor* ref : ref_latents) {
                     if (ref == nullptr) {
                         continue;
