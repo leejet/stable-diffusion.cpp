@@ -90,6 +90,7 @@ Options:
   --increase-ref-index                     automatically increase the indices of references images based on the order they are listed (starting with 1).
   --disable-auto-resize-ref-image          disable auto resize of ref images
   --taesd-preview-only                     prevents usage of taesd for decoding the final image. (for use with --preview tae)
+  --preview-noisy                          enables previewing noisy inputs of the models rather than the denoised outputs
   -M, --mode                               run mode, one of [img_gen, vid_gen, upscale, convert], default: img_gen
   --type                                   weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). If not specified, the default is the
                                            type of the weight file
