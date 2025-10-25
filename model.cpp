@@ -330,6 +330,10 @@ std::string convert_cond_model_name(const std::string& name) {
         return new_name;
     }
 
+    if (new_name == "model.text_projection.weight") {
+        new_name = "transformer.text_model.text_projection";
+    }
+
     if (open_clip_to_hf_clip_model.find(new_name) != open_clip_to_hf_clip_model.end()) {
         new_name = open_clip_to_hf_clip_model[new_name];
     }
