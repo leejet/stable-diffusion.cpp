@@ -369,7 +369,7 @@ public:
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
                                                                 offload_params_to_cpu,
                                                                 sd_ctx_params->diffusion_flash_attn,
-                                                               model_loader.tensor_storages_types);
+                                                                model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : model_loader.tensor_storages_types) {
@@ -443,11 +443,11 @@ public:
                                                                             "",
                                                                             enable_vision);
                 diffusion_model  = std::make_shared<QwenImageModel>(backend,
-                                                                   offload_params_to_cpu,
-                                                                   model_loader.tensor_storages_types,
-                                                                   "model.diffusion_model",
-                                                                   version,
-                                                                   sd_ctx_params->diffusion_flash_attn);
+                                                                    offload_params_to_cpu,
+                                                                    model_loader.tensor_storages_types,
+                                                                    "model.diffusion_model",
+                                                                    version,
+                                                                    sd_ctx_params->diffusion_flash_attn);
             } else {  // SD1.x SD2.x SDXL
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
@@ -1157,7 +1157,7 @@ public:
 
         if (preview_mode == PREVIEW_PROJ) {
             const float (*latent_rgb_proj)[channel] = NULL;
-            float *latent_rgb_bias = NULL;
+            float* latent_rgb_bias                  = NULL;
 
             if (dim == 48) {
                 if (sd_version_is_wan(version)) {
@@ -1214,7 +1214,7 @@ public:
 
             uint8_t* data = (uint8_t*)malloc(frames * width * height * channel * sizeof(uint8_t));
 
-            preview_latent_video(data, latents, latent_rgb_proj,latent_rgb_bias, width, height, frames, dim);
+            preview_latent_video(data, latents, latent_rgb_proj, latent_rgb_bias, width, height, frames, dim);
             sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
             for (int i = 0; i < frames; i++) {
                 images[i] = {width, height, channel, data + i * width * height * channel};
@@ -1274,7 +1274,7 @@ public:
             }
 
             step_callback(step, frames, images, is_noisy);
-            
+
             ggml_tensor_scale(result, 0);
             for (int i = 0; i < frames; i++) {
                 free(images[i].data);

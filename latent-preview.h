@@ -126,7 +126,7 @@ const float sd_latent_rgb_proj[4][3]{
     {0.3250f, 0.4974f, 0.2350f},
     {-0.2829f, 0.1762f, 0.2721f},
     {-0.2120f, -0.2616f, -0.7177f}};
-float sd_latent_rgb_bias[3] = {0,0,0};
+float sd_latent_rgb_bias[3] = {0, 0, 0};
 
 void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int width, int height, int frames, int dim) {
     size_t buffer_head = 0;
@@ -135,7 +135,7 @@ void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const fl
             for (int i = 0; i < width; i++) {
                 size_t latent_id = (i * latents->nb[0] + j * latents->nb[1] + k * latents->nb[2]);
                 float r = 0, g = 0, b = 0;
-                if(latent_rgb_proj!=NULL){
+                if (latent_rgb_proj != NULL) {
                     for (int d = 0; d < dim; d++) {
                         float value = *(float*)((char*)latents->data + latent_id + d * latents->nb[ggml_n_dims(latents) - 1]);
                         r += value * latent_rgb_proj[d][0];
@@ -148,7 +148,7 @@ void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const fl
                     g = *(float*)((char*)latents->data + latent_id + 1 * latents->nb[ggml_n_dims(latents) - 1]);
                     b = *(float*)((char*)latents->data + latent_id + 2 * latents->nb[ggml_n_dims(latents) - 1]);
                 }
-                if(latent_rgb_bias!=NULL){
+                if (latent_rgb_bias != NULL) {
                     // bias
                     r += latent_rgb_bias[0];
                     g += latent_rgb_bias[1];

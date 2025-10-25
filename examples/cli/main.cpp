@@ -828,11 +828,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--taesd-preview-only",
          std::string("prevents usage of taesd for decoding the final image. (for use with --preview ") + previews_str[PREVIEW_TAE] + ")",
          true, &params.taesd_preview},
-         {"",
-        "--preview-noisy",
-        "enables previewing noisy inputs of the models rather than the denoised outputs",
-        true, &params.preview_noisy}
-    };
+        {"",
+         "--preview-noisy",
+         "enables previewing noisy inputs of the models rather than the denoised outputs",
+         true, &params.preview_noisy}};
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
