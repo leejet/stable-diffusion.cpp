@@ -1788,6 +1788,7 @@ SDVersion ModelLoader::get_sd_version() {
     bool is_wan                      = false;
     int64_t patch_embedding_channels = 0;
     bool has_img_emb                 = false;
+    bool has_middle_block_1          = false;
 
     for (auto& tensor_storage : tensor_storages) {
         if (!(is_xl || is_flux)) {
@@ -1834,6 +1835,10 @@ SDVersion ModelLoader::get_sd_version() {
                 return VERSION_SVD;
             }
         }
+        if (tensor_storage.name.find("model.diffusion_model.middle_block.1.") != std::string::npos ||
+            tensor_storage.name.find("unet.mid_block.resnets.1.") != std::string::npos) {
+            has_middle_block_1 = true;
+        }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||
             tensor_storage.name == "text_model.embeddings.token_embedding.weight" ||
@@ -1846,7 +1851,7 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name == "model.diffusion_model.input_blocks.0.0.weight" || tensor_storage.name == "model.diffusion_model.img_in.weight" || tensor_storage.name == "unet.conv_in.weight") {
             input_block_weight  = tensor_storage;
             input_block_checked = true;
-            if (is_xl || is_flux) {
+            if (is_flux) {
                 break;
             }
         }
@@ -1870,12 +1875,10 @@ SDVersion ModelLoader::get_sd_version() {
         if (is_ip2p) {
             return VERSION_SDXL_PIX2PIX;
         }
-        for (auto& tensor_storage : tensor_storages) {
-            if (tensor_storage.name.find("model.diffusion_model.middle_block.1") != std::string::npos) {
-                return VERSION_SDXL;      // found a missing tensor in SSD1B, so it is SDXL
-            }
+        if (!has_middle_block_1) {
+            return VERSION_SDXL_SSD1B;
         }
-       	return VERSION_SDXL_SSD1B;
+       	return VERSION_SDXL;
     }
 
     if (is_flux) {
@@ -1898,12 +1901,10 @@ SDVersion ModelLoader::get_sd_version() {
         if (is_ip2p) {
             return VERSION_SD1_PIX2PIX;
         }
-        for (auto& tensor_storage : tensor_storages) {
-            if (tensor_storage.name.find("model.diffusion_model.middle_block") != std::string::npos) {
-                return VERSION_SD1;      // found a middle block, so it is SD1
-            }
+        if (!has_middle_block_1) {
+            return VERSION_SD1_TINY_UNET;
         }
-        return VERSION_SD1_TINY_UNET;
+        return VERSION_SD1;
     } else if (token_embedding_weight.ne[0] == 1024) {
         if (is_inpaint) {
             return VERSION_SD2_INPAINT;
