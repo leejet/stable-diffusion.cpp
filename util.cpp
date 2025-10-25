@@ -5,12 +5,12 @@
 #include <cstdarg>
 #include <fstream>
 #include <locale>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
-#include "preprocessing.hpp"
 
 #if defined(__APPLE__) && defined(__MACH__)
 #include <sys/sysctl.h>
@@ -23,7 +23,6 @@
 #endif
 
 #include "ggml-cpu.h"
-#include "ggml.h"
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_RESIZE_IMPLEMENTATION

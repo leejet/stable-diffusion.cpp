@@ -1,6 +1,7 @@
 #ifndef __CLIP_HPP__
 #define __CLIP_HPP__
 
+#include <regex>
 #include "ggml_extend.hpp"
 #include "model.h"
 

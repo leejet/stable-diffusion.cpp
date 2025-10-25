@@ -10,7 +10,6 @@
 #include "control.hpp"
 #include "denoiser.hpp"
 #include "diffusion_model.hpp"
-#include "esrgan.hpp"
 #include "lora.hpp"
 #include "pmid.hpp"
 #include "tae.hpp"

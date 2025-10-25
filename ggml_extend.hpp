@@ -9,13 +9,9 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
-#include <iterator>
 #include <map>
 #include <memory>
-#include <random>
-#include <regex>
 #include <set>
-#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -282,7 +278,7 @@ __STATIC_INLINE__ void ggml_tensor_diff(
     ggml_tensor_iter(a, [&](ggml_tensor* a, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
         float a_value = ggml_tensor_get_f32(a, i0, i1, i2, i3);
         float b_value = ggml_tensor_get_f32(b, i0, i1, i2, i3);
-        if (abs(a_value - b_value) > gap) {
+        if (std::abs(a_value - b_value) > gap) {
             LOG_WARN("[%ld, %ld, %ld, %ld] %f %f", i3, i2, i1, i0, a_value, b_value);
         }
     });
@@ -876,7 +872,7 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, input_tile_size_x, input_tile_size_y, input->ne[2], input->ne[3]);
     ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, output_tile_size_x, output_tile_size_y, output->ne[2], output->ne[3]);
     int num_tiles            = num_tiles_x * num_tiles_y;
-    LOG_INFO("processing %i tiles", num_tiles);
+    LOG_DEBUG("processing %i tiles", num_tiles);
     pretty_progress(0, num_tiles, 0.0f);
     int tile_count = 1;
     bool last_y = false, last_x = false;
