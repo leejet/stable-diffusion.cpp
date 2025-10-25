@@ -36,6 +36,7 @@ enum SDVersion {
     VERSION_FLUX_FILL,
     VERSION_FLUX_CONTROLS,
     VERSION_FLEX_2,
+    VERSION_CHROMA_RADIANCE,
     VERSION_WAN2,
     VERSION_WAN2_2_I2V,
     VERSION_WAN2_2_TI2V,
@@ -72,7 +73,11 @@ static inline bool sd_version_is_sd3(SDVersion version) {
 }
 
 static inline bool sd_version_is_flux(SDVersion version) {
-    if (version == VERSION_FLUX || version == VERSION_FLUX_FILL || version == VERSION_FLUX_CONTROLS || version == VERSION_FLEX_2) {
+    if (version == VERSION_FLUX ||
+        version == VERSION_FLUX_FILL ||
+        version == VERSION_FLUX_CONTROLS ||
+        version == VERSION_FLEX_2 ||
+        version == VERSION_CHROMA_RADIANCE) {
         return true;
     }
     return false;

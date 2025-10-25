@@ -35,10 +35,11 @@ API and command-line option may change frequently.***
   - Image Models
     - SD1.x, SD2.x, [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)
     - SDXL, [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo)
-    - [some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
+    - [Some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
     - [SD3/SD3.5](./docs/sd3.md)
     - [Flux-dev/Flux-schnell](./docs/flux.md)
     - [Chroma](./docs/chroma.md)
+    - [Chroma1-Radiance](./docs/chroma_radiance.md)
     - [Qwen Image](./docs/qwen_image.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
