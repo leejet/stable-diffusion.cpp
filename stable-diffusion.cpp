@@ -484,7 +484,7 @@ public:
                 vae_decode_only = false;
             }
 
-            if (high_noise_diffusion_model || sd_ctx_params->tae_preview_only) {
+            if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->alloc_params_buffer();
                 high_noise_diffusion_model->get_param_tensors(tensors);
             }
@@ -508,7 +508,7 @@ public:
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 first_stage_model = std::make_shared<FakeVAE>(vae_backend,
                                                               offload_params_to_cpu);
-            } else if (!use_tiny_autoencoder) {
+            } else if (!use_tiny_autoencoder || sd_ctx_params->tae_preview_only) {
                 first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend,
                                                                     offload_params_to_cpu,
                                                                     model_loader.tensor_storages_types,
