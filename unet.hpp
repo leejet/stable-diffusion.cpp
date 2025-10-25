@@ -205,8 +205,8 @@ public:
             num_head_channels = 64;
             num_heads         = -1;
         } else if (version == VERSION_SD1_TINY_UNET) {
-            num_res_blocks    = 1;
-            channel_mult      = {1, 2, 4};
+            num_res_blocks = 1;
+            channel_mult   = {1, 2, 4};
         }
         if (sd_version_is_inpaint(version)) {
             in_channels = 9;
@@ -273,15 +273,17 @@ public:
                         n_head = ch / d_head;
                     }
                     std::string name = "input_blocks." + std::to_string(input_block_idx) + ".1";
-                    int td=transformer_depth[i];
+                    int td           = transformer_depth[i];
                     if (version == VERSION_SDXL_SSD1B) {
-                        if (i==2) td=4;
+                        if (i == 2) {
+                            td = 4;
+                        }
                     }
-                    blocks[name]     = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
-                                                                                      n_head,
-                                                                                      d_head,
-                                                                                      td,
-                                                                                      context_dim));
+                    blocks[name] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
+                                                                                  n_head,
+                                                                                  d_head,
+                                                                                  td,
+                                                                                  context_dim));
                 }
                 input_block_chans.push_back(ch);
                 if (version == VERSION_SD1_TINY_UNET) {
@@ -309,10 +311,10 @@ public:
             blocks["middle_block.0"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
             if (version != VERSION_SDXL_SSD1B) {
                 blocks["middle_block.1"] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
-                                                                                      n_head,
-                                                                                      d_head,
-                                                                                      transformer_depth[transformer_depth.size() - 1],
-                                                                                      context_dim));
+                                                                                          n_head,
+                                                                                          d_head,
+                                                                                          transformer_depth[transformer_depth.size() - 1],
+                                                                                          context_dim));
                 blocks["middle_block.2"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
             }
         }
@@ -337,12 +339,16 @@ public:
                         n_head = ch / d_head;
                     }
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + ".1";
-                    int td = transformer_depth[i];
+                    int td           = transformer_depth[i];
                     if (version == VERSION_SDXL_SSD1B) {
-                        if (i==2 && (j==0 || j==1)) td=4;
-                        if (i==1 && (j==1 || j==2)) td=1;
-                    }                                              
-                    blocks[name]     = std::shared_ptr<GGMLBlock>(get_attention_layer(ch, n_head, d_head, td, context_dim));
+                        if (i == 2 && (j == 0 || j == 1)) {
+                            td = 4;
+                        }
+                        if (i == 1 && (j == 1 || j == 2)) {
+                            td = 1;
+                        }
+                    }
+                    blocks[name] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch, n_head, d_head, td, context_dim));
 
                     up_sample_idx++;
                 }
@@ -351,7 +357,7 @@ public:
                     if (version == VERSION_SD1_TINY_UNET) {
                         output_block_idx++;
                         if (output_block_idx == 2) {
-                            up_sample_idx=1;
+                            up_sample_idx = 1;
                         }
                     }
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx);
@@ -505,7 +511,7 @@ public:
 
         // middle_block
         if (version != VERSION_SD1_TINY_UNET) {
-            h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);                      // [N, 4*model_channels, h/8, w/8]
+            h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
             if (version != VERSION_SDXL_SSD1B) {
                 h = attention_layer_forward("middle_block.1", ctx, backend, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
                 h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);                      // [N, 4*model_channels, h/8, w/8]
@@ -549,7 +555,7 @@ public:
                     if (version == VERSION_SD1_TINY_UNET) {
                         output_block_idx++;
                         if (output_block_idx == 2) {
-                            up_sample_idx=1;
+                            up_sample_idx = 1;
                         }
                     }
                     std::string name = "output_blocks." + std::to_string(output_block_idx) + "." + std::to_string(up_sample_idx);

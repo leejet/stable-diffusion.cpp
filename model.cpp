@@ -628,12 +628,12 @@ std::string convert_tensor_name(std::string name) {
         name = "model." + name;
     }
     if (starts_with(name, "model.diffusion_model.up_blocks.0.attentions.0.")) {
-        name.replace(0,sizeof("model.diffusion_model.up_blocks.0.attentions.0.") - 1,
-                       "model.diffusion_model.output_blocks.0.1.");
+        name.replace(0, sizeof("model.diffusion_model.up_blocks.0.attentions.0.") - 1,
+                     "model.diffusion_model.output_blocks.0.1.");
     }
     if (starts_with(name, "model.diffusion_model.up_blocks.0.attentions.1.")) {
-        name.replace(0,sizeof("model.diffusion_model.up_blocks.0.attentions.1.") - 1,
-                       "model.diffusion_model.output_blocks.1.1.");
+        name.replace(0, sizeof("model.diffusion_model.up_blocks.0.attentions.1.") - 1,
+                     "model.diffusion_model.output_blocks.1.1.");
     }
     // size_t pos = name.find("lora_A");
     // if (pos != std::string::npos) {
@@ -1878,7 +1878,7 @@ SDVersion ModelLoader::get_sd_version() {
         if (!has_middle_block_1) {
             return VERSION_SDXL_SSD1B;
         }
-       	return VERSION_SDXL;
+        return VERSION_SDXL;
     }
 
     if (is_flux) {
