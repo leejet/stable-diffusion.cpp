@@ -111,11 +111,11 @@ const char* unused_tensors[] = {
     "embedding_manager",
     "denoiser.sigmas",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
-    "text_encoders.t5xxl.logit_scale", // only used during training
+    "text_encoders.t5xxl.logit_scale",                              // only used during training
     "text_encoders.t5xxl.transformer.scaled_fp8",
     "text_encoders.qwen2vl.output.weight",
     "text_encoders.qwen2vl.lm_head.",
-    "text_encoders.qwen2vl.logit_scale", // only used during training
+    "text_encoders.qwen2vl.logit_scale",  // only used during training
     "text_encoders.qwen2vl.transformer.scaled_fp8",
 };
 
@@ -819,8 +819,8 @@ float f8_e4m3fn_to_f32(uint8_t f8) {
     }
 
     const uint32_t exponent_bias_delta = 127 - 7;
-    uint32_t exponent = ((f8 >> 3) & 15) + exponent_bias_delta;
-    uint32_t mantissa = f8 & 7;
+    uint32_t exponent                  = ((f8 >> 3) & 15) + exponent_bias_delta;
+    uint32_t mantissa                  = f8 & 7;
 
     // subnormal
     if (exponent == exponent_bias_delta) {
@@ -840,7 +840,7 @@ float f8_e4m3fn_to_f32(uint8_t f8) {
         mantissa <<= 1;
     }
 
-    const uint32_t sign = f8 >> 7;
+    const uint32_t sign   = f8 >> 7;
     const uint32_t result = (sign << 31) | (exponent << 23) | (mantissa << 20);
     return *reinterpret_cast<const float*>(&result);
 }
@@ -890,7 +890,7 @@ void convert_tensor(void* src,
         ptr = static_cast<float*>(dst);
     }
 
-    switch(src_type) {
+    switch (src_type) {
         case GGML_TYPE_F64:
             for (int i = 0; i < n; i++) {
                 ptr[i] = static_cast<double*>(src)[i];
@@ -928,17 +928,17 @@ void convert_tensor(void* src,
                                                 ggml_type_name(src_type)));
             }
             if (ptr == src) {
-               buffer.resize(n);
-               ptr = buffer.data();
+                buffer.resize(n);
+                ptr = buffer.data();
             }
             qtype->to_float(src, ptr, n);
             break;
-       }
+        }
     }
 
     // convert f32 to dst_type
     // int dst types are forbidden as they can overflow
-    switch(dst_type) {
+    switch (dst_type) {
         case GGML_TYPE_F64:
             for (int i = n - 1; i >= 0; i--) {
                 static_cast<double*>(dst)[i] = ptr[i];
@@ -949,7 +949,9 @@ void convert_tensor(void* src,
             break;
         default:
             GGML_ASSERT(ptr != dst);
-            ggml_quantize_chunk(dst_type, ptr, dst, 0, nrows, n_per_row, nullptr);
+            std::vector<float> imatrix(n_per_row, 1.0f);  // dummy importance matrix
+            const float* im = imatrix.data();
+            ggml_quantize_chunk(dst_type, ptr, dst, 0, nrows, n_per_row, im);
             break;
     }
 }
@@ -2112,7 +2114,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                 scale_count[tensor->name]--;
             }
         }
-        for(auto& x : scale_count) {
+        for (auto& x : scale_count) {
             if (x.second > 0) {
                 LOG_ERROR("f8 weight not found for scale_weight: '%s'", x.first.c_str());
                 return false;
@@ -2187,7 +2189,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         continue;
                     }
 
-                    ggml_tensor* dst_tensor             = nullptr;
+                    ggml_tensor* dst_tensor = nullptr;
 
                     t0 = ggml_time_ms();
 
