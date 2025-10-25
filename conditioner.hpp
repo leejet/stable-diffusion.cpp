@@ -998,7 +998,8 @@ struct SD3CLIPEmbedder : public Conditioner {
                     ggml_tensor_scale(tensor, (original_mean / new_mean));
                 }
             } else {
-                chunk_hidden_states_t5 = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 4096, 0);
+                chunk_hidden_states_t5 = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 4096, chunk_len);
+                ggml_set_f32(chunk_hidden_states_t5, 0.f);
             }
 
             auto chunk_hidden_states_lg_pad = ggml_new_tensor_3d(work_ctx,
@@ -1182,6 +1183,7 @@ struct FluxCLIPEmbedder : public Conditioner {
                 t5_weights.insert(t5_weights.end(), curr_tokens.size(), curr_weight);
             }
         }
+
         if (clip_l) {
             clip_l_tokenizer.pad_tokens(clip_l_tokens, clip_l_weights, 77, padding);
         }
