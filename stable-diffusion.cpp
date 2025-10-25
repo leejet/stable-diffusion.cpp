@@ -1539,12 +1539,6 @@ public:
                 vec_denoised[i] = latent_result * c_out + vec_input[i] * c_skip;
             }
 
-            int64_t t1 = ggml_time_us();
-            if (step > 0 || step == -(int)steps) {
-                int showstep = std::abs(step);
-                pretty_progress(showstep, (int)steps, (t1 - t0) / 1000000.f / showstep);
-                // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
-            }
             if (denoise_mask != nullptr) {
                 apply_mask(denoised, init_latent, denoise_mask);
             }
@@ -1554,6 +1548,13 @@ public:
                 if (step % sd_get_preview_interval() == 0) {
                     preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb);
                 }
+            }
+            
+            int64_t t1 = ggml_time_us();
+            if (step > 0 || step == -(int)steps) {
+                int showstep = std::abs(step);
+                pretty_progress(showstep, (int)steps, (t1 - t0) / 1000000.f / showstep);
+                // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
             return denoised;
         };
