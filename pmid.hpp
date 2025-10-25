@@ -472,8 +472,8 @@ public:
         struct ggml_tensor* prompt_embeds_d   = to_backend(prompt_embeds);
         struct ggml_tensor* id_embeds_d       = to_backend(id_embeds);
 
-        struct ggml_tensor* left  = NULL;
-        struct ggml_tensor* right = NULL;
+        struct ggml_tensor* left  = nullptr;
+        struct ggml_tensor* right = nullptr;
         for (int i = 0; i < class_tokens_mask.size(); i++) {
             if (class_tokens_mask[i]) {
                 // printf(" 1,");
@@ -528,7 +528,7 @@ public:
                 }
             }
         }
-        struct ggml_tensor* updated_prompt_embeds = NULL;
+        struct ggml_tensor* updated_prompt_embeds = nullptr;
         if (pm_version == PM_VERSION_1)
             updated_prompt_embeds = id_encoder.forward(ctx0,
                                                        runtime_backend,
@@ -591,7 +591,7 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
         return "id_embeds";
     }
 
-    bool load_from_file(bool filter_tensor = false) {
+    bool load_from_file(bool filter_tensor, int n_threads) {
         LOG_INFO("loading PhotoMaker ID Embeds from '%s'", file_path.c_str());
 
         if (load_failed) {
@@ -623,11 +623,11 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
             return true;
         };
 
-        model_loader->load_tensors(on_new_tensor_cb);
+        model_loader->load_tensors(on_new_tensor_cb, n_threads);
         alloc_params_buffer();
 
         dry_run = false;
-        model_loader->load_tensors(on_new_tensor_cb);
+        model_loader->load_tensors(on_new_tensor_cb, n_threads);
 
         LOG_DEBUG("finished loading PhotoMaker ID Embeds ");
         return true;
@@ -638,7 +638,7 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
         pos = tensors.find("pmid.id_embeds");
         if (pos != tensors.end())
             return pos->second;
-        return NULL;
+        return nullptr;
     }
 };
 

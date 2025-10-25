@@ -64,6 +64,16 @@ enum scheduler_t {
     SCHEDULE_COUNT
 };
 
+enum prediction_t {
+    DEFAULT_PRED,
+    EPS_PRED,
+    V_PRED,
+    EDM_V_PRED,
+    SD3_FLOW_PRED,
+    FLUX_FLOW_PRED,
+    PREDICTION_COUNT
+};
+
 // same as enum ggml_type
 enum sd_type_t {
     SD_TYPE_F32  = 0,
@@ -131,6 +141,8 @@ typedef struct {
     const char* clip_g_path;
     const char* clip_vision_path;
     const char* t5xxl_path;
+    const char* qwen2vl_path;
+    const char* qwen2vl_vision_path;
     const char* diffusion_model_path;
     const char* high_noise_diffusion_model_path;
     const char* vae_path;
@@ -144,6 +156,7 @@ typedef struct {
     int n_threads;
     enum sd_type_t wtype;
     enum rng_type_t rng_type;
+    enum prediction_t prediction;
     bool offload_params_to_cpu;
     bool keep_clip_on_cpu;
     bool keep_control_net_on_cpu;
@@ -151,6 +164,7 @@ typedef struct {
     bool diffusion_flash_attn;
     bool diffusion_conv_direct;
     bool vae_conv_direct;
+    bool force_sdxl_vae_conv_scale;
     bool chroma_use_dit_mask;
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
@@ -202,6 +216,7 @@ typedef struct {
     sd_image_t init_image;
     sd_image_t* ref_images;
     int ref_images_count;
+    bool auto_resize_ref_image;
     bool increase_ref_index;
     sd_image_t mask_image;
     int width;
@@ -253,6 +268,8 @@ SD_API const char* sd_sample_method_name(enum sample_method_t sample_method);
 SD_API enum sample_method_t str_to_sample_method(const char* str);
 SD_API const char* sd_schedule_name(enum scheduler_t scheduler);
 SD_API enum scheduler_t str_to_schedule(const char* str);
+SD_API const char* sd_prediction_name(enum prediction_t prediction);
+SD_API enum prediction_t str_to_prediction(const char* str);
 
 SD_API void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params);
 SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
@@ -282,6 +299,8 @@ SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
                           sd_image_t input_image,
                           uint32_t upscale_factor);
+
+SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
 
 SD_API bool convert(const char* input_path,
                     const char* vae_path,

@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "ggml-backend.h"
@@ -31,9 +32,12 @@ enum SDVersion {
     VERSION_SD3,
     VERSION_FLUX,
     VERSION_FLUX_FILL,
+    VERSION_FLUX_CONTROLS,
+    VERSION_FLEX_2,
     VERSION_WAN2,
     VERSION_WAN2_2_I2V,
     VERSION_WAN2_2_TI2V,
+    VERSION_QWEN_IMAGE,
     VERSION_COUNT,
 };
 
@@ -66,7 +70,7 @@ static inline bool sd_version_is_sd3(SDVersion version) {
 }
 
 static inline bool sd_version_is_flux(SDVersion version) {
-    if (version == VERSION_FLUX || version == VERSION_FLUX_FILL) {
+    if (version == VERSION_FLUX || version == VERSION_FLUX_FILL || version == VERSION_FLUX_CONTROLS || version == VERSION_FLEX_2) {
         return true;
     }
     return false;
@@ -79,15 +83,25 @@ static inline bool sd_version_is_wan(SDVersion version) {
     return false;
 }
 
+static inline bool sd_version_is_qwen_image(SDVersion version) {
+    if (version == VERSION_QWEN_IMAGE) {
+        return true;
+    }
+    return false;
+}
+
 static inline bool sd_version_is_inpaint(SDVersion version) {
-    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT || version == VERSION_SDXL_INPAINT || version == VERSION_FLUX_FILL) {
+    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT || version == VERSION_SDXL_INPAINT || version == VERSION_FLUX_FILL || version == VERSION_FLEX_2) {
         return true;
     }
     return false;
 }
 
 static inline bool sd_version_is_dit(SDVersion version) {
-    if (sd_version_is_flux(version) || sd_version_is_sd3(version) || sd_version_is_wan(version)) {
+    if (sd_version_is_flux(version) ||
+        sd_version_is_sd3(version) ||
+        sd_version_is_wan(version) ||
+        sd_version_is_qwen_image(version)) {
         return true;
     }
     return false;
@@ -97,8 +111,12 @@ static inline bool sd_version_is_unet_edit(SDVersion version) {
     return version == VERSION_SD1_PIX2PIX || version == VERSION_SDXL_PIX2PIX;
 }
 
+static inline bool sd_version_is_control(SDVersion version) {
+    return version == VERSION_FLUX_CONTROLS || version == VERSION_FLEX_2;
+}
+
 static bool sd_version_is_inpaint_or_unet_edit(SDVersion version) {
-    return sd_version_is_unet_edit(version) || sd_version_is_inpaint(version);
+    return sd_version_is_unet_edit(version) || sd_version_is_inpaint(version) || sd_version_is_control(version);
 }
 
 enum PMVersion {
@@ -123,8 +141,8 @@ struct TensorStorage {
 
     TensorStorage() = default;
 
-    TensorStorage(const std::string& name, ggml_type type, const int64_t* ne, int n_dims, size_t file_index, size_t offset = 0)
-        : name(name), type(type), n_dims(n_dims), file_index(file_index), offset(offset) {
+    TensorStorage(std::string name, ggml_type type, const int64_t* ne, int n_dims, size_t file_index, size_t offset = 0)
+        : name(std::move(name)), type(type), n_dims(n_dims), file_index(file_index), offset(offset) {
         for (int i = 0; i < n_dims; i++) {
             this->ne[i] = ne[i];
         }
@@ -242,15 +260,23 @@ public:
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     bool model_is_unet();
     SDVersion get_sd_version();
-    ggml_type get_sd_wtype();
-    ggml_type get_conditioner_wtype();
-    ggml_type get_diffusion_model_wtype();
-    ggml_type get_vae_wtype();
+    std::map<ggml_type, uint32_t> get_wtype_stat();
+    std::map<ggml_type, uint32_t> get_conditioner_wtype_stat();
+    std::map<ggml_type, uint32_t> get_diffusion_model_wtype_stat();
+    std::map<ggml_type, uint32_t> get_vae_wtype_stat();
     void set_wtype_override(ggml_type wtype, std::string prefix = "");
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       std::set<std::string> ignore_tensors = {},
                       int n_threads                        = 0);
+
+    std::vector<std::string> get_tensor_names() const {
+        std::vector<std::string> names;
+        for (const auto& ts : tensor_storages) {
+            names.push_back(ts.name);
+        }
+        return names;
+    }
 
     bool save_to_gguf_file(const std::string& file_path, ggml_type type, const std::string& tensor_type_rules);
     bool tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type);
@@ -258,6 +284,7 @@ public:
     ~ModelLoader() = default;
 
     static std::string load_merges();
+    static std::string load_qwen2_merges();
     static std::string load_t5_tokenizer_json();
     static std::string load_umt5_tokenizer_json();
 };

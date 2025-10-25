@@ -121,7 +121,7 @@ public:
         }
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* emb = NULL) {
+    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x, struct ggml_tensor* emb = nullptr) {
         // For dims==3, we reduce dimension from 5d to 4d by merging h and w, in order not to change ggml
         // [N, c, t, h, w] => [N, c, t, h * w]
         // x: [N, channels, h, w] if dims == 2 else [N, channels, t, h, w]
@@ -131,7 +131,7 @@ public:
         auto out_layers_0 = std::dynamic_pointer_cast<GroupNorm32>(blocks["out_layers.0"]);
         auto out_layers_3 = std::dynamic_pointer_cast<UnaryBlock>(blocks["out_layers.3"]);
 
-        if (emb == NULL) {
+        if (emb == nullptr) {
             GGML_ASSERT(skip_t_emb);
         }
 
@@ -177,12 +177,12 @@ public:
     }
 };
 
-class GEGLU : public GGMLBlock {
+class GEGLU : public UnaryBlock {
 protected:
     int64_t dim_in;
     int64_t dim_out;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
         enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_types, GGML_TYPE_F32);
         enum ggml_type bias_wtype = GGML_TYPE_F32;
         params["proj.weight"]     = ggml_new_tensor_2d(ctx, wtype, dim_in, dim_out * 2);
@@ -193,7 +193,7 @@ public:
     GEGLU(int64_t dim_in, int64_t dim_out)
         : dim_in(dim_in), dim_out(dim_out) {}
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
         // x: [ne3, ne2, ne1, dim_in]
         // return: [ne3, ne2, ne1, dim_out]
         struct ggml_tensor* w = params["proj.weight"];
@@ -216,23 +216,57 @@ public:
     }
 };
 
+class GELU : public UnaryBlock {
+public:
+    GELU(int64_t dim_in, int64_t dim_out, bool bias = true) {
+        blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim_in, dim_out, bias));
+    }
+
+    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+        // x: [ne3, ne2, ne1, dim_in]
+        // return: [ne3, ne2, ne1, dim_out]
+        auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
+
+        x = proj->forward(ctx, x);
+        x = ggml_gelu_inplace(ctx, x);
+        return x;
+    }
+};
+
 class FeedForward : public GGMLBlock {
 public:
+    enum class Activation {
+        GEGLU,
+        GELU
+    };
     FeedForward(int64_t dim,
                 int64_t dim_out,
-                int64_t mult = 4) {
+                int64_t mult          = 4,
+                Activation activation = Activation::GEGLU,
+                bool precision_fix    = false) {
         int64_t inner_dim = dim * mult;
+        if (activation == Activation::GELU) {
+            blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GELU(dim, inner_dim));
+        } else {
+            blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GEGLU(dim, inner_dim));
+        }
 
-        blocks["net.0"] = std::shared_ptr<GGMLBlock>(new GEGLU(dim, inner_dim));
         // net_1 is nn.Dropout(), skip for inference
-        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out));
+        float scale = 1.f;
+        if (precision_fix) {
+            scale = 1.f / 128.f;
+        }
+        // The purpose of the scale here is to prevent NaN issues in certain situations.
+        // For example, when using Vulkan without enabling force_prec_f32,
+        // or when using CUDA but the weights are k-quants.
+        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out, true, false, false, scale));
     }
 
     struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
         // x: [ne3, ne2, ne1, dim]
         // return: [ne3, ne2, ne1, dim_out]
 
-        auto net_0 = std::dynamic_pointer_cast<GEGLU>(blocks["net.0"]);
+        auto net_0 = std::dynamic_pointer_cast<UnaryBlock>(blocks["net.0"]);
         auto net_2 = std::dynamic_pointer_cast<Linear>(blocks["net.2"]);
 
         x = net_0->forward(ctx, x);  // [ne3, ne2, ne1, inner_dim]
@@ -291,7 +325,7 @@ public:
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
         auto v = to_v->forward(ctx, context);  // [N, n_context, inner_dim]
 
-        x = ggml_nn_attention_ext(ctx, backend, q, k, v, n_head, NULL, false, false, flash_attn);  // [N, n_token, inner_dim]
+        x = ggml_nn_attention_ext(ctx, backend, q, k, v, n_head, nullptr, false, false, flash_attn);  // [N, n_token, inner_dim]
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]
         return x;
@@ -449,7 +483,7 @@ public:
 
 class AlphaBlender : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
         // Get the type of the "mix_factor" tensor from the input tensors map with the specified prefix
         enum ggml_type wtype = GGML_TYPE_F32;
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
