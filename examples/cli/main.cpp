@@ -1506,7 +1506,10 @@ bool load_images_from_dir(const std::string dir,
 const char* preview_path;
 float preview_fps;
 
-void step_callback(int step, int frame_count, sd_image_t* image) {
+void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) {
+    (void)is_noisy;
+    // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
+    // unused in this app, it will either be always noisy or always denoised here
     if (frame_count == 1) {
         stbi_write_png(preview_path, image->width, image->height, image->channel, image->data, 0);
     } else {
@@ -1541,7 +1544,7 @@ int main(int argc, const char* argv[]) {
     params.high_noise_sample_params.guidance.slg.layer_count = params.high_noise_skip_layers.size();
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
-    sd_set_preview_callback((sd_preview_cb_t)step_callback, params.preview_method, params.preview_interval);
+    sd_set_preview_callback((sd_preview_cb_t)step_callback, params.preview_method, params.preview_interval, true, false);
 
     if (params.verbose) {
         print_params(params);

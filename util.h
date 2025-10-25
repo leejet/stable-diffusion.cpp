@@ -60,6 +60,8 @@ void* sd_get_progress_callback_data();
 sd_preview_cb_t sd_get_preview_callback();
 preview_t sd_get_preview_mode();
 int sd_get_preview_interval();
+bool sd_should_preview_denoised();
+bool sd_should_preview_noisy();
 
 #define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)

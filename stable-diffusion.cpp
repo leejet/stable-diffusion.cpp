@@ -1148,7 +1148,8 @@ public:
                        enum SDVersion version,
                        preview_t preview_mode,
                        ggml_tensor* result,
-                       std::function<void(int, int, sd_image_t*)> step_callback) {
+                       std::function<void(int, int, sd_image_t*, bool)> step_callback,
+                       bool is_noisy) {
         const uint32_t channel = 3;
         uint32_t width         = latents->ne[0];
         uint32_t height        = latents->ne[1];
@@ -1218,7 +1219,7 @@ public:
             for (int i = 0; i < frames; i++) {
                 images[i] = {width, height, channel, data + i * width * height * channel};
             }
-            step_callback(step, frames, images);
+            step_callback(step, frames, images, is_noisy);
             free(data);
             free(images);
         } else {
@@ -1272,7 +1273,7 @@ public:
                 images[i].data    = sd_tensor_to_image(result, i, ggml_n_dims(latents) == 4);
             }
 
-            step_callback(step, frames, images);
+            step_callback(step, frames, images, is_noisy);
             
             ggml_tensor_scale(result, 0);
             for (int i = 0; i < frames; i++) {
@@ -1384,6 +1385,8 @@ public:
         }
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
+            auto sd_preview_cb   = sd_get_preview_callback();
+            auto sd_preview_mode = sd_get_preview_mode();
             if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
             }
@@ -1417,6 +1420,11 @@ public:
 
             if (denoise_mask != nullptr && version == VERSION_WAN2_2_TI2V) {
                 apply_mask(noised_input, init_latent, denoise_mask);
+            }
+            if (sd_preview_cb != NULL && sd_should_preview_noisy()) {
+                if (step % sd_get_preview_interval() == 0) {
+                    preview_image(work_ctx, step, noised_input, version, sd_preview_mode, preview_tensor, sd_preview_cb, true);
+                }
             }
 
             std::vector<struct ggml_tensor*> controls;
@@ -1542,14 +1550,13 @@ public:
             if (denoise_mask != nullptr) {
                 apply_mask(denoised, init_latent, denoise_mask);
             }
-            auto sd_preview_cb   = sd_get_preview_callback();
-            auto sd_preview_mode = sd_get_preview_mode();
-            if (sd_preview_cb != NULL) {
+
+            if (sd_preview_cb != NULL && sd_should_preview_denoised()) {
                 if (step % sd_get_preview_interval() == 0) {
-                    preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb);
+                    preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb, false);
                 }
             }
-            
+
             int64_t t1 = ggml_time_us();
             if (step > 0 || step == -(int)steps) {
                 int showstep = std::abs(step);

@@ -189,8 +189,10 @@ static sd_progress_cb_t sd_progress_cb = nullptr;
 void* sd_progress_cb_data              = nullptr;
 
 static sd_preview_cb_t sd_preview_cb = NULL;
-preview_t sd_preview_mode         = PREVIEW_NONE;
+preview_t sd_preview_mode            = PREVIEW_NONE;
 int sd_preview_interval              = 1;
+bool sd_preview_denoised             = true;
+bool sd_preview_noisy                = false;
 
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
@@ -335,10 +337,12 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
 }
-void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode = PREVIEW_PROJ, int interval = 1) {
+void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode = PREVIEW_PROJ, int interval = 1, bool denoised = true, bool noisy = false) {
     sd_preview_cb       = cb;
     sd_preview_mode     = mode;
     sd_preview_interval = interval;
+    sd_preview_denoised = denoised;
+    sd_preview_noisy    = noisy;
 }
 
 sd_preview_cb_t sd_get_preview_callback() {
@@ -350,6 +354,12 @@ preview_t sd_get_preview_mode() {
 }
 int sd_get_preview_interval() {
     return sd_preview_interval;
+}
+bool sd_should_preview_denoised() {
+    return sd_preview_denoised;
+}
+bool sd_should_preview_noisy() {
+    return sd_preview_noisy;
 }
 
 sd_progress_cb_t sd_get_progress_callback() {
