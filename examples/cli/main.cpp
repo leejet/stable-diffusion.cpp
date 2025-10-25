@@ -146,13 +146,13 @@ struct SDParams {
     int preview_interval     = 1;
     std::string preview_path = "preview.png";
     bool taesd_preview       = false;
+    bool preview_noisy       = false;
 
     SDParams() {
         sd_sample_params_init(&sample_params);
         sd_sample_params_init(&high_noise_sample_params);
         high_noise_sample_params.sample_steps = -1;
     }
-
 };
 
 void print_params(SDParams params) {
@@ -223,7 +223,7 @@ void print_params(SDParams params) {
     printf("    video_frames:                      %d\n", params.video_frames);
     printf("    vace_strength:                     %.2f\n", params.vace_strength);
     printf("    fps:                               %d\n", params.fps);
-    printf("    preview_mode:                      %s\n", previews_str[params.preview_method]);
+    printf("    preview_mode:                      %s (%s)\n", previews_str[params.preview_method], params.preview_noisy ? "noisy" : "denoised");
     printf("    preview_interval:                  %d\n", params.preview_interval);
     free(sample_params_str);
     free(high_noise_sample_params_str);
@@ -604,7 +604,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--negative-prompt",
          "the negative prompt (default: \"\")",
          &params.negative_prompt},
-        {"", 
+        {"",
          "--preview-path",
          "path to write preview image to (default: ./preview.png)",
          &params.preview_path},
@@ -669,7 +669,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"",
          "--preview-interval",
          "interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at every step)",
-          &params.preview_interval},
+         &params.preview_interval},
     };
 
     options.float_options = {
@@ -826,8 +826,12 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          false, &params.auto_resize_ref_image},
         {"",
          "--taesd-preview-only",
-         std::string("prevents usage of taesd for decoding the final image. (for use with --preview ") + previews_str[PREVIEW_TAE] + ")", 
-         false, &params.taesd_preview},
+         std::string("prevents usage of taesd for decoding the final image. (for use with --preview ") + previews_str[PREVIEW_TAE] + ")",
+         true, &params.taesd_preview},
+         {"",
+        "--preview-noisy",
+        "enables previewing noisy inputs of the models rather than the denoised outputs",
+        true, &params.preview_noisy}
     };
 
     auto on_mode_arg = [&](int argc, const char** argv, int index) {
@@ -1507,6 +1511,7 @@ const char* preview_path;
 float preview_fps;
 
 void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) {
+    (void)step;
     (void)is_noisy;
     // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
     // unused in this app, it will either be always noisy or always denoised here
@@ -1531,7 +1536,8 @@ int main(int argc, const char* argv[]) {
             std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
         }
         if (file_ext == ".png") {
-            preview_path = (base_path + ".avi").c_str();
+            base_path    = base_path + ".avi";
+            preview_path = base_path.c_str();
         }
     }
     preview_fps = params.fps;
@@ -1544,7 +1550,7 @@ int main(int argc, const char* argv[]) {
     params.high_noise_sample_params.guidance.slg.layer_count = params.high_noise_skip_layers.size();
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
-    sd_set_preview_callback((sd_preview_cb_t)step_callback, params.preview_method, params.preview_interval, true, false);
+    sd_set_preview_callback((sd_preview_cb_t)step_callback, params.preview_method, params.preview_interval, !params.preview_noisy, params.preview_noisy);
 
     if (params.verbose) {
         print_params(params);
