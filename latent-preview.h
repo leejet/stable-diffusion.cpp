@@ -1,3 +1,6 @@
+#include <cstddef>
+#include <cstdint>
+#include "ggml.h"
 const float wan_21_latent_rgb_proj[16][3] = {
     {-0.1299, -0.1692, 0.2932},
     {0.0671, 0.0406, 0.0442},
