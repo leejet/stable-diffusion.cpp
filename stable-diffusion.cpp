@@ -1155,8 +1155,8 @@ public:
         uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
 
         if (preview_mode == PREVIEW_PROJ) {
-            const float (*latent_rgb_proj)[channel];
-            float *latent_rgb_bias;
+            const float (*latent_rgb_proj)[channel] = NULL;
+            float *latent_rgb_bias = NULL;
 
             if (dim == 48) {
                 if (sd_version_is_wan(version)) {
@@ -1198,6 +1198,8 @@ public:
                     LOG_WARN("No latent to RGB projection known for this model");
                     return;
                 }
+            } else if (dim == 4) {
+                // Do nothing, assuming already RGB latents
             } else {
                 LOG_WARN("No latent to RGB projection known for this model");
                 // unknown latent space
@@ -1227,7 +1229,7 @@ public:
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                         first_stage_model->compute(n_threads, in, true, &out, NULL);
                     };
-                    silent_tiling(latents, result, 8, 32, 0.5f, on_tiling);
+                    silent_tiling(latents, result, get_vae_scale_factor(), 32, 0.5f, on_tiling);
 
                 } else {
                     first_stage_model->compute(n_threads, latents, true, &result, work_ctx);
@@ -1246,7 +1248,7 @@ public:
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                         tae_first_stage->compute(n_threads, in, true, &out, NULL);
                     };
-                    silent_tiling(latents, result, 8, 64, 0.5f, on_tiling);
+                    silent_tiling(latents, result, get_vae_scale_factor(), 64, 0.5f, on_tiling);
                 } else {
                     tae_first_stage->compute(n_threads, latents, true, &result, work_ctx);
                 }
@@ -1359,17 +1361,13 @@ public:
         struct ggml_tensor* preview_tensor = NULL;
         auto sd_preview_mode               = sd_get_preview_mode();
         if (sd_preview_mode != PREVIEW_NONE && sd_preview_mode != PREVIEW_PROJ) {
-            int64_t W = x->ne[0] * 8;
-            int64_t H = x->ne[1] * 8;
+            int64_t W = x->ne[0] * get_vae_scale_factor();
+            int64_t H = x->ne[1] * get_vae_scale_factor();
             if (ggml_n_dims(x) == 4) {
                 // assuming video mode (if batch processing gets implemented this will break)
                 int T = x->ne[2];
                 if (sd_version_is_wan(version)) {
                     T = ((T - 1) * 4) + 1;
-                    if (version == VERSION_WAN2_2_TI2V) {
-                        W = x->ne[0] * 16;
-                        H = x->ne[1] * 16;
-                    }
                 }
                 preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
                                                     W,

@@ -132,17 +132,25 @@ void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const fl
             for (int i = 0; i < width; i++) {
                 size_t latent_id = (i * latents->nb[0] + j * latents->nb[1] + k * latents->nb[2]);
                 float r = 0, g = 0, b = 0;
-                for (int d = 0; d < dim; d++) {
-                    float value = *(float*)((char*)latents->data + latent_id + d * latents->nb[ggml_n_dims(latents) - 1]);
-                    r += value * latent_rgb_proj[d][0];
-                    g += value * latent_rgb_proj[d][1];
-                    b += value * latent_rgb_proj[d][2];
+                if(latent_rgb_proj!=NULL){
+                    for (int d = 0; d < dim; d++) {
+                        float value = *(float*)((char*)latents->data + latent_id + d * latents->nb[ggml_n_dims(latents) - 1]);
+                        r += value * latent_rgb_proj[d][0];
+                        g += value * latent_rgb_proj[d][1];
+                        b += value * latent_rgb_proj[d][2];
+                    }
+                } else {
+                    // interpret first 3 channels as RGB
+                    r = *(float*)((char*)latents->data + latent_id + 0 * latents->nb[ggml_n_dims(latents) - 1]);
+                    g = *(float*)((char*)latents->data + latent_id + 1 * latents->nb[ggml_n_dims(latents) - 1]);
+                    b = *(float*)((char*)latents->data + latent_id + 2 * latents->nb[ggml_n_dims(latents) - 1]);
                 }
-                // bias
-                r += latent_rgb_bias[0];
-                g += latent_rgb_bias[1];
-                b += latent_rgb_bias[2];
-
+                if(latent_rgb_bias!=NULL){
+                    // bias
+                    r += latent_rgb_bias[0];
+                    g += latent_rgb_bias[1];
+                    b += latent_rgb_bias[2];
+                }
                 // change range
                 r = r * .5f + .5f;
                 g = g * .5f + .5f;
