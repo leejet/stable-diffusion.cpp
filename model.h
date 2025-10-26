@@ -134,8 +134,7 @@ enum PMVersion {
 struct TensorStorage {
     std::string name;
     ggml_type type          = GGML_TYPE_F32;
-    bool is_bf16            = false;
-    bool is_f8_e4m3         = false;
+    bool is_f8_e4m3fn       = false;
     bool is_f8_e5m2         = false;
     bool is_f64             = false;
     bool is_i64             = false;
@@ -168,8 +167,8 @@ struct TensorStorage {
     }
 
     int64_t nbytes_to_read() const {
-        if (is_bf16 || is_f8_e4m3 || is_f8_e5m2) {
-            return nbytes() / 2;
+        if (is_f8_e4m3fn || is_f8_e5m2) {
+            return nbytes() / 4;
         } else if (is_f64 || is_i64) {
             return nbytes() * 2;
         } else {
@@ -215,17 +214,17 @@ struct TensorStorage {
 
     std::string to_string() const {
         std::stringstream ss;
-        const char* type_name = ggml_type_name(type);
-        if (is_bf16) {
-            type_name = "bf16";
-        } else if (is_f8_e4m3) {
-            type_name = "f8_e4m3";
+        const char* type_name;
+        if (is_f8_e4m3fn) {
+            type_name = "f8_e4m3fn";
         } else if (is_f8_e5m2) {
             type_name = "f8_e5m2";
         } else if (is_f64) {
             type_name = "f64";
         } else if (is_i64) {
             type_name = "i64";
+        } else {
+            type_name = ggml_type_name(type);
         }
         ss << name << " | " << type_name << " | ";
         ss << n_dims << " [";
@@ -238,6 +237,9 @@ struct TensorStorage {
         ss << "]";
         return ss.str();
     }
+
+    bool read_data(void* buf, std::ifstream& file) const;
+    bool read_data(void* buf, struct zip_t* zip, std::atomic<int64_t>& memcpy_time_ms) const;
 };
 
 typedef std::function<bool(const TensorStorage&, ggml_tensor**)> on_new_tensor_cb_t;
