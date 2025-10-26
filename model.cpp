@@ -111,8 +111,12 @@ const char* unused_tensors[] = {
     "embedding_manager",
     "denoiser.sigmas",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
+    "text_encoders.t5xxl.logit_scale",                              // only used during training
+    "text_encoders.t5xxl.transformer.scaled_fp8",
     "text_encoders.qwen2vl.output.weight",
     "text_encoders.qwen2vl.lm_head.",
+    "text_encoders.qwen2vl.logit_scale",  // only used during training
+    "text_encoders.qwen2vl.transformer.scaled_fp8",
 };
 
 bool is_unused_tensor(std::string name) {
@@ -2084,6 +2088,26 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
         std::atomic<bool> failed(false);
         std::vector<std::thread> workers;
 
+        std::unordered_map<std::string, int> scale_idx;
+        std::unordered_map<std::string, int> scale_count;
+        for (int i = 0; i < file_tensors.size(); i++) {
+            const TensorStorage* tensor = file_tensors[i];
+            if (ends_with(tensor->name, ".scale_weight")) {
+                std::string new_name = tensor->name.substr(0, tensor->name.size() - strlen(".scale_weight")) + ".weight";
+                GGML_ASSERT(tensor->nelements() == 1 && tensor->type == GGML_TYPE_F32 && tensor->nbytes_to_read() == 4);
+                scale_idx[new_name] = i;
+                scale_count[new_name]++;
+            } else if (ends_with(tensor->name, ".weight") && (tensor->is_f8_e4m3fn || tensor->is_f8_e5m2)) {
+                scale_count[tensor->name]--;
+            }
+        }
+        for (auto& x : scale_count) {
+            if (x.second > 0) {
+                LOG_ERROR("f8 weight not found for scale_weight: '%s'", x.first.c_str());
+                return false;
+            }
+        }
+
         for (int i = 0; i < n_threads; ++i) {
             workers.emplace_back([&, file_path, is_zip]() {
                 std::ifstream file;
@@ -2114,6 +2138,15 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     } else {
                         fail |= !tensor_storage.read_data(buf, file);
                     }
+                    float scale = 1;
+                    if (scale_idx.count(tensor_storage.name)) {
+                        const TensorStorage* tensor = file_tensors[scale_idx[tensor_storage.name]];
+                        if (is_zip) {
+                            fail |= !tensor->read_data(&scale, zip, memcpy_time_ms);
+                        } else {
+                            fail |= !tensor->read_data(&scale, file);
+                        }
+                    }
                     if (fail) {
                         failed = true;
                         LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
@@ -2125,11 +2158,17 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     if (tensor_storage.is_f8_e4m3fn) {
                         for (int64_t i = count - 1; i >= 0; i--) {
                             static_cast<float*>(buf)[i] = f8_e4m3fn_to_f32(static_cast<uint8_t*>(buf)[i]);
+                            if (scale != 1) {
+                                static_cast<float*>(buf)[i] *= scale;
+                            }
                         }
                     } else if (tensor_storage.is_f8_e5m2) {
                         for (int64_t i = count - 1; i >= 0; i--) {
                             static_cast<float*>(buf)[i] =
                                 ggml_fp16_to_fp32(f8_e5m2_to_f16(static_cast<uint8_t*>(buf)[i]));
+                            if (scale != 1) {
+                                static_cast<float*>(buf)[i] *= scale;
+                            }
                         }
                     } else if (tensor_storage.is_f64) {
                         for (int64_t i = 0; i < count; i++) {
@@ -2154,7 +2193,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     }
 
                     const TensorStorage& tensor_storage = *file_tensors[idx];
-                    ggml_tensor* dst_tensor             = nullptr;
+                    if (ends_with(tensor_storage.name, ".scale_weight")) {
+                        continue;
+                    }
+
+                    ggml_tensor* dst_tensor = nullptr;
 
                     if (!on_new_tensor_cb(tensor_storage, &dst_tensor)) {
                         LOG_WARN("process tensor failed: '%s'", tensor_storage.name.c_str());
