@@ -267,6 +267,7 @@ public:
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
     bool model_is_unet();
     SDVersion get_sd_version();
+    std::map<ggml_type, uint32_t> get_loaded_wtype_stat();
     std::map<ggml_type, uint32_t> get_wtype_stat();
     std::map<ggml_type, uint32_t> get_conditioner_wtype_stat();
     std::map<ggml_type, uint32_t> get_diffusion_model_wtype_stat();

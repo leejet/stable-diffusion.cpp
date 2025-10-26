@@ -298,11 +298,6 @@ public:
             model_loader.set_wtype_override(wtype);
         }
 
-        std::map<ggml_type, uint32_t> wtype_stat                 = model_loader.get_wtype_stat();
-        std::map<ggml_type, uint32_t> conditioner_wtype_stat     = model_loader.get_conditioner_wtype_stat();
-        std::map<ggml_type, uint32_t> diffusion_model_wtype_stat = model_loader.get_diffusion_model_wtype_stat();
-        std::map<ggml_type, uint32_t> vae_wtype_stat             = model_loader.get_vae_wtype_stat();
-
         auto wtype_stat_to_str = [](const std::map<ggml_type, uint32_t>& m, int key_width = 8, int value_width = 5) -> std::string {
             std::ostringstream oss;
             bool first = true;
@@ -317,10 +312,11 @@ public:
             return oss.str();
         };
 
-        LOG_INFO("Weight type stat:                 %s", wtype_stat_to_str(wtype_stat).c_str());
-        LOG_INFO("Conditioner weight type stat:     %s", wtype_stat_to_str(conditioner_wtype_stat).c_str());
-        LOG_INFO("Diffusion model weight type stat: %s", wtype_stat_to_str(diffusion_model_wtype_stat).c_str());
-        LOG_INFO("VAE weight type stat:             %s", wtype_stat_to_str(vae_wtype_stat).c_str());
+        LOG_INFO("Loaded weight type stat:          %s", wtype_stat_to_str(model_loader.get_loaded_wtype_stat()).c_str());
+        LOG_INFO("Weight type stat:                 %s", wtype_stat_to_str(model_loader.get_wtype_stat()).c_str());
+        LOG_INFO("Conditioner weight type stat:     %s", wtype_stat_to_str(model_loader.get_conditioner_wtype_stat()).c_str());
+        LOG_INFO("Diffusion model weight type stat: %s", wtype_stat_to_str(model_loader.get_diffusion_model_wtype_stat()).c_str());
+        LOG_INFO("VAE weight type stat:             %s", wtype_stat_to_str(model_loader.get_vae_wtype_stat()).c_str());
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
 

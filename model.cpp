@@ -1908,18 +1908,22 @@ SDVersion ModelLoader::get_sd_version() {
     return VERSION_COUNT;
 }
 
+std::map<ggml_type, uint32_t> ModelLoader::get_loaded_wtype_stat() {
+    std::map<ggml_type, uint32_t> wtype_stat;
+    for (auto& pair : tensor_storages_types) {
+        if (!is_unused_tensor(pair.first)) {
+            wtype_stat[pair.second]++;
+        }
+    }
+
+    return wtype_stat;
+}
+
 std::map<ggml_type, uint32_t> ModelLoader::get_wtype_stat() {
     std::map<ggml_type, uint32_t> wtype_stat;
     for (auto& tensor_storage : tensor_storages) {
-        if (is_unused_tensor(tensor_storage.name)) {
-            continue;
-        }
-
-        auto iter = wtype_stat.find(tensor_storage.type);
-        if (iter != wtype_stat.end()) {
-            iter->second++;
-        } else {
-            wtype_stat[tensor_storage.type] = 1;
+        if (!is_unused_tensor(tensor_storage.name)) {
+            wtype_stat[tensor_storage.type]++;
         }
     }
     return wtype_stat;
@@ -1939,12 +1943,7 @@ std::map<ggml_type, uint32_t> ModelLoader::get_conditioner_wtype_stat() {
             continue;
         }
 
-        auto iter = wtype_stat.find(tensor_storage.type);
-        if (iter != wtype_stat.end()) {
-            iter->second++;
-        } else {
-            wtype_stat[tensor_storage.type] = 1;
-        }
+        wtype_stat[tensor_storage.type]++;
     }
     return wtype_stat;
 }
@@ -1960,12 +1959,7 @@ std::map<ggml_type, uint32_t> ModelLoader::get_diffusion_model_wtype_stat() {
             continue;
         }
 
-        auto iter = wtype_stat.find(tensor_storage.type);
-        if (iter != wtype_stat.end()) {
-            iter->second++;
-        } else {
-            wtype_stat[tensor_storage.type] = 1;
-        }
+        wtype_stat[tensor_storage.type]++;
     }
     return wtype_stat;
 }
@@ -1982,12 +1976,7 @@ std::map<ggml_type, uint32_t> ModelLoader::get_vae_wtype_stat() {
             continue;
         }
 
-        auto iter = wtype_stat.find(tensor_storage.type);
-        if (iter != wtype_stat.end()) {
-            iter->second++;
-        } else {
-            wtype_stat[tensor_storage.type] = 1;
-        }
+        wtype_stat[tensor_storage.type]++;
     }
     return wtype_stat;
 }
