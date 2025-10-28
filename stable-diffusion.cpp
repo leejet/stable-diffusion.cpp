@@ -1250,7 +1250,7 @@ public:
                 return;
             }
 
-            ggml_tensor_clamp(result, 0.0f, 1.0f);
+            ggml_ext_tensor_clamp_inplace(result, 0.0f, 1.0f);
             uint32_t frames = 1;
             if (ggml_n_dims(latents) == 4) {
                 frames = result->ne[2];
@@ -1262,12 +1262,12 @@ public:
                 images[i].width   = result->ne[0];
                 images[i].height  = result->ne[1];
                 images[i].channel = 3;
-                images[i].data    = sd_tensor_to_image(result, i, ggml_n_dims(latents) == 4);
+                images[i].data    = ggml_tensor_to_sd_image(result, i, ggml_n_dims(latents) == 4);
             }
 
             step_callback(step, frames, images, is_noisy);
 
-            ggml_tensor_scale(result, 0);
+            ggml_ext_tensor_scale_inplace(result, 0);
             for (int i = 0; i < frames; i++) {
                 free(images[i].data);
             }
