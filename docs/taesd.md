@@ -7,7 +7,7 @@ You can use TAESD to accelerate the decoding of latent images by following these
 Or curl
 
 ```bash
-curl -L -O https://huggingface.co/madebyollin/taesd/blob/main/diffusion_pytorch_model.safetensors
+curl -L -O https://huggingface.co/madebyollin/taesd/resolve/main/diffusion_pytorch_model.safetensors
 ```
 
 - Specify the model path using the `--taesd PATH` parameter. example:
