@@ -1191,7 +1191,7 @@ public:
                     LOG_WARN("No latent to RGB projection known for this model");
                     return;
                 }
-            } else if (dim == 4) {
+            } else if (dim == 3) {
                 // Do nothing, assuming already RGB latents
             } else {
                 LOG_WARN("No latent to RGB projection known for this model");
