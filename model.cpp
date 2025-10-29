@@ -746,6 +746,10 @@ std::string convert_tensor_name(std::string name) {
 
 void add_preprocess_tensor_storage_types(String2GGMLType& tensor_storages_types, std::string name, enum ggml_type type) {
     std::string new_name = convert_tensor_name(name);
+    // TODO: enable bf16 once it is supported by the relevant ggml ops
+    if (type == GGML_TYPE_BF16) {
+        type = GGML_TYPE_F32;
+    }
 
     if (new_name.find("cond_stage_model") != std::string::npos && ends_with(new_name, "attn.in_proj_weight")) {
         size_t prefix_size                                        = new_name.find("attn.in_proj_weight");
