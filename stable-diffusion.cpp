@@ -2532,8 +2532,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         sd_image_to_ggml_tensor(sd_img_gen_params->mask_image, mask_img);
         sd_image_to_ggml_tensor(sd_img_gen_params->init_image, init_img);
 
-        init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
-
         if (sd_version_is_inpaint(sd_ctx->sd->version)) {
             int64_t mask_channels = 1;
             if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
@@ -2548,8 +2546,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                 ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
                 ggml_ext_tensor_apply_mask(init_img, mask_img, masked_img);
                 masked_latent = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
+                init_latent   = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
             } else {
                 // mask after vae
+                init_latent   = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
                 masked_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2], 1);
                 ggml_ext_tensor_apply_mask(init_latent, mask_img, masked_latent, 0.);
             }
@@ -2593,6 +2593,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                     }
                 }
             }
+        } else {
+            init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
         }
 
         {
