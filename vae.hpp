@@ -30,7 +30,7 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [N, in_channels, h, w]
         // t_emb is always None
         auto norm1 = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm1"]);
@@ -40,12 +40,12 @@ public:
 
         auto h = x;
         h      = norm1->forward(ctx, h);
-        h      = ggml_silu_inplace(ctx, h);  // swish
+        h      = ggml_silu_inplace(ctx->ggml_ctx, h);  // swish
         h      = conv1->forward(ctx, h);
         // return h;
 
         h = norm2->forward(ctx, h);
-        h = ggml_silu_inplace(ctx, h);  // swish
+        h = ggml_silu_inplace(ctx->ggml_ctx, h);  // swish
         // dropout, skip for inference
         h = conv2->forward(ctx, h);
 
@@ -56,7 +56,7 @@ public:
             x = nin_shortcut->forward(ctx, x);  // [N, out_channels, h, w]
         }
 
-        h = ggml_add(ctx, h, x);
+        h = ggml_add(ctx->ggml_ctx, h, x);
         return h;  // [N, out_channels, h, w]
     }
 };
@@ -76,7 +76,7 @@ public:
         blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, in_channels, {1, 1}));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [N, in_channels, h, w]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
         auto q_proj   = std::dynamic_pointer_cast<Conv2d>(blocks["q"]);
@@ -91,25 +91,25 @@ public:
         const int64_t h = h_->ne[1];
         const int64_t w = h_->ne[0];
 
-        auto q = q_proj->forward(ctx, h_);                          // [N, in_channels, h, w]
-        q      = ggml_cont(ctx, ggml_permute(ctx, q, 1, 2, 0, 3));  // [N, h, w, in_channels]
-        q      = ggml_reshape_3d(ctx, q, c, h * w, n);              // [N, h * w, in_channels]
+        auto q = q_proj->forward(ctx, h_);                                              // [N, in_channels, h, w]
+        q      = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, q, 1, 2, 0, 3));  // [N, h, w, in_channels]
+        q      = ggml_reshape_3d(ctx->ggml_ctx, q, c, h * w, n);                        // [N, h * w, in_channels]
 
-        auto k = k_proj->forward(ctx, h_);                          // [N, in_channels, h, w]
-        k      = ggml_cont(ctx, ggml_permute(ctx, k, 1, 2, 0, 3));  // [N, h, w, in_channels]
-        k      = ggml_reshape_3d(ctx, k, c, h * w, n);              // [N, h * w, in_channels]
+        auto k = k_proj->forward(ctx, h_);                                              // [N, in_channels, h, w]
+        k      = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, k, 1, 2, 0, 3));  // [N, h, w, in_channels]
+        k      = ggml_reshape_3d(ctx->ggml_ctx, k, c, h * w, n);                        // [N, h * w, in_channels]
 
-        auto v = v_proj->forward(ctx, h_);              // [N, in_channels, h, w]
-        v      = ggml_reshape_3d(ctx, v, h * w, c, n);  // [N, in_channels, h * w]
+        auto v = v_proj->forward(ctx, h_);                        // [N, in_channels, h, w]
+        v      = ggml_reshape_3d(ctx->ggml_ctx, v, h * w, c, n);  // [N, in_channels, h * w]
 
-        h_ = ggml_ext_attention(ctx, q, k, v, false);  // [N, h * w, in_channels]
+        h_ = ggml_ext_attention(ctx->ggml_ctx, q, k, v, false);  // [N, h * w, in_channels]
 
-        h_ = ggml_cont(ctx, ggml_permute(ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
-        h_ = ggml_reshape_4d(ctx, h_, w, h, c, n);               // [N, in_channels, h, w]
+        h_ = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h_, 1, 0, 2, 3));  // [N, in_channels, h * w]
+        h_ = ggml_reshape_4d(ctx->ggml_ctx, h_, w, h, c, n);                         // [N, in_channels, h, w]
 
         h_ = proj_out->forward(ctx, h_);  // [N, in_channels, h, w]
 
-        h_ = ggml_add(ctx, h_, x);
+        h_ = ggml_add(ctx->ggml_ctx, h_, x);
         return h_;
     }
 };
@@ -133,7 +133,7 @@ public:
                                                                              kernel_padding));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx,
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x) override {
         // timesteps always None
         // skip_video always False
@@ -152,12 +152,12 @@ public:
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];
 
-        x = ggml_reshape_4d(ctx, x, W * H, C, T, B);           // (b t) c h w -> b t c (h w)
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
-        x = time_mix_conv->forward(ctx, x);                    // [B, OC, T, OH * OW]
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
-        x = ggml_reshape_4d(ctx, x, W, H, C, T * B);           // b t c (h w) -> (b t) c h w
-        return x;                                              // [B*T, OC, OH, OW]
+        x = ggml_reshape_4d(ctx->ggml_ctx, x, W * H, C, T, B);                     // (b t) c h w -> b t c (h w)
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
+        x = time_mix_conv->forward(ctx, x);                                        // [B, OC, T, OH * OW]
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
+        x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, C, T * B);                     // b t c (h w) -> (b t) c h w
+        return x;                                                                  // [B*T, OC, OH, OW]
     }
 };
 
@@ -182,7 +182,7 @@ public:
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));
     }
 
-    struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) override {
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
         // x: [N, in_channels, h, w] aka [b*t, in_channels, h, w]
         // return: [N, out_channels, h, w] aka [b*t, out_channels, h, w]
         // t_emb is always None
@@ -199,19 +199,19 @@ public:
         int64_t H = x->ne[1];
         int64_t W = x->ne[0];
 
-        x          = ggml_reshape_4d(ctx, x, W * H, C, T, B);           // (b t) c h w -> b t c (h w)
-        x          = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
+        x          = ggml_reshape_4d(ctx->ggml_ctx, x, W * H, C, T, B);                     // (b t) c h w -> b t c (h w)
+        x          = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b t c (h w) -> b c t (h w)
         auto x_mix = x;
 
         x = time_stack->forward(ctx, x);  // b t c (h w)
 
         float alpha = get_alpha();
-        x           = ggml_add(ctx,
-                               ggml_scale(ctx, x, alpha),
-                               ggml_scale(ctx, x_mix, 1.0f - alpha));
+        x           = ggml_add(ctx->ggml_ctx,
+                               ggml_scale(ctx->ggml_ctx, x, alpha),
+                               ggml_scale(ctx->ggml_ctx, x_mix, 1.0f - alpha));
 
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
-        x = ggml_reshape_4d(ctx, x, W, H, C, T * B);           // b t c (h w) -> (b t) c h w
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
+        x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, C, T * B);                     // b t c (h w) -> (b t) c h w
 
         return x;
     }
@@ -271,7 +271,7 @@ public:
         blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(block_in, double_z ? z_channels * 2 : z_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* x) {
+    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [N, in_channels, h, w]
 
         auto conv_in     = std::dynamic_pointer_cast<Conv2d>(blocks["conv_in"]);
@@ -307,8 +307,8 @@ public:
 
         // end
         h = norm_out->forward(ctx, h);
-        h = ggml_silu_inplace(ctx, h);  // nonlinearity/swish
-        h = conv_out->forward(ctx, h);  // [N, z_channels*2, h, w]
+        h = ggml_silu_inplace(ctx->ggml_ctx, h);  // nonlinearity/swish
+        h = conv_out->forward(ctx, h);            // [N, z_channels*2, h, w]
         return h;
     }
 };
@@ -388,7 +388,7 @@ public:
         blocks["conv_out"] = get_conv_out(block_in, out_ch, {3, 3}, {1, 1}, {1, 1});
     }
 
-    virtual struct ggml_tensor* forward(struct ggml_context* ctx, struct ggml_tensor* z) {
+    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
         // alpha is always 0
         // merge_strategy is always learned
@@ -429,8 +429,8 @@ public:
         }
 
         h = norm_out->forward(ctx, h);
-        h = ggml_silu_inplace(ctx, h);  // nonlinearity/swish
-        h = conv_out->forward(ctx, h);  // [N, out_ch, h*8, w*8]
+        h = ggml_silu_inplace(ctx->ggml_ctx, h);  // nonlinearity/swish
+        h = conv_out->forward(ctx, h);            // [N, out_ch, h*8, w*8]
         return h;
     }
 };
@@ -493,7 +493,7 @@ public:
         }
     }
 
-    struct ggml_tensor* decode(struct ggml_context* ctx, struct ggml_tensor* z) {
+    struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
         if (use_quant) {
             auto post_quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["post_quant_conv"]);
@@ -507,7 +507,7 @@ public:
         return h;
     }
 
-    struct ggml_tensor* encode(struct ggml_context* ctx, struct ggml_tensor* x) {
+    struct ggml_tensor* encode(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         // x: [N, in_channels, h, w]
         auto encoder = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
 
@@ -607,7 +607,9 @@ struct AutoEncoderKL : public VAE {
 
         z = to_backend(z);
 
-        struct ggml_tensor* out = decode_graph ? ae.decode(compute_ctx, z) : ae.encode(compute_ctx, z);
+        auto runner_ctx = get_context();
+
+        struct ggml_tensor* out = decode_graph ? ae.decode(&runner_ctx, z) : ae.encode(&runner_ctx, z);
 
         ggml_build_forward_expand(gf, out);
 
