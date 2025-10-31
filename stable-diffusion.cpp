@@ -2535,7 +2535,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         if (sd_version_is_inpaint(sd_ctx->sd->version)) {
             int64_t mask_channels = 1;
             if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
-                mask_channels = sd_ctx->sd->get_vae_scale_factor() * sd_ctx->sd->get_vae_scale_factor();  // flatten the whole mask
+                mask_channels = vae_scale_factor * vae_scale_factor;  // flatten the whole mask
             } else if (sd_ctx->sd->version == VERSION_FLEX_2) {
                 mask_channels = 1 + sd_ctx->sd->get_latent_channel();
             }
