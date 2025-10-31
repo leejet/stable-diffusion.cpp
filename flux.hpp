@@ -85,13 +85,11 @@ namespace Flux {
     struct SelfAttention : public GGMLBlock {
     public:
         int64_t num_heads;
-        bool flash_attn;
 
     public:
         SelfAttention(int64_t dim,
                       int64_t num_heads = 8,
-                      bool qkv_bias     = false,
-                      bool flash_attn   = false)
+                      bool qkv_bias     = false)
             : num_heads(num_heads) {
             int64_t head_dim = dim / num_heads;
             blocks["qkv"]    = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
@@ -129,7 +127,7 @@ namespace Flux {
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
             auto qkv = pre_attention(ctx, x);                                               // q,k,v: [N, n_token, n_head, d_head]
-            x        = Rope::attention(ctx, qkv[0], qkv[1], qkv[2], pe, mask, flash_attn);  // [N, n_token, dim]
+            x        = Rope::attention(ctx, qkv[0], qkv[1], qkv[2], pe, mask);  // [N, n_token, dim]
             x        = post_attention(ctx, x);                                              // [N, n_token, dim]
             return x;
         }
@@ -198,7 +196,6 @@ namespace Flux {
     }
 
     struct DoubleStreamBlock : public GGMLBlock {
-        bool flash_attn;
         bool prune_mod;
         int idx = 0;
 
@@ -208,15 +205,14 @@ namespace Flux {
                           float mlp_ratio,
                           int idx         = 0,
                           bool qkv_bias   = false,
-                          bool flash_attn = false,
                           bool prune_mod  = false)
-            : idx(idx), flash_attn(flash_attn), prune_mod(prune_mod) {
+            : idx(idx), prune_mod(prune_mod) {
             int64_t mlp_hidden_dim = hidden_size * mlp_ratio;
             if (!prune_mod) {
                 blocks["img_mod"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
             }
             blocks["img_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
-            blocks["img_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, flash_attn));
+            blocks["img_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias));
 
             blocks["img_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             blocks["img_mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, mlp_hidden_dim));
@@ -227,7 +223,7 @@ namespace Flux {
                 blocks["txt_mod"] = std::shared_ptr<GGMLBlock>(new Modulation(hidden_size, true));
             }
             blocks["txt_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
-            blocks["txt_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias, flash_attn));
+            blocks["txt_attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qkv_bias));
 
             blocks["txt_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-6f, false));
             blocks["txt_mlp.0"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, mlp_hidden_dim));
@@ -317,7 +313,7 @@ namespace Flux {
             auto k = ggml_concat(ctx->ggml_ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx->ggml_ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = Rope::attention(ctx, q, k, v, pe, mask, flash_attn);                      // [N, n_txt_token + n_img_token, n_head*d_head]
+            auto attn         = Rope::attention(ctx, q, k, v, pe, mask);                      // [N, n_txt_token + n_img_token, n_head*d_head]
             attn              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, attn, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx->ggml_ctx,
                                              attn,
@@ -365,7 +361,6 @@ namespace Flux {
         int64_t num_heads;
         int64_t hidden_size;
         int64_t mlp_hidden_dim;
-        bool flash_attn;
         bool prune_mod;
         int idx = 0;
 
@@ -375,9 +370,8 @@ namespace Flux {
                           float mlp_ratio = 4.0f,
                           int idx         = 0,
                           float qk_scale  = 0.f,
-                          bool flash_attn = false,
                           bool prune_mod  = false)
-            : hidden_size(hidden_size), num_heads(num_heads), idx(idx), flash_attn(flash_attn), prune_mod(prune_mod) {
+            : hidden_size(hidden_size), num_heads(num_heads), idx(idx), prune_mod(prune_mod) {
             int64_t head_dim = hidden_size / num_heads;
             float scale      = qk_scale;
             if (scale <= 0.f) {
@@ -451,7 +445,7 @@ namespace Flux {
             auto v           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
             q                = norm->query_norm(ctx, q);
             k                = norm->key_norm(ctx, k);
-            auto attn        = Rope::attention(ctx, q, k, v, pe, mask, flash_attn);  // [N, n_token, hidden_size]
+            auto attn        = Rope::attention(ctx, q, k, v, pe, mask);  // [N, n_token, hidden_size]
 
             auto attn_mlp = ggml_concat(ctx->ggml_ctx, attn, ggml_gelu_inplace(ctx->ggml_ctx, mlp), 0);  // [N, n_token, hidden_size + mlp_hidden_dim]
             auto output   = linear2->forward(ctx, attn_mlp);                                             // [N, n_token, hidden_size]
@@ -689,7 +683,6 @@ namespace Flux {
         int theta                   = 10000;
         bool qkv_bias               = true;
         bool guidance_embed         = true;
-        bool flash_attn             = true;
         int64_t in_dim              = 64;
         ChromaRadianceParams chroma_radiance_params;
     };
@@ -728,7 +721,6 @@ namespace Flux {
                                                                                                    params.mlp_ratio,
                                                                                                    i,
                                                                                                    params.qkv_bias,
-                                                                                                   params.flash_attn,
                                                                                                    params.is_chroma);
             }
 
@@ -738,7 +730,6 @@ namespace Flux {
                                                                                                    params.mlp_ratio,
                                                                                                    i,
                                                                                                    0.f,
-                                                                                                   params.flash_attn,
                                                                                                    params.is_chroma);
             }
 
@@ -1127,11 +1118,9 @@ namespace Flux {
                    const String2GGMLType& tensor_types = {},
                    const std::string prefix            = "",
                    SDVersion version                   = VERSION_FLUX,
-                   bool flash_attn                     = false,
                    bool use_mask                       = false)
             : GGMLRunner(backend, offload_params_to_cpu), version(version), use_mask(use_mask) {
             flux_params.version             = version;
-            flux_params.flash_attn          = flash_attn;
             flux_params.guidance_embed      = false;
             flux_params.depth               = 0;
             flux_params.depth_single_blocks = 0;
@@ -1427,8 +1416,7 @@ namespace Flux {
                                                                             tensor_types,
                                                                             "model.diffusion_model",
                                                                             VERSION_CHROMA_RADIANCE,
-                                                                            false,
-                                                                            true);
+                                                                            false);
 
             flux->alloc_params_buffer();
             std::map<std::string, ggml_tensor*> tensors;

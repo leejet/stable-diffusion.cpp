@@ -1287,15 +1287,13 @@ namespace WAN {
     public:
         int64_t num_heads;
         int64_t head_dim;
-        bool flash_attn;
 
     public:
         WanSelfAttention(int64_t dim,
                          int64_t num_heads,
                          bool qk_norm    = true,
-                         float eps       = 1e-6,
-                         bool flash_attn = false)
-            : num_heads(num_heads), flash_attn(flash_attn) {
+                         float eps       = 1e-6)
+            : num_heads(num_heads) {
             head_dim    = dim / num_heads;
             blocks["q"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
             blocks["k"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
@@ -1338,7 +1336,7 @@ namespace WAN {
             k = ggml_reshape_4d(ctx->ggml_ctx, k, head_dim, num_heads, n_token, N);  // [N, n_token, n_head, d_head]
             v = ggml_reshape_4d(ctx->ggml_ctx, v, head_dim, num_heads, n_token, N);  // [N, n_token, n_head, d_head]
 
-            x = Rope::attention(ctx, q, k, v, pe, mask, flash_attn);  // [N, n_token, dim]
+            x = Rope::attention(ctx, q, k, v, pe, mask);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
@@ -1350,9 +1348,8 @@ namespace WAN {
         WanCrossAttention(int64_t dim,
                           int64_t num_heads,
                           bool qk_norm    = true,
-                          float eps       = 1e-6,
-                          bool flash_attn = false)
-            : WanSelfAttention(dim, num_heads, qk_norm, eps, flash_attn) {}
+                          float eps       = 1e-6)
+            : WanSelfAttention(dim, num_heads, qk_norm, eps) {}
         virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                             struct ggml_tensor* x,
                                             struct ggml_tensor* context,
@@ -1364,9 +1361,8 @@ namespace WAN {
         WanT2VCrossAttention(int64_t dim,
                              int64_t num_heads,
                              bool qk_norm    = true,
-                             float eps       = 1e-6,
-                             bool flash_attn = false)
-            : WanCrossAttention(dim, num_heads, qk_norm, eps, flash_attn) {}
+                             float eps       = 1e-6)
+            : WanCrossAttention(dim, num_heads, qk_norm, eps) {}
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* context,
@@ -1391,7 +1387,7 @@ namespace WAN {
             k      = norm_k->forward(ctx, k);
             auto v = v_proj->forward(ctx, context);  // [N, n_context, dim]
 
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
+            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
 
             x = o_proj->forward(ctx, x);  // [N, n_token, dim]
             return x;
@@ -1403,9 +1399,8 @@ namespace WAN {
         WanI2VCrossAttention(int64_t dim,
                              int64_t num_heads,
                              bool qk_norm    = true,
-                             float eps       = 1e-6,
-                             bool flash_attn = false)
-            : WanCrossAttention(dim, num_heads, qk_norm, eps, flash_attn) {
+                             float eps       = 1e-6)
+            : WanCrossAttention(dim, num_heads, qk_norm, eps) {
             blocks["k_img"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
             blocks["v_img"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
 
@@ -1457,8 +1452,8 @@ namespace WAN {
             k_img      = norm_k_img->forward(ctx, k_img);
             auto v_img = v_img_proj->forward(ctx, context_img);  // [N, context_img_len, dim]
 
-            auto img_x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k_img, v_img, num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
-            x          = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, false, flash_attn);          // [N, n_token, dim]
+            auto img_x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k_img, v_img, num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+            x          = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, false, false, ctx->flash_attn_enabled);          // [N, n_token, dim]
 
             x = ggml_add(ctx->ggml_ctx, x, img_x);
 
@@ -1511,20 +1506,19 @@ namespace WAN {
                           int64_t num_heads,
                           bool qk_norm         = true,
                           bool cross_attn_norm = false,
-                          float eps            = 1e-6,
-                          bool flash_attn      = false)
+                          float eps            = 1e-6)
             : dim(dim) {
             blocks["norm1"]     = std::shared_ptr<GGMLBlock>(new LayerNorm(dim, eps, false));
-            blocks["self_attn"] = std::shared_ptr<GGMLBlock>(new WanSelfAttention(dim, num_heads, qk_norm, eps, flash_attn));
+            blocks["self_attn"] = std::shared_ptr<GGMLBlock>(new WanSelfAttention(dim, num_heads, qk_norm, eps));
             if (cross_attn_norm) {
                 blocks["norm3"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim, eps, true));
             } else {
                 blocks["norm3"] = std::shared_ptr<GGMLBlock>(new Identity());
             }
             if (t2v_cross_attn) {
-                blocks["cross_attn"] = std::shared_ptr<GGMLBlock>(new WanT2VCrossAttention(dim, num_heads, qk_norm, eps, flash_attn));
+                blocks["cross_attn"] = std::shared_ptr<GGMLBlock>(new WanT2VCrossAttention(dim, num_heads, qk_norm, eps));
             } else {
-                blocks["cross_attn"] = std::shared_ptr<GGMLBlock>(new WanI2VCrossAttention(dim, num_heads, qk_norm, eps, flash_attn));
+                blocks["cross_attn"] = std::shared_ptr<GGMLBlock>(new WanI2VCrossAttention(dim, num_heads, qk_norm, eps));
             }
 
             blocks["norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim, eps, false));
@@ -1601,9 +1595,8 @@ namespace WAN {
                               bool qk_norm         = true,
                               bool cross_attn_norm = false,
                               float eps            = 1e-6,
-                              int block_id         = 0,
-                              bool flash_attn      = false)
-            : WanAttentionBlock(t2v_cross_attn, dim, ffn_dim, num_heads, qk_norm, cross_attn_norm, eps, flash_attn), block_id(block_id) {
+                              int block_id         = 0)
+            : WanAttentionBlock(t2v_cross_attn, dim, ffn_dim, num_heads, qk_norm, cross_attn_norm, eps), block_id(block_id) {
             if (block_id == 0) {
                 blocks["before_proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
             }
@@ -1755,7 +1748,6 @@ namespace WAN {
         // wan2.1 1.3B: 1536/12, wan2.1/2.2 14B: 5120/40, wan2.2 5B: 3074/24
         std::vector<int> axes_dim = {44, 42, 42};
         int64_t axes_dim_sum      = 128;
-        bool flash_attn           = false;
     };
 
     class Wan : public GGMLBlock {
@@ -1790,8 +1782,7 @@ namespace WAN {
                                                                                                          params.num_heads,
                                                                                                          params.qk_norm,
                                                                                                          params.cross_attn_norm,
-                                                                                                         params.eps,
-                                                                                                         params.flash_attn));
+                                                                                                         params.eps));
                 blocks["blocks." + std::to_string(i)] = block;
             }
 
@@ -1813,8 +1804,7 @@ namespace WAN {
                                                                                                                       params.qk_norm,
                                                                                                                       params.cross_attn_norm,
                                                                                                                       params.eps,
-                                                                                                                      i,
-                                                                                                                      params.flash_attn));
+                                                                                                                      i));
                     blocks["vace_blocks." + std::to_string(i)] = block;
                 }
 
@@ -2027,10 +2017,8 @@ namespace WAN {
                   bool offload_params_to_cpu,
                   const String2GGMLType& tensor_types = {},
                   const std::string prefix            = "",
-                  SDVersion version                   = VERSION_WAN2,
-                  bool flash_attn                     = false)
+                  SDVersion version                   = VERSION_WAN2)
             : GGMLRunner(backend, offload_params_to_cpu) {
-            wan_params.flash_attn = flash_attn;
             wan_params.num_layers = 0;
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
@@ -2278,8 +2266,7 @@ namespace WAN {
                                                                          false,
                                                                          tensor_types,
                                                                          "model.diffusion_model",
-                                                                         VERSION_WAN2_2_TI2V,
-                                                                         true);
+                                                                         VERSION_WAN2_2_TI2V);
 
             wan->alloc_params_buffer();
             std::map<std::string, ggml_tensor*> tensors;

@@ -183,7 +183,7 @@ public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1, const String2GGMLType& tensor_types = {}, bool flash_attn = false)
+    UnetModelBlock(SDVersion version = VERSION_SD1, const String2GGMLType& tensor_types = {})
         : version(version) {
         if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
@@ -251,7 +251,7 @@ public:
             if (version == VERSION_SVD) {
                 return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim);
             } else {
-                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, flash_attn);
+                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim);
             }
         };
 
@@ -583,9 +583,8 @@ struct UNetModelRunner : public GGMLRunner {
                     bool offload_params_to_cpu,
                     const String2GGMLType& tensor_types,
                     const std::string prefix,
-                    SDVersion version = VERSION_SD1,
-                    bool flash_attn   = false)
-        : GGMLRunner(backend, offload_params_to_cpu), unet(version, tensor_types, flash_attn) {
+                    SDVersion version = VERSION_SD1)
+        : GGMLRunner(backend, offload_params_to_cpu), unet(version, tensor_types) {
         unet.init(params_ctx, tensor_types, prefix);
     }
 

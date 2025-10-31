@@ -525,7 +525,7 @@ namespace Qwen {
             auto k = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
             auto v = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
 
-            x = Rope::attention(ctx, q, k, v, pe, mask, false, 1.f, false);  // [N, n_token, hidden_size]
+            x = Rope::attention(ctx, q, k, v, pe, mask, 1.f, false);  // [N, n_token, hidden_size]
 
             x = proj->forward(ctx, x);  // [N, n_token, hidden_size]
             return x;

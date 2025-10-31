@@ -65,7 +65,6 @@ namespace Qwen {
     struct QwenImageAttention : public GGMLBlock {
     protected:
         int64_t dim_head;
-        bool flash_attn;
 
     public:
         QwenImageAttention(int64_t query_dim,
@@ -75,9 +74,8 @@ namespace Qwen {
                            int64_t out_context_dim = 0,
                            bool bias               = true,
                            bool out_bias           = true,
-                           float eps               = 1e-6,
-                           bool flash_attn         = false)
-            : dim_head(dim_head), flash_attn(flash_attn) {
+                           float eps               = 1e-6)
+            : dim_head(dim_head) {
             int64_t inner_dim = out_dim > 0 ? out_dim : dim_head * num_heads;
             out_dim           = out_dim > 0 ? out_dim : query_dim;
             out_context_dim   = out_context_dim > 0 ? out_context_dim : query_dim;
@@ -160,7 +158,7 @@ namespace Qwen {
             auto k = ggml_concat(ctx->ggml_ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx->ggml_ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = Rope::attention(ctx, q, k, v, pe, mask, flash_attn, (1.0f / 128.f));      // [N, n_txt_token + n_img_token, n_head*d_head]
+            auto attn         = Rope::attention(ctx, q, k, v, pe, mask, (1.0f / 128.f));      // [N, n_txt_token + n_img_token, n_head*d_head]
             attn              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, attn, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx->ggml_ctx,
                                              attn,
@@ -193,8 +191,7 @@ namespace Qwen {
         QwenImageTransformerBlock(int64_t dim,
                                   int64_t num_attention_heads,
                                   int64_t attention_head_dim,
-                                  float eps       = 1e-6,
-                                  bool flash_attn = false) {
+                                  float eps       = 1e-6) {
             // img_mod.0 is nn.SiLU()
             blocks["img_mod.1"] = std::shared_ptr<GGMLBlock>(new Linear(dim, 6 * dim, true));
 
@@ -216,8 +213,7 @@ namespace Qwen {
                                                                                0,     // out_context-dim
                                                                                true,  // bias
                                                                                true,  // out_bias
-                                                                               eps,
-                                                                               flash_attn));
+                                                                               eps));
         }
 
         virtual std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
@@ -325,7 +321,6 @@ namespace Qwen {
         float theta                 = 10000;
         std::vector<int> axes_dim   = {16, 56, 56};
         int64_t axes_dim_sum        = 128;
-        bool flash_attn             = false;
     };
 
     class QwenImageModel : public GGMLBlock {
@@ -347,8 +342,7 @@ namespace Qwen {
                 auto block                                        = std::shared_ptr<GGMLBlock>(new QwenImageTransformerBlock(inner_dim,
                                                                                                                              params.num_attention_heads,
                                                                                                                              params.attention_head_dim,
-                                                                                                                             1e-6f,
-                                                                                                                             params.flash_attn));
+                                                                                                                             1e-6f));
                 blocks["transformer_blocks." + std::to_string(i)] = block;
             }
 
@@ -510,10 +504,8 @@ namespace Qwen {
                         bool offload_params_to_cpu,
                         const String2GGMLType& tensor_types = {},
                         const std::string prefix            = "",
-                        SDVersion version                   = VERSION_QWEN_IMAGE,
-                        bool flash_attn                     = false)
+                        SDVersion version                   = VERSION_QWEN_IMAGE)
             : GGMLRunner(backend, offload_params_to_cpu) {
-            qwen_image_params.flash_attn = flash_attn;
             qwen_image_params.num_layers = 0;
             for (auto pair : tensor_types) {
                 std::string tensor_name = pair.first;
@@ -669,8 +661,7 @@ namespace Qwen {
                                                                                             false,
                                                                                             tensor_types,
                                                                                             "model.diffusion_model",
-                                                                                            VERSION_QWEN_IMAGE,
-                                                                                            true);
+                                                                                            VERSION_QWEN_IMAGE);
 
             qwen_image->alloc_params_buffer();
             std::map<std::string, ggml_tensor*> tensors;

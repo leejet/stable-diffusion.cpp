@@ -1157,8 +1157,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
                                                              struct ggml_tensor* mask = nullptr,
                                                              bool diag_mask_inf       = false,
                                                              bool skip_reshape        = false,
-                                                             bool flash_attn          = false,  // avoid overflow
-                                                             float kv_scale           = 1.0f) {
+                                                             bool flash_attn          = false,
+                                                             float kv_scale           = 1.0f ) { // avoid overflow
     int64_t L_q;
     int64_t L_k;
     int64_t C;
@@ -1465,6 +1465,7 @@ typedef std::map<std::string, enum ggml_type> String2GGMLType;
 struct GGMLRunnerContext {
     ggml_backend_t backend = nullptr;
     ggml_context* ggml_ctx = nullptr;
+    bool flash_attn_enabled = false;
 };
 
 struct GGMLRunner {
@@ -1492,6 +1493,8 @@ protected:
     std::map<struct ggml_tensor*, const void*> backend_tensor_data_map;
     std::map<std::string, struct ggml_tensor*> cache_tensor_map;  // name -> tensor
     const std::string final_result_name = "ggml_runner_final_result_tensor";
+
+    bool flash_attn_enabled = false;
 
     void alloc_params_ctx() {
         struct ggml_init_params params;
@@ -1753,6 +1756,7 @@ public:
         GGMLRunnerContext runner_ctx;
         runner_ctx.ggml_ctx = compute_ctx;
         runner_ctx.backend  = runtime_backend;
+        runner_ctx.flash_attn_enabled = flash_attn_enabled;
         return runner_ctx;
     }
 
@@ -1875,6 +1879,10 @@ public:
         if (free_compute_buffer_immediately) {
             free_compute_buffer();
         }
+    }
+
+    void set_flash_attention_enabled(bool enabled) {
+        flash_attn_enabled = enabled;
     }
 };
 

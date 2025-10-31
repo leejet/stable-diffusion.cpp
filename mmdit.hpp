@@ -149,16 +149,14 @@ public:
     int64_t num_heads;
     bool pre_only;
     std::string qk_norm;
-    bool flash_attn;
 
 public:
     SelfAttention(int64_t dim,
                   int64_t num_heads   = 8,
                   std::string qk_norm = "",
                   bool qkv_bias       = false,
-                  bool pre_only       = false,
-                  bool flash_attn     = false)
-        : num_heads(num_heads), pre_only(pre_only), qk_norm(qk_norm), flash_attn(flash_attn) {
+                  bool pre_only       = false)
+        : num_heads(num_heads), pre_only(pre_only), qk_norm(qk_norm) {
         int64_t d_head = dim / num_heads;
         blocks["qkv"]  = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
         if (!pre_only) {
@@ -209,7 +207,7 @@ public:
     struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x) {
         auto qkv = pre_attention(ctx, x);
-        x        = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, true);  // [N, n_token, dim]
+        x        = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
         x        = post_attention(ctx, x);                                                                                               // [N, n_token, dim]
         return x;
     }
@@ -235,7 +233,6 @@ public:
     int64_t num_heads;
     bool pre_only;
     bool self_attn;
-    bool flash_attn;
 
 public:
     DismantledBlock(int64_t hidden_size,
@@ -244,17 +241,16 @@ public:
                     std::string qk_norm = "",
                     bool qkv_bias       = false,
                     bool pre_only       = false,
-                    bool self_attn      = false,
-                    bool flash_attn     = false)
+                    bool self_attn      = false)
         : num_heads(num_heads), pre_only(pre_only), self_attn(self_attn) {
         // rmsnorm is always Flase
         // scale_mod_only is always Flase
         // swiglu is always Flase
         blocks["norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size, 1e-06f, false));
-        blocks["attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qk_norm, qkv_bias, pre_only, flash_attn));
+        blocks["attn"]  = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qk_norm, qkv_bias, pre_only));
 
         if (self_attn) {
-            blocks["attn2"] = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qk_norm, qkv_bias, false, flash_attn));
+            blocks["attn2"] = std::shared_ptr<GGMLBlock>(new SelfAttention(hidden_size, num_heads, qk_norm, qkv_bias, false));
         }
 
         if (!pre_only) {
@@ -439,8 +435,8 @@ public:
             auto qkv2          = std::get<1>(qkv_intermediates);
             auto intermediates = std::get<2>(qkv_intermediates);
 
-            auto attn_out  = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, flash_attn);     // [N, n_token, dim]
-            auto attn2_out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv2[0], qkv2[1], qkv2[2], num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
+            auto attn_out  = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, ctx->flash_attn_enabled);     // [N, n_token, dim]
+            auto attn2_out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv2[0], qkv2[1], qkv2[2], num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
             x              = post_attention_x(ctx,
                                               attn_out,
                                               attn2_out,
@@ -456,7 +452,7 @@ public:
             auto qkv               = qkv_intermediates.first;
             auto intermediates     = qkv_intermediates.second;
 
-            auto attn_out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, flash_attn);  // [N, n_token, dim]
+            auto attn_out = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
             x             = post_attention(ctx,
                                            attn_out,
                                            intermediates[0],
@@ -471,7 +467,6 @@ public:
 
 __STATIC_INLINE__ std::pair<struct ggml_tensor*, struct ggml_tensor*>
 block_mixing(GGMLRunnerContext* ctx,
-             bool flash_attn,
              struct ggml_tensor* context,
              struct ggml_tensor* x,
              struct ggml_tensor* c,
@@ -501,7 +496,7 @@ block_mixing(GGMLRunnerContext* ctx,
         qkv.push_back(ggml_concat(ctx->ggml_ctx, context_qkv[i], x_qkv[i], 1));
     }
 
-    auto attn         = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], x_block->num_heads, nullptr, false, false, flash_attn);  // [N, n_context + n_token, hidden_size]
+    auto attn         = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], x_block->num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_context + n_token, hidden_size]
     attn              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, attn, 0, 2, 1, 3));                                                             // [n_context + n_token, N, hidden_size]
     auto context_attn = ggml_view_3d(ctx->ggml_ctx,
                                      attn,
@@ -535,7 +530,7 @@ block_mixing(GGMLRunnerContext* ctx,
     }
 
     if (x_block->self_attn) {
-        auto attn2 = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, x_qkv2[0], x_qkv2[1], x_qkv2[2], x_block->num_heads);  // [N, n_token, hidden_size]
+        auto attn2 = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, x_qkv2[0], x_qkv2[1], x_qkv2[2], x_block->num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, hidden_size]
 
         x = x_block->post_attention_x(ctx,
                                       x_attn,
@@ -560,8 +555,6 @@ block_mixing(GGMLRunnerContext* ctx,
 }
 
 struct JointBlock : public GGMLBlock {
-    bool flash_attn;
-
 public:
     JointBlock(int64_t hidden_size,
                int64_t num_heads,
@@ -569,11 +562,9 @@ public:
                std::string qk_norm = "",
                bool qkv_bias       = false,
                bool pre_only       = false,
-               bool self_attn_x    = false,
-               bool flash_attn     = false)
-        : flash_attn(flash_attn) {
-        blocks["context_block"] = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qk_norm, qkv_bias, pre_only, false, flash_attn));
-        blocks["x_block"]       = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qk_norm, qkv_bias, false, self_attn_x, flash_attn));
+               bool self_attn_x    = false) {
+        blocks["context_block"] = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qk_norm, qkv_bias, pre_only, false));
+        blocks["x_block"]       = std::shared_ptr<GGMLBlock>(new DismantledBlock(hidden_size, num_heads, mlp_ratio, qk_norm, qkv_bias, false, self_attn_x));
     }
 
     std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(GGMLRunnerContext* ctx,
@@ -583,7 +574,7 @@ public:
         auto context_block = std::dynamic_pointer_cast<DismantledBlock>(blocks["context_block"]);
         auto x_block       = std::dynamic_pointer_cast<DismantledBlock>(blocks["x_block"]);
 
-        return block_mixing(ctx, flash_attn, context, x, c, context_block, x_block);
+        return block_mixing(ctx, context, x, c, context_block, x_block);
     }
 };
 
@@ -641,7 +632,6 @@ protected:
     int64_t context_embedder_out_dim = 1536;
     int64_t hidden_size;
     std::string qk_norm;
-    bool flash_attn = false;
 
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F32;
@@ -649,8 +639,7 @@ protected:
     }
 
 public:
-    MMDiT(bool flash_attn = false, const String2GGMLType& tensor_types = {})
-        : flash_attn(flash_attn) {
+    MMDiT(const String2GGMLType& tensor_types = {}) {
         // input_size is always None
         // learn_sigma is always False
         // register_length is alwalys 0
@@ -718,8 +707,7 @@ public:
                                                                                                     qk_norm,
                                                                                                     true,
                                                                                                     i == depth - 1,
-                                                                                                    i <= d_self,
-                                                                                                    flash_attn));
+                                                                                                    i <= d_self));
         }
 
         blocks["final_layer"] = std::shared_ptr<GGMLBlock>(new FinalLayer(hidden_size, patch_size, out_channels));
@@ -864,10 +852,9 @@ struct MMDiTRunner : public GGMLRunner {
 
     MMDiTRunner(ggml_backend_t backend,
                 bool offload_params_to_cpu,
-                bool flash_attn,
                 const String2GGMLType& tensor_types = {},
                 const std::string prefix            = "")
-        : GGMLRunner(backend, offload_params_to_cpu), mmdit(flash_attn, tensor_types) {
+        : GGMLRunner(backend, offload_params_to_cpu), mmdit(tensor_types) {
         mmdit.init(params_ctx, tensor_types, prefix);
     }
 
@@ -966,7 +953,7 @@ struct MMDiTRunner : public GGMLRunner {
         // ggml_backend_t backend    = ggml_backend_cuda_init(0);
         ggml_backend_t backend             = ggml_backend_cpu_init();
         ggml_type model_data_type          = GGML_TYPE_F16;
-        std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, false, false);
+        std::shared_ptr<MMDiTRunner> mmdit = std::make_shared<MMDiTRunner>(backend, false);
         {
             LOG_INFO("loading from '%s'", file_path.c_str());
 

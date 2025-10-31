@@ -392,7 +392,6 @@ namespace Rope {
                                                     struct ggml_tensor* v,
                                                     struct ggml_tensor* pe,
                                                     struct ggml_tensor* mask,
-                                                    bool flash_attn,
                                                     float kv_scale        = 1.0f,
                                                     bool rope_interleaved = true) {
         // q,k,v: [N, L, n_head, d_head]
@@ -401,7 +400,7 @@ namespace Rope {
         q = apply_rope(ctx->ggml_ctx, q, pe, rope_interleaved);  // [N*n_head, L, d_head]
         k = apply_rope(ctx->ggml_ctx, k, pe, rope_interleaved);  // [N*n_head, L, d_head]
 
-        auto x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, v->ne[1], mask, false, true, flash_attn, kv_scale);  // [N, L, n_head*d_head]
+        auto x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, v->ne[1], mask, false, true, ctx->flash_attn_enabled, kv_scale);  // [N, L, n_head*d_head]
         return x;
     }
 };  // namespace Rope
