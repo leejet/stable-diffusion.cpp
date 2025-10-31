@@ -1291,8 +1291,8 @@ namespace WAN {
     public:
         WanSelfAttention(int64_t dim,
                          int64_t num_heads,
-                         bool qk_norm    = true,
-                         float eps       = 1e-6)
+                         bool qk_norm = true,
+                         float eps    = 1e-6)
             : num_heads(num_heads) {
             head_dim    = dim / num_heads;
             blocks["q"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
@@ -1347,8 +1347,8 @@ namespace WAN {
     public:
         WanCrossAttention(int64_t dim,
                           int64_t num_heads,
-                          bool qk_norm    = true,
-                          float eps       = 1e-6)
+                          bool qk_norm = true,
+                          float eps    = 1e-6)
             : WanSelfAttention(dim, num_heads, qk_norm, eps) {}
         virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                             struct ggml_tensor* x,
@@ -1360,8 +1360,8 @@ namespace WAN {
     public:
         WanT2VCrossAttention(int64_t dim,
                              int64_t num_heads,
-                             bool qk_norm    = true,
-                             float eps       = 1e-6)
+                             bool qk_norm = true,
+                             float eps    = 1e-6)
             : WanCrossAttention(dim, num_heads, qk_norm, eps) {}
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
@@ -1398,8 +1398,8 @@ namespace WAN {
     public:
         WanI2VCrossAttention(int64_t dim,
                              int64_t num_heads,
-                             bool qk_norm    = true,
-                             float eps       = 1e-6)
+                             bool qk_norm = true,
+                             float eps    = 1e-6)
             : WanCrossAttention(dim, num_heads, qk_norm, eps) {
             blocks["k_img"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));
             blocks["v_img"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim));

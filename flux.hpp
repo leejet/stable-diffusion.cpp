@@ -126,9 +126,9 @@ namespace Flux {
             // x: [N, n_token, dim]
             // pe: [n_token, d_head/2, 2, 2]
             // return [N, n_token, dim]
-            auto qkv = pre_attention(ctx, x);                                               // q,k,v: [N, n_token, n_head, d_head]
+            auto qkv = pre_attention(ctx, x);                                   // q,k,v: [N, n_token, n_head, d_head]
             x        = Rope::attention(ctx, qkv[0], qkv[1], qkv[2], pe, mask);  // [N, n_token, dim]
-            x        = post_attention(ctx, x);                                              // [N, n_token, dim]
+            x        = post_attention(ctx, x);                                  // [N, n_token, dim]
             return x;
         }
     };
@@ -203,9 +203,9 @@ namespace Flux {
         DoubleStreamBlock(int64_t hidden_size,
                           int64_t num_heads,
                           float mlp_ratio,
-                          int idx         = 0,
-                          bool qkv_bias   = false,
-                          bool prune_mod  = false)
+                          int idx        = 0,
+                          bool qkv_bias  = false,
+                          bool prune_mod = false)
             : idx(idx), prune_mod(prune_mod) {
             int64_t mlp_hidden_dim = hidden_size * mlp_ratio;
             if (!prune_mod) {
@@ -313,7 +313,7 @@ namespace Flux {
             auto k = ggml_concat(ctx->ggml_ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx->ggml_ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = Rope::attention(ctx, q, k, v, pe, mask);                      // [N, n_txt_token + n_img_token, n_head*d_head]
+            auto attn         = Rope::attention(ctx, q, k, v, pe, mask);                                  // [N, n_txt_token + n_img_token, n_head*d_head]
             attn              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, attn, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx->ggml_ctx,
                                              attn,

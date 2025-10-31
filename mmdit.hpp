@@ -208,7 +208,7 @@ public:
                                 struct ggml_tensor* x) {
         auto qkv = pre_attention(ctx, x);
         x        = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
-        x        = post_attention(ctx, x);                                                                                               // [N, n_token, dim]
+        x        = post_attention(ctx, x);                                                                                                                  // [N, n_token, dim]
         return x;
     }
 };
@@ -497,7 +497,7 @@ block_mixing(GGMLRunnerContext* ctx,
     }
 
     auto attn         = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, qkv[0], qkv[1], qkv[2], x_block->num_heads, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_context + n_token, hidden_size]
-    attn              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, attn, 0, 2, 1, 3));                                                             // [n_context + n_token, N, hidden_size]
+    attn              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, attn, 0, 2, 1, 3));                                                                          // [n_context + n_token, N, hidden_size]
     auto context_attn = ggml_view_3d(ctx->ggml_ctx,
                                      attn,
                                      attn->ne[0],

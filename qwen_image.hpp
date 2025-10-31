@@ -158,7 +158,7 @@ namespace Qwen {
             auto k = ggml_concat(ctx->ggml_ctx, txt_k, img_k, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
             auto v = ggml_concat(ctx->ggml_ctx, txt_v, img_v, 2);  // [N, n_txt_token + n_img_token, n_head, d_head]
 
-            auto attn         = Rope::attention(ctx, q, k, v, pe, mask, (1.0f / 128.f));      // [N, n_txt_token + n_img_token, n_head*d_head]
+            auto attn         = Rope::attention(ctx, q, k, v, pe, mask, (1.0f / 128.f));                  // [N, n_txt_token + n_img_token, n_head*d_head]
             attn              = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, attn, 0, 2, 1, 3));  // [n_txt_token + n_img_token, N, hidden_size]
             auto txt_attn_out = ggml_view_3d(ctx->ggml_ctx,
                                              attn,
@@ -191,7 +191,7 @@ namespace Qwen {
         QwenImageTransformerBlock(int64_t dim,
                                   int64_t num_attention_heads,
                                   int64_t attention_head_dim,
-                                  float eps       = 1e-6) {
+                                  float eps = 1e-6) {
             // img_mod.0 is nn.SiLU()
             blocks["img_mod.1"] = std::shared_ptr<GGMLBlock>(new Linear(dim, 6 * dim, true));
 

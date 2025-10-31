@@ -1158,7 +1158,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
                                                              bool diag_mask_inf       = false,
                                                              bool skip_reshape        = false,
                                                              bool flash_attn          = false,
-                                                             float kv_scale           = 1.0f ) { // avoid overflow
+                                                             float kv_scale           = 1.0f) {  // avoid overflow
     int64_t L_q;
     int64_t L_k;
     int64_t C;
@@ -1463,9 +1463,9 @@ __STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
 typedef std::map<std::string, enum ggml_type> String2GGMLType;
 
 struct GGMLRunnerContext {
-    ggml_backend_t backend = nullptr;
-    ggml_context* ggml_ctx = nullptr;
-    bool flash_attn_enabled = false;
+    ggml_backend_t backend     = nullptr;
+    ggml_context* ggml_ctx     = nullptr;
+    bool flash_attn_enabled    = false;
     bool conv2d_direct_enabled = false;
 };
 
@@ -1495,7 +1495,7 @@ protected:
     std::map<std::string, struct ggml_tensor*> cache_tensor_map;  // name -> tensor
     const std::string final_result_name = "ggml_runner_final_result_tensor";
 
-    bool flash_attn_enabled = false;
+    bool flash_attn_enabled    = false;
     bool conv2d_direct_enabled = false;
 
     void alloc_params_ctx() {
@@ -1756,9 +1756,9 @@ public:
 
     virtual GGMLRunnerContext get_context() {
         GGMLRunnerContext runner_ctx;
-        runner_ctx.ggml_ctx = compute_ctx;
-        runner_ctx.backend  = runtime_backend;
-        runner_ctx.flash_attn_enabled = flash_attn_enabled;
+        runner_ctx.ggml_ctx              = compute_ctx;
+        runner_ctx.backend               = runtime_backend;
+        runner_ctx.flash_attn_enabled    = flash_attn_enabled;
         runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
         return runner_ctx;
     }
