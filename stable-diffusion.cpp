@@ -443,7 +443,7 @@ public:
                                                               version);
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the diffusion model");
-                    std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.enable_conv2d_direct();
+                    std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_conv2d_direct_enabled(true);
                 }
             }
 
@@ -496,7 +496,7 @@ public:
                                                                     version);
                 if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the vae model");
-                    first_stage_model->enable_conv2d_direct();
+                    first_stage_model->set_conv2d_direct_enabled(true);
                 }
                 if (version == VERSION_SDXL &&
                     (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale)) {
@@ -518,7 +518,7 @@ public:
                                                                     version);
                 if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the tae model");
-                    tae_first_stage->enable_conv2d_direct();
+                    tae_first_stage->set_conv2d_direct_enabled(true);
                 }
             }
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
@@ -537,7 +537,7 @@ public:
                                                            version);
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the control net");
-                    control_net->enable_conv2d_direct();
+                    control_net->set_conv2d_direct_enabled(true);
                 }
             }
 

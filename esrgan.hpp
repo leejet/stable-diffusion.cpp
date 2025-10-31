@@ -161,19 +161,6 @@ struct ESRGAN : public GGMLRunner {
         // rrdb_net will be created in load_from_file
     }
 
-    void enable_conv2d_direct() {
-        if (!rrdb_net)
-            return;
-        std::vector<GGMLBlock*> blocks;
-        rrdb_net->get_all_blocks(blocks);
-        for (auto block : blocks) {
-            if (block->get_desc() == "Conv2d") {
-                auto conv_block = (Conv2d*)block;
-                conv_block->enable_direct();
-            }
-        }
-    }
-
     std::string get_desc() override {
         return "esrgan";
     }

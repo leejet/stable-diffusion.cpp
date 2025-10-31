@@ -1466,6 +1466,7 @@ struct GGMLRunnerContext {
     ggml_backend_t backend = nullptr;
     ggml_context* ggml_ctx = nullptr;
     bool flash_attn_enabled = false;
+    bool conv2d_direct_enabled = false;
 };
 
 struct GGMLRunner {
@@ -1495,6 +1496,7 @@ protected:
     const std::string final_result_name = "ggml_runner_final_result_tensor";
 
     bool flash_attn_enabled = false;
+    bool conv2d_direct_enabled = false;
 
     void alloc_params_ctx() {
         struct ggml_init_params params;
@@ -1757,6 +1759,7 @@ public:
         runner_ctx.ggml_ctx = compute_ctx;
         runner_ctx.backend  = runtime_backend;
         runner_ctx.flash_attn_enabled = flash_attn_enabled;
+        runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
         return runner_ctx;
     }
 
@@ -1883,6 +1886,10 @@ public:
 
     void set_flash_attention_enabled(bool enabled) {
         flash_attn_enabled = enabled;
+    }
+
+    void set_conv2d_direct_enabled(bool enabled) {
+        conv2d_direct_enabled = enabled;
     }
 };
 
@@ -2084,7 +2091,6 @@ protected:
     std::pair<int, int> padding;
     std::pair<int, int> dilation;
     bool bias;
-    bool direct = false;
     float scale = 1.f;
 
     void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") override {
@@ -2112,10 +2118,6 @@ public:
           dilation(dilation),
           bias(bias) {}
 
-    void enable_direct() {
-        direct = true;
-    }
-
     void set_scale(float scale_value) {
         scale = scale_value;
     }
@@ -2140,7 +2142,7 @@ public:
                                 padding.first,
                                 dilation.second,
                                 dilation.first,
-                                direct,
+                                ctx->conv2d_direct_enabled,
                                 scale);
     }
 };

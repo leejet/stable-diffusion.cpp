@@ -529,7 +529,6 @@ struct VAE : public GGMLRunner {
                          struct ggml_tensor** output,
                          struct ggml_context* output_ctx)                                                         = 0;
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) = 0;
-    virtual void enable_conv2d_direct(){};
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
 };
 
@@ -570,17 +569,6 @@ struct AutoEncoderKL : public VAE {
                   SDVersion version      = VERSION_SD1)
         : decode_only(decode_only), ae(decode_only, use_video_decoder, version), VAE(backend, offload_params_to_cpu) {
         ae.init(params_ctx, tensor_types, prefix);
-    }
-
-    void enable_conv2d_direct() override {
-        std::vector<GGMLBlock*> blocks;
-        ae.get_all_blocks(blocks);
-        for (auto block : blocks) {
-            if (block->get_desc() == "Conv2d") {
-                auto conv_block = (Conv2d*)block;
-                conv_block->enable_direct();
-            }
-        }
     }
 
     void set_conv2d_scale(float scale) override {
