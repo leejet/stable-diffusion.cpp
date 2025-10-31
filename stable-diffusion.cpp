@@ -1116,7 +1116,7 @@ public:
                         ggml_tensor* noise,
                         SDCondition cond,
                         SDCondition uncond,
-                        SDCondition img_cond,
+                        SDCondition img_uncond,
                         ggml_tensor* control_hint,
                         float control_strength,
                         sd_guidance_params_t guidance,
@@ -1143,7 +1143,7 @@ public:
 
         if (img_cfg_scale != cfg_scale && !sd_version_is_inpaint_or_unet_edit(version)) {
             LOG_WARN("2-conditioning CFG is not supported with this model, disabling it for better performance...");
-            img_cfg_scale = cfg_scale;
+            img_cfg_scale = 1.0f;
         }
 
         size_t steps          = sigmas.size() - 1;
@@ -1155,10 +1155,11 @@ public:
         }
 
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x);
-
-        bool has_unconditioned = img_cfg_scale != 1.0 && uncond.c_crossattn != nullptr;
-        bool has_img_cond      = cfg_scale != img_cfg_scale && img_cond.c_crossattn != nullptr;
+        
         bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
+        bool has_conditionned  = (has_skiplayer || cfg_scale != 0.0) && cond.c_crossattn != nullptr;
+        bool has_unconditioned = cfg_scale != img_cfg_scale && uncond.c_crossattn != nullptr;
+        bool has_img_uncond    = img_cfg_scale != 1.0 && img_uncond.c_crossattn != nullptr;
 
         // denoise wrapper
         struct ggml_tensor* out_cond     = ggml_dup_tensor(work_ctx, x);
@@ -1177,7 +1178,7 @@ public:
                 LOG_WARN("SLG is incompatible with %s models", model_version_to_str[version]);
             }
         }
-        if (has_img_cond) {
+        if (has_img_uncond) {
             out_img_cond = ggml_dup_tensor(work_ctx, x);
         }
         struct ggml_tensor* denoised = ggml_dup_tensor(work_ctx, x);
@@ -1240,21 +1241,23 @@ public:
             diffusion_params.vace_context       = vace_context;
             diffusion_params.vace_strength      = vace_strength;
 
-            if (start_merge_step == -1 || step <= start_merge_step) {
-                // cond
-                diffusion_params.context  = cond.c_crossattn;
-                diffusion_params.c_concat = cond.c_concat;
-                diffusion_params.y        = cond.c_vector;
-                work_diffusion_model->compute(n_threads,
-                                              diffusion_params,
-                                              &out_cond);
-            } else {
-                diffusion_params.context  = id_cond.c_crossattn;
-                diffusion_params.c_concat = cond.c_concat;
-                diffusion_params.y        = id_cond.c_vector;
-                work_diffusion_model->compute(n_threads,
-                                              diffusion_params,
-                                              &out_cond);
+            if (has_conditionned) {
+                if (start_merge_step == -1 || step <= start_merge_step) {
+                    // cond
+                    diffusion_params.context  = cond.c_crossattn;
+                    diffusion_params.c_concat = cond.c_concat;
+                    diffusion_params.y        = cond.c_vector;
+                    work_diffusion_model->compute(n_threads,
+                                                  diffusion_params,
+                                                  &out_cond);
+                } else {
+                    diffusion_params.context  = id_cond.c_crossattn;
+                    diffusion_params.c_concat = cond.c_concat;
+                    diffusion_params.y        = id_cond.c_vector;
+                    work_diffusion_model->compute(n_threads,
+                                                  diffusion_params,
+                                                  &out_cond);
+                }
             }
 
             float* negative_data = nullptr;
@@ -1275,10 +1278,10 @@ public:
             }
 
             float* img_cond_data = nullptr;
-            if (has_img_cond) {
-                diffusion_params.context  = img_cond.c_crossattn;
-                diffusion_params.c_concat = img_cond.c_concat;
-                diffusion_params.y        = img_cond.c_vector;
+            if (has_img_uncond) {
+                diffusion_params.context  = img_uncond.c_crossattn;
+                diffusion_params.c_concat = img_uncond.c_concat;
+                diffusion_params.y        = img_uncond.c_vector;
                 work_diffusion_model->compute(n_threads,
                                               diffusion_params,
                                               &out_img_cond);
@@ -1321,19 +1324,19 @@ public:
                 float latent_result = positive_data[i];
                 if (has_unconditioned) {
                     // out_uncond + cfg_scale * (out_cond - out_uncond)
-                    if (has_img_cond) {
+                    if (has_img_uncond) {
                         // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
                         latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
                     } else {
                         // img_cfg_scale == cfg_scale
                         latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
                     }
-                } else if (has_img_cond) {
+                } else if (has_img_uncond) {
                     // img_cfg_scale == 1
                     latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
                 }
                 if (is_skiplayer_step) {
-                    latent_result = latent_result + (positive_data[i] - skip_layer_data[i]) * slg_scale;
+                    latent_result = latent_result + slg_scale * (positive_data[i] - skip_layer_data[i]);
                 }
                 // v = latent_result, eps = latent_result
                 // denoised = (v * c_out + input * c_skip) or (input + eps * c_out)
@@ -1977,7 +1980,7 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              sample_params->guidance.txt_cfg,
              std::isfinite(sample_params->guidance.img_cfg)
                  ? sample_params->guidance.img_cfg
-                 : sample_params->guidance.txt_cfg,
+                 : 1.0f,
              sample_params->guidance.distilled_guidance,
              sample_params->guidance.slg.layer_count,
              sample_params->guidance.slg.layer_start,
@@ -2142,7 +2145,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     }
 
     if (!std::isfinite(guidance.img_cfg)) {
-        guidance.img_cfg = guidance.txt_cfg;
+        // default to 1
+        guidance.img_cfg = 1.0f;
     }
 
     // for (auto v : sigmas) {
@@ -2250,7 +2254,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
 
     SDCondition uncond;
     if (guidance.txt_cfg != 1.0 ||
-        (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
+        (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != 1.0f)) {
         bool zero_out_masked = false;
         if (sd_version_is_sdxl(sd_ctx->sd->version) && negative_prompt.size() == 0 && !sd_ctx->sd->is_using_edm_v_parameterization) {
             zero_out_masked = true;
@@ -2288,6 +2292,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         ggml_ext_tensor_scale_inplace(control_latent, control_strength);
     }
 
+    struct ggml_tensor* empty_latent;
+
     if (sd_version_is_inpaint(sd_ctx->sd->version)) {
         int64_t mask_channels = 1;
         if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
@@ -2295,7 +2301,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         } else if (sd_ctx->sd->version == VERSION_FLEX_2) {
             mask_channels = 1 + init_latent->ne[2];
         }
-        auto empty_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], mask_channels + init_latent->ne[2], 1);
+        empty_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], mask_channels + init_latent->ne[2], 1);
         // no mask, set the whole image as masked
         for (int64_t x = 0; x < empty_latent->ne[0]; x++) {
             for (int64_t y = 0; y < empty_latent->ne[1]; y++) {
@@ -2345,31 +2351,31 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
             concat_latent = empty_latent;
         }
         cond.c_concat   = concat_latent;
-        uncond.c_concat = empty_latent;
+        uncond.c_concat = concat_latent;
         denoise_mask    = nullptr;
     } else if (sd_version_is_unet_edit(sd_ctx->sd->version)) {
-        auto empty_latent = ggml_dup_tensor(work_ctx, init_latent);
+        empty_latent = ggml_dup_tensor(work_ctx, init_latent);
         ggml_set_f32(empty_latent, 0);
-        uncond.c_concat = empty_latent;
-        cond.c_concat   = ref_latents[0];
+        cond.c_concat = ref_latents[0];
         if (cond.c_concat == nullptr) {
             cond.c_concat = empty_latent;
         }
+        uncond.c_concat = cond.c_concat;
     } else if (sd_version_is_control(sd_ctx->sd->version)) {
-        auto empty_latent = ggml_dup_tensor(work_ctx, init_latent);
+        empty_latent = ggml_dup_tensor(work_ctx, init_latent);
         ggml_set_f32(empty_latent, 0);
-        uncond.c_concat = empty_latent;
         if (sd_ctx->sd->control_net == nullptr) {
             cond.c_concat = control_latent;
         }
         if (cond.c_concat == nullptr) {
             cond.c_concat = empty_latent;
         }
+        uncond.c_concat = cond.c_concat;
     }
-    SDCondition img_cond;
+    SDCondition img_uncond = uncond;
     if (uncond.c_crossattn != nullptr &&
-        (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.txt_cfg != guidance.img_cfg)) {
-        img_cond = SDCondition(uncond.c_crossattn, uncond.c_vector, cond.c_concat);
+        (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.img_cfg != 1.0)) {
+        img_uncond = SDCondition(uncond.c_crossattn, uncond.c_vector, empty_latent);
     }
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
@@ -2396,7 +2402,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      noise,
                                                      cond,
                                                      uncond,
-                                                     img_cond,
+                                                     img_uncond,
                                                      image_hint,
                                                      control_strength,
                                                      guidance,
@@ -3027,7 +3033,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                  noise,
                                  cond,
                                  uncond,
-                                 {},
+                                 uncond,
                                  nullptr,
                                  0,
                                  sd_vid_gen_params->high_noise_sample_params.guidance,
@@ -3063,7 +3069,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           noise,
                                           cond,
                                           uncond,
-                                          {},
+                                          uncond,
                                           nullptr,
                                           0,
                                           sd_vid_gen_params->sample_params.guidance,
