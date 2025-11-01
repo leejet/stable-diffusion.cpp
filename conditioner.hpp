@@ -641,7 +641,9 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
 
         pixel_values = to_backend(pixel_values);
 
-        struct ggml_tensor* hidden_states = vision_model.forward(compute_ctx, runtime_backend, pixel_values, return_pooled, clip_skip);
+        auto runner_ctx = get_context();
+
+        struct ggml_tensor* hidden_states = vision_model.forward(&runner_ctx, pixel_values, return_pooled, clip_skip);
 
         ggml_build_forward_expand(gf, hidden_states);
 
