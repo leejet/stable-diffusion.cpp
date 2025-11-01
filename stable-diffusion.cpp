@@ -1161,12 +1161,17 @@ public:
         bool has_unconditioned = cfg_scale != img_cfg_scale && uncond.c_crossattn != nullptr;
         bool has_img_uncond    = img_cfg_scale != 1.0 && img_uncond.c_crossattn != nullptr;
 
+        GGML_ASSERT(has_conditionned || has_unconditioned || has_img_uncond);
+
         // denoise wrapper
-        struct ggml_tensor* out_cond     = ggml_dup_tensor(work_ctx, x);
+        struct ggml_tensor* out_cond     = nullptr;
         struct ggml_tensor* out_uncond   = nullptr;
         struct ggml_tensor* out_skip     = nullptr;
         struct ggml_tensor* out_img_cond = nullptr;
 
+        if (has_conditionned) {
+            out_cond = ggml_dup_tensor(work_ctx, x);
+        }
         if (has_unconditioned) {
             out_uncond = ggml_dup_tensor(work_ctx, x);
         }
@@ -1277,7 +1282,7 @@ public:
                 negative_data = (float*)out_uncond->data;
             }
 
-            float* img_cond_data = nullptr;
+            float* img_uncond_data = nullptr;
             if (has_img_uncond) {
                 diffusion_params.context  = img_uncond.c_crossattn;
                 diffusion_params.c_concat = img_uncond.c_concat;
@@ -1285,7 +1290,7 @@ public:
                 work_diffusion_model->compute(n_threads,
                                               diffusion_params,
                                               &out_img_cond);
-                img_cond_data = (float*)out_img_cond->data;
+                img_uncond_data = (float*)out_img_cond->data;
             }
 
             int step_count         = sigmas.size();
@@ -1325,15 +1330,15 @@ public:
                 if (has_unconditioned) {
                     // out_uncond + cfg_scale * (out_cond - out_uncond)
                     if (has_img_uncond) {
-                        // out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
-                        latent_result = negative_data[i] + img_cfg_scale * (img_cond_data[i] - negative_data[i]) + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                        // out_uncond + text_cfg_scale * (out_cond - out_txt_uncond) + image_cfg_scale * (out_txt_uncond - out_txtimg_uncond)
+                        latent_result = img_uncond_data[i] + img_cfg_scale * (negative_data[i] - img_uncond_data[i]) + cfg_scale * (positive_data[i] - negative_data[i]);
                     } else {
-                        // img_cfg_scale == cfg_scale
+                        // img_cfg_scale == 1
                         latent_result = negative_data[i] + cfg_scale * (positive_data[i] - negative_data[i]);
                     }
                 } else if (has_img_uncond) {
-                    // img_cfg_scale == 1
-                    latent_result = img_cond_data[i] + cfg_scale * (positive_data[i] - img_cond_data[i]);
+                    // img_cfg_scale == cfg_scale
+                    latent_result = img_uncond_data[i] + cfg_scale * (positive_data[i] - img_uncond_data[i]);
                 }
                 if (is_skiplayer_step) {
                     latent_result = latent_result + slg_scale * (positive_data[i] - skip_layer_data[i]);
