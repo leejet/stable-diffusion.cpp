@@ -152,6 +152,7 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 - [sd.cpp-webui](https://github.com/daniandtheweb/sd.cpp-webui)
 - [LocalAI](https://github.com/mudler/LocalAI)
 - [Neural-Pixel](https://github.com/Luiz-Alcantara/Neural-Pixel)
+- [KoboldCpp](https://github.com/LostRuins/koboldcpp)
 
 ## Contributors
 
