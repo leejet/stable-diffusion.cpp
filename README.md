@@ -29,7 +29,7 @@ API and command-line option may change frequently.***
 
 ## Features
 
-- Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
+- Plain C/C++ implementation based on [ggml](https://github.com/ggml-org/ggml), working in the same way as [llama.cpp](https://github.com/ggml-org/llama.cpp)
 - Super lightweight and without external dependencies
 - Supported models
   - Image Models
@@ -165,7 +165,7 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 
 ## References
 
-- [ggml](https://github.com/ggerganov/ggml)
+- [ggml](https://github.com/ggml-org/ggml)
 - [diffusers](https://github.com/huggingface/diffusers)
 - [stable-diffusion](https://github.com/CompVis/stable-diffusion)
 - [sd3-ref](https://github.com/Stability-AI/sd3-ref)
