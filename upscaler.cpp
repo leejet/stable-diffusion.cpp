@@ -53,7 +53,7 @@ struct UpscalerGGML {
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
         esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, model_loader.tensor_storages_types);
         if (direct) {
-            esrgan_upscaler->enable_conv2d_direct();
+            esrgan_upscaler->set_conv2d_direct_enabled(true);
         }
         if (!esrgan_upscaler->load_from_file(esrgan_path, n_threads)) {
             return false;

@@ -351,17 +351,13 @@ public:
                 LOG_INFO("CLIP: Using CPU backend");
                 clip_backend = ggml_backend_cpu_init();
             }
-            if (sd_ctx_params->diffusion_flash_attn) {
-                LOG_INFO("Using flash attention in the diffusion model");
-            }
             if (sd_version_is_sd3(version)) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
                                                                      offload_params_to_cpu,
                                                                      model_loader.tensor_storages_types);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                                offload_params_to_cpu,
-                                                                sd_ctx_params->diffusion_flash_attn,
-                                                                model_loader.tensor_storages_types);
+                                                               offload_params_to_cpu,
+                                                               model_loader.tensor_storages_types);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : model_loader.tensor_storages_types) {
@@ -394,7 +390,6 @@ public:
                                                               offload_params_to_cpu,
                                                               model_loader.tensor_storages_types,
                                                               version,
-                                                              sd_ctx_params->diffusion_flash_attn,
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
@@ -404,18 +399,16 @@ public:
                                                                     1,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
-                                                              offload_params_to_cpu,
-                                                              model_loader.tensor_storages_types,
-                                                              "model.diffusion_model",
-                                                              version,
-                                                              sd_ctx_params->diffusion_flash_attn);
+                                                             offload_params_to_cpu,
+                                                             model_loader.tensor_storages_types,
+                                                             "model.diffusion_model",
+                                                             version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
                                                                             offload_params_to_cpu,
                                                                             model_loader.tensor_storages_types,
                                                                             "model.high_noise_diffusion_model",
-                                                                            version,
-                                                                            sd_ctx_params->diffusion_flash_attn);
+                                                                            version);
                 }
                 if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" || diffusion_model->get_desc() == "Wan2.1-FLF2V-14B") {
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
@@ -435,11 +428,10 @@ public:
                                                                             "",
                                                                             enable_vision);
                 diffusion_model  = std::make_shared<QwenImageModel>(backend,
-                                                                    offload_params_to_cpu,
-                                                                    model_loader.tensor_storages_types,
-                                                                    "model.diffusion_model",
-                                                                    version,
-                                                                    sd_ctx_params->diffusion_flash_attn);
+                                                                   offload_params_to_cpu,
+                                                                   model_loader.tensor_storages_types,
+                                                                   "model.diffusion_model",
+                                                                   version);
             } else {  // SD1.x SD2.x SDXL
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
@@ -458,12 +450,16 @@ public:
                 diffusion_model = std::make_shared<UNetModel>(backend,
                                                               offload_params_to_cpu,
                                                               model_loader.tensor_storages_types,
-                                                              version,
-                                                              sd_ctx_params->diffusion_flash_attn);
+                                                              version);
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the diffusion model");
-                    std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.enable_conv2d_direct();
+                    std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_conv2d_direct_enabled(true);
                 }
+            }
+
+            if (sd_ctx_params->diffusion_flash_attn) {
+                LOG_INFO("Using flash attention in the diffusion model");
+                diffusion_model->set_flash_attn_enabled(true);
             }
 
             cond_stage_model->alloc_params_buffer();
@@ -510,7 +506,7 @@ public:
                                                                     version);
                 if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the vae model");
-                    first_stage_model->enable_conv2d_direct();
+                    first_stage_model->set_conv2d_direct_enabled(true);
                 }
                 if (version == VERSION_SDXL &&
                     (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale)) {
@@ -533,7 +529,7 @@ public:
                                                                     version);
                 if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the tae model");
-                    tae_first_stage->enable_conv2d_direct();
+                    tae_first_stage->set_conv2d_direct_enabled(true);
                 }
             }
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
@@ -552,7 +548,7 @@ public:
                                                            version);
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the control net");
-                    control_net->enable_conv2d_direct();
+                    control_net->set_conv2d_direct_enabled(true);
                 }
             }
 
@@ -2756,14 +2752,12 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         sd_image_to_ggml_tensor(sd_img_gen_params->mask_image, mask_img);
         sd_image_to_ggml_tensor(sd_img_gen_params->init_image, init_img);
 
-        init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
-
         if (sd_version_is_inpaint(sd_ctx->sd->version)) {
             int64_t mask_channels = 1;
             if (sd_ctx->sd->version == VERSION_FLUX_FILL) {
-                mask_channels = 8 * 8;  // flatten the whole mask
+                mask_channels = vae_scale_factor * vae_scale_factor;  // flatten the whole mask
             } else if (sd_ctx->sd->version == VERSION_FLEX_2) {
-                mask_channels = 1 + init_latent->ne[2];
+                mask_channels = 1 + sd_ctx->sd->get_latent_channel();
             }
             ggml_tensor* masked_latent = nullptr;
 
@@ -2772,8 +2766,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                 ggml_tensor* masked_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
                 ggml_ext_tensor_apply_mask(init_img, mask_img, masked_img);
                 masked_latent = sd_ctx->sd->encode_first_stage(work_ctx, masked_img);
+                init_latent   = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
             } else {
                 // mask after vae
+                init_latent   = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
                 masked_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, init_latent->ne[0], init_latent->ne[1], init_latent->ne[2], 1);
                 ggml_ext_tensor_apply_mask(init_latent, mask_img, masked_latent, 0.);
             }
@@ -2814,9 +2810,18 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                         for (int k = 0; k < masked_latent->ne[2]; k++) {
                             ggml_ext_tensor_set_f32(concat_latent, 0, ix, iy, masked_latent->ne[2] + 1 + k);
                         }
+                    } else {
+                        float m = ggml_ext_tensor_get_f32(mask_img, mx, my);
+                        ggml_ext_tensor_set_f32(concat_latent, m, ix, iy, 0);
+                        for (int k = 0; k < masked_latent->ne[2]; k++) {
+                            float v = ggml_ext_tensor_get_f32(masked_latent, ix, iy, k);
+                            ggml_ext_tensor_set_f32(concat_latent, v, ix, iy, k + mask_channels);
+                        }
                     }
                 }
             }
+        } else {
+            init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
         }
 
         {
