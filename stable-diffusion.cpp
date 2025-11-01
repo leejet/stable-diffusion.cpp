@@ -2593,7 +2593,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                     } else {
                         float m = ggml_ext_tensor_get_f32(mask_img, mx, my);
                         ggml_ext_tensor_set_f32(concat_latent, m, ix, iy, 0);
-                        for (int k = 0; k < masked_latent->ne[2];k++) {
+                        for (int k = 0; k < masked_latent->ne[2]; k++) {
                             float v = ggml_ext_tensor_get_f32(masked_latent, ix, iy, k);
                             ggml_ext_tensor_set_f32(concat_latent, v, ix, iy, k + mask_channels);
                         }
