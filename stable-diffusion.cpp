@@ -1164,7 +1164,7 @@ public:
         GGML_ASSERT(has_conditionned || has_unconditioned || has_img_uncond);
 
         // denoise wrapper
-        struct ggml_tensor* out_cond     = nullptr;
+        struct ggml_tensor* out_cond     = x;
         struct ggml_tensor* out_uncond   = nullptr;
         struct ggml_tensor* out_skip     = nullptr;
         struct ggml_tensor* out_img_cond = nullptr;
