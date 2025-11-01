@@ -111,6 +111,8 @@ public:
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
 
+    bool has_vision = false;
+
     std::map<std::string, struct ggml_tensor*> tensors;
 
     std::string lora_model_dir;
@@ -412,6 +414,7 @@ public:
                 if (!vae_decode_only) {
                     enable_vision = true;
                 }
+                has_vision       = enable_vision;
                 cond_stage_model = std::make_shared<Qwen2_5_VLCLIPEmbedder>(clip_backend,
                                                                             offload_params_to_cpu,
                                                                             model_loader.tensor_storages_types,
@@ -1141,7 +1144,8 @@ public:
         float img_cfg_scale = std::isfinite(guidance.img_cfg) ? guidance.img_cfg : guidance.txt_cfg;
         float slg_scale     = guidance.slg.scale;
 
-        if (img_cfg_scale != 1.0 && !sd_version_is_inpaint_or_unet_edit(version)) {
+        if (img_cfg_scale != 1.0 && !sd_version_is_inpaint_or_unet_edit(version)
+        && (version != VERSION_FLUX || ref_latents.size()==0) && (version != VERSION_QWEN_IMAGE || ref_latents.size()==0)) {
             LOG_WARN("2-conditioning CFG is not supported with this model, disabling it for better performance...");
             img_cfg_scale = 1.0f;
         }
@@ -1155,7 +1159,7 @@ public:
         }
 
         struct ggml_tensor* noised_input = ggml_dup_tensor(work_ctx, x);
-        
+
         bool has_skiplayer     = slg_scale != 0.0 && skip_layers.size() > 0;
         bool has_conditionned  = (has_skiplayer || cfg_scale != 0.0) && cond.c_crossattn != nullptr;
         bool has_unconditioned = cfg_scale != img_cfg_scale && uncond.c_crossattn != nullptr;
@@ -1284,9 +1288,10 @@ public:
 
             float* img_uncond_data = nullptr;
             if (has_img_uncond) {
-                diffusion_params.context  = img_uncond.c_crossattn;
-                diffusion_params.c_concat = img_uncond.c_concat;
-                diffusion_params.y        = img_uncond.c_vector;
+                diffusion_params.ref_latents = {};
+                diffusion_params.context     = img_uncond.c_crossattn;
+                diffusion_params.c_concat    = img_uncond.c_concat;
+                diffusion_params.y           = img_uncond.c_vector;
                 work_diffusion_model->compute(n_threads,
                                               diffusion_params,
                                               &out_img_cond);
@@ -2270,6 +2275,15 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                                                                sd_ctx->sd->n_threads,
                                                                                                condition_params);
     }
+    SDCondition img_uncond = uncond;
+    if (uncond.c_crossattn != nullptr && guidance.img_cfg != 1.0 && sd_ctx->sd->has_vision && condition_params.ref_images.size() > 0) {
+        // Recompute negative conditionning without ref images
+        condition_params.ref_images = {};
+        img_uncond                  = sd_ctx->sd->cond_stage_model->get_learned_condition(work_ctx,
+                                                                                          sd_ctx->sd->n_threads,
+                                                                                          condition_params);
+    }
+
     int64_t t1 = ggml_time_ms();
     LOG_INFO("get_learned_condition completed, taking %" PRId64 " ms", t1 - t0);
 
@@ -2377,10 +2391,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         }
         uncond.c_concat = cond.c_concat;
     }
-    SDCondition img_uncond = uncond;
     if (uncond.c_crossattn != nullptr &&
         (sd_version_is_inpaint_or_unet_edit(sd_ctx->sd->version) && guidance.img_cfg != 1.0)) {
-        img_uncond = SDCondition(uncond.c_crossattn, uncond.c_vector, empty_latent);
+        img_uncond.c_concat = empty_latent;
     }
     for (int b = 0; b < batch_count; b++) {
         int64_t sampling_start = ggml_time_ms();
