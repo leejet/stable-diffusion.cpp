@@ -1141,7 +1141,7 @@ public:
         float img_cfg_scale = std::isfinite(guidance.img_cfg) ? guidance.img_cfg : guidance.txt_cfg;
         float slg_scale     = guidance.slg.scale;
 
-        if (img_cfg_scale != cfg_scale && !sd_version_is_inpaint_or_unet_edit(version)) {
+        if (img_cfg_scale != 1.0 && !sd_version_is_inpaint_or_unet_edit(version)) {
             LOG_WARN("2-conditioning CFG is not supported with this model, disabling it for better performance...");
             img_cfg_scale = 1.0f;
         }
