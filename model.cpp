@@ -2043,106 +2043,71 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         }
                     };
 
+                    char* read_buf    = nullptr;
+                    char* target_buf  = nullptr;
+                    char* convert_buf = nullptr;
                     if (dst_tensor->buffer == nullptr || ggml_backend_buffer_is_host(dst_tensor->buffer)) {
                         if (tensor_storage.type == dst_tensor->type) {
                             GGML_ASSERT(ggml_nbytes(dst_tensor) == tensor_storage.nbytes());
                             if (tensor_storage.is_f64 || tensor_storage.is_i64) {
                                 read_buffer.resize(tensor_storage.nbytes_to_read());
-                                read_data((char*)read_buffer.data(), nbytes_to_read);
+                                read_buf = (char*)read_buffer.data();
                             } else {
-                                read_data((char*)dst_tensor->data, nbytes_to_read);
+                                read_buf = (char*)dst_tensor->data;
                             }
-                            t1 = ggml_time_ms();
-                            read_time_ms.fetch_add(t1 - t0);
-
-                            t0 = ggml_time_ms();
-                            if (tensor_storage.is_bf16) {
-                                // inplace op
-                                bf16_to_f32_vec((uint16_t*)dst_tensor->data, (float*)dst_tensor->data, tensor_storage.nelements());
-                            } else if (tensor_storage.is_f8_e4m3) {
-                                // inplace op
-                                f8_e4m3_to_f16_vec((uint8_t*)dst_tensor->data, (uint16_t*)dst_tensor->data, tensor_storage.nelements());
-                            } else if (tensor_storage.is_f8_e5m2) {
-                                // inplace op
-                                f8_e5m2_to_f16_vec((uint8_t*)dst_tensor->data, (uint16_t*)dst_tensor->data, tensor_storage.nelements());
-                            } else if (tensor_storage.is_f64) {
-                                f64_to_f32_vec((double*)read_buffer.data(), (float*)dst_tensor->data, tensor_storage.nelements());
-                            } else if (tensor_storage.is_i64) {
-                                i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)dst_tensor->data, tensor_storage.nelements());
-                            }
-                            t1 = ggml_time_ms();
-                            convert_time_ms.fetch_add(t1 - t0);
+                            target_buf = (char*)dst_tensor->data;
                         } else {
                             read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
-                            read_data((char*)read_buffer.data(), nbytes_to_read);
-                            t1 = ggml_time_ms();
-                            read_time_ms.fetch_add(t1 - t0);
-
-                            t0 = ggml_time_ms();
-                            if (tensor_storage.is_bf16) {
-                                // inplace op
-                                bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
-                            } else if (tensor_storage.is_f8_e4m3) {
-                                // inplace op
-                                f8_e4m3_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
-                            } else if (tensor_storage.is_f8_e5m2) {
-                                // inplace op
-                                f8_e5m2_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
-                            } else if (tensor_storage.is_f64) {
-                                // inplace op
-                                f64_to_f32_vec((double*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
-                            } else if (tensor_storage.is_i64) {
-                                // inplace op
-                                i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)read_buffer.data(), tensor_storage.nelements());
-                            }
-                            convert_tensor((void*)read_buffer.data(), tensor_storage.type, dst_tensor->data, dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
-                            t1 = ggml_time_ms();
-                            convert_time_ms.fetch_add(t1 - t0);
+                            read_buf    = (char*)read_buffer.data();
+                            target_buf  = read_buf;
+                            convert_buf = (char*)dst_tensor->data;
                         }
                     } else {
                         read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
-                        read_data((char*)read_buffer.data(), nbytes_to_read);
-                        t1 = ggml_time_ms();
-                        read_time_ms.fetch_add(t1 - t0);
+                        read_buf   = (char*)read_buffer.data();
+                        target_buf = read_buf;
 
-                        t0 = ggml_time_ms();
-                        if (tensor_storage.is_bf16) {
-                            // inplace op
-                            bf16_to_f32_vec((uint16_t*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
-                        } else if (tensor_storage.is_f8_e4m3) {
-                            // inplace op
-                            f8_e4m3_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
-                        } else if (tensor_storage.is_f8_e5m2) {
-                            // inplace op
-                            f8_e5m2_to_f16_vec((uint8_t*)read_buffer.data(), (uint16_t*)read_buffer.data(), tensor_storage.nelements());
-                        } else if (tensor_storage.is_f64) {
-                            // inplace op
-                            f64_to_f32_vec((double*)read_buffer.data(), (float*)read_buffer.data(), tensor_storage.nelements());
-                        } else if (tensor_storage.is_i64) {
-                            // inplace op
-                            i64_to_i32_vec((int64_t*)read_buffer.data(), (int32_t*)read_buffer.data(), tensor_storage.nelements());
-                        }
-
-                        if (tensor_storage.type == dst_tensor->type) {
-                            // copy to device memory
-                            t1 = ggml_time_ms();
-                            convert_time_ms.fetch_add(t1 - t0);
-                            t0 = ggml_time_ms();
-                            ggml_backend_tensor_set(dst_tensor, read_buffer.data(), 0, ggml_nbytes(dst_tensor));
-                            t1 = ggml_time_ms();
-                            copy_to_backend_time_ms.fetch_add(t1 - t0);
-                        } else {
-                            // convert first, then copy to device memory
-
+                        if (tensor_storage.type != dst_tensor->type) {
                             convert_buffer.resize(ggml_nbytes(dst_tensor));
-                            convert_tensor((void*)read_buffer.data(), tensor_storage.type, (void*)convert_buffer.data(), dst_tensor->type, (int)tensor_storage.nelements() / (int)tensor_storage.ne[0], (int)tensor_storage.ne[0]);
-                            t1 = ggml_time_ms();
-                            convert_time_ms.fetch_add(t1 - t0);
-                            t0 = ggml_time_ms();
-                            ggml_backend_tensor_set(dst_tensor, convert_buffer.data(), 0, ggml_nbytes(dst_tensor));
-                            t1 = ggml_time_ms();
-                            copy_to_backend_time_ms.fetch_add(t1 - t0);
+                            convert_buf = (char*)convert_buffer.data();
                         }
+                    }
+
+                    t0 = ggml_time_ms();
+                    read_data(read_buf, nbytes_to_read);
+                    t1 = ggml_time_ms();
+                    read_time_ms.fetch_add(t1 - t0);
+
+                    t0 = ggml_time_ms();
+                    if (tensor_storage.is_bf16) {
+                        bf16_to_f32_vec((uint16_t*)read_buf, (float*)target_buf, tensor_storage.nelements());
+                    } else if (tensor_storage.is_f8_e4m3) {
+                        f8_e4m3_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
+                    } else if (tensor_storage.is_f8_e5m2) {
+                        f8_e5m2_to_f16_vec((uint8_t*)read_buf, (uint16_t*)target_buf, tensor_storage.nelements());
+                    } else if (tensor_storage.is_f64) {
+                        f64_to_f32_vec((double*)read_buf, (float*)target_buf, tensor_storage.nelements());
+                    } else if (tensor_storage.is_i64) {
+                        i64_to_i32_vec((int64_t*)read_buf, (int32_t*)target_buf, tensor_storage.nelements());
+                    }
+                    if (tensor_storage.type != dst_tensor->type) {
+                        convert_tensor((void*)target_buf,
+                                       tensor_storage.type,
+                                       convert_buf,
+                                       dst_tensor->type,
+                                       (int)tensor_storage.nelements() / (int)tensor_storage.ne[0],
+                                       (int)tensor_storage.ne[0]);
+                    } else {
+                        convert_buf = read_buf;
+                    }
+                    t1 = ggml_time_ms();
+                    convert_time_ms.fetch_add(t1 - t0);
+
+                    if (dst_tensor->buffer != nullptr && !ggml_backend_buffer_is_host(dst_tensor->buffer)) {
+                        t0 = ggml_time_ms();
+                        ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
+                        t1 = ggml_time_ms();
+                        copy_to_backend_time_ms.fetch_add(t1 - t0);
                     }
                 }
                 if (zip != nullptr) {
