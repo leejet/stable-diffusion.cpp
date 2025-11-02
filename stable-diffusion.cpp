@@ -1451,7 +1451,7 @@ public:
             }
         } else if (version == VERSION_CHROMA_RADIANCE) {
             // pass
-        } else {
+        } else if (!use_tiny_autoencoder) {
             ggml_ext_tensor_iter(latent, [&](ggml_tensor* latent, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
                 float value = ggml_ext_tensor_get_f32(latent, i0, i1, i2, i3);
                 value       = (value - shift_factor) * scale_factor;
