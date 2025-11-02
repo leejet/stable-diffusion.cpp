@@ -213,7 +213,7 @@ public:
             }
         }
 
-        bool is_unet = sd_version_is_unet(version);
+        bool is_unet = sd_version_is_unet(model_loader.get_sd_version());
 
         if (strlen(SAFE_STR(sd_ctx_params->clip_l_path)) > 0) {
             LOG_INFO("loading clip_l from '%s'", sd_ctx_params->clip_l_path);
