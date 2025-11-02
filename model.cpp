@@ -1992,17 +1992,63 @@ std::map<ggml_type, uint32_t> ModelLoader::get_vae_wtype_stat() {
     return wtype_stat;
 }
 
-void ModelLoader::set_wtype_override(ggml_type wtype, std::string prefix) {
+static std::vector<std::pair<std::string, ggml_type>> parse_tensor_type_rules(const std::string& tensor_type_rules) {
+    std::vector<std::pair<std::string, ggml_type>> result;
+    for (const auto& item : split_string(tensor_type_rules, ',')) {
+        if (item.size() == 0)
+            continue;
+        std::string::size_type pos = item.find('=');
+        if (pos == std::string::npos) {
+            LOG_WARN("ignoring invalid quant override \"%s\"", item.c_str());
+            continue;
+        }
+        std::string tensor_pattern = item.substr(0, pos);
+        std::string type_name      = item.substr(pos + 1);
+
+        ggml_type tensor_type = GGML_TYPE_COUNT;
+
+        if (type_name == "f32") {
+            tensor_type = GGML_TYPE_F32;
+        } else {
+            for (size_t i = 0; i < GGML_TYPE_COUNT; i++) {
+                auto trait = ggml_get_type_traits((ggml_type)i);
+                if (trait->to_float && trait->type_size && type_name == trait->type_name) {
+                    tensor_type = (ggml_type)i;
+                }
+            }
+        }
+
+        if (tensor_type != GGML_TYPE_COUNT) {
+            result.emplace_back(tensor_pattern, tensor_type);
+        } else {
+            LOG_WARN("ignoring invalid quant override \"%s\"", item.c_str());
+        }
+    }
+    return result;
+}
+
+void ModelLoader::set_wtype_override(ggml_type wtype, std::string tensor_type_rules) {
+    auto map_rules = parse_tensor_type_rules(tensor_type_rules);
     for (auto& pair : tensor_storages_types) {
-        if (prefix.size() < 1 || pair.first.substr(0, prefix.size()) == prefix) {
+        ggml_type dst_type = wtype;
+
+        for (const auto& tensor_type_rule : map_rules) {
+            std::regex pattern(tensor_type_rule.first);
+            if (std::regex_search(pair.first, pattern)) {
+                dst_type = tensor_type_rule.second;
+                break;
+            }
+        }
+
+        if (dst_type != GGML_TYPE_COUNT) {
             bool found = false;
             for (auto& tensor_storage : tensor_storages) {
                 std::map<std::string, ggml_type> temp;
                 add_preprocess_tensor_storage_types(temp, tensor_storage.name, tensor_storage.type);
                 for (auto& preprocessed_name : temp) {
                     if (preprocessed_name.first == pair.first) {
-                        if (tensor_should_be_converted(tensor_storage, wtype)) {
-                            pair.second = wtype;
+                        if (tensor_should_be_converted(tensor_storage, dst_type)) {
+                            pair.second = dst_type;
                         }
                         found = true;
                         break;
@@ -2447,41 +2493,6 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
         return false;
     }
     return true;
-}
-
-std::vector<std::pair<std::string, ggml_type>> parse_tensor_type_rules(const std::string& tensor_type_rules) {
-    std::vector<std::pair<std::string, ggml_type>> result;
-    for (const auto& item : split_string(tensor_type_rules, ',')) {
-        if (item.size() == 0)
-            continue;
-        std::string::size_type pos = item.find('=');
-        if (pos == std::string::npos) {
-            LOG_WARN("ignoring invalid quant override \"%s\"", item.c_str());
-            continue;
-        }
-        std::string tensor_pattern = item.substr(0, pos);
-        std::string type_name      = item.substr(pos + 1);
-
-        ggml_type tensor_type = GGML_TYPE_COUNT;
-
-        if (type_name == "f32") {
-            tensor_type = GGML_TYPE_F32;
-        } else {
-            for (size_t i = 0; i < GGML_TYPE_COUNT; i++) {
-                auto trait = ggml_get_type_traits((ggml_type)i);
-                if (trait->to_float && trait->type_size && type_name == trait->type_name) {
-                    tensor_type = (ggml_type)i;
-                }
-            }
-        }
-
-        if (tensor_type != GGML_TYPE_COUNT) {
-            result.emplace_back(tensor_pattern, tensor_type);
-        } else {
-            LOG_WARN("ignoring invalid quant override \"%s\"", item.c_str());
-        }
-    }
-    return result;
 }
 
 bool ModelLoader::tensor_should_be_converted(const TensorStorage& tensor_storage, ggml_type type) {
