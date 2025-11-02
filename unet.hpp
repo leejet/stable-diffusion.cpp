@@ -20,9 +20,10 @@ public:
                             int64_t d_head,
                             int64_t depth,
                             int64_t context_dim,
+                            bool use_linear,
                             int64_t time_depth            = 1,
                             int64_t max_time_embed_period = 10000)
-        : SpatialTransformer(in_channels, n_head, d_head, depth, context_dim),
+        : SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear),
           max_time_embed_period(max_time_embed_period) {
         // We will convert unet transformer linear to conv2d 1x1 when loading the weights, so use_linear is always False
         // use_spatial_context is always True
@@ -178,6 +179,7 @@ protected:
     int num_heads                          = 8;
     int num_head_channels                  = -1;   // channels // num_heads
     int context_dim                        = 768;  // 1024 for VERSION_SD2, 2048 for VERSION_SDXL
+    bool use_linear_projection             = false;
 
 public:
     int model_channels  = 320;
@@ -186,9 +188,10 @@ public:
     UnetModelBlock(SDVersion version = VERSION_SD1, const String2TensorStorage& tensor_storage_map = {})
         : version(version) {
         if (sd_version_is_sd2(version)) {
-            context_dim       = 1024;
-            num_head_channels = 64;
-            num_heads         = -1;
+            context_dim           = 1024;
+            num_head_channels     = 64;
+            num_heads             = -1;
+            use_linear_projection = true;
         } else if (sd_version_is_sdxl(version)) {
             context_dim           = 2048;
             attention_resolutions = {4, 2};
@@ -196,13 +199,15 @@ public:
             transformer_depth     = {1, 2, 10};
             num_head_channels     = 64;
             num_heads             = -1;
+            use_linear_projection = true;
         } else if (version == VERSION_SVD) {
-            in_channels       = 8;
-            out_channels      = 4;
-            context_dim       = 1024;
-            adm_in_channels   = 768;
-            num_head_channels = 64;
-            num_heads         = -1;
+            in_channels           = 8;
+            out_channels          = 4;
+            context_dim           = 1024;
+            adm_in_channels       = 768;
+            num_head_channels     = 64;
+            num_heads             = -1;
+            use_linear_projection = true;
         } else if (version == VERSION_SD1_TINY_UNET) {
             num_res_blocks = 1;
             channel_mult   = {1, 2, 4};
@@ -249,9 +254,9 @@ public:
                                        int64_t depth,
                                        int64_t context_dim) -> SpatialTransformer* {
             if (version == VERSION_SVD) {
-                return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim);
+                return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
             } else {
-                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim);
+                return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
             }
         };
 

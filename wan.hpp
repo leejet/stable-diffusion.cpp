@@ -89,7 +89,12 @@ namespace WAN {
 
         void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             ggml_type wtype = GGML_TYPE_F32;
-            params["gamma"] = ggml_new_tensor_1d(ctx, wtype, dim);
+            auto iter       = tensor_storage_map.find(prefix + "gamma");
+            if (iter != tensor_storage_map.end()) {
+                params["gamma"] = ggml_new_tensor(ctx, wtype, iter->second.n_dims, &iter->second.ne[0]);
+            } else {
+                params["gamma"] = ggml_new_tensor_1d(ctx, wtype, dim);
+            }
         }
 
     public:
@@ -101,6 +106,7 @@ namespace WAN {
             // assert N == 1
 
             struct ggml_tensor* w = params["gamma"];
+            w                     = ggml_reshape_1d(ctx->ggml_ctx, w, ggml_nelements(w));
             auto h                = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 3, 0, 1, 2));  // [ID, IH, IW, N*IC]
             h                     = ggml_rms_norm(ctx->ggml_ctx, h, 1e-12);
             h                     = ggml_mul(ctx->ggml_ctx, h, w);

@@ -2363,9 +2363,11 @@ class MultiheadAttention : public GGMLBlock {
 protected:
     int64_t embed_dim;
     int64_t n_head;
+    bool proj_in;
     std::string q_proj_name;
     std::string k_proj_name;
     std::string v_proj_name;
+    std::string in_proj_name;
     std::string out_proj_name;
 
 public:
@@ -2373,19 +2375,27 @@ public:
                        int64_t n_head,
                        bool qkv_proj_bias        = true,
                        bool out_proj_bias        = true,
+                       bool proj_in              = false,
                        std::string q_proj_name   = "q_proj",
                        std::string k_proj_name   = "k_proj",
                        std::string v_proj_name   = "v_proj",
+                       std::string in_proj_name  = "in_proj",
                        std::string out_proj_name = "out_proj")
         : embed_dim(embed_dim),
           n_head(n_head),
+          proj_in(proj_in),
           q_proj_name(q_proj_name),
           k_proj_name(k_proj_name),
           v_proj_name(v_proj_name),
+          in_proj_name(in_proj_name),
           out_proj_name(out_proj_name) {
-        blocks[q_proj_name]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
-        blocks[k_proj_name]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
-        blocks[v_proj_name]   = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
+        if (proj_in) {
+            blocks[in_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim * 3, qkv_proj_bias));
+        } else {
+            blocks[q_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
+            blocks[k_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
+            blocks[v_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, qkv_proj_bias));
+        }
         blocks[out_proj_name] = std::shared_ptr<GGMLBlock>(new Linear(embed_dim, embed_dim, out_proj_bias));
     }
 
@@ -2393,14 +2403,27 @@ public:
     struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                 struct ggml_tensor* x,
                                 bool mask = false) {
-        auto q_proj   = std::dynamic_pointer_cast<Linear>(blocks[q_proj_name]);
-        auto k_proj   = std::dynamic_pointer_cast<Linear>(blocks[k_proj_name]);
-        auto v_proj   = std::dynamic_pointer_cast<Linear>(blocks[v_proj_name]);
         auto out_proj = std::dynamic_pointer_cast<Linear>(blocks[out_proj_name]);
 
-        struct ggml_tensor* q = q_proj->forward(ctx, x);
-        struct ggml_tensor* k = k_proj->forward(ctx, x);
-        struct ggml_tensor* v = v_proj->forward(ctx, x);
+        ggml_tensor* q;
+        ggml_tensor* k;
+        ggml_tensor* v;
+        if (proj_in) {
+            auto in_proj = std::dynamic_pointer_cast<Linear>(blocks[in_proj_name]);
+            auto qkv     = in_proj->forward(ctx, x);
+            auto qkv_vec = split_qkv(ctx->ggml_ctx, qkv);
+            q            = qkv_vec[0];
+            k            = qkv_vec[1];
+            v            = qkv_vec[2];
+        } else {
+            auto q_proj = std::dynamic_pointer_cast<Linear>(blocks[q_proj_name]);
+            auto k_proj = std::dynamic_pointer_cast<Linear>(blocks[k_proj_name]);
+            auto v_proj = std::dynamic_pointer_cast<Linear>(blocks[v_proj_name]);
+
+            q = q_proj->forward(ctx, x);
+            k = k_proj->forward(ctx, x);
+            v = v_proj->forward(ctx, x);
+        }
 
         x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, nullptr, mask);  // [N, n_token, embed_dim]
 

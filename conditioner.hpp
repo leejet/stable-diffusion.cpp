@@ -624,8 +624,20 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
     FrozenCLIPVisionEmbedder(ggml_backend_t backend,
                              bool offload_params_to_cpu,
                              const String2TensorStorage& tensor_storage_map = {})
-        : vision_model(OPEN_CLIP_VIT_H_14), GGMLRunner(backend, offload_params_to_cpu) {
-        vision_model.init(params_ctx, tensor_storage_map, "cond_stage_model.transformer");
+        : GGMLRunner(backend, offload_params_to_cpu) {
+        std::string prefix = "cond_stage_model.transformer";
+        bool proj_in       = false;
+        for (const auto& [name, tensor_storage] : tensor_storage_map) {
+            if (!starts_with(name, prefix)) {
+                continue;
+            }
+            if (contains(name, "self_attn.in_proj")) {
+                proj_in = true;
+                break;
+            }
+        }
+        vision_model = CLIPVisionModelProjection(OPEN_CLIP_VIT_H_14, false, proj_in);
+        vision_model.init(params_ctx, tensor_storage_map, prefix);
     }
 
     std::string get_desc() override {

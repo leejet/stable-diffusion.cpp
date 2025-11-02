@@ -140,7 +140,9 @@ std::unordered_map<std::string, std::string> open_clip_to_hf_clip_model = {
     {"model.visual.proj", "transformer.visual_projection.weight"},
 };
 
-std::unordered_map<std::string, std::string> open_clip_to_hk_clip_resblock = {
+std::unordered_map<std::string, std::string> open_clip_to_hf_clip_resblock = {
+    {"attn.in_proj_bias", "self_attn.in_proj.bias"},
+    {"attn.in_proj_weight", "self_attn.in_proj.weight"},
     {"attn.out_proj.bias", "self_attn.out_proj.bias"},
     {"attn.out_proj.weight", "self_attn.out_proj.weight"},
     {"ln_1.bias", "layer_norm1.bias"},
@@ -351,10 +353,8 @@ std::string convert_cond_model_name(const std::string& name) {
             std::string idx    = remain.substr(0, remain.find("."));
             std::string suffix = remain.substr(idx.length() + 1);
 
-            if (suffix == "attn.in_proj_weight" || suffix == "attn.in_proj_bias") {
-                new_name = hf_clip_resblock_prefix + idx + "." + suffix;
-            } else if (open_clip_to_hk_clip_resblock.find(suffix) != open_clip_to_hk_clip_resblock.end()) {
-                std::string new_suffix = open_clip_to_hk_clip_resblock[suffix];
+            if (open_clip_to_hf_clip_resblock.find(suffix) != open_clip_to_hf_clip_resblock.end()) {
+                std::string new_suffix = open_clip_to_hf_clip_resblock[suffix];
                 new_name               = hf_clip_resblock_prefix + idx + "." + new_suffix;
             }
         }
@@ -738,60 +738,6 @@ std::string convert_tensor_name(std::string name) {
     //     LOG_DEBUG("%s => %s", name.c_str(), new_name.c_str());
     // }
     return new_name;
-}
-
-void preprocess_tensor(TensorStorage tensor_storage,
-                       std::vector<TensorStorage>& processed_tensor_storages) {
-    std::vector<TensorStorage> result;
-    std::string new_name = convert_tensor_name(tensor_storage.name);
-
-    // convert unet transformer linear to conv2d 1x1
-    if (starts_with(new_name, "model.diffusion_model.") &&
-        !starts_with(new_name, "model.diffusion_model.proj_out.") &&
-        (ends_with(new_name, "proj_in.weight") || ends_with(new_name, "proj_out.weight"))) {
-        tensor_storage.unsqueeze();
-    }
-
-    // convert vae attn block linear to conv2d 1x1
-    if (starts_with(new_name, "first_stage_model.") && new_name.find("attn_1") != std::string::npos) {
-        tensor_storage.unsqueeze();
-    }
-
-    // wan vae
-    if (ends_with(new_name, "gamma")) {
-        tensor_storage.reverse_ne();
-        tensor_storage.n_dims = 1;
-        tensor_storage.reverse_ne();
-    }
-
-    tensor_storage.name = new_name;
-
-    if (new_name.find("cond_stage_model") != std::string::npos &&
-        ends_with(new_name, "attn.in_proj_weight")) {
-        size_t prefix_size = new_name.find("attn.in_proj_weight");
-        std::string prefix = new_name.substr(0, prefix_size);
-
-        std::vector<TensorStorage> chunks = tensor_storage.chunk(3);
-        chunks[0].name                    = prefix + "self_attn.q_proj.weight";
-        chunks[1].name                    = prefix + "self_attn.k_proj.weight";
-        chunks[2].name                    = prefix + "self_attn.v_proj.weight";
-
-        processed_tensor_storages.insert(processed_tensor_storages.end(), chunks.begin(), chunks.end());
-
-    } else if (new_name.find("cond_stage_model") != std::string::npos &&
-               ends_with(new_name, "attn.in_proj_bias")) {
-        size_t prefix_size = new_name.find("attn.in_proj_bias");
-        std::string prefix = new_name.substr(0, prefix_size);
-
-        std::vector<TensorStorage> chunks = tensor_storage.chunk(3);
-        chunks[0].name                    = prefix + "self_attn.q_proj.bias";
-        chunks[1].name                    = prefix + "self_attn.k_proj.bias";
-        chunks[2].name                    = prefix + "self_attn.v_proj.bias";
-
-        processed_tensor_storages.insert(processed_tensor_storages.end(), chunks.begin(), chunks.end());
-    } else {
-        processed_tensor_storages.push_back(tensor_storage);
-    }
 }
 
 float bf16_to_f32(uint16_t bfloat16) {
@@ -2453,14 +2399,10 @@ int64_t ModelLoader::get_params_mem_size(ggml_backend_t backend, ggml_type type)
     }
     int64_t mem_size = 0;
     std::vector<TensorStorage> processed_tensor_storages;
-    for (auto& [name, tensor_storage] : tensor_storage_map) {
+    for (auto [name, tensor_storage] : tensor_storage_map) {
         if (is_unused_tensor(tensor_storage.name)) {
             continue;
         }
-        preprocess_tensor(tensor_storage, processed_tensor_storages);
-    }
-
-    for (auto& tensor_storage : processed_tensor_storages) {
         if (tensor_should_be_converted(tensor_storage, type)) {
             tensor_storage.type = type;
         }
