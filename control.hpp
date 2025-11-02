@@ -318,10 +318,10 @@ struct ControlNet : public GGMLRunner {
 
     ControlNet(ggml_backend_t backend,
                bool offload_params_to_cpu,
-               const String2GGMLType& tensor_types = {},
-               SDVersion version                   = VERSION_SD1)
+               const String2TensorStorage& tensor_storage_map = {},
+               SDVersion version                              = VERSION_SD1)
         : GGMLRunner(backend, offload_params_to_cpu), control_net(version) {
-        control_net.init(params_ctx, tensor_types, "");
+        control_net.init(params_ctx, tensor_storage_map, "");
     }
 
     ~ControlNet() override {

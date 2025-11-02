@@ -44,9 +44,9 @@ struct UNetModel : public DiffusionModel {
 
     UNetModel(ggml_backend_t backend,
               bool offload_params_to_cpu,
-              const String2GGMLType& tensor_types = {},
-              SDVersion version                   = VERSION_SD1)
-        : unet(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version) {
+              const String2TensorStorage& tensor_storage_map = {},
+              SDVersion version                              = VERSION_SD1)
+        : unet(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model", version) {
     }
 
     std::string get_desc() override {
@@ -102,8 +102,8 @@ struct MMDiTModel : public DiffusionModel {
 
     MMDiTModel(ggml_backend_t backend,
                bool offload_params_to_cpu,
-               const String2GGMLType& tensor_types = {})
-        : mmdit(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model") {
+               const String2TensorStorage& tensor_storage_map = {})
+        : mmdit(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model") {
     }
 
     std::string get_desc() override {
@@ -158,10 +158,10 @@ struct FluxModel : public DiffusionModel {
 
     FluxModel(ggml_backend_t backend,
               bool offload_params_to_cpu,
-              const String2GGMLType& tensor_types = {},
-              SDVersion version                   = VERSION_FLUX,
-              bool use_mask                       = false)
-        : flux(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, use_mask) {
+              const String2TensorStorage& tensor_storage_map = {},
+              SDVersion version                              = VERSION_FLUX,
+              bool use_mask                                  = false)
+        : flux(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model", version, use_mask) {
     }
 
     std::string get_desc() override {
@@ -221,10 +221,10 @@ struct WanModel : public DiffusionModel {
 
     WanModel(ggml_backend_t backend,
              bool offload_params_to_cpu,
-             const String2GGMLType& tensor_types = {},
-             const std::string prefix            = "model.diffusion_model",
-             SDVersion version                   = VERSION_WAN2)
-        : prefix(prefix), wan(backend, offload_params_to_cpu, tensor_types, prefix, version) {
+             const String2TensorStorage& tensor_storage_map = {},
+             const std::string prefix                       = "model.diffusion_model",
+             SDVersion version                              = VERSION_WAN2)
+        : prefix(prefix), wan(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
     }
 
     std::string get_desc() override {
@@ -283,10 +283,10 @@ struct QwenImageModel : public DiffusionModel {
 
     QwenImageModel(ggml_backend_t backend,
                    bool offload_params_to_cpu,
-                   const String2GGMLType& tensor_types = {},
-                   const std::string prefix            = "model.diffusion_model",
-                   SDVersion version                   = VERSION_QWEN_IMAGE)
-        : prefix(prefix), qwen_image(backend, offload_params_to_cpu, tensor_types, prefix, version) {
+                   const String2TensorStorage& tensor_storage_map = {},
+                   const std::string prefix                       = "model.diffusion_model",
+                   SDVersion version                              = VERSION_QWEN_IMAGE)
+        : prefix(prefix), qwen_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
     }
 
     std::string get_desc() override {

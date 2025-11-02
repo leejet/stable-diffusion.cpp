@@ -412,7 +412,7 @@ public:
 public:
     PhotoMakerIDEncoder(ggml_backend_t backend,
                         bool offload_params_to_cpu,
-                        const String2GGMLType& tensor_types,
+                        const String2TensorStorage& tensor_storage_map,
                         const std::string prefix,
                         SDVersion version = VERSION_SDXL,
                         PMVersion pm_v    = PM_VERSION_1,
@@ -422,9 +422,9 @@ public:
           pm_version(pm_v),
           style_strength(sty) {
         if (pm_version == PM_VERSION_1) {
-            id_encoder.init(params_ctx, tensor_types, prefix);
+            id_encoder.init(params_ctx, tensor_storage_map, prefix);
         } else if (pm_version == PM_VERSION_2) {
-            id_encoder2.init(params_ctx, tensor_types, prefix);
+            id_encoder2.init(params_ctx, tensor_storage_map, prefix);
         }
     }
 

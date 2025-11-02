@@ -197,14 +197,14 @@ struct TinyAutoEncoder : public GGMLRunner {
 
     TinyAutoEncoder(ggml_backend_t backend,
                     bool offload_params_to_cpu,
-                    const String2GGMLType& tensor_types,
+                    const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
                     bool decoder_only = true,
                     SDVersion version = VERSION_SD1)
         : decode_only(decoder_only),
           taesd(decoder_only, version),
           GGMLRunner(backend, offload_params_to_cpu) {
-        taesd.init(params_ctx, tensor_types, prefix);
+        taesd.init(params_ctx, tensor_storage_map, prefix);
     }
 
     std::string get_desc() override {

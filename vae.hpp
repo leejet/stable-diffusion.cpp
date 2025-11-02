@@ -163,8 +163,8 @@ public:
 
 class VideoResnetBlock : public ResnetBlock {
 protected:
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
-        enum ggml_type wtype = get_type(prefix + "mix_factor", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        enum ggml_type wtype = get_type(prefix + "mix_factor", tensor_storage_map, GGML_TYPE_F32);
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
 
@@ -562,13 +562,13 @@ struct AutoEncoderKL : public VAE {
 
     AutoEncoderKL(ggml_backend_t backend,
                   bool offload_params_to_cpu,
-                  const String2GGMLType& tensor_types,
+                  const String2TensorStorage& tensor_storage_map,
                   const std::string prefix,
                   bool decode_only       = false,
                   bool use_video_decoder = false,
                   SDVersion version      = VERSION_SD1)
         : decode_only(decode_only), ae(decode_only, use_video_decoder, version), VAE(backend, offload_params_to_cpu) {
-        ae.init(params_ctx, tensor_types, prefix);
+        ae.init(params_ctx, tensor_storage_map, prefix);
     }
 
     void set_conv2d_scale(float scale) override {

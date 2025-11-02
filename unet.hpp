@@ -183,7 +183,7 @@ public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL/SVD
 
-    UnetModelBlock(SDVersion version = VERSION_SD1, const String2GGMLType& tensor_types = {})
+    UnetModelBlock(SDVersion version = VERSION_SD1, const String2TensorStorage& tensor_storage_map = {})
         : version(version) {
         if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
@@ -581,11 +581,11 @@ struct UNetModelRunner : public GGMLRunner {
 
     UNetModelRunner(ggml_backend_t backend,
                     bool offload_params_to_cpu,
-                    const String2GGMLType& tensor_types,
+                    const String2TensorStorage& tensor_storage_map,
                     const std::string prefix,
                     SDVersion version = VERSION_SD1)
-        : GGMLRunner(backend, offload_params_to_cpu), unet(version, tensor_types) {
-        unet.init(params_ctx, tensor_types, prefix);
+        : GGMLRunner(backend, offload_params_to_cpu), unet(version, tensor_storage_map) {
+        unet.init(params_ctx, tensor_storage_map, prefix);
     }
 
     std::string get_desc() override {

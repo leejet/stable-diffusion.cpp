@@ -182,8 +182,8 @@ protected:
     int64_t dim_in;
     int64_t dim_out;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
-        enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
+        enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_storage_map, GGML_TYPE_F32);
         enum ggml_type bias_wtype = GGML_TYPE_F32;
         params["proj.weight"]     = ggml_new_tensor_2d(ctx, wtype, dim_in, dim_out * 2);
         params["proj.bias"]       = ggml_new_tensor_1d(ctx, bias_wtype, dim_out * 2);
@@ -475,7 +475,7 @@ public:
 
 class AlphaBlender : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
         // Get the type of the "mix_factor" tensor from the input tensors map with the specified prefix
         enum ggml_type wtype = GGML_TYPE_F32;
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);

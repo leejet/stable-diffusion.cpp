@@ -1460,8 +1460,6 @@ __STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
 #define MAX_PARAMS_TENSOR_NUM 32768
 #define MAX_GRAPH_SIZE 327680
 
-typedef std::map<std::string, enum ggml_type> String2GGMLType;
-
 struct GGMLRunnerContext {
     ggml_backend_t backend     = nullptr;
     ggml_context* ggml_ctx     = nullptr;
@@ -1900,30 +1898,36 @@ protected:
     GGMLBlockMap blocks;
     ParameterMap params;
 
-    ggml_type get_type(const std::string& name, const String2GGMLType& tensor_types, ggml_type default_type) {
-        auto iter = tensor_types.find(name);
-        if (iter != tensor_types.end()) {
-            return iter->second;
+    ggml_type get_type(const std::string& name, const String2TensorStorage& tensor_storage_map, ggml_type default_type) {
+        ggml_type wtype = default_type;
+        auto iter       = tensor_storage_map.find(name);
+        if (iter != tensor_storage_map.end()) {
+            const TensorStorage& tensor_storage = iter->second;
+            if (tensor_storage.expected_type != GGML_TYPE_COUNT) {
+                wtype = tensor_storage.expected_type;
+            } else {
+                wtype = tensor_storage.type;
+            }
         }
-        return default_type;
+        return wtype;
     }
 
-    void init_blocks(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {
+    void init_blocks(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
         for (auto& pair : blocks) {
             auto& block = pair.second;
-            block->init(ctx, tensor_types, prefix + pair.first);
+            block->init(ctx, tensor_storage_map, prefix + pair.first);
         }
     }
 
-    virtual void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") {}
+    virtual void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {}
 
 public:
-    void init(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") {
+    void init(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") {
         if (prefix.size() > 0) {
             prefix = prefix + ".";
         }
-        init_blocks(ctx, tensor_types, prefix);
-        init_params(ctx, tensor_types, prefix);
+        init_blocks(ctx, tensor_storage_map, prefix);
+        init_params(ctx, tensor_storage_map, prefix);
     }
 
     size_t get_params_num() {
@@ -2001,8 +2005,8 @@ protected:
     bool force_prec_f32;
     float scale;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
-        enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
         if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
             wtype = GGML_TYPE_F32;
         }
@@ -2049,8 +2053,8 @@ class Embedding : public UnaryBlock {
 protected:
     int64_t embedding_dim;
     int64_t num_embeddings;
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") override {
-        enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
         if (!support_get_rows(wtype)) {
             wtype = GGML_TYPE_F32;
         }
@@ -2093,7 +2097,7 @@ protected:
     bool bias;
     float scale = 1.f;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels, out_channels);
         if (bias) {
@@ -2157,7 +2161,7 @@ protected:
     int64_t dilation;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx, wtype, 1, kernel_size, in_channels, out_channels);  // 5d => 4d
         if (bias) {
@@ -2204,7 +2208,7 @@ protected:
     std::tuple<int, int, int> dilation;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types, const std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx,
                                                   wtype,
@@ -2253,7 +2257,7 @@ protected:
     bool elementwise_affine;
     bool bias;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         if (elementwise_affine) {
             enum ggml_type wtype = GGML_TYPE_F32;
             params["weight"]     = ggml_new_tensor_1d(ctx, wtype, normalized_shape);
@@ -2295,7 +2299,7 @@ protected:
     float eps;
     bool affine;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         if (affine) {
             enum ggml_type wtype      = GGML_TYPE_F32;
             enum ggml_type bias_wtype = GGML_TYPE_F32;
@@ -2336,7 +2340,7 @@ protected:
     int64_t hidden_size;
     float eps;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
