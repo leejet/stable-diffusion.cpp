@@ -1163,10 +1163,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         exit(1);
     }
 
-    if (params.mode != CONVERT && params.tensor_type_rules.size() > 0) {
-        fprintf(stderr, "warning: --tensor-type-rules is currently supported only for conversion\n");
-    }
-
     if (params.mode == VID_GEN && params.video_frames <= 0) {
         fprintf(stderr, "warning: --video-frames must be at least 1\n");
         exit(1);
@@ -1643,6 +1639,7 @@ int main(int argc, const char* argv[]) {
         params.lora_model_dir.c_str(),
         params.embedding_dir.c_str(),
         params.photo_maker_path.c_str(),
+        params.tensor_type_rules.c_str(),
         vae_decode_only,
         true,
         params.n_threads,
