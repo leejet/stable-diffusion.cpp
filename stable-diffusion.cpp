@@ -491,6 +491,10 @@ public:
                                                                              "decoder",
                                                                              vae_decode_only,
                                                                              version);
+                    if (sd_ctx_params->vae_conv_direct) {
+                        LOG_INFO("Using Conv2d direct in the tae model");
+                        tae_first_stage->set_conv2d_direct_enabled(true);
+                    }
                 }
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 first_stage_model = std::make_shared<FakeVAE>(vae_backend,
@@ -1718,6 +1722,10 @@ public:
             first_stage_model->free_compute_buffer();
             process_vae_output_tensor(result);
         } else {
+            if (sd_version_is_wan(version)) {
+                x = ggml_permute(work_ctx, x, 0, 1, 3, 2);
+            }
+
             if (vae_tiling_params.enabled && !decode_video) {
                 // split latent in 64x64 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
@@ -1728,6 +1736,7 @@ public:
                 tae_first_stage->compute(n_threads, x, true, &result);
             }
             tae_first_stage->free_compute_buffer();
+
         }
 
         int64_t t1 = ggml_time_ms();
