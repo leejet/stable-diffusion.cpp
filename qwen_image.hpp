@@ -502,12 +502,12 @@ namespace Qwen {
 
         QwenImageRunner(ggml_backend_t backend,
                         bool offload_params_to_cpu,
-                        const String2GGMLType& tensor_types = {},
-                        const std::string prefix            = "",
-                        SDVersion version                   = VERSION_QWEN_IMAGE)
+                        const String2TensorStorage& tensor_storage_map = {},
+                        const std::string prefix                       = "",
+                        SDVersion version                              = VERSION_QWEN_IMAGE)
             : GGMLRunner(backend, offload_params_to_cpu) {
             qwen_image_params.num_layers = 0;
-            for (auto pair : tensor_types) {
+            for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find(prefix) == std::string::npos)
                     continue;
@@ -526,7 +526,7 @@ namespace Qwen {
             }
             LOG_INFO("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
             qwen_image = QwenImageModel(qwen_image_params);
-            qwen_image.init(params_ctx, tensor_types, prefix);
+            qwen_image.init(params_ctx, tensor_storage_map, prefix);
         }
 
         std::string get_desc() override {
@@ -649,17 +649,16 @@ namespace Qwen {
                 return;
             }
 
-            auto tensor_types = model_loader.tensor_storages_types;
-            for (auto& item : tensor_types) {
-                // LOG_DEBUG("%s %u", item.first.c_str(), item.second);
-                if (ends_with(item.first, "weight")) {
-                    item.second = model_data_type;
+            auto& tensor_storage_map = model_loader.get_tensor_storage_map();
+            for (auto& [name, tensor_storage] : tensor_storage_map) {
+                if (ends_with(name, "weight")) {
+                    tensor_storage.expected_type = model_data_type;
                 }
             }
 
             std::shared_ptr<QwenImageRunner> qwen_image = std::make_shared<QwenImageRunner>(backend,
                                                                                             false,
-                                                                                            tensor_types,
+                                                                                            tensor_storage_map,
                                                                                             "model.diffusion_model",
                                                                                             VERSION_QWEN_IMAGE);
 

@@ -182,8 +182,8 @@ protected:
     int64_t dim_in;
     int64_t dim_out;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
-        enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
+        enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_storage_map, GGML_TYPE_F32);
         enum ggml_type bias_wtype = GGML_TYPE_F32;
         params["proj.weight"]     = ggml_new_tensor_2d(ctx, wtype, dim_in, dim_out * 2);
         params["proj.bias"]       = ggml_new_tensor_1d(ctx, bias_wtype, dim_out * 2);
@@ -408,30 +408,40 @@ protected:
     int64_t d_head;
     int64_t depth       = 1;    // 1
     int64_t context_dim = 768;  // hidden_size, 1024 for VERSION_SD2
+    bool use_linear     = false;
 
 public:
     SpatialTransformer(int64_t in_channels,
                        int64_t n_head,
                        int64_t d_head,
                        int64_t depth,
-                       int64_t context_dim)
+                       int64_t context_dim,
+                       bool use_linear)
         : in_channels(in_channels),
           n_head(n_head),
           d_head(d_head),
           depth(depth),
-          context_dim(context_dim) {
-        // We will convert unet transformer linear to conv2d 1x1 when loading the weights, so use_linear is always False
+          context_dim(context_dim),
+          use_linear(use_linear) {
         // disable_self_attn is always False
         int64_t inner_dim = n_head * d_head;  // in_channels
         blocks["norm"]    = std::shared_ptr<GGMLBlock>(new GroupNorm32(in_channels));
-        blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, inner_dim, {1, 1}));
+        if (use_linear) {
+            blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Linear(in_channels, inner_dim));
+        } else {
+            blocks["proj_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, inner_dim, {1, 1}));
+        }
 
         for (int i = 0; i < depth; i++) {
             std::string name = "transformer_blocks." + std::to_string(i);
             blocks[name]     = std::shared_ptr<GGMLBlock>(new BasicTransformerBlock(inner_dim, n_head, d_head, context_dim, false));
         }
 
-        blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}));
+        if (use_linear) {
+            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, in_channels));
+        } else {
+            blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(inner_dim, in_channels, {1, 1}));
+        }
     }
 
     virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -440,8 +450,8 @@ public:
         // x: [N, in_channels, h, w]
         // context: [N, max_position(aka n_token), hidden_size(aka context_dim)]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
-        auto proj_in  = std::dynamic_pointer_cast<Conv2d>(blocks["proj_in"]);
-        auto proj_out = std::dynamic_pointer_cast<Conv2d>(blocks["proj_out"]);
+        auto proj_in  = std::dynamic_pointer_cast<UnaryBlock>(blocks["proj_in"]);
+        auto proj_out = std::dynamic_pointer_cast<UnaryBlock>(blocks["proj_out"]);
 
         auto x_in         = x;
         int64_t n         = x->ne[3];
@@ -450,10 +460,15 @@ public:
         int64_t inner_dim = n_head * d_head;
 
         x = norm->forward(ctx, x);
-        x = proj_in->forward(ctx, x);  // [N, inner_dim, h, w]
-
-        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
-        x = ggml_reshape_3d(ctx->ggml_ctx, x, inner_dim, w * h, n);                // [N, h * w, inner_dim]
+        if (use_linear) {
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
+            x = ggml_reshape_3d(ctx->ggml_ctx, x, inner_dim, w * h, n);                // [N, h * w, inner_dim]
+            x = proj_in->forward(ctx, x);                                              // [N, inner_dim, h, w]
+        } else {
+            x = proj_in->forward(ctx, x);                                              // [N, inner_dim, h, w]
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
+            x = ggml_reshape_3d(ctx->ggml_ctx, x, inner_dim, w * h, n);                // [N, h * w, inner_dim]
+        }
 
         for (int i = 0; i < depth; i++) {
             std::string name       = "transformer_blocks." + std::to_string(i);
@@ -462,11 +477,19 @@ public:
             x = transformer_block->forward(ctx, x, context);
         }
 
-        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
-        x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, inner_dim, n);                 // [N, inner_dim, h, w]
+        if (use_linear) {
+            // proj_out
+            x = proj_out->forward(ctx, x);  // [N, in_channels, h, w]
 
-        // proj_out
-        x = proj_out->forward(ctx, x);  // [N, in_channels, h, w]
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
+            x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, inner_dim, n);                 // [N, inner_dim, h, w]
+        } else {
+            x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [N, inner_dim, h * w]
+            x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, inner_dim, n);                 // [N, inner_dim, h, w]
+
+            // proj_out
+            x = proj_out->forward(ctx, x);  // [N, in_channels, h, w]
+        }
 
         x = ggml_add(ctx->ggml_ctx, x, x_in);
         return x;
@@ -475,7 +498,7 @@ public:
 
 class AlphaBlender : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
         // Get the type of the "mix_factor" tensor from the input tensors map with the specified prefix
         enum ggml_type wtype = GGML_TYPE_F32;
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
