@@ -67,7 +67,7 @@ struct SDParams {
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
     std::string vae_path;
-    std::string taesd_path;
+    std::string tae_path;
     std::string esrgan_path;
     std::string control_net_path;
     std::string embedding_dir;
@@ -159,7 +159,7 @@ void print_params(SDParams params) {
     printf("    diffusion_model_path:              %s\n", params.diffusion_model_path.c_str());
     printf("    high_noise_diffusion_model_path:   %s\n", params.high_noise_diffusion_model_path.c_str());
     printf("    vae_path:                          %s\n", params.vae_path.c_str());
-    printf("    taesd_path:                        %s\n", params.taesd_path.c_str());
+    printf("    tae_path:                          %s\n", params.tae_path.c_str());
     printf("    esrgan_path:                       %s\n", params.esrgan_path.c_str());
     printf("    control_net_path:                  %s\n", params.control_net_path.c_str());
     printf("    embedding_dir:                     %s\n", params.embedding_dir.c_str());
@@ -523,10 +523,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--vae",
          "path to standalone vae model",
          &params.vae_path},
-        {"",
+        {"--tae",
          "--taesd",
-         "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
-         &params.taesd_path},
+         "path to taesd or taehv. Using Tiny AutoEncoder for fast decoding (low quality)",
+         &params.tae_path},
         {"",
          "--control-net",
          "path to control net model",
@@ -1638,7 +1638,7 @@ int main(int argc, const char* argv[]) {
         params.diffusion_model_path.c_str(),
         params.high_noise_diffusion_model_path.c_str(),
         params.vae_path.c_str(),
-        params.taesd_path.c_str(),
+        params.tae_path.c_str(),
         params.control_net_path.c_str(),
         params.lora_model_dir.c_str(),
         params.embedding_dir.c_str(),
