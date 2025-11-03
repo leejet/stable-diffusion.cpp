@@ -1451,7 +1451,7 @@ public:
             }
         } else if (version == VERSION_CHROMA_RADIANCE) {
             // pass
-        } else if (!use_tiny_autoencoder) {
+        } else {
             ggml_ext_tensor_iter(latent, [&](ggml_tensor* latent, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
                 float value = ggml_ext_tensor_get_f32(latent, i0, i1, i2, i3);
                 value       = (value - shift_factor) * scale_factor;
@@ -1646,7 +1646,9 @@ public:
         } else {
             latent = gaussian_latent_sample(work_ctx, vae_output);
         }
-        process_latent_in(latent);
+        if (!use_tiny_autoencoder) {
+            process_latent_in(latent);
+        }
         if (sd_version_is_qwen_image(version)) {
             latent = ggml_reshape_4d(work_ctx, latent, latent->ne[0], latent->ne[1], latent->ne[3], 1);
         }
