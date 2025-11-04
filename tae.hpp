@@ -309,7 +309,6 @@ public:
     }
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* z) override {
-        LOG_DEBUG("Here");
         auto first_conv = std::dynamic_pointer_cast<Conv2d>(blocks["1"]);
 
         // Clamp()
@@ -343,8 +342,6 @@ public:
 
         // shape(W, H, 3, T+3) => shape(W, H, 3, T)
         h = ggml_view_4d(ctx->ggml_ctx, h, h->ne[0], h->ne[1], h->ne[2], h->ne[3] - 3, h->nb[1], h->nb[2], h->nb[3], 0);
-        LOG_DEBUG("Here");
-        print_ggml_tensor(h, true);
         return h;
     }
 };
@@ -370,12 +367,11 @@ public:
     }
 
     struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
-        LOG_DEBUG("Decode");
         auto decoder = std::dynamic_pointer_cast<TinyVideoDecoder>(blocks["decoder"]);
         auto result  = decoder->forward(ctx, z);
-        LOG_DEBUG("Decoded");
         if (sd_version_is_wan(version)) {
-            result = ggml_permute(ctx->ggml_ctx, result, 0, 1, 3, 2);
+            // (W, H, C, T) -> (W, H, T, C)
+            result = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, result, 0, 1, 3, 2));
         }
         return result;
     }
