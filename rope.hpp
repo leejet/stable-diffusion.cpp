@@ -71,6 +71,138 @@ namespace Rope {
         return result;
     }
 
+    float find_correction_factor(float num_rotations, int dim, float base, float max_position_embeddings) {
+        return (dim * std::log(max_position_embeddings / (num_rotations * 2 * 3.14159265358979323846))) / (2 * std::log(base));
+    }
+
+    std::pair<int, int> find_correction_range(float low_ratio, float high_ratio, int dim, float base, float ori_max_pe_len) {
+        float low  = std::floor(find_correction_factor(low_ratio, dim, base, ori_max_pe_len));
+        float high = std::ceil(find_correction_factor(high_ratio, dim, base, ori_max_pe_len));
+        return {std::max(0, static_cast<int>(low)), std::min(dim - 1, static_cast<int>(high))};
+    }
+
+    std::vector<float> linear_ramp_mask(int min, int max, int dim) {
+        if (min == max) {
+            max += 0.001f;  // Prevent singularity
+        }
+        std::vector<float> ramp(dim);
+        for (int i = 0; i < dim; ++i) {
+            ramp[i] = std::max(0.0f, std::min(1.0f, static_cast<float>(i - min) / (max - min)));
+        }
+        return ramp;
+    }
+
+    float find_newbase_ntk(int dim, float base, float scale) {
+        return base * std::pow(scale, static_cast<float>(dim) / (dim - 2));
+    }
+
+    __STATIC_INLINE__ std::vector<std::vector<float>> rope_ext(
+        const std::vector<float>& pos,
+        int dim,
+        float theta                 = 10000.0f,
+        bool use_real               = false,
+        float linear_factor         = 1.0f,
+        float ntk_factor            = 1.0f,
+        bool repeat_interleave_real = true,
+        bool yarn                   = false,
+        int max_pe_len              = -1,
+        int ori_max_pe_len          = 64,
+        bool dype                   = false,
+        float current_timestep      = 1.0f) {
+        assert(dim % 2 == 0);
+        int half_dim = dim / 2;
+
+        // Compute scale for YARN
+        float scale = 1.0f;
+        if (yarn && max_pe_len > ori_max_pe_len) {
+            scale = std::max(1.0f, static_cast<float>(max_pe_len) / ori_max_pe_len);
+        }
+
+        // Compute frequencies
+        std::vector<float> freqs_base(half_dim);
+        std::vector<float> freqs_linear(half_dim);
+        std::vector<float> freqs_ntk(half_dim);
+        std::vector<float> freqs(half_dim);
+
+        for (int i = 0; i < half_dim; ++i) {
+            float exponent = static_cast<float>(i) / half_dim;
+            freqs_base[i]  = 1.0f / std::pow(theta, exponent);
+            if (yarn && max_pe_len > ori_max_pe_len) {
+                freqs_linear[i] = 1.0f / std::pow(theta, exponent) / scale;
+                float new_base  = 1.0f / std::pow(theta, exponent / scale);  // Simplified for YARN
+                freqs_ntk[i]    = 1.0f / std::pow(new_base, exponent);
+            }
+        }
+
+        // YARN interpolation
+        if (yarn && max_pe_len > ori_max_pe_len) {
+            float beta_0  = 1.25f;
+            float beta_1  = 0.75f;
+            float gamma_0 = 16.0f;
+            float gamma_1 = 2.0f;
+
+            if (dype) {
+                beta_0  = std::pow(beta_0, 2.0f * current_timestep * current_timestep);
+                beta_1  = std::pow(beta_1, 2.0f * current_timestep * current_timestep);
+                gamma_0 = std::pow(gamma_0, 2.0f * current_timestep * current_timestep);
+                gamma_1 = std::pow(gamma_1, 2.0f * current_timestep * current_timestep);
+            }
+
+            // Compute freqs_linear and freqs_ntk
+            for (int i = 0; i < half_dim; ++i) {
+                float exponent  = static_cast<float>(i) / half_dim;
+                freqs_linear[i] = 1.0f / (std::pow(theta, exponent) * scale);
+            }
+
+            float new_base = find_newbase_ntk(dim, theta, scale);
+            for (int i = 0; i < half_dim; ++i) {
+                float exponent = static_cast<float>(i) / half_dim;
+                freqs_ntk[i]   = 1.0f / std::pow(new_base, exponent);
+            }
+
+            // Apply correction range and linear ramp mask
+            auto [low, high] = find_correction_range(beta_0, beta_1, dim, theta, ori_max_pe_len);
+            auto mask        = linear_ramp_mask(low, high, half_dim);
+            for (int i = 0; i < half_dim; ++i) {
+                freqs[i] = freqs_linear[i] * (1.0f - mask[i]) + freqs_ntk[i] * mask[i];
+            }
+
+            // Apply gamma correction
+            auto [low_gamma, high_gamma] = find_correction_range(gamma_0, gamma_1, dim, theta, ori_max_pe_len);
+            auto mask_gamma              = linear_ramp_mask(low_gamma, high_gamma, half_dim);
+            for (int i = 0; i < half_dim; ++i) {
+                freqs[i] = freqs[i] * (1.0f - mask_gamma[i]) + freqs_base[i] * mask_gamma[i];
+            }
+        } else {
+            float theta_ntk = theta * ntk_factor;
+            for (int i = 0; i < half_dim; ++i) {
+                float exponent = static_cast<float>(i) / half_dim;
+                freqs[i]       = 1.0f / std::pow(theta_ntk, exponent) / linear_factor;
+            }
+        }
+
+        // Outer product of pos and freqs
+        std::vector<std::vector<float>> freqs_outer(pos.size(), std::vector<float>(half_dim));
+        for (size_t i = 0; i < pos.size(); ++i) {
+            for (int j = 0; j < half_dim; ++j) {
+                freqs_outer[i][j] = pos[i] * freqs[j];
+            }
+        }
+
+        std::vector<std::vector<float>> result;
+        result.resize(pos.size(), std::vector<float>(half_dim * 4));
+        for (size_t i = 0; i < pos.size(); ++i) {
+            for (int j = 0; j < half_dim; ++j) {
+                result[i][4 * j]     = std::cos(freqs_outer[i][j]);   // cos
+                result[i][4 * j + 1] = -std::sin(freqs_outer[i][j]);  // -sin
+                result[i][4 * j + 2] = std::sin(freqs_outer[i][j]);   // sin
+                result[i][4 * j + 3] = std::cos(freqs_outer[i][j]);   // cos
+            }
+        }
+
+        return result;
+    }
+
     // Generate IDs for image patches and text
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_txt_ids(int bs, int context_len) {
         return std::vector<std::vector<float>>(bs * context_len, std::vector<float>(3, 0.0));
@@ -151,6 +283,45 @@ namespace Rope {
         return flatten(emb);
     }
 
+    std::vector<float> embed_nd_ext(
+        const std::vector<std::vector<float>>& ids,
+        int bs,
+        float theta,
+        const std::vector<int>& axes_dim,
+        bool yarn              = false,
+        int max_pe_len         = -1,
+        int ori_max_pe_len     = 64,
+        bool dype              = false,
+        float current_timestep = 1.0f) {
+        std::vector<std::vector<float>> trans_ids = transpose(ids);
+        size_t pos_len                            = ids.size() / bs;
+        int num_axes                              = axes_dim.size();
+
+        int emb_dim = 0;
+        for (int d : axes_dim) {
+            emb_dim += d;
+        }
+
+        std::vector<std::vector<float>> emb(bs * pos_len, std::vector<float>(emb_dim * 2, 0.0f));
+        int offset = 0;
+
+        for (int i = 0; i < num_axes; ++i) {
+            std::vector<std::vector<float>> rope_emb = rope_ext(
+                trans_ids[i], axes_dim[i], theta, false, 1.0f, 1.0f, true, yarn, max_pe_len, ori_max_pe_len, dype, current_timestep);
+
+            for (int b = 0; b < bs; ++b) {
+                for (size_t j = 0; j < pos_len; ++j) {
+                    for (size_t k = 0; k < rope_emb[j].size(); ++k) {
+                        emb[b * pos_len + j][offset + k] = rope_emb[j][k];
+                    }
+                }
+            }
+            offset += static_cast<int>(axes_dim[i] * 2);
+        }
+
+        return flatten(emb);
+    }
+
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_refs_ids(int patch_size,
                                                                    int bs,
                                                                    const std::vector<ggml_tensor*>& ref_latents,
@@ -210,9 +381,26 @@ namespace Rope {
                                                      const std::vector<ggml_tensor*>& ref_latents,
                                                      bool increase_ref_index,
                                                      int theta,
-                                                     const std::vector<int>& axes_dim) {
+                                                     const std::vector<int>& axes_dim,
+                                                     bool use_yarn          = false,
+                                                     bool use_dype          = false,
+                                                     float current_timestep = 1.0f) {
+        const int base_patches              = 1024 / 16;
         std::vector<std::vector<float>> ids = gen_flux_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
-        return embed_nd(ids, bs, theta, axes_dim);
+        float max_pos_f                     = 0.0f;
+        for (const auto& row : ids) {
+            for (float val : row) {
+                if (val > max_pos_f) {
+                    max_pos_f = val;
+                }
+            }
+        }
+        int max_pos = static_cast<int>(max_pos_f) + 1;
+        if (use_yarn && max_pos > base_patches) {
+            return embed_nd_ext(ids, bs, theta, axes_dim, true, max_pos, base_patches, use_dype, current_timestep);
+        } else {
+            return embed_nd(ids, bs, theta, axes_dim);
+        }
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int h,

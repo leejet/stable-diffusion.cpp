@@ -1266,13 +1266,30 @@ namespace Flux {
                 set_backend_tensor_data(mod_index_arange, mod_index_arange_vec.data());
             }
             y = to_backend(y);
-
+            float current_timestep = ggml_get_f32_1d(timesteps, 0);
+            LOG_DEBUG("current_timestep %f", current_timestep);
             timesteps = to_backend(timesteps);
             if (flux_params.guidance_embed || flux_params.is_chroma) {
                 guidance = to_backend(guidance);
             }
             for (int i = 0; i < ref_latents.size(); i++) {
                 ref_latents[i] = to_backend(ref_latents[i]);
+            }
+
+            // get use_yarn and use_dype from env for now (TODO: add args)
+            bool use_yarn      = false;
+            bool use_dype      = false;
+            char* use_yarn_env = getenv("USE_YARN");
+            if (use_yarn_env != nullptr) {
+                if (strcmp(use_yarn_env, "OFF") != 0) {
+                    use_yarn = true;
+                    char* use_dype_env = getenv("USE_DYPE");
+                    if (use_dype_env != nullptr) {
+                        if (strcmp(use_dype_env, "OFF") != 0) {
+                            use_dype = true;
+                        }
+                    }
+                }
             }
 
             pe_vec      = Rope::gen_flux_pe(x->ne[1],
@@ -1283,7 +1300,10 @@ namespace Flux {
                                             ref_latents,
                                             increase_ref_index,
                                             flux_params.theta,
-                                            flux_params.axes_dim);
+                                            flux_params.axes_dim,
+                                            use_yarn,
+                                            use_dype,
+                                            current_timestep);
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
