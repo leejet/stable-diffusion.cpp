@@ -78,7 +78,7 @@ namespace Rope {
     std::pair<int, int> find_correction_range(float low_ratio, float high_ratio, int dim, float base, float ori_max_pe_len) {
         float low  = std::floor(find_correction_factor(low_ratio, dim, base, ori_max_pe_len));
         float high = std::ceil(find_correction_factor(high_ratio, dim, base, ori_max_pe_len));
-        return {std::max(0, static_cast<int>(low)), std::min(dim - 1, static_cast<int>(high))};
+        return {std::max(0, static_cast<int>(low)), std::min(dim / 2, static_cast<int>(high))};
     }
 
     std::vector<float> linear_ramp_mask(int min, int max, int dim) {
@@ -90,10 +90,6 @@ namespace Rope {
             ramp[i] = std::max(0.0f, std::min(1.0f, static_cast<float>(i - min) / (max - min)));
         }
         return ramp;
-    }
-
-    float find_newbase_ntk(int dim, float base, float scale) {
-        return base * std::pow(scale, static_cast<float>(dim) / (dim - 2));
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> rope_ext(
@@ -112,34 +108,27 @@ namespace Rope {
         assert(dim % 2 == 0);
         int half_dim = dim / 2;
 
-        // Compute scale for YARN
-        float scale = 1.0f;
-        if (yarn && max_pe_len > ori_max_pe_len) {
-            scale = std::max(1.0f, static_cast<float>(max_pe_len) / ori_max_pe_len);
-        }
-
         // Compute frequencies
         std::vector<float> freqs_base(half_dim);
         std::vector<float> freqs_linear(half_dim);
         std::vector<float> freqs_ntk(half_dim);
         std::vector<float> freqs(half_dim);
 
-        for (int i = 0; i < half_dim; ++i) {
-            float exponent = static_cast<float>(i) / half_dim;
-            freqs_base[i]  = 1.0f / std::pow(theta, exponent);
-            if (yarn && max_pe_len > ori_max_pe_len) {
-                freqs_linear[i] = 1.0f / std::pow(theta, exponent) / scale;
-                float new_base  = 1.0f / std::pow(theta, exponent / scale);  // Simplified for YARN
-                freqs_ntk[i]    = 1.0f / std::pow(new_base, exponent);
-            }
-        }
-
-        // YARN interpolation
         if (yarn && max_pe_len > ori_max_pe_len) {
             float beta_0  = 1.25f;
             float beta_1  = 0.75f;
             float gamma_0 = 16.0f;
             float gamma_1 = 2.0f;
+
+            float scale = std::max(1.0f, static_cast<float>(max_pe_len) / ori_max_pe_len);
+            // d,t,s
+            float new_base = theta * std::pow(scale, half_dim / (half_dim - 1));
+            for (int i = 0; i < half_dim; ++i) {
+                float exponent  = static_cast<float>(i) / half_dim;
+                freqs_base[i]   = 1.0f / std::pow(theta, exponent);
+                freqs_linear[i] = 1.0f / (scale * std::pow(theta, exponent));
+                freqs_ntk[i]    = 1.0f / std::pow(new_base, exponent);
+            }
 
             if (dype) {
                 beta_0  = std::pow(beta_0, 2.0f * current_timestep * current_timestep);
@@ -148,30 +137,18 @@ namespace Rope {
                 gamma_1 = std::pow(gamma_1, 2.0f * current_timestep * current_timestep);
             }
 
-            // Compute freqs_linear and freqs_ntk
-            for (int i = 0; i < half_dim; ++i) {
-                float exponent  = static_cast<float>(i) / half_dim;
-                freqs_linear[i] = 1.0f / (std::pow(theta, exponent) * scale);
-            }
-
-            float new_base = find_newbase_ntk(dim, theta, scale);
-            for (int i = 0; i < half_dim; ++i) {
-                float exponent = static_cast<float>(i) / half_dim;
-                freqs_ntk[i]   = 1.0f / std::pow(new_base, exponent);
-            }
-
             // Apply correction range and linear ramp mask
             auto [low, high] = find_correction_range(beta_0, beta_1, dim, theta, ori_max_pe_len);
             auto mask        = linear_ramp_mask(low, high, half_dim);
             for (int i = 0; i < half_dim; ++i) {
-                freqs[i] = freqs_linear[i] * (1.0f - mask[i]) + freqs_ntk[i] * mask[i];
+                freqs[i] = freqs_linear[i] * mask[i] + freqs_ntk[i] * (1.0f - mask[i]);
             }
 
             // Apply gamma correction
             auto [low_gamma, high_gamma] = find_correction_range(gamma_0, gamma_1, dim, theta, ori_max_pe_len);
             auto mask_gamma              = linear_ramp_mask(low_gamma, high_gamma, half_dim);
             for (int i = 0; i < half_dim; ++i) {
-                freqs[i] = freqs[i] * (1.0f - mask_gamma[i]) + freqs_base[i] * mask_gamma[i];
+                freqs[i] = freqs[i] * mask_gamma[i] + freqs_base[i] * (1.0f - mask_gamma[i]);
             }
         } else {
             float theta_ntk = theta * ntk_factor;
@@ -288,14 +265,22 @@ namespace Rope {
         int bs,
         float theta,
         const std::vector<int>& axes_dim,
-        bool yarn              = false,
-        int max_pe_len         = -1,
-        int ori_max_pe_len     = 64,
-        bool dype              = false,
-        float current_timestep = 1.0f) {
+        bool yarn                      = false,
+        std::vector<int> max_pe_len    = {},
+        int ori_max_pe_len             = 64,
+        bool dype                      = false,
+        float current_timestep         = 1.0f,
+        std::vector<float> ntk_factors = {}) {
         std::vector<std::vector<float>> trans_ids = transpose(ids);
         size_t pos_len                            = ids.size() / bs;
         int num_axes                              = axes_dim.size();
+
+        if (ntk_factors.size() == 0) {
+            ntk_factors = std::vector<float>(num_axes, 1.0f);
+        }
+        if (max_pe_len.size() == 0) {
+            max_pe_len = std::vector<int>(num_axes, -1);
+        }
 
         int emb_dim = 0;
         for (int d : axes_dim) {
@@ -307,7 +292,7 @@ namespace Rope {
 
         for (int i = 0; i < num_axes; ++i) {
             std::vector<std::vector<float>> rope_emb = rope_ext(
-                trans_ids[i], axes_dim[i], theta, false, 1.0f, 1.0f, true, yarn, max_pe_len, ori_max_pe_len, dype, current_timestep);
+                trans_ids[i], axes_dim[i], theta, false, 1.0f, ntk_factors[i], true, yarn, max_pe_len[i], ori_max_pe_len, dype, current_timestep);
 
             for (int b = 0; b < bs; ++b) {
                 for (size_t j = 0; j < pos_len; ++j) {
@@ -384,20 +369,38 @@ namespace Rope {
                                                      const std::vector<int>& axes_dim,
                                                      bool use_yarn          = false,
                                                      bool use_dype          = false,
+                                                     bool use_ntk           = false,
                                                      float current_timestep = 1.0f) {
-        const int base_patches              = 1024 / 16;
+        int base_resolution = 1024;
+        // set it via environment variable for now (TODO: arg)
+        const char* env_base_resolution = getenv("FLUX_DYPE_BASE_RESOLUTION");
+        if (env_base_resolution != nullptr) {
+            base_resolution = atoi(env_base_resolution);
+        }
+        int base_patches                    = base_resolution / 16;
         std::vector<std::vector<float>> ids = gen_flux_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
-        float max_pos_f                     = 0.0f;
-        for (const auto& row : ids) {
-            for (float val : row) {
+        std::vector<int> max_pos_vec        = {};
+        std::vector<float> ntk_factor_vec   = {};
+        for (int i = 0; i < axes_dim.size(); i++) {
+            float max_pos_f = 0.0f;
+            for (const auto& row : ids) {
+                float val = row[i];
                 if (val > max_pos_f) {
                     max_pos_f = val;
                 }
             }
+            int max_pos = static_cast<int>(max_pos_f) + 1;
+            max_pos_vec.push_back(max_pos);
+            float ntk_factor = 1.0f;
+            if (use_ntk) {
+                float base_ntk = pow((float)max_pos / base_patches, (float)axes_dim[i] / (axes_dim[i] - 2));
+                ntk_factor     = use_dype ? pow(base_ntk, 2.0f * current_timestep * current_timestep) : base_ntk;
+                ntk_factor     = std::max(1.0f, ntk_factor);
+            }
+            ntk_factor_vec.push_back(ntk_factor);
         }
-        int max_pos = static_cast<int>(max_pos_f) + 1;
-        if (use_yarn && max_pos > base_patches) {
-            return embed_nd_ext(ids, bs, theta, axes_dim, true, max_pos, base_patches, use_dype, current_timestep);
+        if (use_yarn || use_ntk) {
+            return embed_nd_ext(ids, bs, theta, axes_dim, use_yarn, max_pos_vec, base_patches, use_dype, current_timestep, ntk_factor_vec);
         } else {
             return embed_nd(ids, bs, theta, axes_dim);
         }

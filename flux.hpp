@@ -1276,19 +1276,27 @@ namespace Flux {
                 ref_latents[i] = to_backend(ref_latents[i]);
             }
 
-            // get use_yarn and use_dype from env for now (TODO: add args)
-            bool use_yarn      = false;
-            bool use_dype      = false;
-            char* use_yarn_env = getenv("USE_YARN");
-            if (use_yarn_env != nullptr) {
-                if (strcmp(use_yarn_env, "OFF") != 0) {
+            // get use_yarn, use_ntk and use_dype from env for now (TODO: add args)
+            // Env value could be one of yarn, dy_yarn, ntk or dy_ntk, (anything else means disabled)
+            const char* env_value = getenv("FLUX_ROPE");
+            bool use_yarn = false;
+            bool use_dype = false;
+            bool use_ntk  = false; 
+            if (env_value != nullptr) {
+                if (strcmp(env_value, "YARN") == 0) {
+                    LOG_DEBUG("Using YARN RoPE");
                     use_yarn = true;
-                    char* use_dype_env = getenv("USE_DYPE");
-                    if (use_dype_env != nullptr) {
-                        if (strcmp(use_dype_env, "OFF") != 0) {
-                            use_dype = true;
-                        }
-                    }
+                } else if (strcmp(env_value, "DY_YARN") == 0) {
+                    LOG_DEBUG("Using DY YARN RoPE");
+                    use_yarn = true;
+                    use_dype = true;
+                } else if (strcmp(env_value, "NTK") == 0) {
+                    LOG_DEBUG("Using NTK RoPE");
+                    use_ntk = true;
+                } else if (strcmp(env_value, "DY_NTK") == 0) {
+                    LOG_DEBUG("Using DY NTK RoPE");
+                    use_ntk  = true;
+                    use_dype = true;
                 }
             }
 
@@ -1303,6 +1311,7 @@ namespace Flux {
                                             flux_params.axes_dim,
                                             use_yarn,
                                             use_dype,
+                                            use_ntk,
                                             current_timestep);
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);
