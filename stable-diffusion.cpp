@@ -1645,7 +1645,9 @@ public:
         } else {
             latent = gaussian_latent_sample(work_ctx, vae_output);
         }
-        process_latent_in(latent);
+        if (!use_tiny_autoencoder) {
+            process_latent_in(latent);
+        }
         if (sd_version_is_qwen_image(version)) {
             latent = ggml_reshape_4d(work_ctx, latent, latent->ne[0], latent->ne[1], latent->ne[3], 1);
         }
