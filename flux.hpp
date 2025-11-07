@@ -37,7 +37,7 @@ namespace Flux {
         int64_t hidden_size;
         float eps;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             ggml_type wtype = GGML_TYPE_F32;
             params["scale"] = ggml_new_tensor_1d(ctx, wtype, hidden_size);
         }
@@ -1115,10 +1115,10 @@ namespace Flux {
 
         FluxRunner(ggml_backend_t backend,
                    bool offload_params_to_cpu,
-                   const String2GGMLType& tensor_types = {},
-                   const std::string prefix            = "",
-                   SDVersion version                   = VERSION_FLUX,
-                   bool use_mask                       = false)
+                   const String2TensorStorage& tensor_storage_map = {},
+                   const std::string prefix                       = "",
+                   SDVersion version                              = VERSION_FLUX,
+                   bool use_mask                                  = false)
             : GGMLRunner(backend, offload_params_to_cpu), version(version), use_mask(use_mask) {
             flux_params.version             = version;
             flux_params.guidance_embed      = false;
@@ -1134,7 +1134,7 @@ namespace Flux {
                 flux_params.in_channels = 3;
                 flux_params.patch_size  = 16;
             }
-            for (auto pair : tensor_types) {
+            for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
                 if (!starts_with(tensor_name, prefix))
                     continue;
@@ -1172,7 +1172,7 @@ namespace Flux {
             }
 
             flux = Flux(flux_params);
-            flux.init(params_ctx, tensor_types, prefix);
+            flux.init(params_ctx, tensor_storage_map, prefix);
         }
 
         std::string get_desc() override {
@@ -1403,17 +1403,16 @@ namespace Flux {
                 return;
             }
 
-            auto tensor_types = model_loader.tensor_storages_types;
-            for (auto& item : tensor_types) {
-                // LOG_DEBUG("%s %u", item.first.c_str(), item.second);
-                if (ends_with(item.first, "weight")) {
-                    // item.second = model_data_type;
+            auto& tensor_storage_map = model_loader.get_tensor_storage_map();
+            for (auto& [name, tensor_storage] : tensor_storage_map) {
+                if (ends_with(name, "weight")) {
+                    tensor_storage.expected_type = model_data_type;
                 }
             }
 
             std::shared_ptr<FluxRunner> flux = std::make_shared<FluxRunner>(backend,
                                                                             false,
-                                                                            tensor_types,
+                                                                            tensor_storage_map,
                                                                             "model.diffusion_model",
                                                                             VERSION_CHROMA_RADIANCE,
                                                                             false);

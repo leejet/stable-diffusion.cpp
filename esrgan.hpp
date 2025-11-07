@@ -156,7 +156,7 @@ struct ESRGAN : public GGMLRunner {
 
     ESRGAN(ggml_backend_t backend,
            bool offload_params_to_cpu,
-           const String2GGMLType& tensor_types = {})
+           const String2TensorStorage& tensor_storage_map = {})
         : GGMLRunner(backend, offload_params_to_cpu) {
         // rrdb_net will be created in load_from_file
     }

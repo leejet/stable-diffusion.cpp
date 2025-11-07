@@ -26,7 +26,7 @@ namespace WAN {
         std::tuple<int, int, int> dilation;
         bool bias;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             params["weight"] = ggml_new_tensor_4d(ctx,
                                                   GGML_TYPE_F16,
                                                   std::get<2>(kernel_size),
@@ -87,9 +87,14 @@ namespace WAN {
     protected:
         int64_t dim;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             ggml_type wtype = GGML_TYPE_F32;
-            params["gamma"] = ggml_new_tensor_1d(ctx, wtype, dim);
+            auto iter       = tensor_storage_map.find(prefix + "gamma");
+            if (iter != tensor_storage_map.end()) {
+                params["gamma"] = ggml_new_tensor(ctx, wtype, iter->second.n_dims, &iter->second.ne[0]);
+            } else {
+                params["gamma"] = ggml_new_tensor_1d(ctx, wtype, dim);
+            }
         }
 
     public:
@@ -101,6 +106,7 @@ namespace WAN {
             // assert N == 1
 
             struct ggml_tensor* w = params["gamma"];
+            w                     = ggml_reshape_1d(ctx->ggml_ctx, w, ggml_nelements(w));
             auto h                = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 3, 0, 1, 2));  // [ID, IH, IW, N*IC]
             h                     = ggml_rms_norm(ctx->ggml_ctx, h, 1e-12);
             h                     = ggml_mul(ctx->ggml_ctx, h, w);
@@ -1110,12 +1116,12 @@ namespace WAN {
 
         WanVAERunner(ggml_backend_t backend,
                      bool offload_params_to_cpu,
-                     const String2GGMLType& tensor_types = {},
-                     const std::string prefix            = "",
-                     bool decode_only                    = false,
-                     SDVersion version                   = VERSION_WAN2)
+                     const String2TensorStorage& tensor_storage_map = {},
+                     const std::string prefix                       = "",
+                     bool decode_only                               = false,
+                     SDVersion version                              = VERSION_WAN2)
             : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(backend, offload_params_to_cpu) {
-            ae.init(params_ctx, tensor_types, prefix);
+            ae.init(params_ctx, tensor_storage_map, prefix);
         }
 
         std::string get_desc() override {
@@ -1256,7 +1262,7 @@ namespace WAN {
             // ggml_backend_t backend = ggml_backend_cuda_init(0);
             ggml_backend_t backend            = ggml_backend_cpu_init();
             ggml_type model_data_type         = GGML_TYPE_F16;
-            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, false, String2GGMLType{}, "", false, VERSION_WAN2_2_TI2V);
+            std::shared_ptr<WanVAERunner> vae = std::make_shared<WanVAERunner>(backend, false, String2TensorStorage{}, "", false, VERSION_WAN2_2_TI2V);
             {
                 LOG_INFO("loading from '%s'", file_path.c_str());
 
@@ -1494,8 +1500,8 @@ namespace WAN {
     protected:
         int dim;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
-            enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
+        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+            enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
             params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 6, 1);
         }
 
@@ -1582,8 +1588,8 @@ namespace WAN {
     class VaceWanAttentionBlock : public WanAttentionBlock {
     protected:
         int block_id;
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
-            enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
+        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+            enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
             params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 6, 1);
         }
 
@@ -1634,8 +1640,8 @@ namespace WAN {
     protected:
         int dim;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
-            enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
+        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+            enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
             params["modulation"] = ggml_new_tensor_3d(ctx, wtype, dim, 2, 1);
         }
 
@@ -1681,7 +1687,7 @@ namespace WAN {
         int in_dim;
         int flf_pos_embed_token_number;
 
-        void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+        void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             if (flf_pos_embed_token_number > 0) {
                 params["emb_pos"] = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, in_dim, flf_pos_embed_token_number, 1);
             }
@@ -2015,12 +2021,12 @@ namespace WAN {
 
         WanRunner(ggml_backend_t backend,
                   bool offload_params_to_cpu,
-                  const String2GGMLType& tensor_types = {},
-                  const std::string prefix            = "",
-                  SDVersion version                   = VERSION_WAN2)
+                  const String2TensorStorage& tensor_storage_map = {},
+                  const std::string prefix                       = "",
+                  SDVersion version                              = VERSION_WAN2)
             : GGMLRunner(backend, offload_params_to_cpu) {
             wan_params.num_layers = 0;
-            for (auto pair : tensor_types) {
+            for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find(prefix) == std::string::npos)
                     continue;
@@ -2117,7 +2123,7 @@ namespace WAN {
             LOG_INFO("%s", desc.c_str());
 
             wan = Wan(wan_params);
-            wan.init(params_ctx, tensor_types, prefix);
+            wan.init(params_ctx, tensor_storage_map, prefix);
         }
 
         std::string get_desc() override {
@@ -2254,17 +2260,16 @@ namespace WAN {
                 return;
             }
 
-            auto tensor_types = model_loader.tensor_storages_types;
-            for (auto& item : tensor_types) {
-                // LOG_DEBUG("%s %u", item.first.c_str(), item.second);
-                if (ends_with(item.first, "weight")) {
-                    item.second = model_data_type;
+            auto& tensor_storage_map = model_loader.get_tensor_storage_map();
+            for (auto& [name, tensor_storage] : tensor_storage_map) {
+                if (ends_with(name, "weight")) {
+                    tensor_storage.expected_type = model_data_type;
                 }
             }
 
             std::shared_ptr<WanRunner> wan = std::make_shared<WanRunner>(backend,
                                                                          false,
-                                                                         tensor_types,
+                                                                         tensor_storage_map,
                                                                          "model.diffusion_model",
                                                                          VERSION_WAN2_2_TI2V);
 

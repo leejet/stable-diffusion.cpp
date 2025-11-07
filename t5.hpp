@@ -461,7 +461,7 @@ protected:
     int64_t hidden_size;
     float eps;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
@@ -759,7 +759,7 @@ struct T5Runner : public GGMLRunner {
 
     T5Runner(ggml_backend_t backend,
              bool offload_params_to_cpu,
-             const String2GGMLType& tensor_types,
+             const String2TensorStorage& tensor_storage_map,
              const std::string prefix,
              bool is_umt5 = false)
         : GGMLRunner(backend, offload_params_to_cpu) {
@@ -768,7 +768,7 @@ struct T5Runner : public GGMLRunner {
             params.relative_attention = false;
         }
         model = T5(params);
-        model.init(params_ctx, tensor_types, prefix);
+        model.init(params_ctx, tensor_storage_map, prefix);
     }
 
     std::string get_desc() override {
@@ -905,10 +905,10 @@ struct T5Embedder {
 
     T5Embedder(ggml_backend_t backend,
                bool offload_params_to_cpu,
-               const String2GGMLType& tensor_types = {},
-               const std::string prefix            = "",
-               bool is_umt5                        = false)
-        : model(backend, offload_params_to_cpu, tensor_types, prefix, is_umt5), tokenizer(is_umt5) {
+               const String2TensorStorage& tensor_storage_map = {},
+               const std::string prefix                       = "",
+               bool is_umt5                                   = false)
+        : model(backend, offload_params_to_cpu, tensor_storage_map, prefix, is_umt5), tokenizer(is_umt5) {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -1009,15 +1009,14 @@ struct T5Embedder {
             return;
         }
 
-        auto tensor_types = model_loader.tensor_storages_types;
-        for (auto& item : tensor_types) {
-            // LOG_DEBUG("%s %u", item.first.c_str(), item.second);
-            if (ends_with(item.first, "weight")) {
-                item.second = model_data_type;
+        auto& tensor_storage_map = model_loader.get_tensor_storage_map();
+        for (auto& [name, tensor_storage] : tensor_storage_map) {
+            if (ends_with(name, "weight")) {
+                tensor_storage.expected_type = model_data_type;
             }
         }
 
-        std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, false, tensor_types, "", true);
+        std::shared_ptr<T5Embedder> t5 = std::make_shared<T5Embedder>(backend, false, tensor_storage_map, "", true);
 
         t5->alloc_params_buffer();
         std::map<std::string, ggml_tensor*> tensors;

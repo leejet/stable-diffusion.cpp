@@ -910,13 +910,13 @@ namespace Qwen {
 
         Qwen2_5_VLRunner(ggml_backend_t backend,
                          bool offload_params_to_cpu,
-                         const String2GGMLType& tensor_types,
+                         const String2TensorStorage& tensor_storage_map,
                          const std::string prefix,
                          bool enable_vision_ = false)
             : GGMLRunner(backend, offload_params_to_cpu), enable_vision(enable_vision_) {
             bool have_vision_weight = false;
             bool llama_cpp_style    = false;
-            for (auto pair : tensor_types) {
+            for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
                 if (tensor_name.find(prefix) == std::string::npos)
                     continue;
@@ -940,7 +940,7 @@ namespace Qwen {
                 }
             }
             model = Qwen2_5_VL(params, enable_vision, llama_cpp_style);
-            model.init(params_ctx, tensor_types, prefix);
+            model.init(params_ctx, tensor_storage_map, prefix);
         }
 
         std::string get_desc() override {
@@ -1188,10 +1188,10 @@ namespace Qwen {
 
         Qwen2_5_VLEmbedder(ggml_backend_t backend,
                            bool offload_params_to_cpu,
-                           const String2GGMLType& tensor_types = {},
-                           const std::string prefix            = "",
-                           bool enable_vision                  = false)
-            : model(backend, offload_params_to_cpu, tensor_types, prefix, enable_vision) {
+                           const String2TensorStorage& tensor_storage_map = {},
+                           const std::string prefix                       = "",
+                           bool enable_vision                             = false)
+            : model(backend, offload_params_to_cpu, tensor_storage_map, prefix, enable_vision) {
         }
 
         void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
@@ -1347,17 +1347,16 @@ namespace Qwen {
                 return;
             }
 
-            auto tensor_types = model_loader.tensor_storages_types;
-            for (auto& item : tensor_types) {
-                // LOG_DEBUG("%s %u", item.first.c_str(), item.second);
-                if (ends_with(item.first, "weight")) {
-                    item.second = model_data_type;
+            auto& tensor_storage_map = model_loader.get_tensor_storage_map();
+            for (auto& [name, tensor_storage] : tensor_storage_map) {
+                if (ends_with(name, "weight")) {
+                    tensor_storage.expected_type = model_data_type;
                 }
             }
 
             std::shared_ptr<Qwen2_5_VLEmbedder> qwenvl = std::make_shared<Qwen2_5_VLEmbedder>(backend,
                                                                                               false,
-                                                                                              tensor_types,
+                                                                                              tensor_storage_map,
                                                                                               "qwen2vl",
                                                                                               true);
 

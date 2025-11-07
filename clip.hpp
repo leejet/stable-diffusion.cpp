@@ -476,11 +476,12 @@ protected:
 public:
     CLIPLayer(int64_t d_model,
               int64_t n_head,
-              int64_t intermediate_size)
+              int64_t intermediate_size,
+              bool proj_in = false)
         : d_model(d_model),
           n_head(n_head),
           intermediate_size(intermediate_size) {
-        blocks["self_attn"] = std::shared_ptr<GGMLBlock>(new MultiheadAttention(d_model, n_head, true, true));
+        blocks["self_attn"] = std::shared_ptr<GGMLBlock>(new MultiheadAttention(d_model, n_head, true, true, proj_in));
 
         blocks["layer_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_model));
         blocks["layer_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(d_model));
@@ -509,11 +510,12 @@ public:
     CLIPEncoder(int64_t n_layer,
                 int64_t d_model,
                 int64_t n_head,
-                int64_t intermediate_size)
+                int64_t intermediate_size,
+                bool proj_in = false)
         : n_layer(n_layer) {
         for (int i = 0; i < n_layer; i++) {
             std::string name = "layers." + std::to_string(i);
-            blocks[name]     = std::shared_ptr<GGMLBlock>(new CLIPLayer(d_model, n_head, intermediate_size));
+            blocks[name]     = std::shared_ptr<GGMLBlock>(new CLIPLayer(d_model, n_head, intermediate_size, proj_in));
         }
     }
 
@@ -549,10 +551,10 @@ protected:
     int64_t num_positions;
     bool force_clip_f32;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         enum ggml_type token_wtype = GGML_TYPE_F32;
         if (!force_clip_f32) {
-            token_wtype = get_type(prefix + "token_embedding.weight", tensor_types, GGML_TYPE_F32);
+            token_wtype = get_type(prefix + "token_embedding.weight", tensor_storage_map, GGML_TYPE_F32);
             if (!support_get_rows(token_wtype)) {
                 token_wtype = GGML_TYPE_F32;
             }
@@ -605,7 +607,8 @@ protected:
     int64_t image_size;
     int64_t num_patches;
     int64_t num_positions;
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         enum ggml_type patch_wtype    = GGML_TYPE_F16;
         enum ggml_type class_wtype    = GGML_TYPE_F32;
         enum ggml_type position_wtype = GGML_TYPE_F32;
@@ -668,7 +671,7 @@ enum CLIPVersion {
 
 class CLIPTextModel : public GGMLBlock {
 protected:
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         if (version == OPEN_CLIP_VIT_BIGG_14) {
             enum ggml_type wtype      = GGML_TYPE_F32;
             params["text_projection"] = ggml_new_tensor_2d(ctx, wtype, projection_dim, hidden_size);
@@ -689,7 +692,8 @@ public:
 
     CLIPTextModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14,
                   bool with_final_ln  = true,
-                  bool force_clip_f32 = false)
+                  bool force_clip_f32 = false,
+                  bool proj_in        = false)
         : version(version), with_final_ln(with_final_ln) {
         if (version == OPEN_CLIP_VIT_H_14) {
             hidden_size       = 1024;
@@ -704,7 +708,7 @@ public:
         }
 
         blocks["embeddings"]       = std::shared_ptr<GGMLBlock>(new CLIPEmbeddings(hidden_size, vocab_size, n_token, force_clip_f32));
-        blocks["encoder"]          = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
+        blocks["encoder"]          = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size, proj_in));
         blocks["final_layer_norm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
     }
 
@@ -758,7 +762,7 @@ public:
     int32_t n_layer           = 24;
 
 public:
-    CLIPVisionModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14) {
+    CLIPVisionModel(CLIPVersion version = OPENAI_CLIP_VIT_L_14, bool proj_in = false) {
         if (version == OPEN_CLIP_VIT_H_14) {
             hidden_size       = 1280;
             intermediate_size = 5120;
@@ -773,7 +777,7 @@ public:
 
         blocks["embeddings"]     = std::shared_ptr<GGMLBlock>(new CLIPVisionEmbeddings(hidden_size, num_channels, patch_size, image_size));
         blocks["pre_layernorm"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
-        blocks["encoder"]        = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size));
+        blocks["encoder"]        = std::shared_ptr<GGMLBlock>(new CLIPEncoder(n_layer, hidden_size, n_head, intermediate_size, proj_in));
         blocks["post_layernorm"] = std::shared_ptr<GGMLBlock>(new LayerNorm(hidden_size));
     }
 
@@ -811,8 +815,8 @@ protected:
     int64_t out_features;
     bool transpose_weight;
 
-    void init_params(struct ggml_context* ctx, const String2GGMLType& tensor_types = {}, const std::string prefix = "") override {
-        enum ggml_type wtype = get_type(prefix + "weight", tensor_types, GGML_TYPE_F32);
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
         if (transpose_weight) {
             params["weight"] = ggml_new_tensor_2d(ctx, wtype, out_features, in_features);
         } else {
@@ -845,7 +849,8 @@ public:
 
 public:
     CLIPVisionModelProjection(CLIPVersion version   = OPENAI_CLIP_VIT_L_14,
-                              bool transpose_proj_w = false) {
+                              bool transpose_proj_w = false,
+                              bool proj_in          = false) {
         if (version == OPEN_CLIP_VIT_H_14) {
             hidden_size    = 1280;
             projection_dim = 1024;
@@ -853,7 +858,7 @@ public:
             hidden_size = 1664;
         }
 
-        blocks["vision_model"]      = std::shared_ptr<GGMLBlock>(new CLIPVisionModel(version));
+        blocks["vision_model"]      = std::shared_ptr<GGMLBlock>(new CLIPVisionModel(version, proj_in));
         blocks["visual_projection"] = std::shared_ptr<GGMLBlock>(new CLIPProjection(hidden_size, projection_dim, transpose_proj_w));
     }
 
@@ -881,13 +886,24 @@ struct CLIPTextModelRunner : public GGMLRunner {
 
     CLIPTextModelRunner(ggml_backend_t backend,
                         bool offload_params_to_cpu,
-                        const String2GGMLType& tensor_types,
+                        const String2TensorStorage& tensor_storage_map,
                         const std::string prefix,
                         CLIPVersion version = OPENAI_CLIP_VIT_L_14,
                         bool with_final_ln  = true,
                         bool force_clip_f32 = false)
-        : GGMLRunner(backend, offload_params_to_cpu), model(version, with_final_ln, force_clip_f32) {
-        model.init(params_ctx, tensor_types, prefix);
+        : GGMLRunner(backend, offload_params_to_cpu) {
+        bool proj_in = false;
+        for (const auto& [name, tensor_storage] : tensor_storage_map) {
+            if (!starts_with(name, prefix)) {
+                continue;
+            }
+            if (contains(name, "self_attn.in_proj")) {
+                proj_in = true;
+                break;
+            }
+        }
+        model = CLIPTextModel(version, with_final_ln, force_clip_f32, proj_in);
+        model.init(params_ctx, tensor_storage_map, prefix);
     }
 
     std::string get_desc() override {

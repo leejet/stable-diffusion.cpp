@@ -27,6 +27,7 @@ protected:
     int num_heads                          = 8;
     int num_head_channels                  = -1;   // channels // num_heads
     int context_dim                        = 768;  // 1024 for VERSION_SD2, 2048 for VERSION_SDXL
+    bool use_linear_projection             = false;
 
 public:
     int model_channels  = 320;
@@ -82,7 +83,7 @@ public:
                                        int64_t d_head,
                                        int64_t depth,
                                        int64_t context_dim) -> SpatialTransformer* {
-            return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim);
+            return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
         };
 
         auto make_zero_conv = [&](int64_t channels) {
@@ -318,10 +319,10 @@ struct ControlNet : public GGMLRunner {
 
     ControlNet(ggml_backend_t backend,
                bool offload_params_to_cpu,
-               const String2GGMLType& tensor_types = {},
-               SDVersion version                   = VERSION_SD1)
+               const String2TensorStorage& tensor_storage_map = {},
+               SDVersion version                              = VERSION_SD1)
         : GGMLRunner(backend, offload_params_to_cpu), control_net(version) {
-        control_net.init(params_ctx, tensor_types, "");
+        control_net.init(params_ctx, tensor_storage_map, "");
     }
 
     ~ControlNet() override {
