@@ -1790,7 +1790,7 @@ SDVersion ModelLoader::get_sd_version() {
         }
         if (!has_middle_block_1) {
             return VERSION_SD2_TINY_UNET;
-        }        
+        }
         return VERSION_SD2;
     }
     return VERSION_COUNT;
