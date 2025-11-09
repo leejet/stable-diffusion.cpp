@@ -54,6 +54,15 @@ std::string trim(const std::string& s);
 
 std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::string& text);
 
+sd_progress_cb_t sd_get_progress_callback();
+void* sd_get_progress_callback_data();
+
+sd_preview_cb_t sd_get_preview_callback();
+preview_t sd_get_preview_mode();
+int sd_get_preview_interval();
+bool sd_should_preview_denoised();
+bool sd_should_preview_noisy();
+
 #define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)

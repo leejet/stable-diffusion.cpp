@@ -32,6 +32,7 @@ Options:
   -o, --output <string>                    path to write result image to (default: ./output.png)
   -p, --prompt <string>                    the prompt to render
   -n, --negative-prompt <string>           the negative prompt (default: "")
+  --preview-path <string>                  path to write preview image to (default: ./preview.png)
   --upscale-model <string>                 path to esrgan model.
   -t, --threads <int>                      number of threads to use during computation (default: -1). If threads <= 0, then threads will be set to the number of
                                            CPU physical cores
@@ -48,6 +49,8 @@ Options:
   --fps <int>                              fps (default: 24)
   --timestep-shift <int>                   shift timestep for NitroFusion models (default: 0). recommended N for NitroSD-Realism around 250 and 500 for
                                            NitroSD-Vibrant
+  --preview-interval <int>                 interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
+                                           every step)
   --cfg-scale <float>                      unconditional guidance scale: (default: 7.0)
   --img-cfg-scale <float>                  image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)
   --guidance <float>                       distilled guidance scale for models with guidance input (default: 3.5)
@@ -86,6 +89,8 @@ Options:
   --chroma-enable-t5-mask                  enable t5 mask for chroma
   --increase-ref-index                     automatically increase the indices of references images based on the order they are listed (starting with 1).
   --disable-auto-resize-ref-image          disable auto resize of ref images
+  --taesd-preview-only                     prevents usage of taesd for decoding the final image. (for use with --preview tae)
+  --preview-noisy                          enables previewing noisy inputs of the models rather than the denoised outputs
   -M, --mode                               run mode, one of [img_gen, vid_gen, upscale, convert], default: img_gen
   --type                                   weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). If not specified, the default is the
                                            type of the weight file
@@ -107,4 +112,5 @@ Options:
   --vae-tile-size                          tile size for vae tiling, format [X]x[Y] (default: 32x32)
   --vae-relative-tile-size                 relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1
                                            (overrides --vae-tile-size)
+  --preview                                preview method. must be one of the following [none, proj, tae, vae] (default is none)
 ```
