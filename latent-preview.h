@@ -13,14 +13,13 @@ const float wan_21_latent_rgb_proj[16][3] = {
     {-0.151145f, 0.017721f, 0.007207f},
     {-0.293239f, -0.207936f, -0.421135f},
     {-0.187721f, 0.050783f, 0.177649f},
-    {-0.013067f, 0.265964f, 0.166578f       },
+    {-0.013067f, 0.265964f, 0.166578f},
     {0.028327f, 0.109329f, 0.108642f},
     {-0.205343f, 0.043991f, 0.148914f},
     {0.014307f, -0.048647f, -0.007219f},
     {0.217150f, 0.053074f, 0.319923f},
-    {0.155357f, 0.083156f, 0.064780f}
-};
-float wan_21_latent_rgb_bias[3] =  {-0.270270f, -0.234976f, -0.456853f};
+    {0.155357f, 0.083156f, 0.064780f}};
+float wan_21_latent_rgb_bias[3] = {-0.270270f, -0.234976f, -0.456853f};
 
 const float wan_22_latent_rgb_proj[48][3] = {
     {0.017126f, -0.027230f, -0.019257f},
@@ -70,9 +69,8 @@ const float wan_22_latent_rgb_proj[48][3] = {
     {0.017271f, 0.045839f, 0.034569f},
     {0.009424f, 0.013088f, -0.001714f},
     {-0.024805f, -0.059378f, -0.033756f},
-    {-0.078293f, 0.029070f, 0.026129f}
-};
-float wan_22_latent_rgb_bias[3] =  {0.013160f, -0.096492f, -0.071323f};
+    {-0.078293f, 0.029070f, 0.026129f}};
+float wan_22_latent_rgb_bias[3] = {0.013160f, -0.096492f, -0.071323f};
 
 const float flux_latent_rgb_proj[16][3] = {
     {-0.041168f, 0.019917f, 0.097253f},
@@ -90,11 +88,10 @@ const float flux_latent_rgb_proj[16][3] = {
     {0.075712f, 0.074139f, 0.081965f},
     {-0.143501f, 0.018263f, -0.136138f},
     {-0.025767f, -0.082035f, -0.040023f},
-    {-0.111849f, -0.055589f, -0.032361f}
-};
+    {-0.111849f, -0.055589f, -0.032361f}};
 float flux_latent_rgb_bias[3] = {0.024600f, -0.006937f, -0.008089f};
 
-// This one was taken straight from 
+// This one was taken straight from
 // https://github.com/Stability-AI/sd3.5/blob/8565799a3b41eb0c7ba976d18375f0f753f56402/sd3_impls.py#L288-L303
 // (MiT Licence)
 const float sd3_latent_rgb_proj[16][3] = {
@@ -117,21 +114,19 @@ const float sd3_latent_rgb_proj[16][3] = {
 };
 float sd3_latent_rgb_bias[3] = {0, 0, 0};
 
-const float sdxl_latent_rgb_proj[4][3] =   {
+const float sdxl_latent_rgb_proj[4][3] = {
     {0.258303f, 0.277640f, 0.329699f},
     {-0.299701f, 0.105446f, 0.014194f},
     {0.050522f, 0.186163f, -0.143257f},
-    {-0.211938f, -0.149892f, -0.080036f}
-};
+    {-0.211938f, -0.149892f, -0.080036f}};
 float sdxl_latent_rgb_bias[3] = {0.144381f, -0.033313f, 0.007061f};
 
 const float sd_latent_rgb_proj[4][3] = {
     {0.337366f, 0.216344f, 0.257386f},
     {0.165636f, 0.386828f, 0.046994f},
     {-0.267803f, 0.237036f, 0.223517f},
-    {-0.178022f, -0.200862f, -0.678514f}
-};
-float sd_latent_rgb_bias[3] ={-0.017478f, -0.055834f, -0.105825f};
+    {-0.178022f, -0.200862f, -0.678514f}};
+float sd_latent_rgb_bias[3] = {-0.017478f, -0.055834f, -0.105825f};
 
 void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int width, int height, int frames, int dim) {
     size_t buffer_head = 0;
@@ -140,7 +135,7 @@ void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const fl
             for (int i = 0; i < width; i++) {
                 size_t latent_id = (i * latents->nb[0] + j * latents->nb[1] + k * latents->nb[2]);
                 float r = 0, g = 0, b = 0;
-                if (latent_rgb_proj != NULL) {
+                if (latent_rgb_proj != nullptr) {
                     for (int d = 0; d < dim; d++) {
                         float value = *(float*)((char*)latents->data + latent_id + d * latents->nb[ggml_n_dims(latents) - 1]);
                         r += value * latent_rgb_proj[d][0];
@@ -153,7 +148,7 @@ void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const fl
                     g = *(float*)((char*)latents->data + latent_id + 1 * latents->nb[ggml_n_dims(latents) - 1]);
                     b = *(float*)((char*)latents->data + latent_id + 2 * latents->nb[ggml_n_dims(latents) - 1]);
                 }
-                if (latent_rgb_bias != NULL) {
+                if (latent_rgb_bias != nullptr) {
                     // bias
                     r += latent_rgb_bias[0];
                     g += latent_rgb_bias[1];

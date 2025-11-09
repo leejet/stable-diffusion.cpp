@@ -185,7 +185,7 @@ int32_t get_num_physical_cores() {
 static sd_progress_cb_t sd_progress_cb = nullptr;
 void* sd_progress_cb_data              = nullptr;
 
-static sd_preview_cb_t sd_preview_cb = NULL;
+static sd_preview_cb_t sd_preview_cb = nullptr;
 preview_t sd_preview_mode            = PREVIEW_NONE;
 int sd_preview_interval              = 1;
 bool sd_preview_denoised             = true;

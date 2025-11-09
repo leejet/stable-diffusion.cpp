@@ -1124,7 +1124,7 @@ public:
     void silent_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
         sd_progress_cb_t cb = sd_get_progress_callback();
         void* cbd           = sd_get_progress_callback_data();
-        sd_set_progress_callback((sd_progress_cb_t)suppress_pp, NULL);
+        sd_set_progress_callback((sd_progress_cb_t)suppress_pp, nullptr);
         sd_tiling(input, output, scale, tile_size, tile_overlap_factor, on_processing);
         sd_set_progress_callback(cb, cbd);
     }
@@ -1143,8 +1143,8 @@ public:
         uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
 
         if (preview_mode == PREVIEW_PROJ) {
-            const float (*latent_rgb_proj)[channel] = NULL;
-            float* latent_rgb_bias                  = NULL;
+            const float(*latent_rgb_proj)[channel] = nullptr;
+            float* latent_rgb_bias                 = nullptr;
 
             if (dim == 48) {
                 if (sd_version_is_wan(version)) {
@@ -1215,7 +1215,7 @@ public:
                 if (vae_tiling_params.enabled) {
                     // split latent in 32x32 tiles and compute in several steps
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                        first_stage_model->compute(n_threads, in, true, &out, NULL);
+                        first_stage_model->compute(n_threads, in, true, &out, nullptr);
                     };
                     silent_tiling(latents, result, get_vae_scale_factor(), 32, 0.5f, on_tiling);
 
@@ -1234,7 +1234,7 @@ public:
                 if (vae_tiling_params.enabled) {
                     // split latent in 64x64 tiles and compute in several steps
                     auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                        tae_first_stage->compute(n_threads, in, true, &out, NULL);
+                        tae_first_stage->compute(n_threads, in, true, &out, nullptr);
                     };
                     silent_tiling(latents, result, get_vae_scale_factor(), 64, 0.5f, on_tiling);
                 } else {
@@ -1346,7 +1346,7 @@ public:
 
         int64_t t0 = ggml_time_us();
 
-        struct ggml_tensor* preview_tensor = NULL;
+        struct ggml_tensor* preview_tensor = nullptr;
         auto sd_preview_mode               = sd_get_preview_mode();
         if (sd_preview_mode != PREVIEW_NONE && sd_preview_mode != PREVIEW_PROJ) {
             int64_t W = x->ne[0] * get_vae_scale_factor();
@@ -1408,7 +1408,7 @@ public:
             if (denoise_mask != nullptr && version == VERSION_WAN2_2_TI2V) {
                 apply_mask(noised_input, init_latent, denoise_mask);
             }
-            if (sd_preview_cb != NULL && sd_should_preview_noisy()) {
+            if (sd_preview_cb != nullptr && sd_should_preview_noisy()) {
                 if (step % sd_get_preview_interval() == 0) {
                     preview_image(work_ctx, step, noised_input, version, sd_preview_mode, preview_tensor, sd_preview_cb, true);
                 }
@@ -1538,7 +1538,7 @@ public:
                 apply_mask(denoised, init_latent, denoise_mask);
             }
 
-            if (sd_preview_cb != NULL && sd_should_preview_denoised()) {
+            if (sd_preview_cb != nullptr && sd_should_preview_denoised()) {
                 if (step % sd_get_preview_interval() == 0) {
                     preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb, false);
                 }
@@ -1629,12 +1629,12 @@ public:
                                     -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
                                     0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
                 latents_std_vec  = {
-                    0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
-                    0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
-                    0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
-                    0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
-                    0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
-                    0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
             }
             for (int i = 0; i < latent->ne[3]; i++) {
                 float mean = latents_mean_vec[i];
@@ -1675,12 +1675,12 @@ public:
                                     -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
                                     0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
                 latents_std_vec  = {
-                    0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
-                    0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
-                    0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
-                    0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
-                    0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
-                    0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
             }
             for (int i = 0; i < latent->ne[3]; i++) {
                 float mean = latents_mean_vec[i];
