@@ -1568,8 +1568,10 @@ protected:
     struct ggml_cgraph* get_compute_graph(get_graph_cb_t get_graph) {
         prepare_build_in_tensor_before();
         struct ggml_cgraph* gf = get_graph();
-        auto result            = ggml_graph_node(gf, -1);
-        ggml_set_name(result, final_result_name.c_str());
+        if (ggml_graph_n_nodes(gf) > 0) {
+            auto result = ggml_graph_node(gf, -1);
+            ggml_set_name(result, final_result_name.c_str());
+        }
         prepare_build_in_tensor_after(gf);
         return gf;
     }

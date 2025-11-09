@@ -1271,7 +1271,7 @@ namespace WAN {
                 vae->get_param_tensors(tensors, "first_stage_model");
 
                 ModelLoader model_loader;
-                if (!model_loader.init_from_file(file_path, "vae.")) {
+                if (!model_loader.init_from_file_and_convert_name(file_path, "vae.")) {
                     LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                     return;
                 }
@@ -2255,7 +2255,7 @@ namespace WAN {
             LOG_INFO("loading from '%s'", file_path.c_str());
 
             ModelLoader model_loader;
-            if (!model_loader.init_from_file(file_path, "model.diffusion_model.")) {
+            if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }

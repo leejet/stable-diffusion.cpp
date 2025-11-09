@@ -111,7 +111,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     bool load_embedding(std::string embd_name, std::string embd_path, std::vector<int32_t>& bpe_tokens) {
         // the order matters
         ModelLoader model_loader;
-        if (!model_loader.init_from_file(embd_path)) {
+        if (!model_loader.init_from_file_and_convert_name(embd_path)) {
             LOG_ERROR("embedding '%s' failed", embd_name.c_str());
             return false;
         }
