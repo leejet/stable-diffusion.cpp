@@ -210,6 +210,13 @@ typedef struct {
 } sd_pm_params_t;  // photo maker
 
 typedef struct {
+    bool enabled;
+    float reuse_threshold;
+    float start_percent;
+    float end_percent;
+} sd_easycache_params_t;
+
+typedef struct {
     const char* prompt;
     const char* negative_prompt;
     int clip_skip;
@@ -229,6 +236,7 @@ typedef struct {
     float control_strength;
     sd_pm_params_t pm_params;
     sd_tiling_params_t vae_tiling_params;
+    sd_easycache_params_t easycache;
 } sd_img_gen_params_t;
 
 typedef struct {
@@ -248,6 +256,7 @@ typedef struct {
     int64_t seed;
     int video_frames;
     float vace_strength;
+    sd_easycache_params_t easycache;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
@@ -270,6 +279,8 @@ SD_API const char* sd_schedule_name(enum scheduler_t scheduler);
 SD_API enum scheduler_t str_to_schedule(const char* str);
 SD_API const char* sd_prediction_name(enum prediction_t prediction);
 SD_API enum prediction_t str_to_prediction(const char* str);
+
+SD_API void sd_easycache_params_init(sd_easycache_params_t* easycache_params);
 
 SD_API void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params);
 SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
