@@ -578,7 +578,7 @@ struct PhotoMakerIDEmbed : public GGMLRunner {
                       const std::string& file_path = "",
                       const std::string& prefix    = "")
         : file_path(file_path), GGMLRunner(backend, offload_params_to_cpu), model_loader(ml) {
-        if (!model_loader->init_from_file(file_path, prefix)) {
+        if (!model_loader->init_from_file_and_convert_name(file_path, prefix)) {
             load_failed = true;
         }
     }

@@ -169,7 +169,7 @@ struct ESRGAN : public GGMLRunner {
         LOG_INFO("loading esrgan from '%s'", file_path.c_str());
 
         ModelLoader model_loader;
-        if (!model_loader.init_from_file(file_path)) {
+        if (!model_loader.init_from_file_and_convert_name(file_path)) {
             LOG_ERROR("init esrgan model loader from file failed: '%s'", file_path.c_str());
             return false;
         }

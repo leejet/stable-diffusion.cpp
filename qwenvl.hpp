@@ -1342,7 +1342,7 @@ namespace Qwen {
             ggml_type model_data_type = GGML_TYPE_F16;
 
             ModelLoader model_loader;
-            if (!model_loader.init_from_file(file_path, "qwen2vl.")) {
+            if (!model_loader.init_from_file_and_convert_name(file_path, "qwen2vl.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }

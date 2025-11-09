@@ -42,7 +42,7 @@ struct UpscalerGGML {
         backend = ggml_backend_sycl_init(0);
 #endif
         ModelLoader model_loader;
-        if (!model_loader.init_from_file(esrgan_path)) {
+        if (!model_loader.init_from_file_and_convert_name(esrgan_path)) {
             LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
         }
         model_loader.set_wtype_override(model_data_type);
