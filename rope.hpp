@@ -265,12 +265,12 @@ namespace Rope {
         int bs,
         float theta,
         const std::vector<int>& axes_dim,
-        bool yarn                      = false,
-        std::vector<int> max_pe_len    = {},
-        int ori_max_pe_len             = 64,
-        bool dype                      = false,
-        float current_timestep         = 1.0f,
-        std::vector<float> ntk_factors = {}) {
+        bool yarn                       = false,
+        std::vector<int> max_pe_len     = {},
+        std::vector<int> ori_max_pe_len = {64, 64, 64},
+        bool dype                       = false,
+        float current_timestep          = 1.0f,
+        std::vector<float> ntk_factors  = {}) {
         std::vector<std::vector<float>> trans_ids = transpose(ids);
         size_t pos_len                            = ids.size() / bs;
         int num_axes                              = axes_dim.size();
@@ -292,7 +292,7 @@ namespace Rope {
 
         for (int i = 0; i < num_axes; ++i) {
             std::vector<std::vector<float>> rope_emb = rope_ext(
-                trans_ids[i], axes_dim[i], theta, false, 1.0f, ntk_factors[i], true, yarn, max_pe_len[i], ori_max_pe_len, dype, current_timestep);
+                trans_ids[i], axes_dim[i], theta, false, 1.0f, ntk_factors[i], true, yarn, max_pe_len[i], ori_max_pe_len[i], dype, current_timestep);
 
             for (int b = 0; b < bs; ++b) {
                 for (size_t j = 0; j < pos_len; ++j) {
@@ -372,12 +372,31 @@ namespace Rope {
                                                      bool use_ntk           = false,
                                                      float current_timestep = 1.0f) {
         int base_resolution = 1024;
+        int base_patches_H  = -1;
+        int base_patches_W  = -1;
+
         // set it via environment variable for now (TODO: arg)
+        // could be either a single integer, or WxH
         const char* env_base_resolution = getenv("FLUX_DYPE_BASE_RESOLUTION");
         if (env_base_resolution != nullptr) {
-            base_resolution = atoi(env_base_resolution);
+            if (strchr(env_base_resolution, 'x') != nullptr) {
+                const char* x_pos = strchr(env_base_resolution, 'x');
+                base_patches_H    = atoi(x_pos + 1) / 16;
+                base_patches_W    = atoi(env_base_resolution) / 16;
+            } else {
+                base_resolution = atoi(env_base_resolution);
+            }
         }
-        int base_patches                    = base_resolution / 16;
+        // preserve aspect ratio of the input image
+        // base_patches_W = k*w, base_patches_H = k*h, base_patches_W*base_patches_H = base_resolution^2
+        // => k = base_resolution / sqrt(w*h)
+        if (base_patches_H == -1)
+            base_patches_H = (base_resolution * h * sqrt(1.0f / (w * h))) / 16;
+        if (base_patches_W == -1)
+            base_patches_W = (base_resolution * w * sqrt(1.0f / (w * h))) / 16;
+
+        // First dim is ref image, should not need any weird rope modifications since the max pos should stay very low. 1024 is a lot
+        std::vector<int> base_patches       = {1024, base_patches_H, base_patches_W};
         std::vector<std::vector<float>> ids = gen_flux_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
         std::vector<int> max_pos_vec        = {};
         std::vector<float> ntk_factor_vec   = {};
@@ -393,7 +412,7 @@ namespace Rope {
             max_pos_vec.push_back(max_pos);
             float ntk_factor = 1.0f;
             if (use_ntk) {
-                float base_ntk = pow((float)max_pos / base_patches, (float)axes_dim[i] / (axes_dim[i] - 2));
+                float base_ntk = pow((float)max_pos / base_patches[i], (float)axes_dim[i] / (axes_dim[i] - 2));
                 ntk_factor     = use_dype ? pow(base_ntk, 2.0f * current_timestep * current_timestep) : base_ntk;
                 ntk_factor     = std::max(1.0f, ntk_factor);
             }
