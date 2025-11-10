@@ -148,7 +148,7 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
 // get_num_physical_cores is copy from
 // https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
 // LICENSE: https://github.com/ggerganov/llama.cpp/blob/master/LICENSE
-int32_t get_num_physical_cores() {
+int32_t sd_get_num_physical_cores() {
 #ifdef __linux__
     // enumerate the set of thread siblings, num entries is num cores
     std::unordered_set<std::string> siblings;

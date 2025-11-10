@@ -1306,7 +1306,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 
     if (params.n_threads <= 0) {
-        params.n_threads = get_num_physical_cores();
+        params.n_threads = sd_get_num_physical_cores();
     }
 
     if ((params.mode == IMG_GEN || params.mode == VID_GEN) && params.prompt.length() == 0) {

@@ -2452,7 +2452,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     *sd_ctx_params                         = {};
     sd_ctx_params->vae_decode_only         = true;
     sd_ctx_params->free_params_immediately = true;
-    sd_ctx_params->n_threads               = get_num_physical_cores();
+    sd_ctx_params->n_threads               = sd_get_num_physical_cores();
     sd_ctx_params->wtype                   = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                = CUDA_RNG;
     sd_ctx_params->sampler_rng_type        = RNG_TYPE_COUNT;
