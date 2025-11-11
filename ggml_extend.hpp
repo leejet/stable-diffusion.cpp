@@ -1119,6 +1119,18 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_ones(struct ggml_context* ctx,
     return ggml_ext_full(ctx, 1.f, ne0, ne1, ne2, ne3);
 }
 
+__STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_tensor* a) {
+    auto out         = ggml_reshape_2d(ctx, a, 1, ggml_nelements(a));
+    ggml_tensor* one = ggml_ext_ones(ctx, 1, 1, 1, 1);  // [1,]
+    if (ggml_is_transposed(out)) {
+        out = ggml_mul_mat(ctx, one, out);
+    } else {
+        out = ggml_mul_mat(ctx, out, one);
+    }
+    out = ggml_reshape(ctx, out, a);
+    return out;
+}
+
 // q: [N * n_head, n_token, d_head]
 // k: [N * n_head, n_k, d_head]
 // v: [N * n_head, d_head, n_k]
@@ -1460,11 +1472,17 @@ __STATIC_INLINE__ size_t ggml_tensor_num(ggml_context* ctx) {
 #define MAX_PARAMS_TENSOR_NUM 32768
 #define MAX_GRAPH_SIZE 327680
 
+struct WeightAdapter {
+    virtual ggml_tensor* patch_weight(ggml_context* ggml_ctx, ggml_tensor* weight, const std::string& weight_name) = 0;
+    virtual size_t get_extra_graph_size()                                                                          = 0;
+};
+
 struct GGMLRunnerContext {
-    ggml_backend_t backend     = nullptr;
-    ggml_context* ggml_ctx     = nullptr;
-    bool flash_attn_enabled    = false;
-    bool conv2d_direct_enabled = false;
+    ggml_backend_t backend                        = nullptr;
+    ggml_context* ggml_ctx                        = nullptr;
+    bool flash_attn_enabled                       = false;
+    bool conv2d_direct_enabled                    = false;
+    std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 };
 
 struct GGMLRunner {
@@ -1485,6 +1503,8 @@ protected:
 
     struct ggml_context* compute_ctx    = nullptr;
     struct ggml_gallocr* compute_allocr = nullptr;
+
+    std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 
     std::vector<float> one_vec = {1.f};
     ggml_tensor* one_tensor    = nullptr;
@@ -1563,6 +1583,13 @@ protected:
 
     void prepare_build_in_tensor_after(struct ggml_cgraph* gf) {
         ggml_build_forward_expand(gf, one_tensor);
+    }
+
+    struct ggml_cgraph* new_graph_custom(size_t graph_size) {
+        if (weight_adapter) {
+            graph_size += weight_adapter->get_extra_graph_size();
+        }
+        return ggml_new_graph_custom(compute_ctx, graph_size, false);
     }
 
     struct ggml_cgraph* get_compute_graph(get_graph_cb_t get_graph) {
@@ -1760,6 +1787,7 @@ public:
         runner_ctx.backend               = runtime_backend;
         runner_ctx.flash_attn_enabled    = flash_attn_enabled;
         runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
+        runner_ctx.weight_adapter        = weight_adapter;
         return runner_ctx;
     }
 
@@ -1891,6 +1919,10 @@ public:
     void set_conv2d_direct_enabled(bool enabled) {
         conv2d_direct_enabled = enabled;
     }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {
+        weight_adapter = adapter;
+    }
 };
 
 class GGMLBlock {
@@ -2006,8 +2038,10 @@ protected:
     bool force_f32;
     bool force_prec_f32;
     float scale;
+    std::string prefix;
 
     void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        this->prefix         = prefix;
         enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
         if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
             wtype = GGML_TYPE_F32;
@@ -2036,8 +2070,14 @@ public:
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = nullptr;
+        if (ctx->weight_adapter) {
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+        }
         if (bias) {
             b = params["bias"];
+            if (ctx->weight_adapter) {
+                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+            }
         }
         return ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
     }
@@ -2098,8 +2138,10 @@ protected:
     std::pair<int, int> dilation;
     bool bias;
     float scale = 1.f;
+    std::string prefix;
 
     void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        this->prefix         = prefix;
         enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx, wtype, kernel_size.second, kernel_size.first, in_channels, out_channels);
         if (bias) {
@@ -2135,8 +2177,17 @@ public:
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = nullptr;
+        if (ctx->weight_adapter) {
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+            if (w->type != GGML_TYPE_F16) {
+                w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F16);
+            }
+        }
         if (bias) {
             b = params["bias"];
+            if (ctx->weight_adapter) {
+                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+            }
         }
         return ggml_ext_conv_2d(ctx->ggml_ctx,
                                 x,
@@ -2209,8 +2260,10 @@ protected:
     std::tuple<int, int, int> padding;
     std::tuple<int, int, int> dilation;
     bool bias;
+    std::string prefix;
 
     void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        this->prefix         = prefix;
         enum ggml_type wtype = GGML_TYPE_F16;
         params["weight"]     = ggml_new_tensor_4d(ctx,
                                                   wtype,
@@ -2242,8 +2295,17 @@ public:
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = nullptr;
+        if (ctx->weight_adapter) {
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+            if (w->type != GGML_TYPE_F16) {
+                w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F16);
+            }
+        }
         if (bias) {
             b = params["bias"];
+            if (ctx->weight_adapter) {
+                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+            }
         }
         return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
                                 std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
@@ -2258,8 +2320,10 @@ protected:
     float eps;
     bool elementwise_affine;
     bool bias;
+    std::string prefix;
 
     void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        this->prefix = prefix;
         if (elementwise_affine) {
             enum ggml_type wtype = GGML_TYPE_F32;
             params["weight"]     = ggml_new_tensor_1d(ctx, wtype, normalized_shape);
@@ -2286,8 +2350,14 @@ public:
 
         if (elementwise_affine) {
             w = params["weight"];
+            if (ctx->weight_adapter) {
+                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+            }
             if (bias) {
                 b = params["bias"];
+                if (ctx->weight_adapter) {
+                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+                }
             }
         }
         return ggml_ext_layer_norm(ctx->ggml_ctx, x, w, b, eps);
@@ -2300,8 +2370,10 @@ protected:
     int64_t num_channels;
     float eps;
     bool affine;
+    std::string prefix;
 
     void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        this->prefix = prefix;
         if (affine) {
             enum ggml_type wtype      = GGML_TYPE_F32;
             enum ggml_type bias_wtype = GGML_TYPE_F32;
@@ -2326,6 +2398,10 @@ public:
         if (affine) {
             w = params["weight"];
             b = params["bias"];
+            if (ctx->weight_adapter) {
+                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+            }
         }
         return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups);
     }
@@ -2341,8 +2417,10 @@ class RMSNorm : public UnaryBlock {
 protected:
     int64_t hidden_size;
     float eps;
+    std::string prefix;
 
     void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
+        this->prefix         = prefix;
         enum ggml_type wtype = GGML_TYPE_F32;
         params["weight"]     = ggml_new_tensor_1d(ctx, wtype, hidden_size);
     }
@@ -2355,8 +2433,11 @@ public:
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
-        x                     = ggml_rms_norm(ctx->ggml_ctx, x, eps);
-        x                     = ggml_mul_inplace(ctx->ggml_ctx, x, w);
+        if (ctx->weight_adapter) {
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+        }
+        x = ggml_rms_norm(ctx->ggml_ctx, x, eps);
+        x = ggml_mul_inplace(ctx->ggml_ctx, x, w);
         return x;
     }
 };

@@ -181,8 +181,10 @@ class GEGLU : public UnaryBlock {
 protected:
     int64_t dim_in;
     int64_t dim_out;
+    std::string prefix;
 
     void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, std::string prefix = "") override {
+        this->prefix              = prefix;
         enum ggml_type wtype      = get_type(prefix + "proj.weight", tensor_storage_map, GGML_TYPE_F32);
         enum ggml_type bias_wtype = GGML_TYPE_F32;
         params["proj.weight"]     = ggml_new_tensor_2d(ctx, wtype, dim_in, dim_out * 2);
@@ -198,6 +200,11 @@ public:
         // return: [ne3, ne2, ne1, dim_out]
         struct ggml_tensor* w = params["proj.weight"];
         struct ggml_tensor* b = params["proj.bias"];
+
+        if (ctx->weight_adapter) {
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "proj.weight");
+            b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "proj.bias");
+        }
 
         auto x_w    = ggml_view_2d(ctx->ggml_ctx, w, w->ne[0], w->ne[1] / 2, w->nb[1], 0);                        // [dim_out, dim_in]
         auto x_b    = ggml_view_1d(ctx->ggml_ctx, b, b->ne[0] / 2, 0);                                            // [dim_out, dim_in]
