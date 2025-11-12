@@ -614,18 +614,18 @@ struct LoraModel : public GGMLRunner {
                                           forward_params.conv2d.direct,
                                           forward_params.conv2d.scale);
                 }
-                lx = lx = ggml_ext_conv_2d(ctx,
-                                           lx,
-                                           lora_up,
-                                           nullptr,
-                                           1,
-                                           1,
-                                           0,
-                                           0,
-                                           1,
-                                           1,
-                                           forward_params.conv2d.direct,
-                                           forward_params.conv2d.scale);
+                lx = ggml_ext_conv_2d(ctx,
+                                      lx,
+                                      lora_up,
+                                      nullptr,
+                                      1,
+                                      1,
+                                      0,
+                                      0,
+                                      1,
+                                      1,
+                                      forward_params.conv2d.direct,
+                                      forward_params.conv2d.scale);
             }
 
             auto curr_out_diff = ggml_scale_inplace(ctx, lx, scale_value);
