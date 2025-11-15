@@ -56,12 +56,12 @@ struct SDCtxParams {
     int n_threads   = -1;
     sd_type_t wtype = SD_TYPE_COUNT;
 
-    rng_type_t rng_type = CUDA_RNG;
-    schedule_t schedule = DEFAULT;
+    rng_type_t rng_type  = CUDA_RNG;
+    scheduler_t schedule = DEFAULT;
 
     bool keep_control_net_on_cpu = false;
-    bool keep_clip_on_cpu     = false;
-    bool keep_vae_on_cpu      = false;
+    bool keep_clip_on_cpu        = false;
+    bool keep_vae_on_cpu         = false;
 
     bool diffusion_flash_attn = false;
 };
@@ -494,7 +494,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 break;
             }
             const char* schedule_selected = argv[i];
-            schedule_t schedule_found     = str_to_schedule(schedule_selected);
+            scheduler_t schedule_found    = str_to_schedule(schedule_selected);
             if (schedule_found == SCHEDULE_COUNT) {
                 invalid_arg = true;
                 break;
@@ -892,7 +892,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         bool vae_cpu = payload["keep_vae_on_cpu"];
         if (params->ctxParams.keep_vae_on_cpu != vae_cpu) {
             params->ctxParams.keep_vae_on_cpu = vae_cpu;
-            updatectx                    = true;
+            updatectx                         = true;
         }
     } catch (...) {
     }
@@ -900,7 +900,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         bool clip_cpu = payload["keep_clip_on_cpu"];
         if (params->ctxParams.keep_clip_on_cpu != clip_cpu) {
             params->ctxParams.keep_clip_on_cpu = clip_cpu;
-            updatectx                     = true;
+            updatectx                          = true;
         }
     } catch (...) {
     }
@@ -1046,8 +1046,8 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     }
 
     try {
-        std::string schedule      = payload["schedule"];
-        schedule_t schedule_found = str_to_schedule(schedule.c_str());
+        std::string schedule       = payload["schedule"];
+        scheduler_t schedule_found = str_to_schedule(schedule.c_str());
         if (schedule_found != SCHEDULE_COUNT) {
             if (params->ctxParams.schedule != schedule_found) {
                 params->ctxParams.schedule = schedule_found;
@@ -1201,7 +1201,6 @@ void start_server(SDParams params) {
     params.tae_files                    = list_files(params.tae_dir);
     std::vector<std::string> lora_files = list_files(params.ctxParams.lora_model_dir);
 
-
     server_log_params = (void*)&params;
 
     if (params.verbose) {
@@ -1293,8 +1292,13 @@ void start_server(SDParams params) {
                     params.ctxParams.model_path.c_str(),
                     params.ctxParams.clip_l_path.c_str(),
                     params.ctxParams.clip_g_path.c_str(),
+                    "",
                     params.ctxParams.t5xxl_path.c_str(),
+                    // TODO qwen2vl support
+                    "",
+                    "",
                     params.ctxParams.diffusion_model_path.c_str(),
+                    "",
                     params.ctxParams.vae_path.c_str(),
                     params.ctxParams.taesd_path.c_str(),
                     params.ctxParams.control_net_path.c_str(),
@@ -1302,17 +1306,26 @@ void start_server(SDParams params) {
                     params.ctxParams.embeddings_path.c_str(),
                     params.ctxParams.stacked_id_embeddings_path.c_str(),
                     params.ctxParams.vae_decode_only,
-                    params.ctxParams.vae_tiling,
-                    false,
+                    false,  // free_params_immediately
                     params.ctxParams.n_threads,
                     params.ctxParams.wtype,
                     params.ctxParams.rng_type,
-                    params.ctxParams.schedule,
+                    DEFAULT_PRED,
+                    LORA_APPLY_AUTO,
+                    false,  // offload_params_to_cpu
                     params.ctxParams.keep_clip_on_cpu,
                     params.ctxParams.keep_control_net_on_cpu,
                     params.ctxParams.keep_vae_on_cpu,
                     params.ctxParams.diffusion_flash_attn,
-                    true, false, 1};
+                    false,  // tae_preview_only
+                    false,  // diffusion_conv_direct
+                    false,  // vae_conv_direct
+                    false,  // force_sdxl_vae_conv_scale
+                    true,   // chroma_use_dit_mask
+                    false,  // chroma_use_t5_mask
+                    1,      // chroma_t5_mask_pad
+                    -1.0f   // flow_shift
+                };
                 sd_ctx = new_sd_ctx(&sd_ctx_params);
                 if (sd_ctx == NULL) {
                     printf("new_sd_ctx_t failed\n");
@@ -1345,37 +1358,59 @@ void start_server(SDParams params) {
                 sd_guidance_params_t guidance = {
                     params.lastRequest.cfg_scale,
                     params.lastRequest.cfg_scale,
-                    params.lastRequest.cfg_scale,
                     params.lastRequest.guidance,
                     slg};
-                sd_image_t input_image = {
+                sd_image_t empty_image = {
                     (uint32_t)params.lastRequest.width,
                     (uint32_t)params.lastRequest.height,
                     3,
                     NULL};
-                sd_image_t mask_img            = input_image;
+                sd_image_t input_image           = empty_image;
+                sd_image_t mask_img              = empty_image;
+                sd_image_t control_img          = empty_image;
+                sd_sample_params_t sample_params = {
+                    guidance,
+                    params.ctxParams.schedule,
+                    params.lastRequest.sample_method,
+                    params.lastRequest.sample_steps,
+                    0.,  // eta
+                    0    // shifted_timestep
+                };
+                sd_pm_params_t pm_params = {
+                    NULL,  // id_images
+                    0,     // id_images_count
+                    params.input_id_images_path.c_str(),
+                    params.lastRequest.style_ratio,
+                };
+                sd_tiling_params_t tiling_params = {
+                    params.ctxParams.vae_tiling,  // TODO: move to request
+                    32,                           // tile_size_x
+                    32,                           // tile_size_y
+                    0.5,                          // overlap
+                    -1,                           // rel_size_x
+                    -1                            // rel_size_y
+                };
+
                 sd_img_gen_params_t gen_params = {
                     params.lastRequest.prompt.c_str(),
                     params.lastRequest.negative_prompt.c_str(),
                     params.lastRequest.clip_skip,
-                    guidance,
                     input_image,
-                    NULL,  // ref images
-                    0,     // ref images count
+                    NULL,   // ref images
+                    0,      // ref images count
+                    true,   // auto_resize_ref_image
+                    false,  // increase_ref_index
                     mask_img,
                     params.lastRequest.width,
                     params.lastRequest.height,
-                    params.lastRequest.sample_method,
-                    params.lastRequest.sample_steps,
-                    0.f,  // eta
+                    sample_params,
                     1.f,  // denoise strength
                     params.lastRequest.seed,
                     params.lastRequest.batch_count,
-                    NULL,  // control image ptr
-                    1.f,   // control strength
-                    params.lastRequest.style_ratio,
-                    params.lastRequest.normalize_input,
-                    params.input_id_images_path.c_str()};
+                    control_img,
+                    1.f,  // control strength
+                    pm_params,
+                    tiling_params};
                 results = generate_image(sd_ctx, &gen_params);
 
                 if (results == NULL) {
@@ -1466,16 +1501,16 @@ void start_server(SDParams params) {
         context_params["lora_model_dir"] = params.ctxParams.lora_model_dir;
         // context_params["embeddings_path"] = params.ctxParams.embeddings_path;
         // context_params["stacked_id_embeddings_path"] = params.ctxParams.stacked_id_embeddings_path;
-        context_params["vae_decode_only"]      = params.ctxParams.vae_decode_only;
-        context_params["vae_tiling"]           = params.ctxParams.vae_tiling;
-        context_params["n_threads"]            = params.ctxParams.n_threads;
-        context_params["wtype"]                = params.ctxParams.wtype;
-        context_params["rng_type"]             = params.ctxParams.rng_type;
-        context_params["schedule"]             = sd_schedule_name(params.ctxParams.schedule);
-        context_params["keep_clip_on_cpu"]          = params.ctxParams.keep_clip_on_cpu;
-        context_params["keep_control_net_on_cpu"]      = params.ctxParams.keep_control_net_on_cpu;
-        context_params["keep_vae_on_cpu"]           = params.ctxParams.keep_vae_on_cpu;
-        context_params["diffusion_flash_attn"] = params.ctxParams.diffusion_flash_attn;
+        context_params["vae_decode_only"]         = params.ctxParams.vae_decode_only;
+        context_params["vae_tiling"]              = params.ctxParams.vae_tiling;
+        context_params["n_threads"]               = params.ctxParams.n_threads;
+        context_params["wtype"]                   = params.ctxParams.wtype;
+        context_params["rng_type"]                = params.ctxParams.rng_type;
+        context_params["schedule"]                = sd_schedule_name(params.ctxParams.schedule);
+        context_params["keep_clip_on_cpu"]        = params.ctxParams.keep_clip_on_cpu;
+        context_params["keep_control_net_on_cpu"] = params.ctxParams.keep_control_net_on_cpu;
+        context_params["keep_vae_on_cpu"]         = params.ctxParams.keep_vae_on_cpu;
+        context_params["diffusion_flash_attn"]    = params.ctxParams.diffusion_flash_attn;
 
         // response["taesd_preview"]       = params.taesd_preview;
         // params_json["preview_method"]   = previews_str[params.lastRequest.preview_method];
@@ -1519,7 +1554,7 @@ void start_server(SDParams params) {
         using json = nlohmann::json;
         json response;
         for (int s = 0; s < SCHEDULE_COUNT; s++) {
-            response.push_back(sd_schedule_name((schedule_t)s));
+            response.push_back(sd_schedule_name((scheduler_t)s));
         }
         res.set_content(response.dump(), "application/json");
     });
