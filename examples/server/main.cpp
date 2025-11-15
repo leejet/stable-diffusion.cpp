@@ -99,8 +99,8 @@ struct SDRequestParams {
     // float apg_norm_threshold = 0.0f;
     // float apg_norm_smoothing = 0.0f;
 
-    // sd_preview_t preview_method = SD_PREVIEW_NONE;
-    // int preview_interval        = 1;
+    preview_t preview_method = PREVIEW_NONE;
+    int preview_interval        = 1;
 };
 
 struct SDParams {
@@ -113,7 +113,7 @@ struct SDParams {
     std::string input_path         = "./server/input.png";
     std::string control_image_path = "./server/control.png";
 
-    // std::string preview_path = "./server/preview.png";
+    std::string preview_path = "./server/preview.png";
 
     std::string models_dir;
     std::string diffusion_models_dir;
@@ -131,7 +131,7 @@ struct SDParams {
     std::string input_id_images_path;
 
     // Don't use TAE decoding by default
-    // bool taesd_preview = true;
+    bool taesd_preview = true;
 
     bool verbose = false;
 
@@ -1059,37 +1059,37 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     } catch (...) {
     }
 
-    // try {
-    //     bool tae_decode = payload["tae_decode"];
-    //     if (params->taesd_preview == tae_decode) {
-    //         params->taesd_preview = !tae_decode;
-    //         updatectx             = true;
-    //     }
-    // } catch (...) {
-    // }
+    try {
+        bool tae_decode = payload["tae_decode"];
+        if (params->taesd_preview == tae_decode) {
+            params->taesd_preview = !tae_decode;
+            updatectx             = true;
+        }
+    } catch (...) {
+    }
 
-    // try {
-    //     std::string preview = payload["preview_mode"];
-    //     int preview_found   = -1;
-    //     for (int m = 0; m < N_PREVIEWS; m++) {
-    //         if (!strcmp(preview.c_str(), previews_str[m])) {
-    //             preview_found = m;
-    //         }
-    //     }
-    //     if (preview_found >= 0) {
-    //         if (params->lastRequest.preview_method != (sd_preview_t)preview_found) {
-    //             params->lastRequest.preview_method = (sd_preview_t)preview_found;
-    //         }
-    //     } else {
-    //         sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown preview: %s\n", preview.c_str());
-    //     }
-    // } catch (...) {
-    // }
-    // try {
-    //     int interval                         = payload["preview_interval"];
-    //     params->lastRequest.preview_interval = interval;
-    // } catch (...) {
-    // }
+    try {
+        std::string preview = payload["preview_mode"];
+        int preview_found   = -1;
+        for (int m = 0; m < PREVIEW_COUNT; m++) {
+            if (!strcmp(preview.c_str(), sd_preview_name((preview_t)m))) {
+                preview_found = m;
+            }
+        }
+        if (preview_found >= 0) {
+            if (params->lastRequest.preview_method != (preview_t)preview_found) {
+                params->lastRequest.preview_method = (preview_t)preview_found;
+            }
+        } else {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown preview: %s\n", preview.c_str());
+        }
+    } catch (...) {
+    }
+    try {
+        int interval                         = payload["preview_interval"];
+        params->lastRequest.preview_interval = interval;
+    } catch (...) {
+    }
     try {
         std::string type = payload["type"];
         if (type != "") {
@@ -1162,6 +1162,41 @@ void add_task(std::string task_id, std::function<void()> task) {
     queue_cond.notify_one();
 }
 
+const char* preview_path;
+float preview_fps = 24;  // TODO : video
+
+void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) {
+    using json = nlohmann::json;
+    if (frame_count > 1) {
+        return;
+    }
+
+    if (preview_path) {
+        stbi_write_png(preview_path, image->width, image->height, image->channel, image->data, 0);
+    }
+
+    json task_json = task_results[running_task_id];
+    if (task_json == NULL) {
+        // shouldn't happen
+        task_json = json::object();
+    }
+    task_json["status"] = "Working";
+    task_json["data"]   = json::array();
+
+    int len;
+    unsigned char* png = stbi_write_png_to_mem((const unsigned char*)image->data, 0, image->width, image->height, image->channel, &len, NULL);
+    std::string data_str(png, png + len);
+    std::string encoded_img = base64_encode(data_str);
+    task_json["data"].push_back({{"width", image->width},
+                                 {"height", image->height},
+                                 {"channel", image->channel},
+                                 {"data", encoded_img},
+                                 {"encoding", "png"}});
+
+    std::lock_guard<std::mutex> results_lock(results_mutex);
+    task_results[running_task_id] = task_json;
+}
+
 void update_progress_cb(int step, int steps, float time, void* _data) {
     using json = nlohmann::json;
     if (running_task_id != "") {
@@ -1190,7 +1225,7 @@ bool is_model_file(const std::string& path) {
 }
 
 void start_server(SDParams params) {
-    // preview_path = params.preview_path.c_str();
+    preview_path = params.preview_path.c_str();
     sd_set_log_callback(sd_log_cb, (void*)&params);
     sd_set_progress_callback(update_progress_cb, NULL);
 
@@ -1317,7 +1352,7 @@ void start_server(SDParams params) {
                     params.ctxParams.keep_control_net_on_cpu,
                     params.ctxParams.keep_vae_on_cpu,
                     params.ctxParams.diffusion_flash_attn,
-                    false,  // tae_preview_only
+                    params.taesd_preview,
                     false,  // diffusion_conv_direct
                     false,  // vae_conv_direct
                     false,  // force_sdxl_vae_conv_scale
@@ -1367,7 +1402,7 @@ void start_server(SDParams params) {
                     NULL};
                 sd_image_t input_image           = empty_image;
                 sd_image_t mask_img              = empty_image;
-                sd_image_t control_img          = empty_image;
+                sd_image_t control_img           = empty_image;
                 sd_sample_params_t sample_params = {
                     guidance,
                     params.ctxParams.schedule,
@@ -1411,6 +1446,7 @@ void start_server(SDParams params) {
                     1.f,  // control strength
                     pm_params,
                     tiling_params};
+                sd_set_preview_callback((sd_preview_cb_t) step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, true, false);
                 results = generate_image(sd_ctx, &gen_params);
 
                 if (results == NULL) {
@@ -1512,9 +1548,9 @@ void start_server(SDParams params) {
         context_params["keep_vae_on_cpu"]         = params.ctxParams.keep_vae_on_cpu;
         context_params["diffusion_flash_attn"]    = params.ctxParams.diffusion_flash_attn;
 
-        // response["taesd_preview"]       = params.taesd_preview;
-        // params_json["preview_method"]   = previews_str[params.lastRequest.preview_method];
-        // params_json["preview_interval"] = params.lastRequest.preview_interval;
+        response["taesd_preview"]       = params.taesd_preview;
+        params_json["preview_method"]   = sd_preview_name(params.lastRequest.preview_method);
+        params_json["preview_interval"] = params.lastRequest.preview_interval;
 
         response["generation_params"] = params_json;
         response["context_params"]    = context_params;
@@ -1562,10 +1598,9 @@ void start_server(SDParams params) {
     svr->Get("/previews", [](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         json response;
-        // unsupported
-        // for (int s = 0; s < N_PREVIEWS; s++) {
-        //     response.push_back(previews_str[s]);
-        // }
+        for (int s = 0; s < PREVIEW_COUNT; s++) {
+            response.push_back(sd_preview_name((preview_t)s));
+        }
         res.set_content(response.dump(), "application/json");
     });
 
