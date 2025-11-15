@@ -100,7 +100,7 @@ struct SDRequestParams {
     // float apg_norm_smoothing = 0.0f;
 
     preview_t preview_method = PREVIEW_NONE;
-    int preview_interval        = 1;
+    int preview_interval     = 1;
 };
 
 struct SDParams {
@@ -1353,13 +1353,13 @@ void start_server(SDParams params) {
                     params.ctxParams.keep_vae_on_cpu,
                     params.ctxParams.diffusion_flash_attn,
                     params.taesd_preview,
-                    false,  // diffusion_conv_direct
-                    false,  // vae_conv_direct
-                    false,  // force_sdxl_vae_conv_scale
-                    true,   // chroma_use_dit_mask
-                    false,  // chroma_use_t5_mask
-                    1,      // chroma_t5_mask_pad
-                    -1.0f   // flow_shift
+                    false,    // diffusion_conv_direct
+                    false,    // vae_conv_direct
+                    false,    // force_sdxl_vae_conv_scale
+                    true,     // chroma_use_dit_mask
+                    false,    // chroma_use_t5_mask
+                    1,        // chroma_t5_mask_pad
+                    INFINITY  // flow_shift
                 };
                 sd_ctx = new_sd_ctx(&sd_ctx_params);
                 if (sd_ctx == NULL) {
@@ -1446,7 +1446,7 @@ void start_server(SDParams params) {
                     1.f,  // control strength
                     pm_params,
                     tiling_params};
-                sd_set_preview_callback((sd_preview_cb_t) step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, true, false);
+                sd_set_preview_callback((sd_preview_cb_t)step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, true, false);
                 results = generate_image(sd_ctx, &gen_params);
 
                 if (results == NULL) {
