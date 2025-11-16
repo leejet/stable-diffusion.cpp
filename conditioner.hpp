@@ -278,13 +278,30 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
             // printf(" %s: %f \n", curr_text.c_str(), curr_weight);
+            int32_t clean_index = 0;
+            if (curr_text == "BREAK" && curr_weight == -1.0f) {
+                // Pad token array up to chunk size at this point.
+                // TODO: This is a hardcoded chunk_len, like in stable-diffusion.cpp, make it a parameter for the future?
+                // Also, this is 75 instead of 77 to leave room for BOS and EOS tokens.
+                int padding_size = 75 - (tokens_acc % 75);
+                for (int j = 0; j < padding_size; j++) {
+                    clean_input_ids.push_back(tokenizer.EOS_TOKEN_ID);
+                    clean_index++;
+                }
+
+                // After padding, continue to the next iteration to process the following text as a new segment
+                tokens.insert(tokens.end(), clean_input_ids.begin(), clean_input_ids.end());
+                weights.insert(weights.end(), padding_size, curr_weight);
+                continue;
+            }
+
+            // Regular token, process normally
             std::vector<int> curr_tokens = tokenizer.encode(curr_text, on_new_token_cb);
-            int32_t clean_index          = 0;
             for (uint32_t i = 0; i < curr_tokens.size(); i++) {
                 int token_id = curr_tokens[i];
-                if (token_id == image_token)
+                if (token_id == image_token) {
                     class_token_index.push_back(clean_index - 1);
-                else {
+                } else {
                     clean_input_ids.push_back(token_id);
                     clean_index++;
                 }
@@ -387,6 +404,22 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
+
+            if (curr_text == "BREAK" && curr_weight == -1.0f) {
+                // Pad token array up to chunk size at this point.
+                // TODO: This is a hardcoded chunk_len, like in stable-diffusion.cpp, make it a parameter for the future?
+                // Also, this is 75 instead of 77 to leave room for BOS and EOS tokens.
+                size_t current_size = tokens.size();
+                size_t padding_size = (75 - (current_size % 75)) % 75;  // Ensure no negative padding
+
+                if (padding_size > 0) {
+                    LOG_DEBUG("BREAK token encountered, padding current chunk by %zu tokens.", padding_size);
+                    tokens.insert(tokens.end(), padding_size, tokenizer.EOS_TOKEN_ID);
+                    weights.insert(weights.end(), padding_size, 1.0f);
+                }
+                continue;  // Skip to the next item after handling BREAK
+            }
+
             std::vector<int> curr_tokens = tokenizer.encode(curr_text, on_new_token_cb);
             tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
             weights.insert(weights.end(), curr_tokens.size(), curr_weight);

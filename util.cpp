@@ -5,6 +5,7 @@
 #include <cstdarg>
 #include <fstream>
 #include <locale>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -547,6 +548,8 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int targe
 //   (abc) - increases attention to abc by a multiplier of 1.1
 //   (abc:3.12) - increases attention to abc by a multiplier of 3.12
 //   [abc] - decreases attention to abc by a multiplier of 1.1
+//   BREAK - separates the prompt into conceptually distinct parts for sequential processing
+//   B - internal helper pattern; prevents 'B' in 'BREAK' from being consumed as normal text
 //   \( - literal character '('
 //   \[ - literal character '['
 //   \) - literal character ')'
@@ -582,7 +585,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     float round_bracket_multiplier  = 1.1f;
     float square_bracket_multiplier = 1 / 1.1f;
 
-    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|[^\\()\[\]:]+|:)");
+    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|\bBREAK\b|[^\\()\[\]:B]+|:|\bB)");
     std::regex re_break(R"(\s*\bBREAK\b\s*)");
 
     auto multiply_range = [&](int start_position, float multiplier) {
@@ -591,7 +594,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
         }
     };
 
-    std::smatch m;
+    std::smatch m, m2;
     std::string remaining_text = text;
 
     while (std::regex_search(remaining_text, m, re_attention)) {
@@ -615,6 +618,8 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
             square_brackets.pop_back();
         } else if (text == "\\(") {
             res.push_back({text.substr(1), 1.0f});
+        } else if (std::regex_search(text, m2, re_break)) {
+            res.push_back({"BREAK", -1.0f});
         } else {
             res.push_back({text, 1.0f});
         }
