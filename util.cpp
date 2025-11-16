@@ -594,7 +594,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
         }
     };
 
-    std::smatch m,m2;
+    std::smatch m, m2;
     std::string remaining_text = text;
 
     while (std::regex_search(remaining_text, m, re_attention)) {

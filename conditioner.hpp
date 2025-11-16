@@ -270,8 +270,8 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
             // printf(" %s: %f \n", curr_text.c_str(), curr_weight);
-            int32_t clean_index          = 0;
-            if(curr_text == "BREAK" && curr_weight == -1.0f) {
+            int32_t clean_index = 0;
+            if (curr_text == "BREAK" && curr_weight == -1.0f) {
                 // Pad token array up to chunk size at this point.
                 // TODO: This is a hardcoded chunk_len, like in stable-diffusion.cpp, make it a parameter for the future?
                 // Also, this is 75 instead of 77 to leave room for BOS and EOS tokens.
@@ -397,7 +397,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
 
-            if(curr_text == "BREAK" && curr_weight == -1.0f) {
+            if (curr_text == "BREAK" && curr_weight == -1.0f) {
                 // Pad token array up to chunk size at this point.
                 // TODO: This is a hardcoded chunk_len, like in stable-diffusion.cpp, make it a parameter for the future?
                 // Also, this is 75 instead of 77 to leave room for BOS and EOS tokens.
@@ -409,7 +409,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                     tokens.insert(tokens.end(), padding_size, tokenizer.EOS_TOKEN_ID);
                     weights.insert(weights.end(), padding_size, 1.0f);
                 }
-                continue; // Skip to the next item after handling BREAK
+                continue;  // Skip to the next item after handling BREAK
             }
 
             std::vector<int> curr_tokens = tokenizer.encode(curr_text, on_new_token_cb);
