@@ -1124,7 +1124,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          on_type_arg},
         {"",
          "--rng",
-         "RNG, one of [std_default, cuda], default: cuda",
+         "RNG, one of [std_default, cuda, cpu], default: cuda(sd-webui), cpu(comfyui)",
          on_rng_arg},
         {"-s",
          "--seed",
