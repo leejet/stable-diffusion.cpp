@@ -292,7 +292,7 @@ public:
     std::map<ggml_type, uint32_t> get_diffusion_model_wtype_stat();
     std::map<ggml_type, uint32_t> get_vae_wtype_stat();
     String2TensorStorage& get_tensor_storage_map() { return tensor_storage_map; }
-    void set_wtype_override(ggml_type wtype, std::string prefix = "");
+    void set_wtype_override(ggml_type wtype, std::string tensor_type_rules = "");
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       std::set<std::string> ignore_tensors = {},

@@ -304,11 +304,12 @@ public:
         }
 
         LOG_INFO("Version: %s ", model_version_to_str[version]);
-        ggml_type wtype = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
-                              ? (ggml_type)sd_ctx_params->wtype
-                              : GGML_TYPE_COUNT;
-        if (wtype != GGML_TYPE_COUNT) {
-            model_loader.set_wtype_override(wtype);
+        ggml_type wtype               = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
+                                            ? (ggml_type)sd_ctx_params->wtype
+                                            : GGML_TYPE_COUNT;
+        std::string tensor_type_rules = SAFE_STR(sd_ctx_params->tensor_type_rules);
+        if (wtype != GGML_TYPE_COUNT || tensor_type_rules.size() > 0) {
+            model_loader.set_wtype_override(wtype, tensor_type_rules);
         }
 
         std::map<ggml_type, uint32_t> wtype_stat                 = model_loader.get_wtype_stat();
@@ -2325,6 +2326,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "lora_model_dir: %s\n"
              "embedding_dir: %s\n"
              "photo_maker_path: %s\n"
+             "tensor_type_rules: %s\n"
              "vae_decode_only: %s\n"
              "free_params_immediately: %s\n"
              "n_threads: %d\n"
@@ -2354,6 +2356,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->lora_model_dir),
              SAFE_STR(sd_ctx_params->embedding_dir),
              SAFE_STR(sd_ctx_params->photo_maker_path),
+             SAFE_STR(sd_ctx_params->tensor_type_rules),
              BOOL_STR(sd_ctx_params->vae_decode_only),
              BOOL_STR(sd_ctx_params->free_params_immediately),
              sd_ctx_params->n_threads,
