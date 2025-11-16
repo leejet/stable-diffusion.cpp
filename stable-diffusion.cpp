@@ -2454,10 +2454,10 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                 LOG_WARN("Turn off PhotoMaker");
                 sd_ctx->sd->stacked_id = false;
             } else {
-            if (pm_params.id_images_count != id_embeds->ne[1]) {
-                LOG_WARN("PhotoMaker image count (%d) does NOT match ID embeds (%d). You should run face_detect.py again.",pm_params.id_images_count,id_embeds->ne[1]);
-                LOG_WARN("Turn off PhotoMaker");
-                sd_ctx->sd->stacked_id = false;
+                if (pm_params.id_images_count != id_embeds->ne[1]) {
+                    LOG_WARN("PhotoMaker image count (%d) does NOT match ID embeds (%d). You should run face_detect.py again.", pm_params.id_images_count, id_embeds->ne[1]);
+                    LOG_WARN("Turn off PhotoMaker");
+                    sd_ctx->sd->stacked_id = false;
                 } else {
                     id_cond.c_crossattn = sd_ctx->sd->id_encoder(work_ctx, init_img, id_cond.c_crossattn, id_embeds, class_tokens_mask);
                     int64_t t1          = ggml_time_ms();
