@@ -66,6 +66,25 @@ protected:
     int64_t in_channels;
     bool use_linear;
 
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
+        auto iter = tensor_storage_map.find(prefix + "proj_out.weight");
+        if (iter != tensor_storage_map.end()) {
+            if (iter->second.n_dims == 4 && use_linear) {
+                use_linear         = false;
+                blocks["q"]        = std::make_shared<Conv2d>(in_channels, in_channels, std::pair{1, 1});
+                blocks["k"]        = std::make_shared<Conv2d>(in_channels, in_channels, std::pair{1, 1});
+                blocks["v"]        = std::make_shared<Conv2d>(in_channels, in_channels, std::pair{1, 1});
+                blocks["proj_out"] = std::make_shared<Conv2d>(in_channels, in_channels, std::pair{1, 1});
+            } else if (iter->second.n_dims == 2 && !use_linear) {
+                use_linear         = true;
+                blocks["q"]        = std::make_shared<Linear>(in_channels, in_channels);
+                blocks["k"]        = std::make_shared<Linear>(in_channels, in_channels);
+                blocks["v"]        = std::make_shared<Linear>(in_channels, in_channels);
+                blocks["proj_out"] = std::make_shared<Linear>(in_channels, in_channels);
+            }
+        }
+    }
+
 public:
     AttnBlock(int64_t in_channels, bool use_linear)
         : in_channels(in_channels), use_linear(use_linear) {

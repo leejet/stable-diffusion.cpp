@@ -380,7 +380,7 @@ struct ControlNet : public GGMLRunner {
                                     struct ggml_tensor* timesteps,
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* y = nullptr) {
-        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, CONTROL_NET_GRAPH_SIZE, false);
+        struct ggml_cgraph* gf = new_graph_custom(CONTROL_NET_GRAPH_SIZE);
 
         x = to_backend(x);
         if (guided_hint_cached) {
@@ -442,7 +442,7 @@ struct ControlNet : public GGMLRunner {
         std::set<std::string> ignore_tensors;
 
         ModelLoader model_loader;
-        if (!model_loader.init_from_file(file_path)) {
+        if (!model_loader.init_from_file_and_convert_name(file_path)) {
             LOG_ERROR("init control net model loader from file failed: '%s'", file_path.c_str());
             return false;
         }

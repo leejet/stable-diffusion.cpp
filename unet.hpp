@@ -7,7 +7,7 @@
 
 /*==================================================== UnetModel =====================================================*/
 
-#define UNET_GRAPH_SIZE 10240
+#define UNET_GRAPH_SIZE 102400
 
 class SpatialVideoTransformer : public SpatialTransformer {
 protected:
@@ -180,6 +180,7 @@ protected:
     int num_head_channels                  = -1;   // channels // num_heads
     int context_dim                        = 768;  // 1024 for VERSION_SD2, 2048 for VERSION_SDXL
     bool use_linear_projection             = false;
+    bool tiny_unet                         = false;
 
 public:
     int model_channels  = 320;
@@ -208,14 +209,16 @@ public:
             num_head_channels     = 64;
             num_heads             = -1;
             use_linear_projection = true;
-        } else if (version == VERSION_SD1_TINY_UNET) {
-            num_res_blocks = 1;
-            channel_mult   = {1, 2, 4};
         }
         if (sd_version_is_inpaint(version)) {
             in_channels = 9;
         } else if (sd_version_is_unet_edit(version)) {
             in_channels = 8;
+        }
+        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET) {
+            num_res_blocks = 1;
+            channel_mult   = {1, 2, 4};
+            tiny_unet      = true;
         }
 
         // dims is always 2
@@ -290,7 +293,7 @@ public:
                                                                                   context_dim));
                 }
                 input_block_chans.push_back(ch);
-                if (version == VERSION_SD1_TINY_UNET) {
+                if (tiny_unet) {
                     input_block_idx++;
                 }
             }
@@ -311,7 +314,7 @@ public:
             d_head = num_head_channels;
             n_head = ch / d_head;
         }
-        if (version != VERSION_SD1_TINY_UNET) {
+        if (!tiny_unet) {
             blocks["middle_block.0"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
             if (version != VERSION_SDXL_SSD1B) {
                 blocks["middle_block.1"] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
@@ -358,7 +361,7 @@ public:
                 }
 
                 if (i > 0 && j == num_res_blocks) {
-                    if (version == VERSION_SD1_TINY_UNET) {
+                    if (tiny_unet) {
                         output_block_idx++;
                         if (output_block_idx == 2) {
                             up_sample_idx = 1;
@@ -495,7 +498,7 @@ public:
                 }
                 hs.push_back(h);
             }
-            if (version == VERSION_SD1_TINY_UNET) {
+            if (tiny_unet) {
                 input_block_idx++;
             }
             if (i != len_mults - 1) {
@@ -512,7 +515,7 @@ public:
         // [N, 4*model_channels, h/8, w/8]
 
         // middle_block
-        if (version != VERSION_SD1_TINY_UNET) {
+        if (!tiny_unet) {
             h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
             if (version != VERSION_SDXL_SSD1B) {
                 h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
@@ -554,7 +557,7 @@ public:
                 }
 
                 if (i > 0 && j == num_res_blocks) {
-                    if (version == VERSION_SD1_TINY_UNET) {
+                    if (tiny_unet) {
                         output_block_idx++;
                         if (output_block_idx == 2) {
                             up_sample_idx = 1;
@@ -609,7 +612,7 @@ struct UNetModelRunner : public GGMLRunner {
                                     int num_video_frames                      = -1,
                                     std::vector<struct ggml_tensor*> controls = {},
                                     float control_strength                    = 0.f) {
-        struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, UNET_GRAPH_SIZE, false);
+        struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE);
 
         if (num_video_frames == -1) {
             num_video_frames = x->ne[3];

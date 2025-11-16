@@ -1243,7 +1243,7 @@ namespace Flux {
                                         bool increase_ref_index               = false,
                                         std::vector<int> skip_layers          = {}) {
             GGML_ASSERT(x->ne[3] == 1);
-            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
+            struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE);
 
             struct ggml_tensor* mod_index_arange = nullptr;
             struct ggml_tensor* dct              = nullptr;  // for chroma radiance
@@ -1398,7 +1398,7 @@ namespace Flux {
             ggml_type model_data_type = GGML_TYPE_Q8_0;
 
             ModelLoader model_loader;
-            if (!model_loader.init_from_file(file_path, "model.diffusion_model.")) {
+            if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }

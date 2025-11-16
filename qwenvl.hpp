@@ -1049,7 +1049,7 @@ namespace Qwen {
         }
 
         struct ggml_cgraph* build_encode_image_graph(struct ggml_tensor* image) {
-            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, QWENVL_GRAPH_SIZE, false);
+            struct ggml_cgraph* gf = new_graph_custom(QWENVL_GRAPH_SIZE);
 
             GGML_ASSERT(image->ne[1] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
             GGML_ASSERT(image->ne[0] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
@@ -1342,7 +1342,7 @@ namespace Qwen {
             ggml_type model_data_type = GGML_TYPE_F16;
 
             ModelLoader model_loader;
-            if (!model_loader.init_from_file(file_path, "qwen2vl.")) {
+            if (!model_loader.init_from_file_and_convert_name(file_path, "qwen2vl.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }

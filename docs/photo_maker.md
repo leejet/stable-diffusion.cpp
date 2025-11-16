@@ -40,7 +40,7 @@ Running PMV2 is now a two-step process:
 ```
 python face_detect.py input_image_dir
 ```
-An ```id_embeds.safetensors``` file will be generated in ```input_images_dir```
+An ```id_embeds.bin``` file will be generated in ```input_images_dir```
 
 **Note: this step is only needed to run once; the same ```id_embeds``` can be reused**
 
@@ -48,6 +48,6 @@ An ```id_embeds.safetensors``` file will be generated in ```input_images_dir```
 
   You can download ```photomaker-v2.safetensors``` from [here](https://huggingface.co/bssrdf/PhotoMakerV2)
 
-- All the command line parameters from Version 1 remain the same for Version 2
+- All the command line parameters from Version 1 remain the same for Version 2 plus one extra pointing to a valid ```id_embeds``` file:  --pm-id-embed-path [path_to__id_embeds.bin] 
 
 

@@ -5,6 +5,7 @@
 #include <cstdarg>
 #include <fstream>
 #include <locale>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -185,6 +186,12 @@ int32_t get_num_physical_cores() {
 static sd_progress_cb_t sd_progress_cb = nullptr;
 void* sd_progress_cb_data              = nullptr;
 
+static sd_preview_cb_t sd_preview_cb = nullptr;
+preview_t sd_preview_mode            = PREVIEW_NONE;
+int sd_preview_interval              = 1;
+bool sd_preview_denoised             = true;
+bool sd_preview_noisy                = false;
+
 std::u32string utf8_to_utf32(const std::string& utf8_str) {
     std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
     return converter.from_bytes(utf8_str);
@@ -327,6 +334,37 @@ void sd_set_log_callback(sd_log_cb_t cb, void* data) {
 void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
+}
+void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode = PREVIEW_PROJ, int interval = 1, bool denoised = true, bool noisy = false) {
+    sd_preview_cb       = cb;
+    sd_preview_mode     = mode;
+    sd_preview_interval = interval;
+    sd_preview_denoised = denoised;
+    sd_preview_noisy    = noisy;
+}
+
+sd_preview_cb_t sd_get_preview_callback() {
+    return sd_preview_cb;
+}
+
+preview_t sd_get_preview_mode() {
+    return sd_preview_mode;
+}
+int sd_get_preview_interval() {
+    return sd_preview_interval;
+}
+bool sd_should_preview_denoised() {
+    return sd_preview_denoised;
+}
+bool sd_should_preview_noisy() {
+    return sd_preview_noisy;
+}
+
+sd_progress_cb_t sd_get_progress_callback() {
+    return sd_progress_cb;
+}
+void* sd_get_progress_callback_data() {
+    return sd_progress_cb_data;
 }
 const char* sd_get_system_info() {
     static char buffer[1024];
@@ -510,6 +548,8 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int targe
 //   (abc) - increases attention to abc by a multiplier of 1.1
 //   (abc:3.12) - increases attention to abc by a multiplier of 3.12
 //   [abc] - decreases attention to abc by a multiplier of 1.1
+//   BREAK - separates the prompt into conceptually distinct parts for sequential processing
+//   B - internal helper pattern; prevents 'B' in 'BREAK' from being consumed as normal text
 //   \( - literal character '('
 //   \[ - literal character '['
 //   \) - literal character ')'
@@ -545,7 +585,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     float round_bracket_multiplier  = 1.1f;
     float square_bracket_multiplier = 1 / 1.1f;
 
-    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|[^\\()\[\]:]+|:)");
+    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|\bBREAK\b|[^\\()\[\]:B]+|:|\bB)");
     std::regex re_break(R"(\s*\bBREAK\b\s*)");
 
     auto multiply_range = [&](int start_position, float multiplier) {
@@ -554,7 +594,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
         }
     };
 
-    std::smatch m;
+    std::smatch m, m2;
     std::string remaining_text = text;
 
     while (std::regex_search(remaining_text, m, re_attention)) {
@@ -578,6 +618,8 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
             square_brackets.pop_back();
         } else if (text == "\\(") {
             res.push_back({text.substr(1), 1.0f});
+        } else if (std::regex_search(text, m2, re_break)) {
+            res.push_back({"BREAK", -1.0f});
         } else {
             res.push_back({text, 1.0f});
         }

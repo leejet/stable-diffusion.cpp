@@ -2,6 +2,7 @@
 
 #include "model.h"
 #include "rng.hpp"
+#include "rng_mt19937.hpp"
 #include "rng_philox.hpp"
 #include "stable-diffusion.h"
 #include "util.h"
@@ -16,6 +17,9 @@
 #include "tae.hpp"
 #include "vae.hpp"
 
+#include "latent-preview.h"
+#include "name_conversion.h"
+
 const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
@@ -23,6 +27,7 @@ const char* model_version_to_str[] = {
     "SD 1.x Tiny UNet",
     "SD 2.x",
     "SD 2.x Inpaint",
+    "SD 2.x Tiny UNet",
     "SDXL",
     "SDXL Inpaint",
     "SDXL Instruct-Pix2Pix",
@@ -73,6 +78,14 @@ void calculate_alphas_cumprod(float* alphas_cumprod,
     }
 }
 
+void suppress_pp(int step, int steps, float time, void* data) {
+    (void)step;
+    (void)steps;
+    (void)time;
+    (void)data;
+    return;
+}
+
 /*=============================================== StableDiffusionGGML ================================================*/
 
 class StableDiffusionGGML {
@@ -97,10 +110,14 @@ public:
     std::shared_ptr<DiffusionModel> high_noise_diffusion_model;
     std::shared_ptr<VAE> first_stage_model;
     std::shared_ptr<TinyAutoEncoder> tae_first_stage;
-    std::shared_ptr<ControlNet> control_net = nullptr;
+    std::shared_ptr<ControlNet> control_net;
     std::shared_ptr<PhotoMakerIDEncoder> pmid_model;
     std::shared_ptr<LoraModel> pmid_lora;
     std::shared_ptr<PhotoMakerIDEmbed> pmid_id_embeds;
+    std::vector<std::shared_ptr<LoraModel>> cond_stage_lora_models;
+    std::vector<std::shared_ptr<LoraModel>> diffusion_lora_models;
+    std::vector<std::shared_ptr<LoraModel>> first_stage_lora_models;
+    bool apply_lora_immediately = false;
 
     std::string taesd_path;
     bool use_tiny_autoencoder            = false;
@@ -184,6 +201,8 @@ public:
             rng = std::make_shared<STDDefaultRNG>();
         } else if (sd_ctx_params->rng_type == CUDA_RNG) {
             rng = std::make_shared<PhiloxRNG>();
+        } else if (sd_ctx_params->rng_type == CPU_RNG) {
+            rng = std::make_shared<MT19937RNG>();
         }
 
         ggml_log_set(ggml_log_callback_default, nullptr);
@@ -267,6 +286,8 @@ public:
             }
         }
 
+        model_loader.convert_tensors_name();
+
         version = model_loader.get_sd_version();
         if (version == VERSION_COUNT) {
             LOG_ERROR("get sd version from file failed: '%s'", SAFE_STR(sd_ctx_params->model_path));
@@ -316,6 +337,29 @@ public:
         LOG_INFO("VAE weight type stat:             %s", wtype_stat_to_str(vae_wtype_stat).c_str());
 
         LOG_DEBUG("ggml tensor size = %d bytes", (int)sizeof(ggml_tensor));
+
+        if (sd_ctx_params->lora_apply_mode == LORA_APPLY_AUTO) {
+            bool have_quantized_weight = false;
+            if (wtype != GGML_TYPE_COUNT && ggml_is_quantized(wtype)) {
+                have_quantized_weight = true;
+            } else {
+                for (const auto& [type, _] : wtype_stat) {
+                    if (ggml_is_quantized(type)) {
+                        have_quantized_weight = true;
+                        break;
+                    }
+                }
+            }
+            if (have_quantized_weight) {
+                apply_lora_immediately = false;
+            } else {
+                apply_lora_immediately = true;
+            }
+        } else if (sd_ctx_params->lora_apply_mode == LORA_APPLY_IMMEDIATELY) {
+            apply_lora_immediately = true;
+        } else {
+            apply_lora_immediately = false;
+        }
 
         if (sd_version_is_sdxl(version)) {
             scale_factor = 0.13025f;
@@ -487,7 +531,7 @@ public:
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 first_stage_model = std::make_shared<FakeVAE>(vae_backend,
                                                               offload_params_to_cpu);
-            } else if (!use_tiny_autoencoder) {
+            } else if (!use_tiny_autoencoder || sd_ctx_params->tae_preview_only) {
                 first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend,
                                                                     offload_params_to_cpu,
                                                                     tensor_storage_map,
@@ -510,7 +554,8 @@ public:
                 }
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
-            } else {
+            }
+            if (use_tiny_autoencoder) {
                 tae_first_stage = std::make_shared<TinyAutoEncoder>(vae_backend,
                                                                     offload_params_to_cpu,
                                                                     tensor_storage_map,
@@ -558,13 +603,19 @@ public:
                                                                    version);
             }
             if (strlen(SAFE_STR(sd_ctx_params->photo_maker_path)) > 0) {
-                pmid_lora = std::make_shared<LoraModel>(backend, sd_ctx_params->photo_maker_path, "");
-                if (!pmid_lora->load_from_file(true, n_threads)) {
+                pmid_lora               = std::make_shared<LoraModel>("pmid", backend, sd_ctx_params->photo_maker_path, "", version);
+                auto lora_tensor_filter = [&](const std::string& tensor_name) {
+                    if (starts_with(tensor_name, "lora.model")) {
+                        return true;
+                    }
+                    return false;
+                };
+                if (!pmid_lora->load_from_file(n_threads, lora_tensor_filter)) {
                     LOG_WARN("load photomaker lora tensors from %s failed", sd_ctx_params->photo_maker_path);
                     return false;
                 }
                 LOG_INFO("loading stacked ID embedding (PHOTOMAKER) model file from '%s'", sd_ctx_params->photo_maker_path);
-                if (!model_loader.init_from_file(sd_ctx_params->photo_maker_path, "pmid.")) {
+                if (!model_loader.init_from_file_and_convert_name(sd_ctx_params->photo_maker_path, "pmid.")) {
                     LOG_WARN("loading stacked ID embedding from '%s' failed", sd_ctx_params->photo_maker_path);
                 } else {
                     stacked_id = true;
@@ -598,7 +649,7 @@ public:
             ignore_tensors.insert("first_stage_model.");
         }
         if (stacked_id) {
-            ignore_tensors.insert("lora.");
+            ignore_tensors.insert("pmid.unet.");
         }
 
         if (vae_decode_only) {
@@ -626,9 +677,10 @@ public:
                 unet_params_mem_size += high_noise_diffusion_model->get_params_buffer_size();
             }
             size_t vae_params_mem_size = 0;
-            if (!use_tiny_autoencoder) {
+            if (!use_tiny_autoencoder || sd_ctx_params->tae_preview_only) {
                 vae_params_mem_size = first_stage_model->get_params_buffer_size();
-            } else {
+            }
+            if (use_tiny_autoencoder) {
                 if (!tae_first_stage->load_from_file(taesd_path, n_threads)) {
                     return false;
                 }
@@ -801,6 +853,7 @@ public:
 
         LOG_DEBUG("finished loaded file");
         ggml_free(ctx);
+        use_tiny_autoencoder = use_tiny_autoencoder && !sd_ctx_params->tae_preview_only;
         return true;
     }
 
@@ -892,8 +945,11 @@ public:
         return result < -1;
     }
 
-    void apply_lora(std::string lora_name, float multiplier) {
-        int64_t t0                 = ggml_time_ms();
+    std::shared_ptr<LoraModel> load_lora_model_from_file(const std::string& lora_id,
+                                                         float multiplier,
+                                                         ggml_backend_t backend,
+                                                         LoraModel::filter_t lora_tensor_filter = nullptr) {
+        std::string lora_name      = lora_id;
         std::string high_noise_tag = "|high_noise|";
         bool is_high_noise         = false;
         if (starts_with(lora_name, high_noise_tag)) {
@@ -910,25 +966,19 @@ public:
             file_path = ckpt_file_path;
         } else {
             LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
-            return;
+            return nullptr;
         }
-        LoraModel lora(backend, file_path, is_high_noise ? "model.high_noise_" : "");
-        if (!lora.load_from_file(false, n_threads)) {
+        auto lora = std::make_shared<LoraModel>(lora_id, backend, file_path, is_high_noise ? "model.high_noise_" : "", version);
+        if (!lora->load_from_file(n_threads, lora_tensor_filter)) {
             LOG_WARN("load lora tensors from %s failed", file_path.c_str());
-            return;
+            return nullptr;
         }
 
-        lora.multiplier = multiplier;
-        // TODO: send version?
-        lora.apply(tensors, version, n_threads);
-        lora.free_params_buffer();
-
-        int64_t t1 = ggml_time_ms();
-
-        LOG_INFO("lora '%s' applied, taking %.2fs", lora_name.c_str(), (t1 - t0) * 1.0f / 1000);
+        lora->multiplier = multiplier;
+        return lora;
     }
 
-    void apply_loras(const std::unordered_map<std::string, float>& lora_state) {
+    void apply_loras_immediately(const std::unordered_map<std::string, float>& lora_state) {
         std::unordered_map<std::string, float> lora_state_diff;
         for (auto& kv : lora_state) {
             const std::string& lora_name = kv.first;
@@ -949,10 +999,147 @@ public:
         }
 
         for (auto& kv : lora_state_diff) {
-            apply_lora(kv.first, kv.second);
+            int64_t t0 = ggml_time_ms();
+
+            auto lora = load_lora_model_from_file(kv.first, kv.second, backend);
+            lora->apply(tensors, version, n_threads);
+            lora->free_params_buffer();
+
+            int64_t t1 = ggml_time_ms();
+
+            LOG_INFO("lora '%s' applied, taking %.2fs", kv.first.c_str(), (t1 - t0) * 1.0f / 1000);
         }
 
         curr_lora_state = lora_state;
+    }
+
+    void apply_loras_at_runtime(const std::unordered_map<std::string, float>& lora_state) {
+        cond_stage_lora_models.clear();
+        diffusion_lora_models.clear();
+        first_stage_lora_models.clear();
+        if (cond_stage_model) {
+            std::vector<std::shared_ptr<LoraModel>> lora_models;
+            auto lora_state_diff = lora_state;
+            for (auto& lora_model : cond_stage_lora_models) {
+                auto iter = lora_state_diff.find(lora_model->lora_id);
+
+                if (iter != lora_state_diff.end()) {
+                    lora_model->multiplier = iter->second;
+                    lora_models.push_back(lora_model);
+                    lora_state_diff.erase(iter);
+                }
+            }
+            cond_stage_lora_models  = lora_models;
+            auto lora_tensor_filter = [&](const std::string& tensor_name) {
+                if (is_cond_stage_model_name(tensor_name)) {
+                    return true;
+                }
+                return false;
+            };
+            for (auto& kv : lora_state_diff) {
+                const std::string& lora_id = kv.first;
+                float multiplier           = kv.second;
+
+                auto lora = load_lora_model_from_file(lora_id, multiplier, clip_backend, lora_tensor_filter);
+                if (lora && !lora->lora_tensors.empty()) {
+                    lora->preprocess_lora_tensors(tensors);
+                    cond_stage_lora_models.push_back(lora);
+                }
+            }
+            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(cond_stage_lora_models);
+            cond_stage_model->set_weight_adapter(multi_lora_adapter);
+        }
+        if (diffusion_model) {
+            std::vector<std::shared_ptr<LoraModel>> lora_models;
+            auto lora_state_diff = lora_state;
+            for (auto& lora_model : diffusion_lora_models) {
+                auto iter = lora_state_diff.find(lora_model->lora_id);
+
+                if (iter != lora_state_diff.end()) {
+                    lora_model->multiplier = iter->second;
+                    lora_models.push_back(lora_model);
+                    lora_state_diff.erase(iter);
+                }
+            }
+            diffusion_lora_models   = lora_models;
+            auto lora_tensor_filter = [&](const std::string& tensor_name) {
+                if (is_diffusion_model_name(tensor_name)) {
+                    return true;
+                }
+                return false;
+            };
+            for (auto& kv : lora_state_diff) {
+                const std::string& lora_name = kv.first;
+                float multiplier             = kv.second;
+
+                auto lora = load_lora_model_from_file(lora_name, multiplier, backend, lora_tensor_filter);
+                if (lora && !lora->lora_tensors.empty()) {
+                    lora->preprocess_lora_tensors(tensors);
+                    diffusion_lora_models.push_back(lora);
+                }
+            }
+            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(diffusion_lora_models);
+            diffusion_model->set_weight_adapter(multi_lora_adapter);
+            if (high_noise_diffusion_model) {
+                high_noise_diffusion_model->set_weight_adapter(multi_lora_adapter);
+            }
+        }
+
+        if (first_stage_model) {
+            std::vector<std::shared_ptr<LoraModel>> lora_models;
+            auto lora_state_diff = lora_state;
+            for (auto& lora_model : first_stage_lora_models) {
+                auto iter = lora_state_diff.find(lora_model->lora_id);
+
+                if (iter != lora_state_diff.end()) {
+                    lora_model->multiplier = iter->second;
+                    lora_models.push_back(lora_model);
+                    lora_state_diff.erase(iter);
+                }
+            }
+            first_stage_lora_models = lora_models;
+            auto lora_tensor_filter = [&](const std::string& tensor_name) {
+                if (is_first_stage_model_name(tensor_name)) {
+                    return true;
+                }
+                return false;
+            };
+            for (auto& kv : lora_state_diff) {
+                const std::string& lora_name = kv.first;
+                float multiplier             = kv.second;
+
+                auto lora = load_lora_model_from_file(lora_name, multiplier, vae_backend, lora_tensor_filter);
+                if (lora && !lora->lora_tensors.empty()) {
+                    lora->preprocess_lora_tensors(tensors);
+                    first_stage_lora_models.push_back(lora);
+                }
+            }
+            auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(first_stage_lora_models);
+            first_stage_model->set_weight_adapter(multi_lora_adapter);
+        }
+    }
+
+    void lora_stat() {
+        if (!cond_stage_lora_models.empty()) {
+            LOG_INFO("cond_stage_lora_models:");
+            for (auto& lora_model : cond_stage_lora_models) {
+                lora_model->stat();
+            }
+        }
+
+        if (!diffusion_lora_models.empty()) {
+            LOG_INFO("diffusion_lora_models:");
+            for (auto& lora_model : diffusion_lora_models) {
+                lora_model->stat();
+            }
+        }
+
+        if (!first_stage_lora_models.empty()) {
+            LOG_INFO("first_stage_lora_models:");
+            for (auto& lora_model : first_stage_lora_models) {
+                lora_model->stat();
+            }
+        }
     }
 
     std::string apply_loras_from_prompt(const std::string& prompt) {
@@ -963,10 +1150,18 @@ public:
             LOG_DEBUG("lora %s:%.2f", kv.first.c_str(), kv.second);
         }
         int64_t t0 = ggml_time_ms();
-        apply_loras(lora_f2m);
+        if (apply_lora_immediately) {
+            LOG_INFO("apply lora immediately");
+            apply_loras_immediately(lora_f2m);
+        } else {
+            LOG_INFO("apply at runtime");
+            apply_loras_at_runtime(lora_f2m);
+        }
         int64_t t1 = ggml_time_ms();
-        LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-        LOG_DEBUG("prompt after extract and remove lora: \"%s\"", result_pair.second.c_str());
+        if (!lora_f2m.empty()) {
+            LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+            LOG_DEBUG("prompt after extract and remove lora: \"%s\"", result_pair.second.c_str());
+        }
         return result_pair.second;
     }
 
@@ -1109,6 +1304,156 @@ public:
         }
     }
 
+    void silent_tiling(ggml_tensor* input, ggml_tensor* output, const int scale, const int tile_size, const float tile_overlap_factor, on_tile_process on_processing) {
+        sd_progress_cb_t cb = sd_get_progress_callback();
+        void* cbd           = sd_get_progress_callback_data();
+        sd_set_progress_callback((sd_progress_cb_t)suppress_pp, nullptr);
+        sd_tiling(input, output, scale, tile_size, tile_overlap_factor, on_processing);
+        sd_set_progress_callback(cb, cbd);
+    }
+
+    void preview_image(ggml_context* work_ctx,
+                       int step,
+                       struct ggml_tensor* latents,
+                       enum SDVersion version,
+                       preview_t preview_mode,
+                       ggml_tensor* result,
+                       std::function<void(int, int, sd_image_t*, bool)> step_callback,
+                       bool is_noisy) {
+        const uint32_t channel = 3;
+        uint32_t width         = latents->ne[0];
+        uint32_t height        = latents->ne[1];
+        uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
+
+        if (preview_mode == PREVIEW_PROJ) {
+            const float(*latent_rgb_proj)[channel] = nullptr;
+            float* latent_rgb_bias                 = nullptr;
+
+            if (dim == 48) {
+                if (sd_version_is_wan(version)) {
+                    latent_rgb_proj = wan_22_latent_rgb_proj;
+                    latent_rgb_bias = wan_22_latent_rgb_bias;
+                } else {
+                    LOG_WARN("No latent to RGB projection known for this model");
+                    // unknown model
+                    return;
+                }
+            } else if (dim == 16) {
+                // 16 channels VAE -> Flux or SD3
+
+                if (sd_version_is_sd3(version)) {
+                    latent_rgb_proj = sd3_latent_rgb_proj;
+                    latent_rgb_bias = sd3_latent_rgb_bias;
+                } else if (sd_version_is_flux(version)) {
+                    latent_rgb_proj = flux_latent_rgb_proj;
+                    latent_rgb_bias = flux_latent_rgb_bias;
+                } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
+                    latent_rgb_proj = wan_21_latent_rgb_proj;
+                    latent_rgb_bias = wan_21_latent_rgb_bias;
+                } else {
+                    LOG_WARN("No latent to RGB projection known for this model");
+                    // unknown model
+                    return;
+                }
+
+            } else if (dim == 4) {
+                // 4 channels VAE
+                if (sd_version_is_sdxl(version)) {
+                    latent_rgb_proj = sdxl_latent_rgb_proj;
+                    latent_rgb_bias = sdxl_latent_rgb_bias;
+                } else if (sd_version_is_sd1(version) || sd_version_is_sd2(version)) {
+                    latent_rgb_proj = sd_latent_rgb_proj;
+                    latent_rgb_bias = sd_latent_rgb_bias;
+                } else {
+                    // unknown model
+                    LOG_WARN("No latent to RGB projection known for this model");
+                    return;
+                }
+            } else if (dim == 3) {
+                // Do nothing, assuming already RGB latents
+            } else {
+                LOG_WARN("No latent to RGB projection known for this model");
+                // unknown latent space
+                return;
+            }
+
+            uint32_t frames = 1;
+            if (ggml_n_dims(latents) == 4) {
+                frames = latents->ne[2];
+            }
+
+            uint8_t* data = (uint8_t*)malloc(frames * width * height * channel * sizeof(uint8_t));
+
+            preview_latent_video(data, latents, latent_rgb_proj, latent_rgb_bias, width, height, frames, dim);
+            sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
+            for (int i = 0; i < frames; i++) {
+                images[i] = {width, height, channel, data + i * width * height * channel};
+            }
+            step_callback(step, frames, images, is_noisy);
+            free(data);
+            free(images);
+        } else {
+            if (preview_mode == PREVIEW_VAE) {
+                process_latent_out(latents);
+                if (vae_tiling_params.enabled) {
+                    // split latent in 32x32 tiles and compute in several steps
+                    auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+                        first_stage_model->compute(n_threads, in, true, &out, nullptr);
+                    };
+                    silent_tiling(latents, result, get_vae_scale_factor(), 32, 0.5f, on_tiling);
+
+                } else {
+                    first_stage_model->compute(n_threads, latents, true, &result, work_ctx);
+                }
+
+                first_stage_model->free_compute_buffer();
+                process_vae_output_tensor(result);
+                process_latent_in(latents);
+            } else if (preview_mode == PREVIEW_TAE) {
+                if (tae_first_stage == nullptr) {
+                    LOG_WARN("TAE not found for preview");
+                    return;
+                }
+                if (vae_tiling_params.enabled) {
+                    // split latent in 64x64 tiles and compute in several steps
+                    auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
+                        tae_first_stage->compute(n_threads, in, true, &out, nullptr);
+                    };
+                    silent_tiling(latents, result, get_vae_scale_factor(), 64, 0.5f, on_tiling);
+                } else {
+                    tae_first_stage->compute(n_threads, latents, true, &result, work_ctx);
+                }
+                tae_first_stage->free_compute_buffer();
+            } else {
+                return;
+            }
+
+            ggml_ext_tensor_clamp_inplace(result, 0.0f, 1.0f);
+            uint32_t frames = 1;
+            if (ggml_n_dims(latents) == 4) {
+                frames = result->ne[2];
+            }
+
+            sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
+            // print_ggml_tensor(result,true);
+            for (size_t i = 0; i < frames; i++) {
+                images[i].width   = result->ne[0];
+                images[i].height  = result->ne[1];
+                images[i].channel = 3;
+                images[i].data    = ggml_tensor_to_sd_image(result, i, ggml_n_dims(latents) == 4);
+            }
+
+            step_callback(step, frames, images, is_noisy);
+
+            ggml_ext_tensor_scale_inplace(result, 0);
+            for (int i = 0; i < frames; i++) {
+                free(images[i].data);
+            }
+
+            free(images);
+        }
+    }
+
     ggml_tensor* sample(ggml_context* work_ctx,
                         std::shared_ptr<DiffusionModel> work_diffusion_model,
                         bool inverse_noise_scaling,
@@ -1184,7 +1529,34 @@ public:
 
         int64_t t0 = ggml_time_us();
 
+        struct ggml_tensor* preview_tensor = nullptr;
+        auto sd_preview_mode               = sd_get_preview_mode();
+        if (sd_preview_mode != PREVIEW_NONE && sd_preview_mode != PREVIEW_PROJ) {
+            int64_t W = x->ne[0] * get_vae_scale_factor();
+            int64_t H = x->ne[1] * get_vae_scale_factor();
+            if (ggml_n_dims(x) == 4) {
+                // assuming video mode (if batch processing gets implemented this will break)
+                int T = x->ne[2];
+                if (sd_version_is_wan(version)) {
+                    T = ((T - 1) * 4) + 1;
+                }
+                preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
+                                                    W,
+                                                    H,
+                                                    T,
+                                                    3);
+            } else {
+                preview_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
+                                                    W,
+                                                    H,
+                                                    3,
+                                                    x->ne[3]);
+            }
+        }
+
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
+            auto sd_preview_cb   = sd_get_preview_callback();
+            auto sd_preview_mode = sd_get_preview_mode();
             if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
             }
@@ -1218,6 +1590,11 @@ public:
 
             if (denoise_mask != nullptr && version == VERSION_WAN2_2_TI2V) {
                 apply_mask(noised_input, init_latent, denoise_mask);
+            }
+            if (sd_preview_cb != nullptr && sd_should_preview_noisy()) {
+                if (step % sd_get_preview_interval() == 0) {
+                    preview_image(work_ctx, step, noised_input, version, sd_preview_mode, preview_tensor, sd_preview_cb, true);
+                }
             }
 
             std::vector<struct ggml_tensor*> controls;
@@ -1340,16 +1717,22 @@ public:
                 vec_denoised[i] = latent_result * c_out + vec_input[i] * c_skip;
             }
 
+            if (denoise_mask != nullptr) {
+                apply_mask(denoised, init_latent, denoise_mask);
+            }
+
+            if (sd_preview_cb != nullptr && sd_should_preview_denoised()) {
+                if (step % sd_get_preview_interval() == 0) {
+                    preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb, false);
+                }
+            }
+
             int64_t t1 = ggml_time_us();
             if (step > 0 || step == -(int)steps) {
                 int showstep = std::abs(step);
                 pretty_progress(showstep, (int)steps, (t1 - t0) / 1000000.f / showstep);
                 // LOG_INFO("step %d sampling completed taking %.2fs", step, (t1 - t0) * 1.0f / 1000000);
             }
-            if (denoise_mask != nullptr) {
-                apply_mask(denoised, init_latent, denoise_mask);
-            }
-
             return denoised;
         };
 
@@ -1646,7 +2029,9 @@ public:
         } else {
             latent = gaussian_latent_sample(work_ctx, vae_output);
         }
-        process_latent_in(latent);
+        if (!use_tiny_autoencoder) {
+            process_latent_in(latent);
+        }
         if (sd_version_is_qwen_image(version)) {
             latent = ggml_reshape_4d(work_ctx, latent, latent->ne[0], latent->ne[1], latent->ne[3], 1);
         }
@@ -1750,6 +2135,7 @@ enum sd_type_t str_to_sd_type(const char* str) {
 const char* rng_type_to_str[] = {
     "std_default",
     "cuda",
+    "cpu",
 };
 
 const char* sd_rng_type_name(enum rng_type_t rng_type) {
@@ -1853,6 +2239,51 @@ enum prediction_t str_to_prediction(const char* str) {
     return PREDICTION_COUNT;
 }
 
+const char* preview_to_str[] = {
+    "none",
+    "proj",
+    "tae",
+    "vae",
+};
+
+const char* sd_preview_name(enum preview_t preview) {
+    if (preview < PREVIEW_COUNT) {
+        return preview_to_str[preview];
+    }
+    return NONE_STR;
+}
+
+enum preview_t str_to_preview(const char* str) {
+    for (int i = 0; i < PREVIEW_COUNT; i++) {
+        if (!strcmp(str, preview_to_str[i])) {
+            return (enum preview_t)i;
+        }
+    }
+    return PREVIEW_COUNT;
+}
+
+const char* lora_apply_mode_to_str[] = {
+    "auto",
+    "immediately",
+    "at_runtime",
+};
+
+const char* sd_lora_apply_mode_name(enum lora_apply_mode_t mode) {
+    if (mode < LORA_APPLY_MODE_COUNT) {
+        return lora_apply_mode_to_str[mode];
+    }
+    return NONE_STR;
+}
+
+enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
+    for (int i = 0; i < LORA_APPLY_MODE_COUNT; i++) {
+        if (!strcmp(str, lora_apply_mode_to_str[i])) {
+            return (enum lora_apply_mode_t)i;
+        }
+    }
+    return LORA_APPLY_MODE_COUNT;
+}
+
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     *sd_ctx_params                         = {};
     sd_ctx_params->vae_decode_only         = true;
@@ -1861,6 +2292,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->wtype                   = SD_TYPE_COUNT;
     sd_ctx_params->rng_type                = CUDA_RNG;
     sd_ctx_params->prediction              = DEFAULT_PRED;
+    sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
     sd_ctx_params->keep_control_net_on_cpu = false;
@@ -2200,7 +2632,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
             }
 
             ggml_ext_tensor_iter(init_img, [&](ggml_tensor* init_img, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
-                float value = sd_image_get_f32(processed_id_images[i3], i0, i1, i2);
+                float value = sd_image_get_f32(processed_id_images[i3], i0, i1, i2, false);
                 ggml_ext_tensor_set_f32(init_img, value, i0, i1, i2, i3);
             });
 
@@ -2223,18 +2655,24 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                 id_embeds = load_tensor_from_file(work_ctx, pm_params.id_embed_path);
                 // print_ggml_tensor(id_embeds, true, "id_embeds:");
             }
-            id_cond.c_crossattn = sd_ctx->sd->id_encoder(work_ctx, init_img, id_cond.c_crossattn, id_embeds, class_tokens_mask);
-            int64_t t1          = ggml_time_ms();
-            LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
-            if (sd_ctx->sd->free_params_immediately) {
-                sd_ctx->sd->pmid_model->free_params_buffer();
-            }
-            // Encode input prompt without the trigger word for delayed conditioning
-            prompt_text_only = sd_ctx->sd->cond_stage_model->remove_trigger_from_prompt(work_ctx, prompt);
-            // printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
-            prompt = prompt_text_only;  //
-            if (sample_steps < 50) {
-                LOG_WARN("It's recommended to use >= 50 steps for photo maker!");
+            if (pmv2 && id_embeds == nullptr) {
+                LOG_WARN("Provided PhotoMaker images, but NO valid ID embeds file for PM v2");
+                LOG_WARN("Turn off PhotoMaker");
+                sd_ctx->sd->stacked_id = false;
+            } else {
+                id_cond.c_crossattn = sd_ctx->sd->id_encoder(work_ctx, init_img, id_cond.c_crossattn, id_embeds, class_tokens_mask);
+                int64_t t1          = ggml_time_ms();
+                LOG_INFO("Photomaker ID Stacking, taking %" PRId64 " ms", t1 - t0);
+                if (sd_ctx->sd->free_params_immediately) {
+                    sd_ctx->sd->pmid_model->free_params_buffer();
+                }
+                // Encode input prompt without the trigger word for delayed conditioning
+                prompt_text_only = sd_ctx->sd->cond_stage_model->remove_trigger_from_prompt(work_ctx, prompt);
+                // printf("%s || %s \n", prompt.c_str(), prompt_text_only.c_str());
+                prompt = prompt_text_only;  //
+                if (sample_steps < 50) {
+                    LOG_WARN("It's recommended to use >= 50 steps for photo maker!");
+                }
             }
         } else {
             LOG_WARN("Provided PhotoMaker model file, but NO input ID images");
@@ -2442,6 +2880,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->free_params_immediately && !sd_ctx->sd->use_tiny_autoencoder) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
     }
+
+    sd_ctx->sd->lora_stat();
+
     sd_image_t* result_images = (sd_image_t*)calloc(batch_count, sizeof(sd_image_t));
     if (result_images == nullptr) {
         ggml_free(work_ctx);
@@ -3110,6 +3551,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     if (sd_ctx->sd->free_params_immediately) {
         sd_ctx->sd->first_stage_model->free_params_buffer();
     }
+
+    sd_ctx->sd->lora_stat();
 
     sd_image_t* result_images = (sd_image_t*)calloc(vid->ne[2], sizeof(sd_image_t));
     if (result_images == nullptr) {

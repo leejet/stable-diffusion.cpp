@@ -1133,7 +1133,7 @@ namespace WAN {
         }
 
         struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
-            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, 10240 * z->ne[2], false);
+            struct ggml_cgraph* gf = new_graph_custom(10240 * z->ne[2]);
 
             z = to_backend(z);
 
@@ -1147,7 +1147,7 @@ namespace WAN {
         }
 
         struct ggml_cgraph* build_graph_partial(struct ggml_tensor* z, bool decode_graph, int64_t i) {
-            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, 20480, false);
+            struct ggml_cgraph* gf = new_graph_custom(20480);
 
             ae.clear_cache();
 
@@ -1271,7 +1271,7 @@ namespace WAN {
                 vae->get_param_tensors(tensors, "first_stage_model");
 
                 ModelLoader model_loader;
-                if (!model_loader.init_from_file(file_path, "vae.")) {
+                if (!model_loader.init_from_file_and_convert_name(file_path, "vae.")) {
                     LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                     return;
                 }
@@ -2142,7 +2142,7 @@ namespace WAN {
                                         struct ggml_tensor* time_dim_concat = nullptr,
                                         struct ggml_tensor* vace_context    = nullptr,
                                         float vace_strength                 = 1.f) {
-            struct ggml_cgraph* gf = ggml_new_graph_custom(compute_ctx, WAN_GRAPH_SIZE, false);
+            struct ggml_cgraph* gf = new_graph_custom(WAN_GRAPH_SIZE);
 
             x               = to_backend(x);
             timesteps       = to_backend(timesteps);
@@ -2255,7 +2255,7 @@ namespace WAN {
             LOG_INFO("loading from '%s'", file_path.c_str());
 
             ModelLoader model_loader;
-            if (!model_loader.init_from_file(file_path, "model.diffusion_model.")) {
+            if (!model_loader.init_from_file_and_convert_name(file_path, "model.diffusion_model.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }

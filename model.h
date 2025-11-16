@@ -15,6 +15,7 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "json.hpp"
+#include "ordered_map.hpp"
 #include "zip.h"
 
 #define SD_MAX_DIMS 5
@@ -26,6 +27,7 @@ enum SDVersion {
     VERSION_SD1_TINY_UNET,
     VERSION_SD2,
     VERSION_SD2_INPAINT,
+    VERSION_SD2_TINY_UNET,
     VERSION_SDXL,
     VERSION_SDXL_INPAINT,
     VERSION_SDXL_PIX2PIX,
@@ -52,7 +54,7 @@ static inline bool sd_version_is_sd1(SDVersion version) {
 }
 
 static inline bool sd_version_is_sd2(SDVersion version) {
-    if (version == VERSION_SD2 || version == VERSION_SD2_INPAINT) {
+    if (version == VERSION_SD2 || version == VERSION_SD2_INPAINT || version == VERSION_SD2_TINY_UNET) {
         return true;
     }
     return false;
@@ -107,7 +109,11 @@ static inline bool sd_version_is_qwen_image(SDVersion version) {
 }
 
 static inline bool sd_version_is_inpaint(SDVersion version) {
-    if (version == VERSION_SD1_INPAINT || version == VERSION_SD2_INPAINT || version == VERSION_SDXL_INPAINT || version == VERSION_FLUX_FILL || version == VERSION_FLEX_2) {
+    if (version == VERSION_SD1_INPAINT ||
+        version == VERSION_SD2_INPAINT ||
+        version == VERSION_SDXL_INPAINT ||
+        version == VERSION_FLUX_FILL ||
+        version == VERSION_FLEX_2) {
         return true;
     }
     return false;
@@ -252,10 +258,11 @@ struct TensorStorage {
 
 typedef std::function<bool(const TensorStorage&, ggml_tensor**)> on_new_tensor_cb_t;
 
-typedef std::map<std::string, TensorStorage> String2TensorStorage;
+typedef OrderedMap<std::string, TensorStorage> String2TensorStorage;
 
 class ModelLoader {
 protected:
+    SDVersion version_ = VERSION_COUNT;
     std::vector<std::string> file_paths_;
     String2TensorStorage tensor_storage_map;
 
@@ -275,6 +282,10 @@ protected:
 
 public:
     bool init_from_file(const std::string& file_path, const std::string& prefix = "");
+    void convert_tensors_name();
+    bool init_from_file_and_convert_name(const std::string& file_path,
+                                         const std::string& prefix = "",
+                                         SDVersion version         = VERSION_COUNT);
     SDVersion get_sd_version();
     std::map<ggml_type, uint32_t> get_wtype_stat();
     std::map<ggml_type, uint32_t> get_conditioner_wtype_stat();
