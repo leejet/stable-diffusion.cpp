@@ -1266,13 +1266,38 @@ namespace Flux {
                 set_backend_tensor_data(mod_index_arange, mod_index_arange_vec.data());
             }
             y = to_backend(y);
-
+            float current_timestep = ggml_get_f32_1d(timesteps, 0);
+            LOG_DEBUG("current_timestep %f", current_timestep);
             timesteps = to_backend(timesteps);
             if (flux_params.guidance_embed || flux_params.is_chroma) {
                 guidance = to_backend(guidance);
             }
             for (int i = 0; i < ref_latents.size(); i++) {
                 ref_latents[i] = to_backend(ref_latents[i]);
+            }
+
+            // get use_yarn, use_ntk and use_dype from env for now (TODO: add args)
+            // Env value could be one of yarn, dy_yarn, ntk or dy_ntk, (anything else means disabled)
+            const char* env_value = getenv("FLUX_ROPE");
+            bool use_yarn = false;
+            bool use_dype = false;
+            bool use_ntk  = false; 
+            if (env_value != nullptr) {
+                if (strcmp(env_value, "YARN") == 0) {
+                    LOG_DEBUG("Using YARN RoPE");
+                    use_yarn = true;
+                } else if (strcmp(env_value, "DY_YARN") == 0) {
+                    LOG_DEBUG("Using DY YARN RoPE");
+                    use_yarn = true;
+                    use_dype = true;
+                } else if (strcmp(env_value, "NTK") == 0) {
+                    LOG_DEBUG("Using NTK RoPE");
+                    use_ntk = true;
+                } else if (strcmp(env_value, "DY_NTK") == 0) {
+                    LOG_DEBUG("Using DY NTK RoPE");
+                    use_ntk  = true;
+                    use_dype = true;
+                }
             }
 
             pe_vec      = Rope::gen_flux_pe(x->ne[1],
@@ -1283,7 +1308,11 @@ namespace Flux {
                                             ref_latents,
                                             increase_ref_index,
                                             flux_params.theta,
-                                            flux_params.axes_dim);
+                                            flux_params.axes_dim,
+                                            use_yarn,
+                                            use_dype,
+                                            use_ntk,
+                                            current_timestep);
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
