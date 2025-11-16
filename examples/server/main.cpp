@@ -50,20 +50,25 @@ struct SDCtxParams {
     std::string embeddings_path;
     std::string stacked_id_embeddings_path;
 
-    bool vae_decode_only = false;
-    bool vae_tiling      = false;
-
+    bool vae_decode_only = false;  // Does it ever make sense to set it to true?
+    // free_params_immediately has to be false for server
     int n_threads   = -1;
     sd_type_t wtype = SD_TYPE_COUNT;
 
-    rng_type_t rng_type  = CUDA_RNG;
-    scheduler_t schedule = DEFAULT;
+    rng_type_t rng_type               = CUDA_RNG;
+    rng_type_t sampler_rng_type       = CUDA_RNG;
+    prediction_t prediction           = DEFAULT_PRED;
+    lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
     bool keep_control_net_on_cpu = false;
     bool keep_clip_on_cpu        = false;
     bool keep_vae_on_cpu         = false;
 
     bool diffusion_flash_attn = false;
+
+    // Don't use TAE decoding by default
+    bool taesd_preview = true;
+
 };
 
 struct SDRequestParams {
@@ -72,6 +77,8 @@ struct SDRequestParams {
 
     std::string prompt;
     std::string negative_prompt;
+
+    sd_tiling_params_t tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 
     float min_cfg     = 1.0f;
     float cfg_scale   = 7.0f;
@@ -82,7 +89,8 @@ struct SDRequestParams {
     int height        = 512;
     int batch_count   = 1;
 
-    sample_method_t sample_method = EULER_A;
+    sample_method_t sample_method = SAMPLE_METHOD_DEFAULT;
+    scheduler_t schedule          = DEFAULT;
     int sample_steps              = 20;
     float strength                = 0.75f;
     float control_strength        = 0.9f;
@@ -130,8 +138,6 @@ struct SDParams {
     // external dir
     std::string input_id_images_path;
 
-    // Don't use TAE decoding by default
-    bool taesd_preview = true;
 
     bool verbose = false;
 
@@ -178,80 +184,523 @@ void print_params(SDParams params) {
     printf("    width:             %d\n", params.lastRequest.width);
     printf("    height:            %d\n", params.lastRequest.height);
     printf("    sample_method:     %s\n", sd_sample_method_name(params.lastRequest.sample_method));
-    printf("    schedule:          %s\n", sd_schedule_name(params.ctxParams.schedule));
+    printf("    schedule:          %s\n", sd_schedule_name(params.lastRequest.schedule));
     printf("    sample_steps:      %d\n", params.lastRequest.sample_steps);
     printf("    strength(img2img): %.2f\n", params.lastRequest.strength);
     printf("    rng:               %s\n", sd_rng_type_name(params.ctxParams.rng_type));
     printf("    seed:              %ld\n", params.lastRequest.seed);
     printf("    batch_count:       %d\n", params.lastRequest.batch_count);
-    printf("    vae_tiling:        %s\n", params.ctxParams.vae_tiling ? "true" : "false");
+    printf("    vae_tiling:        %s\n", params.lastRequest.tiling_params.enabled ? "true" : "false");
 }
 
-void print_usage(int argc, const char* argv[]) {
-    printf("usage: %s [arguments]\n", argv[0]);
-    printf("\n");
-    printf("arguments:\n");
-    printf("  -h, --help                         show this help message and exit\n");
-    printf("  -t, --threads N                    number of threads to use during computation (default: -1)\n");
-    printf("                                     If threads <= 0, then threads will be set to the number of CPU physical cores\n");
-    printf("  -m, --model [MODEL]                path to full model\n");
-    printf("  --diffusion-model                  path to the standalone diffusion model\n");
-    printf("  --clip_l                           path to the clip-l text encoder\n");
-    printf("  --clip_g                           path to the clip-g text encoder\n");
-    printf("  --t5xxl                            path to the the t5xxl text encoder\n");
-    printf("  --vae [VAE]                        path to vae\n");
-    printf("  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)\n");
-    printf("  --control-net [CONTROL_PATH]       path to control net model\n");
-    printf("  --embd-dir [EMBEDDING_PATH]        path to embeddings\n");
-    printf("  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings\n");
-    printf("  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir\n");
-    printf("  --normalize-input                  normalize PHOTOMAKER input id images\n");
-    // printf("  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now\n");
-    // printf("  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)\n");
-    printf("  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)\n");
-    printf("                                     If not specified, the default is the type of the weight file\n");
-    printf("  --lora-model-dir [DIR]             lora model directory\n");
-    printf("  --control-image [IMAGE]            path to image condition, control net\n");
-    printf("  -o, --output OUTPUT                path to write result image to (default: ./output.png)\n");
-    printf("  -p, --prompt [PROMPT]              the prompt to render\n");
-    printf("  -n, --negative-prompt PROMPT       the negative prompt (default: \"\")\n");
-    printf("  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)\n");
-    printf("  --slg-scale SCALE                  skip layer guidance (SLG) scale, only for DiT models: (default: 0)\n");
-    printf("                                     0 means disabled, a value of 2.5 is nice for sd3.5 medium\n");
-    printf("  --skip_layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])\n");
-    printf("  --skip_layer_start START           SLG enabling point: (default: 0.01)\n");
-    printf("  --skip_layer_end END               SLG disabling point: (default: 0.2)\n");
-    printf("                                     SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])\n");
-    printf("  --strength STRENGTH                strength for noising/unnoising (default: 0.75)\n");
-    printf("  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%%)\n");
-    printf("  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)\n");
-    printf("                                     1.0 corresponds to full destruction of information in init image\n");
-    printf("  -H, --height H                     image height, in pixel space (default: 512)\n");
-    printf("  -W, --width W                      image width, in pixel space (default: 512)\n");
-    printf("  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}\n");
-    printf("                                     sampling method (default: \"euler_a\")\n");
-    printf("  --steps  STEPS                     number of sample steps (default: 20)\n");
-    printf("  --rng {std_default, cuda}          RNG (default: cuda)\n");
-    printf("  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)\n");
-    printf("  -b, --batch-count COUNT            number of images to generate\n");
-    printf("  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)\n");
-    printf("  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)\n");
-    printf("                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x\n");
-    printf("  --vae-tiling                       process vae in tiles to reduce memory usage\n");
-    printf("  --vae-on-cpu                       keep vae in cpu (for low vram)\n");
-    printf("  --clip-on-cpu                      keep clip in cpu (for low vram)\n");
-    printf("  --diffusion-fa                     use flash attention in the diffusion model (for low vram)\n");
-    printf("                                     Might lower quality, since it implies converting k and v to f16.\n");
-    printf("                                     This might crash if it is not supported by the backend.\n");
-    printf("  --control-net-cpu                  keep control_net in cpu (for low vram)\n");
-    printf("  --canny                            apply canny preprocessor (edge detection)\n");
-    printf("  --color                            Colors the logging tags according to level\n");
-    printf("  -v, --verbose                      print extra info\n");
-    printf("  --port                             port used for server (default: 8080)\n");
-    printf("  --host                             IP address used for server. Use 0.0.0.0 to expose server to LAN (default: localhost)\n");
+#if defined(_WIN32)
+static std::string utf16_to_utf8(const std::wstring& wstr) {
+    if (wstr.empty())
+        return {};
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(),
+                                          nullptr, 0, nullptr, nullptr);
+    if (size_needed <= 0)
+        throw std::runtime_error("UTF-16 to UTF-8 conversion failed");
+
+    std::string utf8(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(),
+                        (char*)utf8.data(), size_needed, nullptr, nullptr);
+    return utf8;
+}
+
+static std::string argv_to_utf8(int index, const char** argv) {
+    int argc;
+    wchar_t** argv_w = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv_w)
+        throw std::runtime_error("Failed to parse command line");
+
+    std::string result;
+    if (index < argc) {
+        result = utf16_to_utf8(argv_w[index]);
+    }
+    LocalFree(argv_w);
+    return result;
+}
+
+#else  // Linux / macOS
+static std::string argv_to_utf8(int index, const char** argv) {
+    return std::string(argv[index]);
+}
+
+#endif
+
+struct StringOption {
+    std::string short_name;
+    std::string long_name;
+    std::string desc;
+    std::string* target;
+};
+
+struct IntOption {
+    std::string short_name;
+    std::string long_name;
+    std::string desc;
+    int* target;
+};
+
+struct FloatOption {
+    std::string short_name;
+    std::string long_name;
+    std::string desc;
+    float* target;
+};
+
+struct BoolOption {
+    std::string short_name;
+    std::string long_name;
+    std::string desc;
+    bool keep_true;
+    bool* target;
+};
+
+struct ManualOption {
+    std::string short_name;
+    std::string long_name;
+    std::string desc;
+    std::function<int(int argc, const char** argv, int index)> cb;
+};
+
+struct ArgOptions {
+    std::vector<StringOption> string_options;
+    std::vector<IntOption> int_options;
+    std::vector<FloatOption> float_options;
+    std::vector<BoolOption> bool_options;
+    std::vector<ManualOption> manual_options;
+};
+
+bool parse_options(int argc, const char** argv, ArgOptions& options) {
+    bool invalid_arg = false;
+    std::string arg;
+    for (int i = 1; i < argc; i++) {
+        bool found_arg = false;
+        arg            = argv[i];
+
+        for (auto& option : options.string_options) {
+            if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
+                found_arg = true;
+                if (++i >= argc) {
+                    invalid_arg = true;
+                    break;
+                }
+                *option.target = argv_to_utf8(i, argv);
+            }
+        }
+        if (invalid_arg) {
+            break;
+        }
+
+        for (auto& option : options.int_options) {
+            if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
+                found_arg = true;
+                if (++i >= argc) {
+                    invalid_arg = true;
+                    break;
+                }
+                *option.target = std::stoi(argv[i]);
+            }
+        }
+        if (invalid_arg) {
+            break;
+        }
+
+        for (auto& option : options.float_options) {
+            if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
+                found_arg = true;
+                if (++i >= argc) {
+                    invalid_arg = true;
+                    break;
+                }
+                *option.target = std::stof(argv[i]);
+            }
+        }
+        if (invalid_arg) {
+            break;
+        }
+
+        for (auto& option : options.bool_options) {
+            if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
+                found_arg = true;
+                if (option.keep_true) {
+                    *option.target = true;
+                } else {
+                    *option.target = false;
+                }
+            }
+        }
+        if (invalid_arg) {
+            break;
+        }
+
+        for (auto& option : options.manual_options) {
+            if ((option.short_name.size() > 0 && arg == option.short_name) || (option.long_name.size() > 0 && arg == option.long_name)) {
+                found_arg = true;
+                int ret   = option.cb(argc, argv, i);
+                if (ret < 0) {
+                    invalid_arg = true;
+                    break;
+                }
+                i += ret;
+            }
+        }
+        if (invalid_arg) {
+            break;
+        }
+        if (!found_arg) {
+            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
+            return false;
+        }
+    }
+    if (invalid_arg) {
+        fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
+        return false;
+    }
+    return true;
+}
+
+static std::string wrap_text(const std::string& text, size_t width, size_t indent) {
+    std::ostringstream oss;
+    size_t line_len = 0;
+    size_t pos      = 0;
+
+    while (pos < text.size()) {
+        // Preserve manual newlines
+        if (text[pos] == '\n') {
+            oss << '\n'
+                << std::string(indent, ' ');
+            line_len = indent;
+            ++pos;
+            continue;
+        }
+
+        // Add the character
+        oss << text[pos];
+        ++line_len;
+        ++pos;
+
+        // If the current line exceeds width, try to break at the last space
+        if (line_len >= width) {
+            std::string current = oss.str();
+            size_t back         = current.size();
+
+            // Find the last space (for a clean break)
+            while (back > 0 && current[back - 1] != ' ' && current[back - 1] != '\n')
+                --back;
+
+            // If found a space to break on
+            if (back > 0 && current[back - 1] != '\n') {
+                std::string before = current.substr(0, back - 1);
+                std::string after  = current.substr(back);
+                oss.str("");
+                oss.clear();
+                oss << before << "\n"
+                    << std::string(indent, ' ') << after;
+            } else {
+                // If no space found, just break at width
+                oss << "\n"
+                    << std::string(indent, ' ');
+            }
+            line_len = indent;
+        }
+    }
+
+    return oss.str();
+}
+
+void print_usage(int argc, const char* argv[], const ArgOptions& options) {
+    constexpr size_t max_line_width = 120;
+
+    std::cout << "Usage: " << argv[0] << " [options]\n\n";
+    std::cout << "Options:\n";
+
+    struct Entry {
+        std::string names;
+        std::string desc;
+    };
+    std::vector<Entry> entries;
+
+    auto add_entry = [&](const std::string& s, const std::string& l,
+                         const std::string& desc, const std::string& hint = "") {
+        std::ostringstream ss;
+        if (!s.empty())
+            ss << s;
+        if (!s.empty() && !l.empty())
+            ss << ", ";
+        if (!l.empty())
+            ss << l;
+        if (!hint.empty())
+            ss << " " << hint;
+        entries.push_back({ss.str(), desc});
+    };
+
+    for (auto& o : options.string_options)
+        add_entry(o.short_name, o.long_name, o.desc, "<string>");
+    for (auto& o : options.int_options)
+        add_entry(o.short_name, o.long_name, o.desc, "<int>");
+    for (auto& o : options.float_options)
+        add_entry(o.short_name, o.long_name, o.desc, "<float>");
+    for (auto& o : options.bool_options)
+        add_entry(o.short_name, o.long_name, o.desc, "");
+    for (auto& o : options.manual_options)
+        add_entry(o.short_name, o.long_name, o.desc);
+
+    size_t max_name_width = 0;
+    for (auto& e : entries)
+        max_name_width = std::max(max_name_width, e.names.size());
+
+    for (auto& e : entries) {
+        size_t indent            = 2 + max_name_width + 4;
+        size_t desc_width        = (max_line_width > indent ? max_line_width - indent : 40);
+        std::string wrapped_desc = wrap_text(e.desc, max_line_width, indent);
+        std::cout << "  " << std::left << std::setw(static_cast<int>(max_name_width) + 4)
+                  << e.names << wrapped_desc << "\n";
+    }
 }
 
 void parse_args(int argc, const char** argv, SDParams& params) {
+    ArgOptions options;
+
+    options.string_options = {
+        {"-m", "--model", "path to full model", &params.ctxParams.model_path},
+        {"-i", "--init-img", "path to the init image", &params.input_path},
+        {"-o", "--output", "path to write result image to (default: ./output.png)", &params.output_path},
+        {"-p", "--prompt", "the prompt to render", &params.lastRequest.prompt},
+        {"-n", "--negative-prompt", "the negative prompt (default: \"\")", &params.lastRequest.negative_prompt},
+        {"", "--embd-dir", "embeddings directory", &params.ctxParams.embeddings_path},
+        {"", "--stacked-id-embd-dir", "stacked id embeddings directory", &params.ctxParams.stacked_id_embeddings_path},
+        {"", "--input-id-images-dir", "input id images directory", &params.input_id_images_path},
+        {"", "--lora-model-dir", "lora model directory", &params.ctxParams.lora_model_dir},
+        {"", "--control-image", "path to control image, control net", &params.control_image_path},
+        {"", "--upscale-model", "path to esrgan model", &params.esrgan_path},
+        {"", "--clip_l", "path to the clip-l text encoder", &params.ctxParams.clip_l_path},
+        {"", "--clip_g", "path to the clip-g text encoder", &params.ctxParams.clip_g_path},
+        {"", "--t5xxl", "path to the t5xxl text encoder", &params.ctxParams.t5xxl_path},
+        {"", "--diffusion-model", "path to the standalone diffusion model", &params.ctxParams.diffusion_model_path},
+        {"", "--vae", "path to standalone vae model", &params.ctxParams.vae_path},
+        {"", "--taesd", "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)", &params.ctxParams.taesd_path},
+        {"", "--control-net", "path to control net model", &params.ctxParams.control_net_path},
+        {"", "--models-dir", "path to models directory", &params.models_dir},
+        {"", "--diffusion-models-dir", "path to diffusion models directory", &params.diffusion_models_dir},
+        {"", "--encoders-dir", "path to encoders directory", &params.clip_dir},
+        {"", "--vae-dir", "path to vae directory", &params.vae_dir},
+        {"", "--tae-dir", "path to tae directory", &params.tae_dir},
+        {"", "--host", "host to listen on (default: 0.0.0.0)", &params.host}};
+
+    options.int_options = {
+        {"-t", "--threads", "number of threads to use during computation (default: -1). If threads <= 0, then threads will be set to the number of CPU physical cores", &params.ctxParams.n_threads},
+        {"-H", "--height", "image height, in pixel space (default: 512)", &params.lastRequest.height},
+        {"-W", "--width", "image width, in pixel space (default: 512)", &params.lastRequest.width},
+        {"", "--steps", "number of sample steps (default: 20)", &params.lastRequest.sample_steps},
+        {"", "--clip-skip", "ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1). <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x", &params.lastRequest.clip_skip},
+        {"-b", "--batch-count", "batch count", &params.lastRequest.batch_count},
+        {"", "--port", "port to listen on", &params.port}};
+
+    options.float_options = {
+        {"", "--cfg-scale", "unconditional guidance scale: (default: 7.0)", &params.lastRequest.cfg_scale},
+        {"", "--guidance", "distilled guidance scale for models with guidance input (default: 3.5)", &params.lastRequest.guidance},
+        {"", "--strength", "strength for noising/unnoising (default: 0.75)", &params.lastRequest.strength},
+        {"", "--style-ratio", "style ratio", &params.lastRequest.style_ratio},
+        {"", "--control-strength", "strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image", &params.lastRequest.control_strength},
+        {"", "--slg-scale", "skip layer guidance (SLG) scale, only for DiT models: (default: 0)", &params.lastRequest.slg_scale},
+        {"", "--skip-layer-start", "SLG enabling point (default: 0.01)", &params.lastRequest.skip_layer_start},
+        {"", "--skip-layer-end", "SLG disabling point (default: 0.2)", &params.lastRequest.skip_layer_end}};
+
+    options.bool_options = {
+        {"", "--vae-tiling", "process vae in tiles to reduce memory usage", true, &params.lastRequest.tiling_params.enabled},
+        {"", "--control-net-cpu", "keep controlnet in cpu (for low vram)", true, &params.ctxParams.keep_control_net_on_cpu},
+        {"", "--normalize-input", "normalize input image", true, &params.lastRequest.normalize_input},
+        {"", "--clip-on-cpu", "keep clip in cpu (for low vram)", true, &params.ctxParams.keep_clip_on_cpu},
+        {"", "--vae-on-cpu", "keep vae in cpu (for low vram)", true, &params.ctxParams.keep_vae_on_cpu},
+        {"", "--diffusion-fa", "use flash attention in the diffusion model", true, &params.ctxParams.diffusion_flash_attn},
+        {"-v", "--verbose", "print extra info", true, &params.verbose},
+        {"", "--color", "colors the logging tags according to level", true, &params.color}};
+
+    auto on_type_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg         = argv[index];
+        std::string type        = arg;
+        bool found              = false;
+        std::string valid_types = "";
+        for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+            auto trait = ggml_get_type_traits((ggml_type)i);
+            std::string name(trait->type_name);
+            if (name == "f32" || trait->to_float && trait->type_size) {
+                if (i)
+                    valid_types += ", ";
+                valid_types += name;
+                if (type == name) {
+                    if (ggml_quantize_requires_imatrix((ggml_type)i)) {
+                        printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
+                    }
+                    params.ctxParams.wtype = (enum sd_type_t)i;
+                    found                  = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
+                    type.c_str(),
+                    valid_types.c_str());
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_rng_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg = argv[index];
+        if (strcmp(arg, "std_default") == 0) {
+            params.ctxParams.rng_type = STD_DEFAULT_RNG;
+        } else if (strcmp(arg, "cuda") == 0) {
+            params.ctxParams.rng_type = CUDA_RNG;
+        } else {
+            fprintf(stderr, "error: invalid rng type %s\n",
+                    arg);
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_schedule_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg             = argv[index];
+        params.lastRequest.schedule = str_to_schedule(arg);
+        if (params.lastRequest.schedule == SCHEDULE_COUNT) {
+            fprintf(stderr, "error: invalid scheduler %s\n",
+                    arg);
+            return -1;
+        }
+        return 1;
+    };
+
+    auto on_seed_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        params.lastRequest.seed = std::stoll(argv[index]);
+        return 1;
+    };
+
+    auto on_sample_method_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg   = argv[index];
+        int sample_method = str_to_sample_method(arg);
+        if (sample_method == SAMPLE_METHOD_COUNT) {
+            fprintf(stderr, "error: invalid sample method %s\n",
+                    arg);
+            return -1;
+        }
+        params.lastRequest.sample_method = (sample_method_t)sample_method;
+        return 1;
+    };
+
+    auto on_help_arg = [&](int argc, const char** argv, int index) {
+        print_usage(argc, argv, options);
+        exit(0);
+        return 0;
+    };
+
+    auto on_skip_layers_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        std::string layers_str = argv[index];
+        if (layers_str[0] != '[' || layers_str[layers_str.size() - 1] != ']') {
+            return -1;
+        }
+
+        layers_str = layers_str.substr(1, layers_str.size() - 2);
+
+        std::regex regex("[, ]+");
+        std::sregex_token_iterator iter(layers_str.begin(), layers_str.end(), regex, -1);
+        std::sregex_token_iterator end;
+        std::vector<std::string> tokens(iter, end);
+        std::vector<int> layers;
+        for (const auto& token : tokens) {
+            try {
+                layers.push_back(std::stoi(token));
+            } catch (const std::invalid_argument& e) {
+                return -1;
+            }
+        }
+        params.lastRequest.skip_layers = layers;
+        return 1;
+    };
+
+    options.manual_options = {
+        {"", "--type", "weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). If not specified, the default is the type of the weight file", on_type_arg},
+        {"", "--rng", "RNG, one of [std_default, cuda, cpu], default: cuda(sd-webui), cpu(comfyui)", on_rng_arg},
+        {"-s", "--seed", "RNG seed (default: 42, use random seed for < 0)", on_seed_arg},
+        {"", "--sampling-method", "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)", on_sample_method_arg},
+        {"", "--schedule", "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete", on_schedule_arg},
+        {"", "--skip-layers", "layers to skip for SLG steps (default: [7,8,9])", on_skip_layers_arg},
+        {"-h", "--help", "show this help message and exit", on_help_arg}};
+
+    if (!parse_options(argc, argv, options)) {
+        print_usage(argc, argv, options);
+        exit(1);
+    }
+
+    if (params.ctxParams.n_threads <= 0) {
+        params.ctxParams.n_threads = get_num_physical_cores();
+    }
+
+    if (params.lastRequest.prompt.length() == 0) {
+        fprintf(stderr, "error: the following arguments are required: prompt\n");
+        print_usage(argc, argv, options);
+        exit(1);
+    }
+
+    if (params.ctxParams.model_path.length() == 0 && params.ctxParams.diffusion_model_path.length() == 0) {
+        fprintf(stderr, "error: the following arguments are required: model_path/diffusion_model\n");
+        print_usage(argc, argv, options);
+        exit(1);
+    }
+
+    if (params.output_path.length() == 0) {
+        fprintf(stderr, "error: the following arguments are required: output_path\n");
+        print_usage(argc, argv, options);
+        exit(1);
+    }
+
+    if (params.lastRequest.height <= 0) {
+        fprintf(stderr, "error: the height must be greater than 0\n");
+        exit(1);
+    }
+
+    if (params.lastRequest.width <= 0) {
+        fprintf(stderr, "error: the width must be greater than 0\n");
+        exit(1);
+    }
+
+    if (params.lastRequest.sample_steps <= 0) {
+        fprintf(stderr, "error: the sample_steps must be greater than 0\n");
+        exit(1);
+    }
+
+    if (params.lastRequest.strength < 0.f || params.lastRequest.strength > 1.f) {
+        fprintf(stderr, "error: can only work with strength in [0.0, 1.0]\n");
+        exit(1);
+    }
+
+    if (params.lastRequest.seed < 0) {
+        srand((int)time(nullptr));
+        params.lastRequest.seed = rand();
+    }
+
     bool invalid_arg = false;
     std::string arg;
     for (int i = 1; i < argc; i++) {
@@ -457,7 +906,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             }
             params.lastRequest.clip_skip = std::stoi(argv[i]);
         } else if (arg == "--vae-tiling") {
-            params.ctxParams.vae_tiling = true;
+            params.lastRequest.tiling_params.enabled = true;
         } else if (arg == "--control-net-cpu") {
             params.ctxParams.keep_control_net_on_cpu = true;
         } else if (arg == "--normalize-input") {
@@ -499,7 +948,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.ctxParams.schedule = schedule_found;
+            params.lastRequest.schedule = schedule_found;
         } else if (arg == "-s" || arg == "--seed") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -519,7 +968,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             }
             params.lastRequest.sample_method = (sample_method_t)sample_method_found;
         } else if (arg == "-h" || arg == "--help") {
-            print_usage(argc, argv);
+            print_usage(argc, argv, options);
             exit(0);
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
@@ -624,13 +1073,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.tae_dir = argv[i];
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
-            print_usage(argc, argv);
+            print_usage(argc, argv, options);
             exit(1);
         }
     }
     if (invalid_arg) {
         fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
-        print_usage(argc, argv);
+        print_usage(argc, argv, options);
         exit(1);
     }
     if (params.ctxParams.n_threads <= 0) {
@@ -663,7 +1112,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Model: " + sd_basename(params.ctxParams.model_path) + ", ";
     parameter_string += "RNG: " + std::string(sd_rng_type_name(params.ctxParams.rng_type)) + ", ";
     parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.lastRequest.sample_method));
-    if (params.ctxParams.schedule == KARRAS) {
+    if (params.lastRequest.schedule == KARRAS) {
         parameter_string += " karras";
     }
     parameter_string += ", ";
@@ -906,9 +1355,9 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     }
     try {
         bool vae_tiling = payload["vae_tiling"];
-        if (params->ctxParams.vae_tiling != vae_tiling) {
-            params->ctxParams.vae_tiling = vae_tiling;
-            updatectx                    = true;
+        if (params->lastRequest.tiling_params.enabled != vae_tiling) {
+            params->lastRequest.tiling_params.enabled = vae_tiling;
+            updatectx                                 = true;
         }
     } catch (...) {
     }
@@ -1049,9 +1498,8 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         std::string schedule       = payload["schedule"];
         scheduler_t schedule_found = str_to_schedule(schedule.c_str());
         if (schedule_found != SCHEDULE_COUNT) {
-            if (params->ctxParams.schedule != schedule_found) {
-                params->ctxParams.schedule = schedule_found;
-                updatectx                  = true;
+            if (params->lastRequest.schedule != schedule_found) {
+                params->lastRequest.schedule = schedule_found;
             }
         } else {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown schedule: %s\n", schedule.c_str());
@@ -1061,8 +1509,8 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
 
     try {
         bool tae_decode = payload["tae_decode"];
-        if (params->taesd_preview == tae_decode) {
-            params->taesd_preview = !tae_decode;
+        if (params->ctxParams.taesd_preview == tae_decode) {
+            params->ctxParams.taesd_preview = !tae_decode;
             updatectx             = true;
         }
     } catch (...) {
@@ -1345,7 +1793,7 @@ void start_server(SDParams params) {
                     params.ctxParams.n_threads,
                     params.ctxParams.wtype,
                     params.ctxParams.rng_type,
-                    params.ctxParams.rng_type, // TODO:sampler_rng_type
+                    params.ctxParams.rng_type,  // TODO:sampler_rng_type
                     DEFAULT_PRED,
                     LORA_APPLY_AUTO,
                     false,  // offload_params_to_cpu
@@ -1353,7 +1801,7 @@ void start_server(SDParams params) {
                     params.ctxParams.keep_control_net_on_cpu,
                     params.ctxParams.keep_vae_on_cpu,
                     params.ctxParams.diffusion_flash_attn,
-                    params.taesd_preview,
+                    params.ctxParams.taesd_preview,
                     false,    // diffusion_conv_direct
                     false,    // vae_conv_direct
                     false,    // force_sdxl_vae_conv_scale
@@ -1406,7 +1854,7 @@ void start_server(SDParams params) {
                 sd_image_t control_img           = empty_image;
                 sd_sample_params_t sample_params = {
                     guidance,
-                    params.ctxParams.schedule,
+                    params.lastRequest.schedule,
                     params.lastRequest.sample_method,
                     params.lastRequest.sample_steps,
                     0.,  // eta
@@ -1418,14 +1866,7 @@ void start_server(SDParams params) {
                     params.input_id_images_path.c_str(),
                     params.lastRequest.style_ratio,
                 };
-                sd_tiling_params_t tiling_params = {
-                    params.ctxParams.vae_tiling,  // TODO: move to request
-                    32,                           // tile_size_x
-                    32,                           // tile_size_y
-                    0.5,                          // overlap
-                    -1,                           // rel_size_x
-                    -1                            // rel_size_y
-                };
+                sd_tiling_params_t tiling_params = params.lastRequest.tiling_params;
 
                 sd_img_gen_params_t gen_params = {
                     params.lastRequest.prompt.c_str(),
@@ -1539,17 +1980,17 @@ void start_server(SDParams params) {
         // context_params["embeddings_path"] = params.ctxParams.embeddings_path;
         // context_params["stacked_id_embeddings_path"] = params.ctxParams.stacked_id_embeddings_path;
         context_params["vae_decode_only"]         = params.ctxParams.vae_decode_only;
-        context_params["vae_tiling"]              = params.ctxParams.vae_tiling;
+        context_params["vae_tiling"]              = params.lastRequest.tiling_params.enabled;
         context_params["n_threads"]               = params.ctxParams.n_threads;
         context_params["wtype"]                   = params.ctxParams.wtype;
         context_params["rng_type"]                = params.ctxParams.rng_type;
-        context_params["schedule"]                = sd_schedule_name(params.ctxParams.schedule);
+        context_params["schedule"]                = sd_schedule_name(params.lastRequest.schedule);
         context_params["keep_clip_on_cpu"]        = params.ctxParams.keep_clip_on_cpu;
         context_params["keep_control_net_on_cpu"] = params.ctxParams.keep_control_net_on_cpu;
         context_params["keep_vae_on_cpu"]         = params.ctxParams.keep_vae_on_cpu;
         context_params["diffusion_flash_attn"]    = params.ctxParams.diffusion_flash_attn;
 
-        response["taesd_preview"]       = params.taesd_preview;
+        response["taesd_preview"]       = params.ctxParams.taesd_preview;
         params_json["preview_method"]   = sd_preview_name(params.lastRequest.preview_method);
         params_json["preview_interval"] = params.lastRequest.preview_interval;
 
