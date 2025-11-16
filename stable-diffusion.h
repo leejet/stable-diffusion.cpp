@@ -31,6 +31,7 @@ extern "C" {
 enum rng_type_t {
     STD_DEFAULT_RNG,
     CUDA_RNG,
+    CPU_RNG,
     RNG_TYPE_COUNT
 };
 

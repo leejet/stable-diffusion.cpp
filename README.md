@@ -81,7 +81,9 @@ API and command-line option may change frequently.***
     - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
     - `DPM++ 2S a`
     - [`LCM`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13952)
-- Cross-platform reproducibility (`--rng cuda`, consistent with the `stable-diffusion-webui GPU RNG`)
+- Cross-platform reproducibility
+    - `--rng cuda`, default, consistent with the `stable-diffusion-webui GPU RNG`
+    - `--rng cpu`, consistent with the `comfyui RNG`
 - Embedds generation parameters into png output as webui-compatible text string
 
 ## Quick Start
