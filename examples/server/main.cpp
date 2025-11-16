@@ -37,70 +37,93 @@
 #include "frontend.cpp"
 
 struct SDCtxParams {
+    // sd_ctx_params_t but with strings
     std::string model_path;
     std::string clip_l_path;
     std::string clip_g_path;
+    std::string clip_vision_path;
     std::string t5xxl_path;
+    std::string qwen2vl_path;
+    std::string qwen2vl_vision_path;
     std::string diffusion_model_path;
+    std::string high_noise_diffusion_model_path;
     std::string vae_path;
     std::string taesd_path;
 
     std::string control_net_path;
     std::string lora_model_dir;
     std::string embeddings_path;
-    std::string stacked_id_embeddings_path;
+    std::string photo_maker_path;
+    std::string tensor_type_rules;
 
-    bool vae_decode_only = false;  // Does it ever make sense to set it to true?
-    // free_params_immediately has to be false for server
-    int n_threads   = -1;
-    sd_type_t wtype = SD_TYPE_COUNT;
+    bool vae_decode_only         = false;  // Does it ever make sense to set it to true?
+    bool free_params_immediately = false;  // has to be false for server too keep ctx alive between prompts
+    int n_threads                = -1;
+    sd_type_t wtype              = SD_TYPE_COUNT;
 
     rng_type_t rng_type               = CUDA_RNG;
     rng_type_t sampler_rng_type       = CUDA_RNG;
     prediction_t prediction           = DEFAULT_PRED;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
-    bool keep_control_net_on_cpu = false;
+    bool offload_params_to_cpu   = false;
     bool keep_clip_on_cpu        = false;
+    bool keep_control_net_on_cpu = false;
     bool keep_vae_on_cpu         = false;
 
     bool diffusion_flash_attn = false;
-
     // Don't use TAE decoding by default
-    bool taesd_preview = true;
-
+    bool taesd_preview             = true;
+    bool diffusion_conv_direct     = false;
+    bool vae_conv_direct           = false;
+    bool force_sdxl_vae_conv_scale = false;
+    bool chroma_use_dit_mask       = true;
+    bool chroma_use_t5_mask        = false;
+    int chroma_t5_mask_pad         = 1;
+    float flow_shift               = INFINITY;  // inf means auto
 };
 
 struct SDRequestParams {
-    // TODO set to true if esrgan_path is specified in args
-    bool upscale = false;
-
     std::string prompt;
     std::string negative_prompt;
+    int clip_skip = -1;  // <= 0 represents unspecified
 
+    // TODO: img2img support
+    // sd_image_t init_image;
+    std::vector<sd_image_t> ref_images = {};
+    bool auto_resize_ref_image         = true;
+    bool increase_ref_index            = false;
+
+    // sd_image_t mask_image;
+
+    int width  = 512;
+    int height = 512;
+
+    // skip_layers should be turned into an array of ints at the beginning of sd_slg_params
+    std::vector<int> skip_layers     = {7, 8, 9};
+    sd_sample_params_t sample_params = {
+        sd_guidance_params_t{
+            7,
+            1,
+            3.5,
+            sd_slg_params_t{NULL, 0, 0.01, 0.2, 0}},
+        DEFAULT,
+        SAMPLE_METHOD_DEFAULT,
+        20,
+        0, 0};
+    float strength  = 1.f;
+    int64_t seed    = 42;
+    int batch_count = 1;
+
+    // sd_image_t control_image;
+    float control_strength = 0.9f;
+
+    sd_pm_params_t pm_params         = {NULL, 0, NULL, 20.f};
     sd_tiling_params_t tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 
-    float min_cfg     = 1.0f;
-    float cfg_scale   = 7.0f;
-    float guidance    = 3.5f;
-    float style_ratio = 20.f;
-    int clip_skip     = -1;  // <= 0 represents unspecified
-    int width         = 512;
-    int height        = 512;
-    int batch_count   = 1;
-
-    sample_method_t sample_method = SAMPLE_METHOD_DEFAULT;
-    scheduler_t schedule          = DEFAULT;
-    int sample_steps              = 20;
-    float strength                = 0.75f;
-    float control_strength        = 0.9f;
-    int64_t seed                  = 42;
-
-    std::vector<int> skip_layers = {7, 8, 9};
-    float slg_scale              = 0.;
-    float skip_layer_start       = 0.01;
-    float skip_layer_end         = 0.2;
-    bool normalize_input         = false;
+    // sd_img_gen_params_t covered, extras below
+    // TODO set to true if esrgan_path is specified in args and upscale in request
+    bool upscale = false;
 
     // float apg_eta            = 1.0f;
     // float apg_momentum       = 0.0f;
@@ -138,7 +161,6 @@ struct SDParams {
     // external dir
     std::string input_id_images_path;
 
-
     bool verbose = false;
 
     bool color = false;
@@ -162,10 +184,9 @@ void print_params(SDParams params) {
     printf("    taesd_path:        %s\n", params.ctxParams.taesd_path.c_str());
     printf("    control_net_path:   %s\n", params.ctxParams.control_net_path.c_str());
     printf("    embeddings_path:   %s\n", params.ctxParams.embeddings_path.c_str());
-    printf("    stacked_id_embeddings_path:   %s\n", params.ctxParams.stacked_id_embeddings_path.c_str());
+    printf("    photo_maker_path:   %s\n", params.ctxParams.photo_maker_path.c_str());
     printf("    input_id_images_path:   %s\n", params.input_id_images_path.c_str());
-    printf("    style ratio:       %.2f\n", params.lastRequest.style_ratio);
-    printf("    normalize input image :  %s\n", params.lastRequest.normalize_input ? "true" : "false");
+    printf("    style ratio:       %.2f\n", params.lastRequest.pm_params.style_strength);
     printf("    output_path:       %s\n", params.output_path.c_str());
     printf("    init_img:          %s\n", params.input_path.c_str());
     printf("    control_image:     %s\n", params.control_image_path.c_str());
@@ -176,16 +197,15 @@ void print_params(SDParams params) {
     printf("    strength(control): %.2f\n", params.lastRequest.control_strength);
     printf("    prompt:            %s\n", params.lastRequest.prompt.c_str());
     printf("    negative_prompt:   %s\n", params.lastRequest.negative_prompt.c_str());
-    printf("    min_cfg:           %.2f\n", params.lastRequest.min_cfg);
-    printf("    cfg_scale:         %.2f\n", params.lastRequest.cfg_scale);
-    printf("    slg_scale:         %.2f\n", params.lastRequest.slg_scale);
-    printf("    guidance:          %.2f\n", params.lastRequest.guidance);
+    printf("    cfg_scale:         %.2f\n", params.lastRequest.sample_params.guidance.txt_cfg);
+    printf("    slg_scale:         %.2f\n", params.lastRequest.sample_params.guidance.slg.scale);
+    printf("    guidance:          %.2f\n", params.lastRequest.sample_params.guidance.distilled_guidance);
     printf("    clip_skip:         %d\n", params.lastRequest.clip_skip);
     printf("    width:             %d\n", params.lastRequest.width);
     printf("    height:            %d\n", params.lastRequest.height);
-    printf("    sample_method:     %s\n", sd_sample_method_name(params.lastRequest.sample_method));
-    printf("    schedule:          %s\n", sd_schedule_name(params.lastRequest.schedule));
-    printf("    sample_steps:      %d\n", params.lastRequest.sample_steps);
+    printf("    sample_method:     %s\n", sd_sample_method_name(params.lastRequest.sample_params.sample_method));
+    printf("    schedule:          %s\n", sd_schedule_name(params.lastRequest.sample_params.scheduler));
+    printf("    sample_steps:      %d\n", params.lastRequest.sample_params.sample_steps);
     printf("    strength(img2img): %.2f\n", params.lastRequest.strength);
     printf("    rng:               %s\n", sd_rng_type_name(params.ctxParams.rng_type));
     printf("    seed:              %ld\n", params.lastRequest.seed);
@@ -471,7 +491,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-p", "--prompt", "the prompt to render", &params.lastRequest.prompt},
         {"-n", "--negative-prompt", "the negative prompt (default: \"\")", &params.lastRequest.negative_prompt},
         {"", "--embd-dir", "embeddings directory", &params.ctxParams.embeddings_path},
-        {"", "--stacked-id-embd-dir", "stacked id embeddings directory", &params.ctxParams.stacked_id_embeddings_path},
+        {"", "--stacked-id-embd-dir", "stacked id embeddings directory", &params.ctxParams.photo_maker_path},
         {"", "--input-id-images-dir", "input id images directory", &params.input_id_images_path},
         {"", "--lora-model-dir", "lora model directory", &params.ctxParams.lora_model_dir},
         {"", "--control-image", "path to control image, control net", &params.control_image_path},
@@ -494,25 +514,24 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-t", "--threads", "number of threads to use during computation (default: -1). If threads <= 0, then threads will be set to the number of CPU physical cores", &params.ctxParams.n_threads},
         {"-H", "--height", "image height, in pixel space (default: 512)", &params.lastRequest.height},
         {"-W", "--width", "image width, in pixel space (default: 512)", &params.lastRequest.width},
-        {"", "--steps", "number of sample steps (default: 20)", &params.lastRequest.sample_steps},
+        {"", "--steps", "number of sample steps (default: 20)", &params.lastRequest.sample_params.sample_steps},
         {"", "--clip-skip", "ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1). <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x", &params.lastRequest.clip_skip},
         {"-b", "--batch-count", "batch count", &params.lastRequest.batch_count},
         {"", "--port", "port to listen on", &params.port}};
 
     options.float_options = {
-        {"", "--cfg-scale", "unconditional guidance scale: (default: 7.0)", &params.lastRequest.cfg_scale},
-        {"", "--guidance", "distilled guidance scale for models with guidance input (default: 3.5)", &params.lastRequest.guidance},
+        {"", "--cfg-scale", "unconditional guidance scale: (default: 7.0)", &params.lastRequest.sample_params.guidance.txt_cfg},
+        {"", "--guidance", "distilled guidance scale for models with guidance input (default: 3.5)", &params.lastRequest.sample_params.guidance.distilled_guidance},
         {"", "--strength", "strength for noising/unnoising (default: 0.75)", &params.lastRequest.strength},
-        {"", "--style-ratio", "style ratio", &params.lastRequest.style_ratio},
+        {"", "--style-ratio", "style ratio", &params.lastRequest.pm_params.style_strength},
         {"", "--control-strength", "strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image", &params.lastRequest.control_strength},
-        {"", "--slg-scale", "skip layer guidance (SLG) scale, only for DiT models: (default: 0)", &params.lastRequest.slg_scale},
-        {"", "--skip-layer-start", "SLG enabling point (default: 0.01)", &params.lastRequest.skip_layer_start},
-        {"", "--skip-layer-end", "SLG disabling point (default: 0.2)", &params.lastRequest.skip_layer_end}};
+        {"", "--slg-scale", "skip layer guidance (SLG) scale, only for DiT models: (default: 0)", &params.lastRequest.sample_params.guidance.slg.scale},
+        {"", "--skip-layer-start", "SLG enabling point (default: 0.01)", &params.lastRequest.sample_params.guidance.slg.layer_start},
+        {"", "--skip-layer-end", "SLG disabling point (default: 0.2)", &params.lastRequest.sample_params.guidance.slg.layer_end}};
 
     options.bool_options = {
         {"", "--vae-tiling", "process vae in tiles to reduce memory usage", true, &params.lastRequest.tiling_params.enabled},
         {"", "--control-net-cpu", "keep controlnet in cpu (for low vram)", true, &params.ctxParams.keep_control_net_on_cpu},
-        {"", "--normalize-input", "normalize input image", true, &params.lastRequest.normalize_input},
         {"", "--clip-on-cpu", "keep clip in cpu (for low vram)", true, &params.ctxParams.keep_clip_on_cpu},
         {"", "--vae-on-cpu", "keep vae in cpu (for low vram)", true, &params.ctxParams.keep_vae_on_cpu},
         {"", "--diffusion-fa", "use flash attention in the diffusion model", true, &params.ctxParams.diffusion_flash_attn},
@@ -574,9 +593,9 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg             = argv[index];
-        params.lastRequest.schedule = str_to_schedule(arg);
-        if (params.lastRequest.schedule == SCHEDULE_COUNT) {
+        const char* arg                            = argv[index];
+        params.lastRequest.sample_params.scheduler = str_to_schedule(arg);
+        if (params.lastRequest.sample_params.scheduler == SCHEDULE_COUNT) {
             fprintf(stderr, "error: invalid scheduler %s\n",
                     arg);
             return -1;
@@ -603,7 +622,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                     arg);
             return -1;
         }
-        params.lastRequest.sample_method = (sample_method_t)sample_method;
+        params.lastRequest.sample_params.sample_method = (sample_method_t)sample_method;
         return 1;
     };
 
@@ -686,7 +705,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         exit(1);
     }
 
-    if (params.lastRequest.sample_steps <= 0) {
+    if (params.lastRequest.sample_params.sample_steps <= 0) {
         fprintf(stderr, "error: the sample_steps must be greater than 0\n");
         exit(1);
     }
@@ -777,7 +796,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.ctxParams.stacked_id_embeddings_path = argv[i];
+            params.ctxParams.photo_maker_path = argv[i];
         } else if (arg == "--input-id-images-dir") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -856,13 +875,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.lastRequest.cfg_scale = std::stof(argv[i]);
+            params.lastRequest.sample_params.guidance.txt_cfg = std::stof(argv[i]);
         } else if (arg == "--guidance") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            params.lastRequest.guidance = std::stof(argv[i]);
+            params.lastRequest.sample_params.guidance.distilled_guidance = std::stof(argv[i]);
         } else if (arg == "--strength") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -874,7 +893,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.lastRequest.style_ratio = std::stof(argv[i]);
+            params.lastRequest.pm_params.style_strength = std::stof(argv[i]);
         } else if (arg == "--control-strength") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -898,7 +917,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.lastRequest.sample_steps = std::stoi(argv[i]);
+            params.lastRequest.sample_params.sample_steps = std::stoi(argv[i]);
         } else if (arg == "--clip-skip") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -909,8 +928,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             params.lastRequest.tiling_params.enabled = true;
         } else if (arg == "--control-net-cpu") {
             params.ctxParams.keep_control_net_on_cpu = true;
-        } else if (arg == "--normalize-input") {
-            params.lastRequest.normalize_input = true;
         } else if (arg == "--clip-on-cpu") {
             params.ctxParams.keep_clip_on_cpu = true;  // will slow down get_learned_condiotion but necessary for low MEM GPUs
         } else if (arg == "--vae-on-cpu") {
@@ -948,7 +965,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.lastRequest.schedule = schedule_found;
+            params.lastRequest.sample_params.scheduler = schedule_found;
         } else if (arg == "-s" || arg == "--seed") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -966,7 +983,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.lastRequest.sample_method = (sample_method_t)sample_method_found;
+            params.lastRequest.sample_params.sample_method = (sample_method_t)sample_method_found;
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv, options);
             exit(0);
@@ -979,7 +996,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.lastRequest.slg_scale = std::stof(argv[i]);
+            params.lastRequest.sample_params.guidance.slg.scale = std::stof(argv[i]);
         } else if (arg == "--skip-layers") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -1022,13 +1039,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
                 invalid_arg = true;
                 break;
             }
-            params.lastRequest.skip_layer_start = std::stof(argv[i]);
+            params.lastRequest.sample_params.guidance.slg.layer_start = std::stof(argv[i]);
         } else if (arg == "--skip-layer-end") {
             if (++i >= argc) {
                 invalid_arg = true;
                 break;
             }
-            params.lastRequest.skip_layer_end = std::stof(argv[i]);
+            params.lastRequest.sample_params.guidance.slg.layer_end = std::stof(argv[i]);
         } else if (arg == "--port") {
             if (++i >= argc) {
                 invalid_arg = true;
@@ -1104,15 +1121,15 @@ std::string get_image_params(SDParams params, int64_t seed) {
     if (params.lastRequest.negative_prompt.size() != 0) {
         parameter_string += "Negative prompt: " + params.lastRequest.negative_prompt + "\n";
     }
-    parameter_string += "Steps: " + std::to_string(params.lastRequest.sample_steps) + ", ";
-    parameter_string += "CFG scale: " + std::to_string(params.lastRequest.cfg_scale) + ", ";
-    parameter_string += "Guidance: " + std::to_string(params.lastRequest.guidance) + ", ";
+    parameter_string += "Steps: " + std::to_string(params.lastRequest.sample_params.sample_steps) + ", ";
+    parameter_string += "CFG scale: " + std::to_string(params.lastRequest.sample_params.guidance.txt_cfg) + ", ";
+    parameter_string += "Guidance: " + std::to_string(params.lastRequest.sample_params.guidance.distilled_guidance) + ", ";
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
     parameter_string += "Size: " + std::to_string(params.lastRequest.width) + "x" + std::to_string(params.lastRequest.height) + ", ";
     parameter_string += "Model: " + sd_basename(params.ctxParams.model_path) + ", ";
     parameter_string += "RNG: " + std::string(sd_rng_type_name(params.ctxParams.rng_type)) + ", ";
-    parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.lastRequest.sample_method));
-    if (params.lastRequest.schedule == KARRAS) {
+    parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.lastRequest.sample_params.sample_method));
+    if (params.lastRequest.sample_params.scheduler == KARRAS) {
         parameter_string += " karras";
     }
     parameter_string += ", ";
@@ -1189,7 +1206,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     json payload = json::parse(json_str);
     // if no exception, the request is a json object
     // now we try to get the new param values from the payload object
-    // const char *prompt, const char *negative_prompt, int clip_skip, float cfg_scale, float guidance, int width, int height, sample_method_t sample_method, int sample_steps, int64_t seed, int batch_count, const sd_image_t *control_cond, float control_strength, float style_strength, bool normalize_input, const char *input_id_images_path
+    // const char *prompt, const char *negative_prompt, int clip_skip, float cfg_scale, float guidance, int width, int height, sample_method_t sample_method, int sample_steps, int64_t seed, int batch_count, const sd_image_t *control_cond, float control_strength, float style_strength, const char *input_id_images_path
     try {
         std::string prompt         = payload["prompt"];
         params->lastRequest.prompt = prompt;
@@ -1208,13 +1225,13 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     try {
         json guidance_params = payload["guidance_params"];
         try {
-            float cfg_scale               = guidance_params["cfg_scale"];
-            params->lastRequest.cfg_scale = cfg_scale;
+            float cfg_scale                                    = guidance_params["cfg_scale"];
+            params->lastRequest.sample_params.guidance.txt_cfg = cfg_scale;
         } catch (...) {
         }
         try {
-            float guidance               = guidance_params["guidance"];
-            params->lastRequest.guidance = guidance;
+            float guidance                                                = guidance_params["guidance"];
+            params->lastRequest.sample_params.guidance.distilled_guidance = guidance;
         } catch (...) {
         }
         try {
@@ -1224,18 +1241,18 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
             } catch (...) {
             }
             try {
-                float slg_scale               = slg["scale"];
-                params->lastRequest.slg_scale = slg_scale;
+                float slg_scale                                      = slg["scale"];
+                params->lastRequest.sample_params.guidance.slg.scale = slg_scale;
             } catch (...) {
             }
             try {
-                float skip_layer_start               = slg["start"];
-                params->lastRequest.skip_layer_start = skip_layer_start;
+                float skip_layer_start                                     = slg["start"];
+                params->lastRequest.sample_params.guidance.slg.layer_start = skip_layer_start;
             } catch (...) {
             }
             try {
-                float skip_layer_end               = slg["end"];
-                params->lastRequest.skip_layer_end = skip_layer_end;
+                float skip_layer_end                                     = slg["end"];
+                params->lastRequest.sample_params.guidance.slg.layer_end = skip_layer_end;
             } catch (...) {
             }
         } catch (...) {
@@ -1281,15 +1298,27 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
 
         sample_method_t sample_method_found = str_to_sample_method(sample_method.c_str());
         if (sample_method_found != SAMPLE_METHOD_COUNT) {
-            params->lastRequest.sample_method = sample_method_found;
+            params->lastRequest.sample_params.sample_method = sample_method_found;
         } else {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown sampling method: %s\n", sample_method.c_str());
         }
     } catch (...) {
     }
     try {
-        int sample_steps                 = payload["sample_steps"];
-        params->lastRequest.sample_steps = sample_steps;
+        std::string schedule       = payload["schedule"];
+        scheduler_t schedule_found = str_to_schedule(schedule.c_str());
+        if (schedule_found != SCHEDULE_COUNT) {
+            if (params->lastRequest.sample_params.scheduler != schedule_found) {
+                params->lastRequest.sample_params.scheduler = schedule_found;
+            }
+        } else {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown schedule: %s\n", schedule.c_str());
+        }
+    } catch (...) {
+    }
+    try {
+        int sample_steps                               = payload["sample_steps"];
+        params->lastRequest.sample_params.sample_steps = sample_steps;
     } catch (...) {
     }
     try {
@@ -1326,16 +1355,43 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     } catch (...) {
     }
     try {
-        bool normalize_input                = payload["normalize_input"];
-        params->lastRequest.normalize_input = normalize_input;
-    } catch (...) {
-    }
-    try {
         std::string input_id_images_path = payload["input_id_images_path"];
         // TODO replace with b64 image maybe?
         params->input_id_images_path = input_id_images_path;
     } catch (...) {
     }
+    try {
+        bool vae_tiling = payload["vae_tiling"];
+        if (params->lastRequest.tiling_params.enabled != vae_tiling) {
+            params->lastRequest.tiling_params.enabled = vae_tiling;
+        }
+    } catch (...) {
+    }
+
+    try {
+        std::string preview = payload["preview_mode"];
+        int preview_found   = -1;
+        for (int m = 0; m < PREVIEW_COUNT; m++) {
+            if (!strcmp(preview.c_str(), sd_preview_name((preview_t)m))) {
+                preview_found = m;
+            }
+        }
+        if (preview_found >= 0) {
+            if (params->lastRequest.preview_method != (preview_t)preview_found) {
+                params->lastRequest.preview_method = (preview_t)preview_found;
+            }
+        } else {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown preview: %s\n", preview.c_str());
+        }
+    } catch (...) {
+    }
+    try {
+        int interval                         = payload["preview_interval"];
+        params->lastRequest.preview_interval = interval;
+    } catch (...) {
+    }
+
+    // updatectx zone
 
     try {
         bool vae_cpu = payload["keep_vae_on_cpu"];
@@ -1350,14 +1406,6 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         if (params->ctxParams.keep_clip_on_cpu != clip_cpu) {
             params->ctxParams.keep_clip_on_cpu = clip_cpu;
             updatectx                          = true;
-        }
-    } catch (...) {
-    }
-    try {
-        bool vae_tiling = payload["vae_tiling"];
-        if (params->lastRequest.tiling_params.enabled != vae_tiling) {
-            params->lastRequest.tiling_params.enabled = vae_tiling;
-            updatectx                                 = true;
         }
     } catch (...) {
     }
@@ -1495,49 +1543,14 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     }
 
     try {
-        std::string schedule       = payload["schedule"];
-        scheduler_t schedule_found = str_to_schedule(schedule.c_str());
-        if (schedule_found != SCHEDULE_COUNT) {
-            if (params->lastRequest.schedule != schedule_found) {
-                params->lastRequest.schedule = schedule_found;
-            }
-        } else {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown schedule: %s\n", schedule.c_str());
-        }
-    } catch (...) {
-    }
-
-    try {
         bool tae_decode = payload["tae_decode"];
         if (params->ctxParams.taesd_preview == tae_decode) {
             params->ctxParams.taesd_preview = !tae_decode;
-            updatectx             = true;
+            updatectx                       = true;
         }
     } catch (...) {
     }
 
-    try {
-        std::string preview = payload["preview_mode"];
-        int preview_found   = -1;
-        for (int m = 0; m < PREVIEW_COUNT; m++) {
-            if (!strcmp(preview.c_str(), sd_preview_name((preview_t)m))) {
-                preview_found = m;
-            }
-        }
-        if (preview_found >= 0) {
-            if (params->lastRequest.preview_method != (preview_t)preview_found) {
-                params->lastRequest.preview_method = (preview_t)preview_found;
-            }
-        } else {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown preview: %s\n", preview.c_str());
-        }
-    } catch (...) {
-    }
-    try {
-        int interval                         = payload["preview_interval"];
-        params->lastRequest.preview_interval = interval;
-    } catch (...) {
-    }
     try {
         std::string type = payload["type"];
         if (type != "") {
@@ -1731,10 +1744,10 @@ void start_server(SDParams params) {
             // LOG_DEBUG("raw body is: %s\n", req.body.c_str());
             sd_log(sd_log_level_t::SD_LOG_DEBUG, "raw body is: %s\n", req.body.c_str());
             // parse req.body as json using jsoncpp
-            bool updateCTX = false;
+            bool updateCTX = params.ctxParams.free_params_immediately;
             try {
                 std::string json_str = req.body;
-                updateCTX            = parseJsonPrompt(json_str, &params);
+                updateCTX            = updateCTX || parseJsonPrompt(json_str, &params);
             } catch (json::parse_error& e) {
                 // assume the request is just a prompt
                 // LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
@@ -1775,41 +1788,41 @@ void start_server(SDParams params) {
                     params.ctxParams.model_path.c_str(),
                     params.ctxParams.clip_l_path.c_str(),
                     params.ctxParams.clip_g_path.c_str(),
-                    "",
+                    params.ctxParams.clip_vision_path.c_str(),
                     params.ctxParams.t5xxl_path.c_str(),
-                    "",  // TODO qwen2vl support
-                    "",
+                    params.ctxParams.qwen2vl_path.c_str(),
+                    params.ctxParams.qwen2vl_vision_path.c_str(),
                     params.ctxParams.diffusion_model_path.c_str(),
-                    "",
+                    params.ctxParams.high_noise_diffusion_model_path.c_str(),
                     params.ctxParams.vae_path.c_str(),
                     params.ctxParams.taesd_path.c_str(),
                     params.ctxParams.control_net_path.c_str(),
                     params.ctxParams.lora_model_dir.c_str(),
                     params.ctxParams.embeddings_path.c_str(),
-                    params.ctxParams.stacked_id_embeddings_path.c_str(),
-                    "",  // tensor_type_rules
+                    params.ctxParams.photo_maker_path.c_str(),
+                    params.ctxParams.tensor_type_rules.c_str(),
                     params.ctxParams.vae_decode_only,
-                    false,  // free_params_immediately
+                    params.ctxParams.free_params_immediately,
                     params.ctxParams.n_threads,
                     params.ctxParams.wtype,
                     params.ctxParams.rng_type,
-                    params.ctxParams.rng_type,  // TODO:sampler_rng_type
-                    DEFAULT_PRED,
-                    LORA_APPLY_AUTO,
-                    false,  // offload_params_to_cpu
+                    params.ctxParams.sampler_rng_type,
+                    params.ctxParams.prediction,
+                    params.ctxParams.lora_apply_mode,
+                    params.ctxParams.offload_params_to_cpu,
                     params.ctxParams.keep_clip_on_cpu,
                     params.ctxParams.keep_control_net_on_cpu,
                     params.ctxParams.keep_vae_on_cpu,
                     params.ctxParams.diffusion_flash_attn,
                     params.ctxParams.taesd_preview,
-                    false,    // diffusion_conv_direct
-                    false,    // vae_conv_direct
-                    false,    // force_sdxl_vae_conv_scale
-                    true,     // chroma_use_dit_mask
-                    false,    // chroma_use_t5_mask
-                    1,        // chroma_t5_mask_pad
-                    INFINITY  // flow_shift
-                };
+                    params.ctxParams.diffusion_conv_direct,
+                    params.ctxParams.vae_conv_direct,
+                    params.ctxParams.force_sdxl_vae_conv_scale,
+                    params.ctxParams.chroma_use_dit_mask,
+                    params.ctxParams.chroma_use_t5_mask,
+                    params.ctxParams.chroma_t5_mask_pad,
+                    params.ctxParams.flow_shift};
+
                 sd_ctx = new_sd_ctx(&sd_ctx_params);
                 if (sd_ctx == NULL) {
                     printf("new_sd_ctx_t failed\n");
@@ -1824,7 +1837,7 @@ void start_server(SDParams params) {
                 started_task_json["status"] = "Working";
                 started_task_json["data"]   = json::array();
                 started_task_json["step"]   = 0;
-                started_task_json["steps"]  = params.lastRequest.sample_steps;
+                started_task_json["steps"]  = params.lastRequest.sample_params.sample_steps;
                 started_task_json["eta"]    = "?";
 
                 std::lock_guard<std::mutex> results_lock(results_mutex);
@@ -1833,61 +1846,40 @@ void start_server(SDParams params) {
 
             {
                 sd_image_t* results;
-                sd_slg_params_t slg = {
-                    params.lastRequest.skip_layers.data(),
-                    params.lastRequest.skip_layers.size(),
-                    params.lastRequest.skip_layer_start,
-                    params.lastRequest.skip_layer_end,
-                    params.lastRequest.slg_scale};
-                sd_guidance_params_t guidance = {
-                    params.lastRequest.cfg_scale,
-                    params.lastRequest.cfg_scale,
-                    params.lastRequest.guidance,
-                    slg};
+                params.lastRequest.sample_params.guidance.slg.layers      = params.lastRequest.skip_layers.data();
+                params.lastRequest.sample_params.guidance.slg.layer_count = params.lastRequest.skip_layers.size();
+
                 sd_image_t empty_image = {
                     (uint32_t)params.lastRequest.width,
                     (uint32_t)params.lastRequest.height,
                     3,
                     NULL};
-                sd_image_t input_image           = empty_image;
-                sd_image_t mask_img              = empty_image;
-                sd_image_t control_img           = empty_image;
-                sd_sample_params_t sample_params = {
-                    guidance,
-                    params.lastRequest.schedule,
-                    params.lastRequest.sample_method,
-                    params.lastRequest.sample_steps,
-                    0.,  // eta
-                    0    // shifted_timestep
-                };
-                sd_pm_params_t pm_params = {
-                    NULL,  // id_images
-                    0,     // id_images_count
-                    params.input_id_images_path.c_str(),
-                    params.lastRequest.style_ratio,
-                };
-                sd_tiling_params_t tiling_params = params.lastRequest.tiling_params;
+                sd_image_t input_image = empty_image;
+                sd_image_t mask_img    = empty_image;
+                sd_image_t control_img = empty_image;
+
+                params.lastRequest.pm_params.id_embed_path = params.input_id_images_path.c_str();
 
                 sd_img_gen_params_t gen_params = {
                     params.lastRequest.prompt.c_str(),
                     params.lastRequest.negative_prompt.c_str(),
                     params.lastRequest.clip_skip,
                     input_image,
-                    NULL,   // ref images
-                    0,      // ref images count
-                    true,   // auto_resize_ref_image
-                    false,  // increase_ref_index
+                    params.lastRequest.ref_images.data(),
+                    (int)params.lastRequest.ref_images.size(),
+                    params.lastRequest.auto_resize_ref_image,
+                    params.lastRequest.increase_ref_index,
                     mask_img,
                     params.lastRequest.width,
                     params.lastRequest.height,
-                    sample_params,
-                    1.f,  // denoise strength
+                    params.lastRequest.sample_params,
+                    params.lastRequest.strength,
                     params.lastRequest.seed,
                     params.lastRequest.batch_count,
                     control_img,
-                    1.f,  // control strength
-                    pm_params,
-                    tiling_params};
+                    params.lastRequest.control_strength,
+                    params.lastRequest.pm_params,
+                    params.lastRequest.tiling_params};
                 sd_set_preview_callback((sd_preview_cb_t)step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, true, false);
                 results = generate_image(sd_ctx, &gen_params);
 
@@ -1956,15 +1948,14 @@ void start_server(SDParams params) {
         params_json["prompt"]          = params.lastRequest.prompt;
         params_json["negative_prompt"] = params.lastRequest.negative_prompt;
         params_json["clip_skip"]       = params.lastRequest.clip_skip;
-        params_json["cfg_scale"]       = params.lastRequest.cfg_scale;
-        params_json["guidance"]        = params.lastRequest.guidance;
+        params_json["cfg_scale"]       = params.lastRequest.sample_params.guidance.txt_cfg;
+        params_json["guidance"]        = params.lastRequest.sample_params.guidance.distilled_guidance;
         params_json["width"]           = params.lastRequest.width;
         params_json["height"]          = params.lastRequest.height;
-        params_json["sample_method"]   = sd_sample_method_name(params.lastRequest.sample_method);
-        params_json["sample_steps"]    = params.lastRequest.sample_steps;
+        params_json["sample_method"]   = sd_sample_method_name(params.lastRequest.sample_params.sample_method);
+        params_json["sample_steps"]    = params.lastRequest.sample_params.sample_steps;
         params_json["seed"]            = params.lastRequest.seed;
         params_json["batch_count"]     = params.lastRequest.batch_count;
-        params_json["normalize_input"] = params.lastRequest.normalize_input;
         // params_json["input_id_images_path"] = params.input_id_images_path;
 
         json context_params = json::object();
@@ -1978,13 +1969,13 @@ void start_server(SDParams params) {
         // context_params["control_net_path"] = params.ctxParams.control_net_path;
         context_params["lora_model_dir"] = params.ctxParams.lora_model_dir;
         // context_params["embeddings_path"] = params.ctxParams.embeddings_path;
-        // context_params["stacked_id_embeddings_path"] = params.ctxParams.stacked_id_embeddings_path;
+        // context_params["photo_maker_path"] = params.ctxParams.photo_maker_path;
         context_params["vae_decode_only"]         = params.ctxParams.vae_decode_only;
         context_params["vae_tiling"]              = params.lastRequest.tiling_params.enabled;
         context_params["n_threads"]               = params.ctxParams.n_threads;
         context_params["wtype"]                   = params.ctxParams.wtype;
         context_params["rng_type"]                = params.ctxParams.rng_type;
-        context_params["schedule"]                = sd_schedule_name(params.lastRequest.schedule);
+        context_params["schedule"]                = sd_schedule_name(params.lastRequest.sample_params.scheduler);
         context_params["keep_clip_on_cpu"]        = params.ctxParams.keep_clip_on_cpu;
         context_params["keep_control_net_on_cpu"] = params.ctxParams.keep_control_net_on_cpu;
         context_params["keep_vae_on_cpu"]         = params.ctxParams.keep_vae_on_cpu;
