@@ -103,7 +103,7 @@ Options:
                                            contain any quantized parameters, the at_runtime mode will be used; otherwise,
                                            immediately will be used.The immediately mode may have precision and
                                            compatibility issues with quantized parameters, but it usually offers faster inference
-                                           speed and, in some cases, lower memory usageThe at_runtime mode, on the other
+                                           speed and, in some cases, lower memory usage. The at_runtime mode, on the other
                                            hand, is exactly the opposite.
   --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default:
                                            discrete

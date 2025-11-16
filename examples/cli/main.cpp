@@ -1144,7 +1144,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "the way to apply LoRA, one of [auto, immediately, at_runtime], default is auto. "
          "In auto mode, if the model weights contain any quantized parameters, the at_runtime mode will be used; otherwise, immediately will be used."
          "The immediately mode may have precision and compatibility issues with quantized parameters, "
-         "but it usually offers faster inference speed and, in some cases, lower memory usage"
+         "but it usually offers faster inference speed and, in some cases, lower memory usage. "
          "The at_runtime mode, on the other hand, is exactly the opposite.",
          on_lora_apply_mode_arg},
         {"",
