@@ -905,6 +905,10 @@ public:
                 LOG_INFO("Running with SmoothStep scheduler");
                 denoiser->scheduler = std::make_shared<SmoothStepSchedule>();
                 break;
+            case LCM_SCHEDULER:
+                LOG_INFO("Running with LCM scheduler");
+                denoiser->scheduler = std::make_shared<LCMSchedule>();
+                break;
             case DEFAULT:
                 // Don't touch anything.
                 break;
@@ -2206,6 +2210,7 @@ const char* schedule_to_str[] = {
     "sgm_uniform",
     "simple",
     "smoothstep",
+    "lcm",
 };
 
 const char* sd_schedule_name(enum scheduler_t scheduler) {
@@ -2969,7 +2974,17 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
 
     size_t t0 = ggml_time_ms();
 
-    sd_ctx->sd->init_scheduler(sd_img_gen_params->sample_params.scheduler);
+    enum sample_method_t sample_method = sd_img_gen_params->sample_params.sample_method;
+    if (sample_method == SAMPLE_METHOD_DEFAULT) {
+        sample_method = sd_get_default_sample_method(sd_ctx);
+    }
+
+    enum scheduler_t scheduler = sd_img_gen_params->sample_params.scheduler;
+    if (sample_method == LCM && scheduler == DEFAULT) {
+        scheduler = LCM_SCHEDULER;
+    }
+
+    sd_ctx->sd->init_scheduler(scheduler);
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
 
     ggml_tensor* init_latent   = nullptr;
@@ -3156,11 +3171,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     if (sd_img_gen_params->init_image.data != nullptr || sd_img_gen_params->ref_images_count > 0) {
         size_t t1 = ggml_time_ms();
         LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-    }
-
-    enum sample_method_t sample_method = sd_img_gen_params->sample_params.sample_method;
-    if (sample_method == SAMPLE_METHOD_DEFAULT) {
-        sample_method = sd_get_default_sample_method(sd_ctx);
     }
 
     sd_image_t* result_images = generate_image_internal(sd_ctx,

@@ -1169,7 +1169,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          on_lora_apply_mode_arg},
         {"",
          "--scheduler",
-         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete",
+         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm], default: discrete",
          on_schedule_arg},
         {"",
          "--skip-layers",
@@ -1182,7 +1182,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          on_high_noise_sample_method_arg},
         {"",
          "--high-noise-scheduler",
-         "(high noise) denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete",
+         "(high noise) denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm], default: discrete",
          on_high_noise_schedule_arg},
         {"",
          "--high-noise-skip-layers",
@@ -1824,6 +1824,10 @@ int main(int argc, const char* argv[]) {
 
         if (params.sample_params.sample_method == SAMPLE_METHOD_DEFAULT) {
             params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
+        }
+
+        if (params.sample_params.sample_method == LCM && params.sample_params.scheduler == DEFAULT) {
+            params.sample_params.scheduler = LCM_SCHEDULER;
         }
 
         if (params.mode == IMG_GEN) {

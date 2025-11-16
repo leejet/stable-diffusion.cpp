@@ -62,6 +62,7 @@ enum scheduler_t {
     SGM_UNIFORM,
     SIMPLE,
     SMOOTHSTEP,
+    LCM_SCHEDULER,
     SCHEDULE_COUNT
 };
 
