@@ -242,14 +242,18 @@ public:
         }
 
         // net_1 is nn.Dropout(), skip for inference
-        float scale = 1.f;
+        bool force_prec_f32 = false;
+        float scale         = 1.f;
         if (precision_fix) {
             scale = 1.f / 128.f;
+#ifdef SD_USE_VULKAN
+            force_prec_f32 = true;
+#endif
         }
         // The purpose of the scale here is to prevent NaN issues in certain situations.
         // For example, when using Vulkan without enabling force_prec_f32,
         // or when using CUDA but the weights are k-quants.
-        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out, true, false, false, scale));
+        blocks["net.2"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, dim_out, true, false, force_prec_f32, scale));
     }
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
