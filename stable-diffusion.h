@@ -173,6 +173,7 @@ typedef struct {
     int n_threads;
     enum sd_type_t wtype;
     enum rng_type_t rng_type;
+    enum rng_type_t sampler_rng_type;
     enum prediction_t prediction;
     enum lora_apply_mode_t lora_apply_mode;
     bool offload_params_to_cpu;

@@ -110,21 +110,22 @@ struct SDParams {
     int fps             = 16;
     float vace_strength = 1.f;
 
-    float strength             = 0.75f;
-    float control_strength     = 0.9f;
-    rng_type_t rng_type        = CUDA_RNG;
-    int64_t seed               = 42;
-    bool verbose               = false;
-    bool offload_params_to_cpu = false;
-    bool control_net_cpu       = false;
-    bool clip_on_cpu           = false;
-    bool vae_on_cpu            = false;
-    bool diffusion_flash_attn  = false;
-    bool diffusion_conv_direct = false;
-    bool vae_conv_direct       = false;
-    bool canny_preprocess      = false;
-    bool color                 = false;
-    int upscale_repeats        = 1;
+    float strength              = 0.75f;
+    float control_strength      = 0.9f;
+    rng_type_t rng_type         = CUDA_RNG;
+    rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
+    int64_t seed                = 42;
+    bool verbose                = false;
+    bool offload_params_to_cpu  = false;
+    bool control_net_cpu        = false;
+    bool clip_on_cpu            = false;
+    bool vae_on_cpu             = false;
+    bool diffusion_flash_attn   = false;
+    bool diffusion_conv_direct  = false;
+    bool vae_conv_direct        = false;
+    bool canny_preprocess       = false;
+    bool color                  = false;
+    int upscale_repeats         = 1;
 
     // Photo Maker
     std::string photo_maker_path;
@@ -214,6 +215,7 @@ void print_params(SDParams params) {
     printf("    flow_shift:                        %.2f\n", params.flow_shift);
     printf("    strength(img2img):                 %.2f\n", params.strength);
     printf("    rng:                               %s\n", sd_rng_type_name(params.rng_type));
+    printf("    sampler rng:                       %s\n", sd_rng_type_name(params.sampler_rng_type));
     printf("    seed:                              %zd\n", params.seed);
     printf("    batch_count:                       %d\n", params.batch_count);
     printf("    vae_tiling:                        %s\n", params.vae_tiling_params.enabled ? "true" : "false");
@@ -886,6 +888,20 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_sampler_rng_arg = [&](int argc, const char** argv, int index) {
+        if (++index >= argc) {
+            return -1;
+        }
+        const char* arg         = argv[index];
+        params.sampler_rng_type = str_to_rng_type(arg);
+        if (params.sampler_rng_type == RNG_TYPE_COUNT) {
+            fprintf(stderr, "error: invalid sampler rng type %s\n",
+                    arg);
+            return -1;
+        }
+        return 1;
+    };
+
     auto on_schedule_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
@@ -1126,6 +1142,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--rng",
          "RNG, one of [std_default, cuda, cpu], default: cuda(sd-webui), cpu(comfyui)",
          on_rng_arg},
+        {"",
+         "--sampler-rng",
+         "sampler RNG, one of [std_default, cuda, cpu]. If not specified, use --rng",
+         on_sampler_rng_arg},
         {"-s",
          "--seed",
          "RNG seed (default: 42, use random seed for < 0)",
@@ -1319,6 +1339,9 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Size: " + std::to_string(params.width) + "x" + std::to_string(params.height) + ", ";
     parameter_string += "Model: " + sd_basename(params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(sd_rng_type_name(params.rng_type)) + ", ";
+    if (params.sampler_rng_type != RNG_TYPE_COUNT) {
+        parameter_string += "Sampler RNG: " + std::string(sd_rng_type_name(params.sampler_rng_type)) + ", ";
+    }
     parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.sample_params.sample_method));
     if (params.sample_params.scheduler != DEFAULT) {
         parameter_string += " " + std::string(sd_schedule_name(params.sample_params.scheduler));
@@ -1758,6 +1781,7 @@ int main(int argc, const char* argv[]) {
         params.n_threads,
         params.wtype,
         params.rng_type,
+        params.sampler_rng_type,
         params.prediction,
         params.lora_apply_mode,
         params.offload_params_to_cpu,
