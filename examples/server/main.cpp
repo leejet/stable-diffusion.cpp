@@ -1747,7 +1747,7 @@ void start_server(SDParams params) {
             bool updateCTX = params.ctxParams.free_params_immediately;
             try {
                 std::string json_str = req.body;
-                updateCTX            = updateCTX || parseJsonPrompt(json_str, &params);
+                updateCTX            = parseJsonPrompt(json_str, &params) || updateCTX;
             } catch (json::parse_error& e) {
                 // assume the request is just a prompt
                 // LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
