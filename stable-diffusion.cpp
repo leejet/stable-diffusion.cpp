@@ -209,7 +209,7 @@ public:
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
 
         rng = get_rng(sd_ctx_params->rng_type);
-        if (sd_ctx_params->sampler_rng_type != RNG_TYPE_COUNT) {
+        if (sd_ctx_params->sampler_rng_type != RNG_TYPE_COUNT && sd_ctx_params->sampler_rng_type != sd_ctx_params->rng_type) {
             sampler_rng = get_rng(sd_ctx_params->sampler_rng_type);
         } else {
             sampler_rng = rng;
