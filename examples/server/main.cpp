@@ -1329,8 +1329,7 @@ void start_server(SDParams params) {
                     params.ctxParams.clip_g_path.c_str(),
                     "",
                     params.ctxParams.t5xxl_path.c_str(),
-                    // TODO qwen2vl support
-                    "",
+                    "",  // TODO qwen2vl support
                     "",
                     params.ctxParams.diffusion_model_path.c_str(),
                     "",
@@ -1340,11 +1339,13 @@ void start_server(SDParams params) {
                     params.ctxParams.lora_model_dir.c_str(),
                     params.ctxParams.embeddings_path.c_str(),
                     params.ctxParams.stacked_id_embeddings_path.c_str(),
+                    "",  // tensor_type_rules
                     params.ctxParams.vae_decode_only,
                     false,  // free_params_immediately
                     params.ctxParams.n_threads,
                     params.ctxParams.wtype,
                     params.ctxParams.rng_type,
+                    params.ctxParams.rng_type, // TODO:sampler_rng_type
                     DEFAULT_PRED,
                     LORA_APPLY_AUTO,
                     false,  // offload_params_to_cpu
