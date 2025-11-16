@@ -336,10 +336,14 @@ public:
 
         if (sd_ctx_params->lora_apply_mode == LORA_APPLY_AUTO) {
             bool have_quantized_weight = false;
-            for (const auto& [type, _] : wtype_stat) {
-                if (ggml_is_quantized(type)) {
-                    have_quantized_weight = true;
-                    break;
+            if (wtype != GGML_TYPE_COUNT && ggml_is_quantized(wtype)) {
+                have_quantized_weight = true;
+            } else {
+                for (const auto& [type, _] : wtype_stat) {
+                    if (ggml_is_quantized(type)) {
+                        have_quantized_weight = true;
+                        break;
+                    }
                 }
             }
             if (have_quantized_weight) {
