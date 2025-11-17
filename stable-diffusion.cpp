@@ -199,6 +199,10 @@ struct EasyCacheState {
         return enabled() && step_active;
     }
 
+    bool is_step_skipped() const {
+        return enabled() && step_active && skip_current_step;
+    }
+
     bool has_cache(const SDCondition* cond) const {
         auto it = cache_diffs.find(cond);
         return it != cache_diffs.end() && !it->second.diff.empty();
@@ -1865,11 +1869,37 @@ public:
                 pretty_progress(0, (int)steps, 0);
             }
 
+            DiffusionParams diffusion_params;
+
             const bool easycache_step_active = easycache_enabled && step > 0;
             int easycache_step_index          = easycache_step_active ? (step - 1) : -1;
             if (easycache_step_active) {
                 easycache_state.begin_step(easycache_step_index, sigma);
             }
+
+            auto easycache_before_condition = [&](const SDCondition* condition, struct ggml_tensor* output_tensor) -> bool {
+                if (!easycache_step_active || condition == nullptr || output_tensor == nullptr) {
+                    return false;
+                }
+                return easycache_state.before_condition(condition,
+                                                        diffusion_params.x,
+                                                        output_tensor,
+                                                        sigma,
+                                                        easycache_step_index);
+            };
+
+            auto easycache_after_condition = [&](const SDCondition* condition, struct ggml_tensor* output_tensor) {
+                if (!easycache_step_active || condition == nullptr || output_tensor == nullptr) {
+                    return;
+                }
+                easycache_state.after_condition(condition,
+                                                diffusion_params.x,
+                                                output_tensor);
+            };
+
+            auto easycache_step_is_skipped = [&]() {
+                return easycache_step_active && easycache_state.is_step_skipped();
+            };
 
             std::vector<float> scaling = denoiser->get_scalings(sigma);
             GGML_ASSERT(scaling.size() == 3);
@@ -1916,7 +1946,6 @@ public:
                 // GGML_ASSERT(0);
             }
 
-            DiffusionParams diffusion_params;
             diffusion_params.x                  = noised_input;
             diffusion_params.timesteps          = timesteps;
             diffusion_params.guidance           = guidance_tensor;
@@ -1942,39 +1971,35 @@ public:
                 active_condition          = &id_cond;
             }
 
-            bool skip_model = false;
-            if (easycache_step_active && active_condition != nullptr) {
-                skip_model = easycache_state.before_condition(active_condition,
-                                                              diffusion_params.x,
-                                                              *active_output,
-                                                              sigma,
-                                                              easycache_step_index);
-            }
+            bool skip_model = easycache_before_condition(active_condition, *active_output);
             if (!skip_model) {
                 work_diffusion_model->compute(n_threads,
                                               diffusion_params,
                                               active_output);
-                if (easycache_step_active && active_condition != nullptr) {
-                    easycache_state.after_condition(active_condition,
-                                                    diffusion_params.x,
-                                                    *active_output);
-                }
+                easycache_after_condition(active_condition, *active_output);
             }
+
+            bool current_step_skipped = easycache_step_is_skipped();
 
             float* negative_data = nullptr;
             if (has_unconditioned) {
                 // uncond
-                if (control_hint != nullptr && control_net != nullptr) {
+                if (!current_step_skipped && control_hint != nullptr && control_net != nullptr) {
                     control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector);
                     controls = control_net->controls;
                 }
+                current_step_skipped = easycache_step_is_skipped();
                 diffusion_params.controls = controls;
                 diffusion_params.context  = uncond.c_crossattn;
                 diffusion_params.c_concat = uncond.c_concat;
                 diffusion_params.y        = uncond.c_vector;
-                work_diffusion_model->compute(n_threads,
-                                              diffusion_params,
-                                              &out_uncond);
+                bool skip_uncond = easycache_before_condition(&uncond, out_uncond);
+                if (!skip_uncond) {
+                    work_diffusion_model->compute(n_threads,
+                                                  diffusion_params,
+                                                  &out_uncond);
+                    easycache_after_condition(&uncond, out_uncond);
+                }
                 negative_data = (float*)out_uncond->data;
             }
 
@@ -1983,25 +2008,31 @@ public:
                 diffusion_params.context  = img_cond.c_crossattn;
                 diffusion_params.c_concat = img_cond.c_concat;
                 diffusion_params.y        = img_cond.c_vector;
-                work_diffusion_model->compute(n_threads,
-                                              diffusion_params,
-                                              &out_img_cond);
+                bool skip_img_cond = easycache_before_condition(&img_cond, out_img_cond);
+                if (!skip_img_cond) {
+                    work_diffusion_model->compute(n_threads,
+                                                  diffusion_params,
+                                                  &out_img_cond);
+                    easycache_after_condition(&img_cond, out_img_cond);
+                }
                 img_cond_data = (float*)out_img_cond->data;
             }
 
             int step_count         = sigmas.size();
             bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
-            float* skip_layer_data = nullptr;
+            float* skip_layer_data = has_skiplayer ? (float*)out_skip->data : nullptr;
             if (is_skiplayer_step) {
                 LOG_DEBUG("Skipping layers at step %d\n", step);
-                // skip layer (same as conditionned)
-                diffusion_params.context     = cond.c_crossattn;
-                diffusion_params.c_concat    = cond.c_concat;
-                diffusion_params.y           = cond.c_vector;
-                diffusion_params.skip_layers = skip_layers;
-                work_diffusion_model->compute(n_threads,
-                                              diffusion_params,
-                                              &out_skip);
+                if (!easycache_step_is_skipped()) {
+                    // skip layer (same as conditioned)
+                    diffusion_params.context     = cond.c_crossattn;
+                    diffusion_params.c_concat    = cond.c_concat;
+                    diffusion_params.y           = cond.c_vector;
+                    diffusion_params.skip_layers = skip_layers;
+                    work_diffusion_model->compute(n_threads,
+                                                  diffusion_params,
+                                                  &out_skip);
+                }
                 skip_layer_data = (float*)out_skip->data;
             }
             float* vec_denoised  = (float*)denoised->data;
