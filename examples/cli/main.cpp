@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <cctype>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -625,10 +626,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--upscale-model",
          "path to esrgan model.",
          &params.esrgan_path},
-        {"",
-         "--easycache",
-         "enable EasyCache for DiT models with \"threshold,start_percent,end_percent\" (example: 0.2,0.15,0.95)",
-         &params.easycache_option},
     };
 
     options.int_options = {
@@ -1141,6 +1138,38 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_easycache_arg = [&](int argc, const char** argv, int index) {
+        const std::string default_values = "0.2,0.15,0.95";
+        auto looks_like_value = [](const std::string& token) {
+            if (token.empty()) {
+                return false;
+            }
+            if (token[0] != '-') {
+                return true;
+            }
+            if (token.size() == 1) {
+                return false;
+            }
+            unsigned char next = static_cast<unsigned char>(token[1]);
+            return std::isdigit(next) || token[1] == '.';
+        };
+
+        std::string option_value;
+        int consumed = 0;
+        if (index + 1 < argc) {
+            std::string next_arg = argv[index + 1];
+            if (looks_like_value(next_arg)) {
+                option_value = argv_to_utf8(index + 1, argv);
+                consumed     = 1;
+            }
+        }
+        if (option_value.empty()) {
+            option_value = default_values;
+        }
+        params.easycache_option = option_value;
+        return consumed;
+    };
+
     options.manual_options = {
         {"-M",
          "--mode",
@@ -1221,6 +1250,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--preview",
          std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[PREVIEW_NONE] + ")\n",
          on_preview_arg},
+        {"",
+         "--easycache",
+         "enable EasyCache for DiT models with optional \"threshold,start_percent,end_percent\" (default: 0.2,0.15,0.95)",
+         on_easycache_arg},
     };
 
     if (!parse_options(argc, argv, options)) {

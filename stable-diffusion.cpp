@@ -2660,6 +2660,7 @@ enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
         }
     }
     return LORA_APPLY_MODE_COUNT;
+}
 
 void sd_easycache_params_init(sd_easycache_params_t* easycache_params) {
     *easycache_params              = {};
