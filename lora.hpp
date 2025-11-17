@@ -633,7 +633,7 @@ struct LoraModel : public GGMLRunner {
             if (out_diff == nullptr) {
                 out_diff = curr_out_diff;
             } else {
-                out_diff = ggml_concat(ctx, out_diff, curr_out_diff, ggml_n_dims(out_diff) - 1);
+                out_diff = ggml_concat(ctx, out_diff, curr_out_diff, 0);
             }
 
             index++;
