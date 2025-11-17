@@ -132,6 +132,7 @@ struct SDRequestParams {
 
     preview_t preview_method = PREVIEW_NONE;
     int preview_interval     = 1;
+    bool preview_noisy       = false;
 };
 
 struct SDParams {
@@ -486,23 +487,26 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     options.string_options = {
         {"-m", "--model", "path to full model", &params.ctxParams.model_path},
-        {"-i", "--init-img", "path to the init image", &params.input_path},
-        {"-o", "--output", "path to write result image to (default: ./output.png)", &params.output_path},
-        {"-p", "--prompt", "the prompt to render", &params.lastRequest.prompt},
-        {"-n", "--negative-prompt", "the negative prompt (default: \"\")", &params.lastRequest.negative_prompt},
-        {"", "--embd-dir", "embeddings directory", &params.ctxParams.embeddings_path},
-        {"", "--stacked-id-embd-dir", "stacked id embeddings directory", &params.ctxParams.photo_maker_path},
-        {"", "--input-id-images-dir", "input id images directory", &params.input_id_images_path},
-        {"", "--lora-model-dir", "lora model directory", &params.ctxParams.lora_model_dir},
-        {"", "--control-image", "path to control image, control net", &params.control_image_path},
-        {"", "--upscale-model", "path to esrgan model", &params.esrgan_path},
         {"", "--clip_l", "path to the clip-l text encoder", &params.ctxParams.clip_l_path},
         {"", "--clip_g", "path to the clip-g text encoder", &params.ctxParams.clip_g_path},
+        {"", "--clip_vision", "path to the clip-vision encoder", &params.ctxParams.clip_vision_path},
         {"", "--t5xxl", "path to the t5xxl text encoder", &params.ctxParams.t5xxl_path},
+        {"", "--qwen2vl", "path to the qwen2vl text encoder", &params.ctxParams.qwen2vl_path},
+        {"", "--qwen2vl_vision", "path to the qwen2vl vit", &params.ctxParams.qwen2vl_vision_path},
         {"", "--diffusion-model", "path to the standalone diffusion model", &params.ctxParams.diffusion_model_path},
+        {"", "--high-noise-diffusion-model", "path to the standalone high noise diffusion model", &params.ctxParams.high_noise_diffusion_model_path},
         {"", "--vae", "path to standalone vae model", &params.ctxParams.vae_path},
         {"", "--taesd", "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)", &params.ctxParams.taesd_path},
-        {"", "--control-net", "path to control net model", &params.ctxParams.control_net_path},
+        {"", "--embd-dir", "embeddings directory", &params.ctxParams.embeddings_path},
+        {"", "--lora-model-dir", "lora model directory", &params.ctxParams.lora_model_dir},
+        {"-o", "--output", "path to write result image to (default: ./server/output.png)", &params.output_path},
+        {"-p", "--prompt", "the prompt to render", &params.lastRequest.prompt},
+        {"-n", "--negative-prompt", "the negative prompt (default: \"\")", &params.lastRequest.negative_prompt},
+        {"", "--preview-path", "path to write preview image to (default: ./server/preview.png)", &params.preview_path},
+        // TODO: dirs for the following
+        // {"", "--photo-maker", "path to PHOTOMAKER model", &params.ctxParams.photo_maker_path},
+        // {"", "--pm-id-images-dir", "input id images directory", &params.input_id_images_path},
+        // {"", "--upscale-model", "path to esrgan model", &params.esrgan_path},
         {"", "--models-dir", "path to models directory", &params.models_dir},
         {"", "--diffusion-models-dir", "path to diffusion models directory", &params.diffusion_models_dir},
         {"", "--encoders-dir", "path to encoders directory", &params.clip_dir},
@@ -521,56 +525,21 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     options.float_options = {
         {"", "--cfg-scale", "unconditional guidance scale: (default: 7.0)", &params.lastRequest.sample_params.guidance.txt_cfg},
-        {"", "--guidance", "distilled guidance scale for models with guidance input (default: 3.5)", &params.lastRequest.sample_params.guidance.distilled_guidance},
-        {"", "--strength", "strength for noising/unnoising (default: 0.75)", &params.lastRequest.strength},
-        {"", "--style-ratio", "style ratio", &params.lastRequest.pm_params.style_strength},
-        {"", "--control-strength", "strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image", &params.lastRequest.control_strength},
-        {"", "--slg-scale", "skip layer guidance (SLG) scale, only for DiT models: (default: 0)", &params.lastRequest.sample_params.guidance.slg.scale},
-        {"", "--skip-layer-start", "SLG enabling point (default: 0.01)", &params.lastRequest.sample_params.guidance.slg.layer_start},
-        {"", "--skip-layer-end", "SLG disabling point (default: 0.2)", &params.lastRequest.sample_params.guidance.slg.layer_end}};
+        {"", "--guidance", "distilled guidance scale for models with guidance input (default: 3.5)", &params.lastRequest.sample_params.guidance.distilled_guidance}};
 
     options.bool_options = {
         {"", "--vae-tiling", "process vae in tiles to reduce memory usage", true, &params.lastRequest.tiling_params.enabled},
+        {"", "--force-sdxl-vae-conv-scale", "force use of conv scale on sdxl vae", true, &params.ctxParams.force_sdxl_vae_conv_scale},
+        {"", "--offload-to-cpu", "place the weights in RAM to save VRAM, and automatically load them into VRAM when needed", true, &params.ctxParams.offload_params_to_cpu},
         {"", "--control-net-cpu", "keep controlnet in cpu (for low vram)", true, &params.ctxParams.keep_control_net_on_cpu},
         {"", "--clip-on-cpu", "keep clip in cpu (for low vram)", true, &params.ctxParams.keep_clip_on_cpu},
         {"", "--vae-on-cpu", "keep vae in cpu (for low vram)", true, &params.ctxParams.keep_vae_on_cpu},
         {"", "--diffusion-fa", "use flash attention in the diffusion model", true, &params.ctxParams.diffusion_flash_attn},
+        {"", "--diffusion-conv-direct", "use ggml_conv2d_direct in the diffusion model", true, &params.ctxParams.diffusion_conv_direct},
+        {"", "--vae-conv-direct", "use ggml_conv2d_direct in the vae model", true, &params.ctxParams.vae_conv_direct},
         {"-v", "--verbose", "print extra info", true, &params.verbose},
-        {"", "--color", "colors the logging tags according to level", true, &params.color}};
-
-    auto on_type_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        const char* arg         = argv[index];
-        std::string type        = arg;
-        bool found              = false;
-        std::string valid_types = "";
-        for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
-            auto trait = ggml_get_type_traits((ggml_type)i);
-            std::string name(trait->type_name);
-            if (name == "f32" || trait->to_float && trait->type_size) {
-                if (i)
-                    valid_types += ", ";
-                valid_types += name;
-                if (type == name) {
-                    if (ggml_quantize_requires_imatrix((ggml_type)i)) {
-                        printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
-                    }
-                    params.ctxParams.wtype = (enum sd_type_t)i;
-                    found                  = true;
-                    break;
-                }
-            }
-        }
-        if (!found) {
-            fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
-                    type.c_str(),
-                    valid_types.c_str());
-            return -1;
-        }
-        return 1;
-    };
+        {"", "--color", "colors the logging tags according to level", true, &params.color},
+        {"", "--preview-noisy", "enables previewing noisy inputs of the models rather than the denoised outputs", true, &params.lastRequest.preview_noisy}};
 
     auto on_rng_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
@@ -632,40 +601,11 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 0;
     };
 
-    auto on_skip_layers_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        std::string layers_str = argv[index];
-        if (layers_str[0] != '[' || layers_str[layers_str.size() - 1] != ']') {
-            return -1;
-        }
-
-        layers_str = layers_str.substr(1, layers_str.size() - 2);
-
-        std::regex regex("[, ]+");
-        std::sregex_token_iterator iter(layers_str.begin(), layers_str.end(), regex, -1);
-        std::sregex_token_iterator end;
-        std::vector<std::string> tokens(iter, end);
-        std::vector<int> layers;
-        for (const auto& token : tokens) {
-            try {
-                layers.push_back(std::stoi(token));
-            } catch (const std::invalid_argument& e) {
-                return -1;
-            }
-        }
-        params.lastRequest.skip_layers = layers;
-        return 1;
-    };
-
     options.manual_options = {
-        {"", "--type", "weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). If not specified, the default is the type of the weight file", on_type_arg},
         {"", "--rng", "RNG, one of [std_default, cuda, cpu], default: cuda(sd-webui), cpu(comfyui)", on_rng_arg},
         {"-s", "--seed", "RNG seed (default: 42, use random seed for < 0)", on_seed_arg},
         {"", "--sampling-method", "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)", on_sample_method_arg},
         {"", "--schedule", "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete", on_schedule_arg},
-        {"", "--skip-layers", "layers to skip for SLG steps (default: [7,8,9])", on_skip_layers_arg},
         {"-h", "--help", "show this help message and exit", on_help_arg}};
 
     if (!parse_options(argc, argv, options)) {
@@ -719,386 +659,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         srand((int)time(nullptr));
         params.lastRequest.seed = rand();
     }
-
-    bool invalid_arg = false;
-    std::string arg;
-    for (int i = 1; i < argc; i++) {
-        arg = argv[i];
-
-        if (arg == "-t" || arg == "--threads") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.n_threads = std::stoi(argv[i]);
-        } else if (arg == "-m" || arg == "--model") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.model_path = argv[i];
-        } else if (arg == "--clip_l") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.clip_l_path = argv[i];
-        } else if (arg == "--clip_g") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.clip_g_path = argv[i];
-        } else if (arg == "--t5xxl") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.t5xxl_path = argv[i];
-        } else if (arg == "--diffusion-model") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.diffusion_model_path = argv[i];
-        } else if (arg == "--vae") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.vae_path = argv[i];
-        } else if (arg == "--taesd") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.taesd_path = argv[i];
-        } else if (arg == "--control-net") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.control_net_path = argv[i];
-        } else if (arg == "--upscale-model") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.esrgan_path = argv[i];
-        } else if (arg == "--embd-dir") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.embeddings_path = argv[i];
-        } else if (arg == "--stacked-id-embd-dir") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.photo_maker_path = argv[i];
-        } else if (arg == "--input-id-images-dir") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.input_id_images_path = argv[i];
-        } else if (arg == "--type") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            std::string type        = argv[i];
-            bool found              = false;
-            std::string valid_types = "";
-            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
-                auto trait = ggml_get_type_traits((ggml_type)i);
-                std::string name(trait->type_name);
-                if (name == "f32" || trait->to_float && trait->type_size) {
-                    if (i)
-                        valid_types += ", ";
-                    valid_types += name;
-                    if (type == name) {
-                        if (ggml_quantize_requires_imatrix((ggml_type)i)) {
-                            printf("\033[35;1m[WARNING]\033[0m: type %s requires imatrix to work properly. A dummy imatrix will be used, expect poor quality.\n", trait->type_name);
-                        }
-                        params.ctxParams.wtype = (enum sd_type_t)i;
-                        found                  = true;
-                        break;
-                    }
-                }
-            }
-            if (!found) {
-                fprintf(stderr, "error: invalid weight format %s, must be one of [%s]\n",
-                        type.c_str(),
-                        valid_types.c_str());
-                exit(1);
-            }
-        } else if (arg == "--lora-model-dir") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.ctxParams.lora_model_dir = argv[i];
-        } else if (arg == "-i" || arg == "--init-img") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.input_path = argv[i];
-        } else if (arg == "--control-image") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.control_image_path = argv[i];
-        } else if (arg == "-o" || arg == "--output") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.output_path = argv[i];
-        } else if (arg == "-p" || arg == "--prompt") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.prompt = argv[i];
-        } else if (arg == "-n" || arg == "--negative-prompt") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.negative_prompt = argv[i];
-        } else if (arg == "--cfg-scale") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.sample_params.guidance.txt_cfg = std::stof(argv[i]);
-        } else if (arg == "--guidance") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.sample_params.guidance.distilled_guidance = std::stof(argv[i]);
-        } else if (arg == "--strength") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.strength = std::stof(argv[i]);
-        } else if (arg == "--style-ratio") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.pm_params.style_strength = std::stof(argv[i]);
-        } else if (arg == "--control-strength") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.control_strength = std::stof(argv[i]);
-        } else if (arg == "-H" || arg == "--height") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.height = std::stoi(argv[i]);
-        } else if (arg == "-W" || arg == "--width") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.width = std::stoi(argv[i]);
-        } else if (arg == "--steps") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.sample_params.sample_steps = std::stoi(argv[i]);
-        } else if (arg == "--clip-skip") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.clip_skip = std::stoi(argv[i]);
-        } else if (arg == "--vae-tiling") {
-            params.lastRequest.tiling_params.enabled = true;
-        } else if (arg == "--control-net-cpu") {
-            params.ctxParams.keep_control_net_on_cpu = true;
-        } else if (arg == "--clip-on-cpu") {
-            params.ctxParams.keep_clip_on_cpu = true;  // will slow down get_learned_condiotion but necessary for low MEM GPUs
-        } else if (arg == "--vae-on-cpu") {
-            params.ctxParams.keep_vae_on_cpu = true;  // will slow down latent decoding but necessary for low MEM GPUs
-        } else if (arg == "--diffusion-fa") {
-            params.ctxParams.diffusion_flash_attn = true;  // can reduce MEM significantly
-        } else if (arg == "-b" || arg == "--batch-count") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.batch_count = std::stoi(argv[i]);
-        } else if (arg == "--rng") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            std::string rng_type_str = argv[i];
-            if (rng_type_str == "std_default") {
-                params.ctxParams.rng_type = STD_DEFAULT_RNG;
-            } else if (rng_type_str == "cuda") {
-                params.ctxParams.rng_type = CUDA_RNG;
-            } else {
-                invalid_arg = true;
-                break;
-            }
-        } else if (arg == "--schedule") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            const char* schedule_selected = argv[i];
-            scheduler_t schedule_found    = str_to_schedule(schedule_selected);
-            if (schedule_found == SCHEDULE_COUNT) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.sample_params.scheduler = schedule_found;
-        } else if (arg == "-s" || arg == "--seed") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.seed = std::stoll(argv[i]);
-        } else if (arg == "--sampling-method") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            const char* sample_method_selected = argv[i];
-            int sample_method_found            = str_to_sample_method(sample_method_selected);
-            if (sample_method_found == SAMPLE_METHOD_COUNT) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.sample_params.sample_method = (sample_method_t)sample_method_found;
-        } else if (arg == "-h" || arg == "--help") {
-            print_usage(argc, argv, options);
-            exit(0);
-        } else if (arg == "-v" || arg == "--verbose") {
-            params.verbose = true;
-        } else if (arg == "--color") {
-            params.color = true;
-        } else if (arg == "--slg-scale") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.sample_params.guidance.slg.scale = std::stof(argv[i]);
-        } else if (arg == "--skip-layers") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            if (argv[i][0] != '[') {
-                invalid_arg = true;
-                break;
-            }
-            std::string layers_str = argv[i];
-            while (layers_str.back() != ']') {
-                if (++i >= argc) {
-                    invalid_arg = true;
-                    break;
-                }
-                layers_str += " " + std::string(argv[i]);
-            }
-            layers_str = layers_str.substr(1, layers_str.size() - 2);
-
-            std::regex regex("[, ]+");
-            std::sregex_token_iterator iter(layers_str.begin(), layers_str.end(), regex, -1);
-            std::sregex_token_iterator end;
-            std::vector<std::string> tokens(iter, end);
-            std::vector<int> layers;
-            for (const auto& token : tokens) {
-                try {
-                    layers.push_back(std::stoi(token));
-                } catch (const std::invalid_argument& e) {
-                    invalid_arg = true;
-                    break;
-                }
-            }
-            params.lastRequest.skip_layers = layers;
-
-            if (invalid_arg) {
-                break;
-            }
-        } else if (arg == "--skip-layer-start") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.sample_params.guidance.slg.layer_start = std::stof(argv[i]);
-        } else if (arg == "--skip-layer-end") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.lastRequest.sample_params.guidance.slg.layer_end = std::stof(argv[i]);
-        } else if (arg == "--port") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.port = std::stoi(argv[i]);
-        } else if (arg == "--host") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.host = argv[i];
-        } else if (arg == "--models-dir") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.models_dir = argv[i];
-        } else if (arg == "--diffusion-models-dir") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.diffusion_models_dir = argv[i];
-        } else if (arg == "--encoders-dir") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.clip_dir = argv[i];
-        } else if (arg == "--vae-dir") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.vae_dir = argv[i];
-        } else if (arg == "--tae-dir") {
-            if (++i >= argc) {
-                invalid_arg = true;
-                break;
-            }
-            params.tae_dir = argv[i];
-        } else {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
-            print_usage(argc, argv, options);
-            exit(1);
-        }
-    }
-    if (invalid_arg) {
-        fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
-        print_usage(argc, argv, options);
-        exit(1);
-    }
+    
     if (params.ctxParams.n_threads <= 0) {
         params.ctxParams.n_threads = get_num_physical_cores();
     }
@@ -1880,7 +1441,7 @@ void start_server(SDParams params) {
                     params.lastRequest.control_strength,
                     params.lastRequest.pm_params,
                     params.lastRequest.tiling_params};
-                sd_set_preview_callback((sd_preview_cb_t)step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, true, false);
+                sd_set_preview_callback((sd_preview_cb_t)step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, !params.lastRequest.preview_noisy, params.lastRequest.preview_noisy);
                 results = generate_image(sd_ctx, &gen_params);
 
                 if (results == NULL) {
