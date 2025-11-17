@@ -33,6 +33,7 @@ Options:
   -p, --prompt <string>                    the prompt to render
   -n, --negative-prompt <string>           the negative prompt (default: "")
   --preview-path <string>                  path to write preview image to (default: ./preview.png)
+  --easycache <string>                     enable EasyCache for DiT models, accepts optional "threshold,start_percent,end_percent" values (defaults to 0.2,0.15,0.95)
   --upscale-model <string>                 path to esrgan model.
   -t, --threads <int>                      number of threads to use during computation (default: -1). If threads <= 0, then threads will be set to the number of
                                            CPU physical cores
