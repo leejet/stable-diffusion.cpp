@@ -118,6 +118,10 @@ struct SDRequestParams {
     // sd_image_t control_image;
     float control_strength = 0.9f;
 
+    // pm_images_vec should be turned into a vector of sd_image_t at the beginning of sd_pm_params
+    std::vector<sd_image_t> pm_images_vec = {};
+    // same but a char ptr
+    std::string pm_id_embed_path     = "";
     sd_pm_params_t pm_params         = {NULL, 0, NULL, 20.f};
     sd_tiling_params_t tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 
@@ -659,7 +663,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         srand((int)time(nullptr));
         params.lastRequest.seed = rand();
     }
-    
+
     if (params.ctxParams.n_threads <= 0) {
         params.ctxParams.n_threads = get_num_physical_cores();
     }
@@ -761,28 +765,568 @@ static void log_server_request(const httplib::Request& req, const httplib::Respo
     printf("request: %s %s (%s)\n", req.method.c_str(), req.path.c_str(), req.body.c_str());
 }
 
+struct StringOptionJson {
+    std::string name;
+    std::string* target;
+};
+
+struct IntOptionJson {
+    std::string name;
+    int* target;
+};
+
+struct LongOptionJson {
+    std::string name;
+    int64_t* target;
+};
+
+struct FloatOptionJson {
+    std::string name;
+    float* target;
+};
+
+struct BoolOptionJson {
+    std::string name;
+    bool* target;
+};
+
+struct ManualOptionJson {
+    std::string name;
+    std::function<bool(const nlohmann::json&)> cb;
+};
+
+struct JsonOptions {
+    std::vector<StringOptionJson> string_options;
+    std::vector<IntOptionJson> int_options;
+    std::vector<LongOptionJson> long_options;
+    std::vector<FloatOptionJson> float_options;
+    std::vector<BoolOptionJson> bool_options;
+    std::vector<ManualOptionJson> manual_options;
+};
+
+bool parse_json_options(nlohmann::json payload, JsonOptions& options) {
+    bool has_anything_changed = false;
+
+    for (auto& option : options.string_options) {
+        try {
+            if (payload.contains(option.name)) {
+                option.target->assign(payload[option.name].get<std::string>());
+                has_anything_changed = true;
+            }
+        } catch (...) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse string option: %s\n", option.name.c_str());
+        }
+    }
+    for (auto& option : options.int_options) {
+        try {
+            if (payload.contains(option.name)) {
+                *option.target       = payload[option.name].get<int>();
+                has_anything_changed = true;
+            }
+        } catch (...) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse int option: %s\n", option.name.c_str());
+        }
+    }
+    for (auto& option : options.long_options) {
+        try {
+            if (payload.contains(option.name)) {
+                *option.target       = payload[option.name].get<int64_t>();
+                has_anything_changed = true;
+            }
+        } catch (...) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse long option: %s\n", option.name.c_str());
+        }
+    }
+    for (auto& option : options.float_options) {
+        try {
+            if (payload.contains(option.name)) {
+                *option.target       = payload[option.name].get<float>();
+                has_anything_changed = true;
+            }
+        } catch (...) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse float option: %s\n", option.name.c_str());
+        }
+    }
+
+    for (auto& option : options.bool_options) {
+        try {
+            if (payload.contains(option.name)) {
+                *option.target       = payload[option.name].get<bool>();
+                has_anything_changed = true;
+            }
+        } catch (...) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse bool option: %s\n", option.name.c_str());
+        }
+    }
+
+    for (auto& option : options.manual_options) {
+        try {
+            if (payload.contains(option.name)) {
+                has_anything_changed = option.cb(payload[option.name]);
+            }
+        } catch (...) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse bool option: %s\n", option.name.c_str());
+        }
+    }
+
+    return has_anything_changed;
+}
+
 bool parseJsonPrompt(std::string json_str, SDParams* params) {
     bool updatectx = false;
     using namespace nlohmann;
     json payload = json::parse(json_str);
+
     // if no exception, the request is a json object
     // now we try to get the new param values from the payload object
     // const char *prompt, const char *negative_prompt, int clip_skip, float cfg_scale, float guidance, int width, int height, sample_method_t sample_method, int sample_steps, int64_t seed, int batch_count, const sd_image_t *control_cond, float control_strength, float style_strength, const char *input_id_images_path
-    try {
-        std::string prompt         = payload["prompt"];
-        params->lastRequest.prompt = prompt;
-    } catch (...) {
-    }
-    try {
-        std::string negative_prompt         = payload["negative_prompt"];
-        params->lastRequest.negative_prompt = negative_prompt;
-    } catch (...) {
-    }
-    try {
-        int clip_skip                 = payload["clip_skip"];
-        params->lastRequest.clip_skip = clip_skip;
-    } catch (...) {
-    }
+
+    JsonOptions guidance_options = {
+        {},
+        {},
+        {},
+        // float_options
+        {
+            {"txt_cfg", &params->lastRequest.sample_params.guidance.txt_cfg},
+            {"img_cfg", &params->lastRequest.sample_params.guidance.img_cfg},
+            {"distilled_guidance", &params->lastRequest.sample_params.guidance.distilled_guidance},
+        },
+        {},
+        // manual_options
+        {
+            {"slg",
+             [&](const json& o) -> bool {
+                 JsonOptions slg_options = {
+                     {},
+                     {},
+                     {},
+                     // float_options
+                     {
+                         {"layer_start", &params->lastRequest.sample_params.guidance.slg.layer_start},
+                         {"layer_end", &params->lastRequest.sample_params.guidance.slg.layer_end},
+                         {"scale", &params->lastRequest.sample_params.guidance.slg.scale},
+                     },
+                     {},
+                     // manual_options
+                     {{"layers", [&](const json& o) -> bool {
+                           std::vector<int> layers         = o.get<std::vector<int>>();
+                           bool change                     = params->lastRequest.skip_layers != layers;
+                           params->lastRequest.skip_layers = layers;
+                           return change;
+                       }}},
+                 };
+                 return parse_json_options(o, slg_options);
+             }},
+        },
+    };
+
+    JsonOptions sample_params_options = {
+        {},
+        // int_options
+        {
+            {"sample_steps", &params->lastRequest.sample_params.sample_steps},
+            {"shifted_timestep", &params->lastRequest.sample_params.shifted_timestep},
+        },
+        {},
+        // float_options
+        {{"eta", &params->lastRequest.sample_params.eta}},
+        {},
+        // manual_options
+        {
+            {"guidance", [&](const json& o) -> bool {
+                 return parse_json_options(o, guidance_options);
+             }},
+            {"scheduler", [&](const json& o) -> bool {
+                 std::string schedule       = o.get<std::string>();
+                 scheduler_t schedule_found = str_to_schedule(schedule.c_str());
+                 bool change                = false;
+                 if (schedule_found != SCHEDULE_COUNT) {
+                     if (params->lastRequest.sample_params.scheduler != schedule_found) {
+                         params->lastRequest.sample_params.scheduler = schedule_found;
+                         change                                      = true;
+                     }
+                 } else {
+                     sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown schedule: %s\n", schedule.c_str());
+                 }
+                 return change;
+             }},
+            {"sample_method", [&](const json& o) -> bool {
+                 std::string method           = o.get<std::string>();
+                 sample_method_t method_found = str_to_sample_method(method.c_str());
+                 bool change                  = false;
+                 if (method_found != SAMPLE_METHOD_COUNT) {
+                     if (params->lastRequest.sample_params.sample_method != method_found) {
+                         params->lastRequest.sample_params.sample_method = method_found;
+                         change                                          = true;
+                     }
+                 } else {
+                     sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown method: %s\n", method.c_str());
+                 }
+                 return change;
+             }},
+        }};
+
+    JsonOptions photomaker_options = {
+        {},
+        {},
+        {},
+        {{"style_strength", &params->lastRequest.pm_params.style_strength}},
+        {},
+        {
+            {"id_images", [&](const json& o) -> bool {
+                 // TODO fill up params->lastRequest.pm_images_vec
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "id_images not implemented yet\n");
+                 return false;
+             }},
+            {"id_embed_path", [&](const json& o) -> bool {
+                 // TODO: avoid parsing paths, rather use ids and convert to path server-side
+                 std::string new_path                 = o.get<std::string>();
+                 bool change                          = params->lastRequest.pm_id_embed_path != new_path;
+                 params->lastRequest.pm_id_embed_path = new_path;
+                 return change;
+             }},
+        }};
+
+    JsonOptions tiling_options = {
+        {},
+        // int_options
+        {
+            {"tile_size_x", &params->lastRequest.tiling_params.tile_size_x},
+            {"tile_size_y", &params->lastRequest.tiling_params.tile_size_y},
+        },
+        {},
+        // float_options
+        {
+            {"target_overlap", &params->lastRequest.tiling_params.target_overlap},
+            {"rel_size_x", &params->lastRequest.tiling_params.rel_size_x},
+            {"rel_size_y", &params->lastRequest.tiling_params.rel_size_y},
+        },
+        {{"enabled", &params->lastRequest.tiling_params.enabled}},
+        // manual_options
+        {
+            {"tile_size", [&](const json& o) -> bool {
+                 bool change = false;
+                 // try parsing as single int, as list of ints, or as formated string
+                 if (o.is_number_integer()) {
+                     int new_size = o.get<int>();
+
+                     change = params->lastRequest.tiling_params.tile_size_x != new_size || params->lastRequest.tiling_params.tile_size_y != new_size;
+
+                     params->lastRequest.tiling_params.tile_size_x = new_size;
+                     params->lastRequest.tiling_params.tile_size_y = new_size;
+                 } else if (o.is_array()) {
+                     std::vector<int> tile_size = o.get<std::vector<int>>();
+                     if (tile_size.size() == 2) {
+                         change = params->lastRequest.tiling_params.tile_size_x != tile_size[0] || params->lastRequest.tiling_params.tile_size_y != tile_size[1];
+
+                         params->lastRequest.tiling_params.tile_size_x = tile_size[0];
+                         params->lastRequest.tiling_params.tile_size_y = tile_size[1];
+                     } else {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "tile_size array must have 2 elements\n");
+                     }
+                 } else {
+                     std::string tile_size_str = o.get<std::string>();
+                     // parse string as "WxH" or "W,H" or "W H"
+                     size_t x_pos = tile_size_str.find_first_of("xX, ");
+                     if (x_pos != std::string::npos) {
+                         int x  = std::stoi(tile_size_str.substr(0, x_pos));
+                         int y  = std::stoi(tile_size_str.substr(x_pos + 1));
+                         change = params->lastRequest.tiling_params.tile_size_x != x || params->lastRequest.tiling_params.tile_size_y != y;
+
+                         params->lastRequest.tiling_params.tile_size_x = x;
+                         params->lastRequest.tiling_params.tile_size_y = y;
+                     } else {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "tile_size string must be in format WxH or W,H or W H\n");
+                     }
+                 }
+                 return change;
+             }},
+        }};
+
+    JsonOptions request_options = {
+        // string_options
+        {
+            {"prompt", &params->lastRequest.prompt},
+            {"negative_prompt", &params->lastRequest.negative_prompt},
+        },
+        // int_options
+        {
+            {"clip_skip", &params->lastRequest.clip_skip},
+            {"width", &params->lastRequest.width},
+            {"height", &params->lastRequest.height},
+            {"batch_count", &params->lastRequest.batch_count},
+            {"preview_interval", &params->lastRequest.preview_interval},
+        },
+        // long_options
+        {
+            {"seed", &params->lastRequest.seed},
+        },
+        // float_options
+        {
+            {"strength", &params->lastRequest.strength},
+            {"control_strength", &params->lastRequest.control_strength},
+        },
+        // bool_options
+        {
+            {"auto_resize_ref_image", &params->lastRequest.auto_resize_ref_image},
+            {"increase_ref_index", &params->lastRequest.increase_ref_index},
+            {"upscale", &params->lastRequest.upscale},
+            {"preview_noisy", &params->lastRequest.preview_noisy},
+        },
+        // manual_options
+        {
+            {"sample_params", [&](const json& o) -> bool {
+                 return parse_json_options(o, sample_params_options);
+             }},
+            {"pm_params", [&](const json& o) -> bool {
+                 return parse_json_options(o, photomaker_options);
+             }},
+            {"tiling_params", [&](const json& o) -> bool {
+                 return parse_json_options(o, tiling_options);
+             }},
+            {"init_image", [&](const json& o) -> bool {
+                 // TODO (probably convert base64 to sd_image_t)
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "init_image not implemented yet\n");
+                 return false;
+             }},
+            {"mask_image", [&](const json& o) -> bool {
+                 // TODO (probably convert base64 to sd_image_t)
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "mask_image not implemented yet\n");
+                 return false;
+             }},
+            {"control_image", [&](const json& o) -> bool {
+                 // TODO (probably convert base64 to sd_image_t)
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "control_image not implemented yet\n");
+                 return false;
+             }},
+            // ref images
+            {"ref_images", [&](const json& o) -> bool {
+                 // TODO (probably convert base64 list to vector of sd_image_t)
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "ref_images not implemented yet\n");
+                 return false;
+             }},
+            // preview_method
+            {"preview_method", [&](const json& o) -> bool {
+                 std::string preview = o.get<std::string>();
+                 int preview_found   = -1;
+                 for (int m = 0; m < PREVIEW_COUNT; m++) {
+                     if (!strcmp(preview.c_str(), sd_preview_name((preview_t)m))) {
+                         preview_found = m;
+                     }
+                 }
+                 bool change = false;
+                 if (preview_found >= 0) {
+                     if (params->lastRequest.preview_method != (preview_t)preview_found) {
+                         params->lastRequest.preview_method = (preview_t)preview_found;
+                         change                             = true;
+                     }
+                 } else {
+                     sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown preview: %s\n", preview.c_str());
+                 }
+                 return change;
+             }},
+        }};
+
+    parse_json_options(payload, request_options);
+
+    // CTX
+    
+    const int MODEL_UNLOAD = -2;
+    const int MODEL_KEEP   = -1;
+
+    auto parse_model_part = [&](const json& o, std::vector<std::string> model_part_files, std::string model_part_dir, std::string& model_part_path) -> bool {
+        bool change = false;
+        int index   = o.get<int>();
+        if (index >= 0 && index < model_part_files.size()) {
+            std::string new_path = model_part_dir + model_part_files[index];
+            if (model_part_path != new_path) {
+                model_part_path = new_path;
+                change          = true;
+            }
+        } else if (index == MODEL_UNLOAD) {
+            if (model_part_path != "") {
+                change = true;
+            }
+            model_part_path = "";
+        } else if (index != MODEL_KEEP) {
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid t5xxl index: %d\n", index);
+        }
+        return change;
+    };
+
+    JsonOptions ctx_options = {
+        // string_options (empty, we use ids to avoid exposing paths)
+        {},
+        // int_options
+        {
+            {"n_threads", &params->ctxParams.n_threads},
+            {"chroma_t5_mask_pad", &params->ctxParams.chroma_t5_mask_pad},
+        },
+        // long_options
+        {},
+        // float_options
+        {
+            {"flow_shift", &params->ctxParams.flow_shift},
+        },
+        // bool_options
+        {
+            {"vae_decode_only", &params->ctxParams.vae_decode_only},
+            {"free_params_immediately", &params->ctxParams.free_params_immediately},
+            {"offload_params_to_cpu", &params->ctxParams.offload_params_to_cpu},
+            {"keep_clip_on_cpu", &params->ctxParams.keep_clip_on_cpu},
+            {"keep_control_net_on_cpu", &params->ctxParams.keep_control_net_on_cpu},
+            {"keep_vae_on_cpu", &params->ctxParams.keep_vae_on_cpu},
+            {"diffusion_flash_attn", &params->ctxParams.diffusion_flash_attn},
+            {"taesd_preview", &params->ctxParams.taesd_preview},
+            {"diffusion_conv_direct", &params->ctxParams.diffusion_conv_direct},
+            {"vae_conv_direct", &params->ctxParams.vae_conv_direct},
+            {"force_sdxl_vae_conv_scale", &params->ctxParams.force_sdxl_vae_conv_scale},
+            {"chroma_use_dit_mask", &params->ctxParams.chroma_use_dit_mask},
+            {"chroma_use_t5_mask", &params->ctxParams.chroma_use_t5_mask},
+        },
+        // manual_options (oh boy there are a lot)
+        {
+            {"model", [&](const json& o) -> bool {
+                 bool change     = false;
+                 int model_index = o.get<int>();
+                 if (model_index >= 0 && model_index < params->models_files.size()) {
+                     std::string new_path = params->models_dir + params->models_files[model_index];
+                     if (params->ctxParams.model_path != new_path) {
+                         params->ctxParams.model_path           = new_path;
+                         params->ctxParams.diffusion_model_path = "";
+                         change                                 = true;
+                     }
+                 } else {
+                     if (model_index == MODEL_UNLOAD) {
+                         if (params->ctxParams.model_path != "") {
+                             change = true;
+                         }
+                         params->ctxParams.model_path = "";
+                     } else if (model_index != MODEL_KEEP) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid model index: %d\n", model_index);
+                     }
+                 }
+                 return change;
+             }},
+            {"diffusion_model", [&](const json& o) -> bool {
+                 bool change     = false;
+                 int model_index = o.get<int>();
+                 if (model_index >= 0 && model_index < params->diffusion_models_files.size()) {
+                     std::string new_path = params->diffusion_models_dir + params->diffusion_models_files[model_index];
+                     if (params->ctxParams.diffusion_model_path != new_path) {
+                         params->ctxParams.diffusion_model_path = new_path;
+                         params->ctxParams.model_path           = "";
+                         change                                 = true;
+                     }
+                 } else {
+                     if (model_index == MODEL_UNLOAD) {
+                         if (params->ctxParams.diffusion_model_path != "") {
+                             change = true;
+                         }
+                         params->ctxParams.diffusion_model_path = "";
+                     } else if (model_index != MODEL_KEEP) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid diffusion_model index: %d\n", model_index);
+                     }
+                 }
+                 return change;
+             }},
+            {"high_noise_diffusion_model", [&](const json& o) -> bool {
+                 // TODO: high_noise
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "high_noise_diffusion_model not implemented yet\n");
+                 return false;
+             }},
+            {"clip_l", [&](const json& o) -> bool {
+                 return parse_model_part(o, params->clip_files, params->clip_dir, params->ctxParams.clip_l_path);
+             }},
+            {"clip_g", [&](const json& o) -> bool {
+                 return parse_model_part(o, params->clip_files, params->clip_dir, params->ctxParams.clip_g_path);
+             }},
+            {"clip_vision", [&](const json& o) -> bool {
+                 //  TODO: support clip_vison indices
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "clip_vision not implemented yet\n");
+                 return false;
+             }},
+            {"t5xxl", [&](const json& o) -> bool {
+                 return parse_model_part(o, params->clip_files, params->clip_dir, params->ctxParams.t5xxl_path);
+             }},
+            {"vae", [&](const json& o) -> bool {
+                 return parse_model_part(o, params->vae_files, params->vae_dir, params->ctxParams.vae_path);
+             }},
+            {"tae", [&](const json& o) -> bool {
+                 return parse_model_part(o, params->tae_files, params->tae_dir, params->ctxParams.taesd_path);
+             }},
+            // TODO: qwen stuff
+            {"qwen2vl", [&](const json& o) -> bool {
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "qwen2vl not implemented yet\n");
+                 return false;
+             }},
+            {"qwen2vl_vision", [&](const json& o) -> bool {
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "qwen2vl_vision not implemented yet\n");
+                 return false;
+             }},
+            // controlnet stuff
+            {"control_net", [&](const json& o) -> bool {
+                 // TODO
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "control_net not implemented yet\n");
+                 return false;
+             }},
+            // skip lora_model_dir and embeddings (only set via cli args)
+            // photomaker
+            {"photo_maker", [&](const json& o) -> bool {
+                 // TODO
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "photo_maker not implemented yet\n");
+                 return false;
+             }},
+            {"tensor_type_rules", [&](const json& o) -> bool {
+                 // TODO
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "tensor_type_rules not implemented yet\n");
+                 return false;
+             }},
+            {"wtype", [&](const json& o) -> bool {
+                 bool change      = false;
+                 std::string type = o.get<std::string>();
+                 if (type != "") {
+                     for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+                         auto trait = ggml_get_type_traits((ggml_type)i);
+                         std::string name(trait->type_name);
+                         if (name == "f32" || trait->to_float && trait->type_size) {
+                             if (type == name) {
+                                 params->ctxParams.wtype = (enum sd_type_t)i;
+                                 change                  = true;
+                                 break;
+                             }
+                         }
+                     }
+                 }
+                 return change;
+             }},
+            {"rng_type", [&](const json& o) -> bool {
+                 // TODO
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "rng_type not implemented yet\n");
+                 return false;
+             }},
+            {"sampler_rng_type", [&](const json& o) -> bool {
+                 // TODO
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "sampler_rng_type not implemented yet\n");
+                 return false;
+             }},
+            {"prediction", [&](const json& o) -> bool {
+                 // TODO
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "prediction not implemented yet\n");
+                 return false;
+             }},
+            {"lora_apply_mode", [&](const json& o) -> bool {
+                 // TODO
+                 sd_log(sd_log_level_t::SD_LOG_WARN, "lora_apply_mode not implemented yet\n");
+                 return false;
+             }},
+        }};
+
+    updatectx = parse_json_options(payload, ctx_options);
+
+    // Legacy stuff (to keep webui working for now)
+    // TODO: remove
+
     try {
         json guidance_params = payload["guidance_params"];
         try {
@@ -844,16 +1388,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         // }
     } catch (...) {
     }
-    try {
-        int width                 = payload["width"];
-        params->lastRequest.width = width;
-    } catch (...) {
-    }
-    try {
-        int height                 = payload["height"];
-        params->lastRequest.height = height;
-    } catch (...) {
-    }
+
     try {
         std::string sample_method = payload["sample_method"];
 
@@ -882,39 +1417,8 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         params->lastRequest.sample_params.sample_steps = sample_steps;
     } catch (...) {
     }
-    try {
-        int64_t seed             = payload["seed"];
-        params->lastRequest.seed = seed;
-    } catch (...) {
-    }
-    try {
-        int batch_count                 = payload["batch_count"];
-        params->lastRequest.batch_count = batch_count;
-    } catch (...) {
-    }
 
-    try {
-        std::string control_cond = payload["control_cond"];
 
-        // TODO map to enum value
-        // LOG_WARN("control_cond is not supported yet\n");
-        sd_log(sd_log_level_t::SD_LOG_WARN, "control_cond is not supported yet\n");
-    } catch (...) {
-    }
-    try {
-        float control_strength = payload["control_strength"];
-        // params->control_strength = control_strength;
-        // LOG_WARN("control_strength is not supported yet\n");
-        sd_log(sd_log_level_t::SD_LOG_WARN, "control_strength is not supported yet\n", params);
-    } catch (...) {
-    }
-    try {
-        float style_strength = payload["style_strength"];
-        // params->style_strength = style_strength;
-        // LOG_WARN("style_strength is not supported yet\n");
-        sd_log(sd_log_level_t::SD_LOG_WARN, "style_strength is not supported yet\n", params);
-    } catch (...) {
-    }
     try {
         std::string input_id_images_path = payload["input_id_images_path"];
         // TODO replace with b64 image maybe?
@@ -952,167 +1456,10 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     } catch (...) {
     }
 
-    // updatectx zone
+    // ctxParams zone
 
     try {
-        bool vae_cpu = payload["keep_vae_on_cpu"];
-        if (params->ctxParams.keep_vae_on_cpu != vae_cpu) {
-            params->ctxParams.keep_vae_on_cpu = vae_cpu;
-            updatectx                         = true;
-        }
-    } catch (...) {
-    }
-    try {
-        bool clip_cpu = payload["keep_clip_on_cpu"];
-        if (params->ctxParams.keep_clip_on_cpu != clip_cpu) {
-            params->ctxParams.keep_clip_on_cpu = clip_cpu;
-            updatectx                          = true;
-        }
-    } catch (...) {
-    }
-    const int MODEL_UNLOAD = -2;
-    const int MODEL_KEEP   = -1;
-    try {
-        int model_index = payload["model"];
-        if (model_index >= 0 && model_index < params->models_files.size()) {
-            std::string new_path = params->models_dir + params->models_files[model_index];
-            if (params->ctxParams.model_path != new_path) {
-                params->ctxParams.model_path           = new_path;
-                params->ctxParams.diffusion_model_path = "";
-                updatectx                              = true;
-            }
-        } else {
-            if (model_index == MODEL_UNLOAD) {
-                if (params->ctxParams.model_path != "") {
-                    updatectx = true;
-                }
-                params->ctxParams.model_path = "";
-            } else if (model_index != MODEL_KEEP) {
-                sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid model index: %d\n", model_index);
-            }
-        }
-    } catch (...) {
-    }
-    try {
-        int diffusion_model_index = payload["diffusion_model"];
-        if (diffusion_model_index >= 0 && diffusion_model_index < params->diffusion_models_files.size()) {
-            std::string new_path = params->diffusion_models_dir + params->diffusion_models_files[diffusion_model_index];
-            if (params->ctxParams.diffusion_model_path != new_path) {
-                params->ctxParams.diffusion_model_path = new_path;
-                params->ctxParams.model_path           = "";
-                updatectx                              = true;
-            }
-        } else if (diffusion_model_index == MODEL_UNLOAD) {
-            if (params->ctxParams.diffusion_model_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.diffusion_model_path = "";
-        } else if (diffusion_model_index != MODEL_KEEP) {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid diffusion model index: %d\n", diffusion_model_index);
-        }
-    } catch (...) {
-    }
-    try {
-        int clip_l_index = payload["clip_l"];
-        if (clip_l_index >= 0 && clip_l_index < params->clip_files.size()) {
-            std::string new_path = params->clip_dir + params->clip_files[clip_l_index];
-            if (params->ctxParams.clip_l_path != new_path) {
-                params->ctxParams.clip_l_path = new_path;
-                updatectx                     = true;
-            }
-        } else if (clip_l_index == MODEL_UNLOAD) {
-            if (params->ctxParams.clip_l_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.clip_l_path = "";
-        } else if (clip_l_index != MODEL_KEEP) {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid clip_l index: %d\n", clip_l_index);
-        }
-    } catch (...) {
-    }
-    try {
-        int clip_g_index = payload["clip_g"];
-        if (clip_g_index >= 0 && clip_g_index < params->clip_files.size()) {
-            std::string new_path = params->clip_dir + params->clip_files[clip_g_index];
-            if (params->ctxParams.clip_g_path != new_path) {
-                params->ctxParams.clip_g_path = new_path;
-                updatectx                     = true;
-            }
-        } else if (clip_g_index == MODEL_UNLOAD) {
-            if (params->ctxParams.clip_g_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.clip_g_path = "";
-        } else if (clip_g_index != MODEL_KEEP) {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid clip_g index: %d\n", clip_g_index);
-        }
-    } catch (...) {
-    }
-    try {
-        int t5xxl_index = payload["t5xxl"];
-        if (t5xxl_index >= 0 && t5xxl_index < params->clip_files.size()) {
-            std::string new_path = params->clip_dir + params->clip_files[t5xxl_index];
-            if (params->ctxParams.t5xxl_path != new_path) {
-                params->ctxParams.t5xxl_path = new_path;
-                updatectx                    = true;
-            }
-        } else if (t5xxl_index == MODEL_UNLOAD) {
-            if (params->ctxParams.t5xxl_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.t5xxl_path = "";
-        } else if (t5xxl_index != MODEL_KEEP) {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid t5xxl index: %d\n", t5xxl_index);
-        }
-    } catch (...) {
-    }
-    try {
-        int vae_index = payload["vae"];
-        if (vae_index >= 0 && vae_index < params->vae_files.size()) {
-            std::string new_path = params->vae_dir + params->vae_files[vae_index];
-            if (params->ctxParams.vae_path != new_path) {
-                params->ctxParams.vae_path = new_path;
-                updatectx                  = true;
-            }
-        } else if (vae_index == MODEL_UNLOAD) {
-            if (params->ctxParams.vae_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.vae_path = "";
-        } else if (vae_index != MODEL_KEEP) {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid vae index: %d\n", vae_index);
-        }
-    } catch (...) {
-    }
-    try {
-        int tae_index = payload["tae"];
-        if (tae_index >= 0 && tae_index < params->tae_files.size()) {
-            std::string new_path = params->tae_dir + params->tae_files[tae_index];
-            if (params->ctxParams.taesd_path != new_path) {
-                params->ctxParams.taesd_path = new_path;
-                updatectx                    = true;
-            }
-        } else if (tae_index == MODEL_UNLOAD) {
-            if (params->ctxParams.taesd_path != "") {
-                updatectx = true;
-            }
-            params->ctxParams.taesd_path = "";
-        } else if (tae_index != MODEL_KEEP) {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid tae index: %d\n", tae_index);
-        }
-    } catch (...) {
-    }
-
-    try {
-        bool tae_decode = payload["tae_decode"];
-        if (params->ctxParams.taesd_preview == tae_decode) {
-            params->ctxParams.taesd_preview = !tae_decode;
-            updatectx                       = true;
-        }
-    } catch (...) {
-    }
-
-    try {
+        //renamed to wtype in new API
         std::string type = payload["type"];
         if (type != "") {
             for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
@@ -1419,7 +1766,9 @@ void start_server(SDParams params) {
                 sd_image_t mask_img    = empty_image;
                 sd_image_t control_img = empty_image;
 
-                params.lastRequest.pm_params.id_embed_path = params.input_id_images_path.c_str();
+                params.lastRequest.pm_params.id_embed_path   = params.input_id_images_path.c_str();
+                params.lastRequest.pm_params.id_images       = params.lastRequest.pm_images_vec.data();
+                params.lastRequest.pm_params.id_images_count = params.lastRequest.pm_images_vec.size();
 
                 sd_img_gen_params_t gen_params = {
                     params.lastRequest.prompt.c_str(),
