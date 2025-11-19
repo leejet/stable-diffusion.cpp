@@ -1911,16 +1911,16 @@ void start_server(SDParams params) {
     sd_set_log_callback(sd_log_cb, (void*)&params);
     sd_set_progress_callback(update_progress_cb, NULL);
 
-    params.models_files                 = list_files(params.models_dir);
-    params.diffusion_models_files       = list_files(params.diffusion_models_dir);
-    params.clip_files                   = list_files(params.clip_dir);
-    params.clip_vision_files            = list_files(params.clip_vision_dir);
-    params.vae_files                    = list_files(params.vae_dir);
-    params.tae_files                    = list_files(params.tae_dir);
-    params.controlnet_files             = list_files(params.controlnet_dir);
-    params.photomaker_files             = list_files(params.photomaker_dir);
-    params.upscaler_files               = list_files(params.upscaler_dir);
-    std::vector<std::string> lora_files = list_files(params.ctxParams.lora_model_dir);
+    params.models_files                  = list_files(params.models_dir);
+    params.diffusion_models_files        = list_files(params.diffusion_models_dir);
+    params.clip_files                    = list_files(params.clip_dir);
+    params.clip_vision_files             = list_files(params.clip_vision_dir);
+    params.vae_files                     = list_files(params.vae_dir);
+    params.tae_files                     = list_files(params.tae_dir);
+    params.controlnet_files              = list_files(params.controlnet_dir);
+    params.photomaker_files              = list_files(params.photomaker_dir);
+    params.upscaler_files                = list_files(params.upscaler_dir);
+    std::vector<std::string> lora_files  = list_files(params.ctxParams.lora_model_dir);
     std::vector<std::string> embed_files = list_files(params.ctxParams.embeddings_path);
 
     server_log_params = (void*)&params;
@@ -2221,6 +2221,9 @@ void start_server(SDParams params) {
         if (!params.ctxParams.diffusion_model_path.empty()) {
             response["diffusion_model"] = sd_basename(params.ctxParams.diffusion_model_path);
         }
+        if (!params.ctxParams.high_noise_diffusion_model_path.empty()) {
+            response["high_noise_diffusion_model"] = sd_basename(params.ctxParams.high_noise_diffusion_model_path);
+        }
 
         if (!params.ctxParams.clip_l_path.empty()) {
             response["clip_l"] = sd_basename(params.ctxParams.clip_l_path);
@@ -2230,6 +2233,16 @@ void start_server(SDParams params) {
         }
         if (!params.ctxParams.t5xxl_path.empty()) {
             response["t5xxl"] = sd_basename(params.ctxParams.t5xxl_path);
+        }
+        if (!params.ctxParams.qwen2vl_path.empty()) {
+            response["qwen2vl"] = sd_basename(params.ctxParams.qwen2vl_path);
+        }
+
+        if (!params.ctxParams.clip_vision_path.empty()) {
+            response["clip_vision"] = sd_basename(params.ctxParams.clip_vision_path);
+        }
+        if (!params.ctxParams.qwen2vl_vision_path.empty()) {
+            response["qwen2vl_vision"] = sd_basename(params.ctxParams.qwen2vl_vision_path);
         }
 
         if (!params.ctxParams.vae_path.empty()) {
