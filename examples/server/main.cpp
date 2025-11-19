@@ -55,6 +55,7 @@ struct SDCtxParams {
     std::string embeddings_path;
     std::string photo_maker_path;
     std::string tensor_type_rules;
+    std::string upscale_model_path;
 
     bool vae_decode_only         = false;  // Does it ever make sense to set it to true?
     bool free_params_immediately = false;  // has to be false for server too keep ctx alive between prompts
@@ -154,14 +155,22 @@ struct SDParams {
     std::string models_dir;
     std::string diffusion_models_dir;
     std::string clip_dir;
+    std::string clip_vision_dir;
     std::string vae_dir;
     std::string tae_dir;
+    std::string controlnet_dir;
+    std::string photomaker_dir;
+    std::string upscaler_dir;
 
     std::vector<std::string> models_files;
     std::vector<std::string> diffusion_models_files;
     std::vector<std::string> clip_files;
+    std::vector<std::string> clip_vision_files;
     std::vector<std::string> vae_files;
     std::vector<std::string> tae_files;
+    std::vector<std::string> controlnet_files;
+    std::vector<std::string> photomaker_files;
+    std::vector<std::string> upscaler_files;
 
     // external dir
     std::string input_id_images_path;
@@ -507,15 +516,16 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"-p", "--prompt", "the prompt to render", &params.lastRequest.prompt},
         {"-n", "--negative-prompt", "the negative prompt (default: \"\")", &params.lastRequest.negative_prompt},
         {"", "--preview-path", "path to write preview image to (default: ./server/preview.png)", &params.preview_path},
-        // TODO: dirs for the following
-        // {"", "--photo-maker", "path to PHOTOMAKER model", &params.ctxParams.photo_maker_path},
-        // {"", "--pm-id-images-dir", "input id images directory", &params.input_id_images_path},
-        // {"", "--upscale-model", "path to esrgan model", &params.esrgan_path},
+        // {"", "--pm-id-images-dir", "input id images directory", &params.input_id_images_path}, // maybe shouldn't be set via cli
         {"", "--models-dir", "path to models directory", &params.models_dir},
         {"", "--diffusion-models-dir", "path to diffusion models directory", &params.diffusion_models_dir},
-        {"", "--encoders-dir", "path to encoders directory", &params.clip_dir},
+        {"", "--encoders-dir", "path to text encoders directory", &params.clip_dir},
+        {"", "--vision-model-dir", "path to vision encoders directory", &params.clip_vision_dir},
         {"", "--vae-dir", "path to vae directory", &params.vae_dir},
         {"", "--tae-dir", "path to tae directory", &params.tae_dir},
+        {"", "--control-net-dir", "path to controlnet models directory", &params.controlnet_dir},
+        {"", "--photo-maker-dir", "path to PHOTOMAKER models directory", &params.photomaker_dir},
+        {"", "--upscaler-dir", "path to upscaler models directory", &params.upscaler_dir},
         {"", "--host", "host to listen on (default: 0.0.0.0)", &params.host}};
 
     options.int_options = {
@@ -1231,9 +1241,25 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  return change;
              }},
             {"high_noise_diffusion_model", [&](const json& o) -> bool {
-                 // TODO: high_noise
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "high_noise_diffusion_model not implemented yet\n");
-                 return false;
+                 bool change     = false;
+                 int model_index = o.get<int>();
+                 if (model_index >= 0 && model_index < params->diffusion_models_files.size()) {
+                     std::string new_path = params->diffusion_models_dir + params->diffusion_models_files[model_index];
+                     if (params->ctxParams.high_noise_diffusion_model_path != new_path) {
+                         params->ctxParams.high_noise_diffusion_model_path = new_path;
+                         change                                            = true;
+                     }
+                 } else {
+                     if (model_index == MODEL_UNLOAD) {
+                         if (params->ctxParams.high_noise_diffusion_model_path != "") {
+                             change = true;
+                         }
+                         params->ctxParams.diffusion_model_path = "";
+                     } else if (model_index != MODEL_KEEP) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid diffusion_model index: %d\n", model_index);
+                     }
+                 }
+                 return change;
              }},
             {"clip_l", [&](const json& o) -> bool {
                  return parse_model_part(o, params->clip_files, params->clip_dir, params->ctxParams.clip_l_path);
@@ -1242,9 +1268,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  return parse_model_part(o, params->clip_files, params->clip_dir, params->ctxParams.clip_g_path);
              }},
             {"clip_vision", [&](const json& o) -> bool {
-                 //  TODO: support clip_vison indices
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "clip_vision not implemented yet\n");
-                 return false;
+                 return parse_model_part(o, params->clip_vision_files, params->clip_vision_dir, params->ctxParams.clip_vision_path);
              }},
             {"t5xxl", [&](const json& o) -> bool {
                  return parse_model_part(o, params->clip_files, params->clip_dir, params->ctxParams.t5xxl_path);
@@ -1255,27 +1279,21 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
             {"tae", [&](const json& o) -> bool {
                  return parse_model_part(o, params->tae_files, params->tae_dir, params->ctxParams.taesd_path);
              }},
-            // TODO: qwen stuff
             {"qwen2vl", [&](const json& o) -> bool {
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "qwen2vl not implemented yet\n");
-                 return false;
+                 return parse_model_part(o, params->clip_files, params->clip_dir, params->ctxParams.qwen2vl_path);
              }},
             {"qwen2vl_vision", [&](const json& o) -> bool {
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "qwen2vl_vision not implemented yet\n");
-                 return false;
+                 return parse_model_part(o, params->clip_vision_files, params->clip_vision_dir, params->ctxParams.qwen2vl_vision_path);
              }},
-            // controlnet stuff
             {"control_net", [&](const json& o) -> bool {
-                 // TODO
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "control_net not implemented yet\n");
-                 return false;
+                 return parse_model_part(o, params->controlnet_files, params->controlnet_dir, params->ctxParams.control_net_path);
              }},
             // skip lora_model_dir and embeddings (only set via cli args)
-            // photomaker
             {"photo_maker", [&](const json& o) -> bool {
-                 // TODO
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "photo_maker not implemented yet\n");
-                 return false;
+                 return parse_model_part(o, params->photomaker_files, params->photomaker_dir, params->ctxParams.photo_maker_path);
+             }},
+            {"upscale_model", [&](const json& o) -> bool {
+                 return parse_model_part(o, params->upscaler_files, params->upscaler_dir, params->ctxParams.upscale_model_path);
              }},
             {"tensor_type_rules", [&](const json& o) -> bool {
                  // TODO
@@ -1667,7 +1685,7 @@ bool is_model_file(const std::string& path) {
     return (file_extension == "gguf" || file_extension == "safetensors" || file_extension == "sft" || file_extension == "ckpt");
 }
 
-nlohmann::json serv_generate_image(sd_ctx_t* &sd_ctx, SDParams& params, int& n_prompts, const httplib::Request& req) {
+nlohmann::json serv_generate_image(sd_ctx_t*& sd_ctx, SDParams& params, int& n_prompts, const httplib::Request& req) {
     using json          = nlohmann::json;
     std::string task_id = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
 
@@ -1896,9 +1914,14 @@ void start_server(SDParams params) {
     params.models_files                 = list_files(params.models_dir);
     params.diffusion_models_files       = list_files(params.diffusion_models_dir);
     params.clip_files                   = list_files(params.clip_dir);
+    params.clip_vision_files            = list_files(params.clip_vision_dir);
     params.vae_files                    = list_files(params.vae_dir);
     params.tae_files                    = list_files(params.tae_dir);
+    params.controlnet_files             = list_files(params.controlnet_dir);
+    params.photomaker_files             = list_files(params.photomaker_dir);
+    params.upscaler_files               = list_files(params.upscaler_dir);
     std::vector<std::string> lora_files = list_files(params.ctxParams.lora_model_dir);
+    std::vector<std::string> embed_files = list_files(params.ctxParams.embeddings_path);
 
     server_log_params = (void*)&params;
 
@@ -2009,6 +2032,44 @@ void start_server(SDParams params) {
         }
     });
 
+    svr->Get("/types", [](const httplib::Request& req, httplib::Response& res) {
+        // Deprecated
+        sd_log(SD_LOG_WARN, "/types endpoint is soon to be deprecated, use /wtypes instead");
+        using json = nlohmann::json;
+        json response;
+        for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+            auto trait = ggml_get_type_traits((ggml_type)i);
+            std::string name(trait->type_name);
+            if (name == "f32" || trait->to_float && trait->type_size) {
+                response.push_back(name);
+            }
+        }
+        res.set_content(response.dump(), "application/json");
+    });
+
+    svr->Get("/wtypes", [](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+
+        for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
+            auto trait = ggml_get_type_traits((ggml_type)i);
+            std::string name(trait->type_name);
+            if (name == "f32" || trait->to_float && trait->type_size) {
+                response.push_back(name);
+            }
+        }
+        res.set_content(response.dump(), "application/json");
+    });
+
+    svr->Get("/rngs", [](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        for (size_t i = 0; i < RNG_TYPE_COUNT; i++) {
+            response.push_back(sd_rng_type_name((rng_type_t)i));
+        }
+        res.set_content(response.dump(), "application/json");
+    });
+
     svr->Get("/sample_methods", [](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         json response;
@@ -2019,10 +2080,30 @@ void start_server(SDParams params) {
     });
 
     svr->Get("/schedules", [](const httplib::Request& req, httplib::Response& res) {
+        // Deprecated
+        sd_log(SD_LOG_WARN, "/schedules endpoint is soon to be deprecated, use /schedulers instead");
         using json = nlohmann::json;
         json response;
         for (int s = 0; s < SCHEDULE_COUNT; s++) {
             response.push_back(sd_schedule_name((scheduler_t)s));
+        }
+        res.set_content(response.dump(), "application/json");
+    });
+
+    svr->Get("/schedulers", [](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        for (int s = 0; s < SCHEDULE_COUNT; s++) {
+            response.push_back(sd_schedule_name((scheduler_t)s));
+        }
+        res.set_content(response.dump(), "application/json");
+    });
+
+    svr->Get("/predictions", [](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        for (int s = 0; s < PREDICTION_COUNT; s++) {
+            response.push_back(sd_prediction_name((prediction_t)s));
         }
         res.set_content(response.dump(), "application/json");
     });
@@ -2036,13 +2117,23 @@ void start_server(SDParams params) {
         res.set_content(response.dump(), "application/json");
     });
 
-    svr->Get("/models", [&params, &lora_files](const httplib::Request& req, httplib::Response& res) {
+    svr->Get("/lora_apply_modes", [](const httplib::Request& req, httplib::Response& res) {
+        using json = nlohmann::json;
+        json response;
+        for (int s = 0; s < LORA_APPLY_MODE_COUNT; s++) {
+            response.push_back(sd_lora_apply_mode_name((lora_apply_mode_t)s));
+        }
+        res.set_content(response.dump(), "application/json");
+    });
+
+    svr->Get("/models", [&params, &lora_files, &embed_files](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         json response;
 
         json models;
         json diffusion_models;
         json text_encoders;
+        json vision_models;
         json vaes;
         json taes;
         for (size_t i = 0; i < params.models_files.size(); i++) {
@@ -2060,6 +2151,11 @@ void start_server(SDParams params) {
                 text_encoders.push_back({{"id", i}, {"name", params.clip_files[i]}});
             }
         }
+        for (size_t i = 0; i < params.clip_vision_files.size(); i++) {
+            if (is_model_file(params.clip_vision_files[i])) {
+                vision_models.push_back({{"id", i}, {"name", params.clip_vision_files[i]}});
+            }
+        }
         for (size_t i = 0; i < params.vae_files.size(); i++) {
             if (is_model_file(params.vae_files[i])) {
                 vaes.push_back({{"id", i}, {"name", params.vae_files[i]}});
@@ -2073,6 +2169,7 @@ void start_server(SDParams params) {
         response["models"]           = models;
         response["diffusion_models"] = diffusion_models;
         response["text_encoders"]    = text_encoders;
+        response["vision_models"]    = vision_models;
         response["vaes"]             = vaes;
         response["taes"]             = taes;
 
@@ -2084,8 +2181,30 @@ void start_server(SDParams params) {
                 // Check if extension was either ".safetensors" or ".ckpt"
                 std::string extension = lora_name.substr(pos + 1);
                 lora_name             = lora_name.substr(0, pos);
-                if (extension == "safetensors" || extension == "ckpt") {
+                if (extension == "safetensors" || extension == "ckpt" || extension == "pt") {
                     response["loras"].push_back(lora_name);
+                }
+            }
+        }
+
+        for (size_t i = 0; i < embed_files.size(); i++) {
+            std::string full_embedding_name = embed_files[i];
+            // Remove file extension
+            size_t pos = full_embedding_name.find_last_of(".");
+            if (pos != std::string::npos) {
+                std::string extension = full_embedding_name.substr(pos + 1);
+                full_embedding_name   = full_embedding_name.substr(0, pos);
+                if (extension == "safetensors" || extension == "ckpt" || extension == "pt") {
+                    // split into subdirectory and embedding name
+                    std::string subdir         = "/";
+                    std::string embedding_name = full_embedding_name;
+                    size_t last_slash          = full_embedding_name.find_last_of("/\\");
+                    if (last_slash != std::string::npos) {
+                        subdir         = full_embedding_name.substr(0, last_slash);
+                        embedding_name = full_embedding_name.substr(last_slash + 1);
+                    }
+                    // add to dict
+                    response["embeddings"][subdir].push_back(embedding_name);
                 }
             }
         }
