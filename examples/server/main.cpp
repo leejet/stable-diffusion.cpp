@@ -1966,7 +1966,7 @@ void start_server(SDParams params) {
         // context_params["diffusion_model_path"] = params.ctxParams.diffusion_model_path;
         // context_params["vae_path"] = params.ctxParams.vae_path;
         // context_params["control_net_path"] = params.ctxParams.control_net_path;
-        context_params["lora_model_dir"] = params.ctxParams.lora_model_dir;
+        // context_params["lora_model_dir"] = params.ctxParams.lora_model_dir;
         // context_params["embeddings_path"] = params.ctxParams.embeddings_path;
         // context_params["photo_maker_path"] = params.ctxParams.photo_maker_path;
         context_params["vae_decode_only"]         = params.ctxParams.vae_decode_only;
