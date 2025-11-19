@@ -456,7 +456,9 @@ public:
                                                                             "model.high_noise_diffusion_model",
                                                                             version);
                 }
-                if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" || diffusion_model->get_desc() == "Wan2.1-FLF2V-14B") {
+                if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
+                    diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
+                    diffusion_model->get_desc() == "Wan2.1-I2V-1.3B") {
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map);
@@ -3399,10 +3401,12 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     int64_t ref_image_num           = 0;  // for vace
     if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
         sd_ctx->sd->diffusion_model->get_desc() == "Wan2.2-I2V-14B" ||
+        sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-1.3B" ||
         sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-FLF2V-14B") {
         LOG_INFO("IMG2VID");
 
         if (sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
+            sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-I2V-1.3B" ||
             sd_ctx->sd->diffusion_model->get_desc() == "Wan2.1-FLF2V-14B") {
             if (sd_vid_gen_params->init_image.data) {
                 clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, sd_vid_gen_params->init_image, false, -2);
