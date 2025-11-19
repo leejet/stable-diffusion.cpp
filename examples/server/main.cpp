@@ -862,7 +862,7 @@ bool parse_json_options(nlohmann::json payload, JsonOptions& options) {
     for (auto& option : options.manual_options) {
         try {
             if (payload.contains(option.name)) {
-                has_anything_changed = option.cb(payload[option.name]);
+                has_anything_changed = option.cb(payload[option.name]) || has_anything_changed;
             }
         } catch (...) {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse bool option: %s\n", option.name.c_str());
