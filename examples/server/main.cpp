@@ -1667,7 +1667,7 @@ bool is_model_file(const std::string& path) {
     return (file_extension == "gguf" || file_extension == "safetensors" || file_extension == "sft" || file_extension == "ckpt");
 }
 
-nlohmann::json serv_generate_image(sd_ctx_t* sd_ctx, SDParams& params, int& n_prompts, const httplib::Request& req) {
+nlohmann::json serv_generate_image(sd_ctx_t* &sd_ctx, SDParams& params, int& n_prompts, const httplib::Request& req) {
     using json          = nlohmann::json;
     std::string task_id = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
 
