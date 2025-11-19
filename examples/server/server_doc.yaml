@@ -1,0 +1,565 @@
+openapi: 3.0.0
+info:
+  title: sd.cpp HTTP Server
+  description: |
+    API documentation for the sd.cpp HTTP server. 
+    
+    **Note on Model Loading:** This server allows changing loaded models dynamically via the `/generate_image` POST request by providing the `id` of the model found in the `/models` endpoint. 
+    - ID `-1`: Keep current model.
+    - ID `-2`: Unload model.
+    - ID `>= 0`: Load model at specific index.
+  version: 0.0.1
+servers:
+  - url: /
+    description: Local sd.cpp server
+
+tags:
+  - name: Generation
+    description: Primary image generation endpoints
+  - name: Configuration
+    description: Server configuration and parameters
+  - name: Options
+    description: Lists of available types, methods, and schedulers
+  - name: Assets
+    description: Information about available models, LoRAs, and VAEs
+
+paths:
+  /generate_image:
+    post:
+      tags:
+        - Generation
+      summary: Generate an image
+      description: Main endpoint for Text-to-Image and Image-to-Image generation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerationRequest'
+      responses:
+        '200':
+          description: Successful generation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationResponse'
+
+  /txt2img:
+    post:
+      tags:
+        - Generation
+      summary: Generate an image (Deprecated)
+      deprecated: true
+      description: Alias for /generate_image.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerationRequest'
+      responses:
+        '200':
+          description: Successful generation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerationResponse'
+
+  /result:
+    get:
+      tags:
+        - Generation
+      summary: Get Async Generation Result
+      description: Retrieve the result of a task using its ID. Data is erased from the server after retrieval.
+      parameters:
+        - in: query
+          name: task_id
+          schema:
+            type: string
+          required: true
+          description: The ID of the generation task.
+      responses:
+        '200':
+          description: Task result found
+          content:
+            application/json:
+              schema:
+                type: object
+        '200 (Text)':
+          description: Task not found
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Cannot find task 123 in queue"
+
+  /params:
+    get:
+      tags:
+        - Configuration
+      summary: Get Current Parameters
+      description: Returns the current configuration of the server (last used generation params and current system context).
+      responses:
+        '200':
+          description: Current parameters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  generation_params:
+                    type: object
+                  context_params:
+                    type: object
+                  taesd_preview:
+                    type: boolean
+
+  /models:
+    get:
+      tags:
+        - Assets
+      summary: List all available models
+      description: Returns lists of models, VAEs, LoRAs, embeddings, etc., available on the filesystem. Use the `id` from these lists to switch models in `/generate_image`.
+      responses:
+        '200':
+          description: List of assets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    $ref: '#/components/schemas/ModelList'
+                  diffusion_models:
+                    $ref: '#/components/schemas/ModelList'
+                  text_encoders:
+                    $ref: '#/components/schemas/ModelList'
+                  vision_models:
+                    $ref: '#/components/schemas/ModelList'
+                  vaes:
+                    $ref: '#/components/schemas/ModelList'
+                  taes:
+                    $ref: '#/components/schemas/ModelList'
+                  loras:
+                    type: array
+                    items:
+                      type: string
+                  embeddings:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: string
+
+  /model:
+    get:
+      tags:
+        - Assets
+      summary: Get currently loaded models
+      description: Returns the filenames of the currently loaded models in memory.
+      responses:
+        '200':
+          description: Currently loaded models
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model: { type: string }
+                  diffusion_model: { type: string }
+                  clip_l: { type: string }
+                  clip_g: { type: string }
+                  t5xxl: { type: string }
+                  vae: { type: string }
+                  # ... includes other loaded components
+
+  /schedulers:
+    get:
+      tags:
+        - Options
+      summary: Get available schedulers
+      responses:
+        '200':
+          description: List of scheduler names
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /schedules:
+    get:
+      tags:
+        - Options
+      summary: Get available schedulers (Deprecated)
+      deprecated: true
+      description: Use /schedulers instead.
+      responses:
+        '200':
+          description: List of scheduler names
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /sample_methods:
+    get:
+      tags:
+        - Options
+      summary: Get available sampling methods
+      responses:
+        '200':
+          description: List of sampling methods
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /wtypes:
+    get:
+      tags:
+        - Options
+      summary: Get weight types
+      description: Available quantization types (e.g., f32, f16, q4_0).
+      responses:
+        '200':
+          description: List of types
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /types:
+    get:
+      tags:
+        - Options
+      summary: Get weight types (Deprecated)
+      deprecated: true
+      description: Use /wtypes instead.
+      responses:
+        '200':
+          description: List of types
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /rngs:
+    get:
+      tags:
+        - Options
+      summary: Get RNG types
+      responses:
+        '200':
+          description: List of RNG types
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /predictions:
+    get:
+      tags:
+        - Options
+      summary: Get Prediction types
+      responses:
+        '200':
+          description: List of prediction types
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /previews:
+    get:
+      tags:
+        - Options
+      summary: Get Preview methods
+      responses:
+        '200':
+          description: List of preview methods
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+  
+  /lora_apply_modes:
+    get:
+      tags:
+        - Options
+      summary: Get LoRA apply modes
+      responses:
+        '200':
+          description: List of apply modes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+components:
+  schemas:
+    ModelList:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: integer
+          name:
+            type: string
+
+    GenerationResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          description: Array of generated image objects (usually base64).
+        id:
+          type: string
+          description: Task ID if processed asynchronously.
+        status:
+          type: string
+
+    # The complex request body parsing logic
+    GenerationRequest:
+      type: object
+      properties:
+        # --- Standard Generation Params ---
+        prompt:
+          type: string
+          default: ""
+        negative_prompt:
+          type: string
+          default: ""
+        clip_skip:
+          type: integer
+          default: -1
+        width:
+          type: integer
+        height:
+          type: integer
+        batch_count:
+          type: integer
+          default: 1
+        preview_interval:
+          type: integer
+        seed:
+          type: integer
+          format: int64
+          default: -1
+        strength:
+          type: number
+          format: float
+          description: Img2Img strength.
+        control_strength:
+          type: number
+          format: float
+        
+        # --- Booleans ---
+        auto_resize_ref_image:
+          type: boolean
+        increase_ref_index:
+          type: boolean
+        upscale:
+          type: boolean
+        preview_noisy:
+          type: boolean
+
+        # --- Images ---
+        init_image:
+          type: string
+          description: Base64 encoded initial image (for img2img). Empty string clears previous.
+        mask_image:
+          type: string
+          deprecated: true
+          description: Not implemented yet.
+        control_image:
+          type: string
+          deprecated: true
+          description: Not implemented yet.
+        ref_images:
+          type: array
+          deprecated: true
+          items: { type: string }
+          description: Not implemented yet.
+
+        # --- Structured Parameters ---
+        sample_params:
+          type: object
+          properties:
+            sample_steps:
+              type: integer
+            shifted_timestep:
+              type: integer
+            eta:
+              type: number
+              format: float
+            scheduler:
+              type: string
+            sample_method:
+              type: string
+            guidance:
+              type: object
+              properties:
+                txt_cfg:
+                  type: number
+                  format: float
+                img_cfg:
+                  type: number
+                  format: float
+                distilled_guidance:
+                  type: number
+                  format: float
+                slg:
+                  type: object
+                  properties:
+                    layer_start:
+                      type: number
+                      format: float
+                    layer_end:
+                      type: number
+                      format: float
+                    scale:
+                      type: number
+                      format: float
+                    layers:
+                      type: array
+                      items:
+                        type: integer
+
+        tiling_params:
+          type: object
+          properties:
+            tile_size_x:
+              type: integer
+            tile_size_y:
+              type: integer
+            target_overlap:
+              type: number
+              format: float
+            rel_size_x:
+              type: number
+              format: float
+            rel_size_y:
+              type: number
+              format: float
+            enabled:
+              type: boolean
+            tile_size:
+              description: Convenience setter for X and Y. Can be int, [int, int], or string "WxH".
+              oneOf:
+                - type: integer
+                - type: string
+                - type: array
+                  items: 
+                    type: integer
+
+        pm_params:
+          type: object
+          description: PhotoMaker parameters
+          properties:
+            style_strength:
+              type: number
+              format: float
+            id_embed_path:
+              type: string
+            id_images:
+              type: array
+              deprecated: true
+              description: Not implemented yet.
+
+        preview_method:
+          type: string
+          description: Method used for preview generation.
+
+        # --- Context / System Parameters (Trigger Reloads) ---
+        n_threads:
+          type: integer
+        wtype:
+          type: string
+          description: Weight type name (e.g. f16, q8_0).
+        rng_type:
+          type: string
+        sampler_rng_type:
+          type: string
+        prediction:
+          type: string
+        lora_apply_mode:
+          type: string
+        
+        vae_decode_only:
+          type: boolean
+        free_params_immediately:
+          type: boolean
+        offload_params_to_cpu:
+          type: boolean
+        keep_clip_on_cpu:
+          type: boolean
+        keep_control_net_on_cpu:
+          type: boolean
+        keep_vae_on_cpu:
+          type: boolean
+        diffusion_flash_attn:
+          type: boolean
+        taesd_preview:
+          type: boolean
+        chroma_t5_mask_pad:
+          type: integer
+        
+        # --- Model Loading (Index based) ---
+        # Index: -1 (Keep), -2 (Unload), >=0 (Load from list)
+        model: { type: integer }
+        diffusion_model: { type: integer }
+        high_noise_diffusion_model: { type: integer }
+        clip_l: { type: integer }
+        clip_g: { type: integer }
+        clip_vision: { type: integer }
+        t5xxl: { type: integer }
+        vae: { type: integer }
+        tae: { type: integer }
+        qwen2vl: { type: integer }
+        qwen2vl_vision: { type: integer }
+        control_net: { type: integer }
+        photo_maker: { type: integer }
+        upscale_model: { type: integer }
+
+        # --- Legacy / Deprecated Top-Level Fallbacks ---
+        guidance_params:
+          type: object
+          deprecated: true
+          description: Legacy structure for webui compatibility. Use sample_params.guidance instead.
+        sample_method:
+          type: string
+          deprecated: true
+          description: Use sample_params.sample_method.
+        schedule:
+          type: string
+          deprecated: true
+          description: Use sample_params.scheduler.
+        sample_steps:
+          type: integer
+          deprecated: true
+          description: Use sample_params.sample_steps.
+        input_id_images_path:
+          type: string
+          deprecated: true
+        vae_tiling:
+          type: boolean
+          deprecated: true
+          description: Use tiling_params.enabled.
+        preview_mode:
+          type: string
+          deprecated: true
+          description: Use preview_method.
+        type:
+          type: string
+          deprecated: true
+          description: Alias for wtype.
