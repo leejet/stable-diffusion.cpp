@@ -1140,7 +1140,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
 
     auto on_easycache_arg = [&](int argc, const char** argv, int index) {
         const std::string default_values = "0.2,0.15,0.95";
-        auto looks_like_value = [](const std::string& token) {
+        auto looks_like_value            = [](const std::string& token) {
             if (token.empty()) {
                 return false;
             }
@@ -1269,13 +1269,13 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         while (std::getline(ss, token, ',')) {
             auto trim = [](std::string& s) {
                 const char* whitespace = " \t\r\n";
-                auto start = s.find_first_not_of(whitespace);
+                auto start             = s.find_first_not_of(whitespace);
                 if (start == std::string::npos) {
                     s.clear();
                     return;
                 }
                 auto end = s.find_last_not_of(whitespace);
-                s = s.substr(start, end - start + 1);
+                s        = s.substr(start, end - start + 1);
             };
             trim(token);
             if (token.empty()) {

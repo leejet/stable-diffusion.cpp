@@ -1,10 +1,10 @@
-#include <vector>
-#include <unordered_map>
-#include <limits>
 #include <cmath>
+#include <limits>
+#include <unordered_map>
+#include <vector>
 
-#include "ggml_extend.hpp"
 #include "denoiser.hpp"
+#include "ggml_extend.hpp"
 
 struct EasyCacheConfig {
     bool enabled          = false;
@@ -19,48 +19,48 @@ struct EasyCacheCacheEntry {
 
 struct EasyCacheState {
     EasyCacheConfig config;
-    Denoiser* denoiser = nullptr;
-    float start_sigma        = std::numeric_limits<float>::max();
-    float end_sigma          = 0.0f;
-    bool initialized         = false;
-    bool initial_step        = true;
-    bool skip_current_step   = false;
-    bool step_active         = false;
+    Denoiser* denoiser                  = nullptr;
+    float start_sigma                   = std::numeric_limits<float>::max();
+    float end_sigma                     = 0.0f;
+    bool initialized                    = false;
+    bool initial_step                   = true;
+    bool skip_current_step              = false;
+    bool step_active                    = false;
     const SDCondition* anchor_condition = nullptr;
     std::unordered_map<const SDCondition*, EasyCacheCacheEntry> cache_diffs;
     std::vector<float> prev_input;
     std::vector<float> prev_output;
-    float output_prev_norm                 = 0.0f;
-    bool has_prev_input                    = false;
-    bool has_prev_output                   = false;
-    bool has_output_prev_norm              = false;
-    bool has_relative_transformation_rate  = false;
-    float relative_transformation_rate     = 0.0f;
-    float cumulative_change_rate           = 0.0f;
-    float last_input_change                = 0.0f;
-    bool has_last_input_change             = false;
-    int total_steps_skipped                = 0;
-    int current_step_index                 = -1;
+    float output_prev_norm                = 0.0f;
+    bool has_prev_input                   = false;
+    bool has_prev_output                  = false;
+    bool has_output_prev_norm             = false;
+    bool has_relative_transformation_rate = false;
+    float relative_transformation_rate    = 0.0f;
+    float cumulative_change_rate          = 0.0f;
+    float last_input_change               = 0.0f;
+    bool has_last_input_change            = false;
+    int total_steps_skipped               = 0;
+    int current_step_index                = -1;
 
     void reset_runtime() {
-        initial_step                   = true;
-        skip_current_step              = false;
-        step_active                    = false;
-        anchor_condition               = nullptr;
+        initial_step      = true;
+        skip_current_step = false;
+        step_active       = false;
+        anchor_condition  = nullptr;
         cache_diffs.clear();
         prev_input.clear();
         prev_output.clear();
-        output_prev_norm               = 0.0f;
-        has_prev_input                 = false;
-        has_prev_output                = false;
-        has_output_prev_norm           = false;
+        output_prev_norm                 = 0.0f;
+        has_prev_input                   = false;
+        has_prev_output                  = false;
+        has_output_prev_norm             = false;
         has_relative_transformation_rate = false;
-        relative_transformation_rate   = 0.0f;
-        cumulative_change_rate         = 0.0f;
-        last_input_change              = 0.0f;
-        has_last_input_change          = false;
-        total_steps_skipped            = 0;
-        current_step_index             = -1;
+        relative_transformation_rate     = 0.0f;
+        cumulative_change_rate           = 0.0f;
+        last_input_change                = 0.0f;
+        has_last_input_change            = false;
+        total_steps_skipped              = 0;
+        current_step_index               = -1;
     }
 
     void init(const EasyCacheConfig& cfg, Denoiser* d) {
@@ -99,10 +99,10 @@ struct EasyCacheState {
         if (step_index == current_step_index) {
             return;
         }
-        current_step_index  = step_index;
-        skip_current_step   = false;
+        current_step_index    = step_index;
+        skip_current_step     = false;
         has_last_input_change = false;
-        step_active         = false;
+        step_active           = false;
         if (sigma > start_sigma) {
             return;
         }
@@ -142,7 +142,7 @@ struct EasyCacheState {
             return;
         }
         copy_ggml_tensor(output, input);
-        float* out_data = (float*)output->data;
+        float* out_data                = (float*)output->data;
         const std::vector<float>& diff = it->second.diff;
         for (size_t i = 0; i < diff.size(); ++i) {
             out_data[i] += diff[i];
@@ -220,15 +220,15 @@ struct EasyCacheState {
             return;
         }
 
-        size_t ne       = static_cast<size_t>(ggml_nelements(input));
-        float* in_data  = (float*)input->data;
+        size_t ne      = static_cast<size_t>(ggml_nelements(input));
+        float* in_data = (float*)input->data;
         prev_input.resize(ne);
         for (size_t i = 0; i < ne; ++i) {
             prev_input[i] = in_data[i];
         }
         has_prev_input = true;
 
-        float* out_data = (float*)output->data;
+        float* out_data     = (float*)output->data;
         float output_change = 0.0f;
         if (has_prev_output && prev_output.size() == ne) {
             for (size_t i = 0; i < ne; ++i) {
@@ -249,13 +249,13 @@ struct EasyCacheState {
         for (size_t i = 0; i < ne; ++i) {
             mean_abs += std::fabs(out_data[i]);
         }
-        output_prev_norm      = (ne > 0) ? (mean_abs / static_cast<float>(ne)) : 0.0f;
-        has_output_prev_norm  = output_prev_norm > 0.0f;
+        output_prev_norm     = (ne > 0) ? (mean_abs / static_cast<float>(ne)) : 0.0f;
+        has_output_prev_norm = output_prev_norm > 0.0f;
 
         if (has_last_input_change && last_input_change > 0.0f && output_change > 0.0f) {
             float rate = output_change / last_input_change;
             if (std::isfinite(rate)) {
-                relative_transformation_rate    = rate;
+                relative_transformation_rate     = rate;
                 has_relative_transformation_rate = true;
             }
         }

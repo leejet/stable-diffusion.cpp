@@ -11,12 +11,12 @@
 #include "control.hpp"
 #include "denoiser.hpp"
 #include "diffusion_model.hpp"
+#include "easycache.hpp"
 #include "esrgan.hpp"
 #include "lora.hpp"
 #include "pmid.hpp"
 #include "tae.hpp"
 #include "vae.hpp"
-#include "easycache.hpp"
 
 #include "latent-preview.h"
 #include "name_conversion.h"
@@ -1482,11 +1482,11 @@ public:
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         SDCondition id_cond,
-                        std::vector<ggml_tensor*> ref_latents = {},
-                        bool increase_ref_index               = false,
-                        ggml_tensor* denoise_mask             = nullptr,
-                        ggml_tensor* vace_context             = nullptr,
-                        float vace_strength                   = 1.f,
+                        std::vector<ggml_tensor*> ref_latents         = {},
+                        bool increase_ref_index                       = false,
+                        ggml_tensor* denoise_mask                     = nullptr,
+                        ggml_tensor* vace_context                     = nullptr,
+                        float vace_strength                           = 1.f,
                         const sd_easycache_params_t* easycache_params = nullptr) {
         if (shifted_timestep > 0 && !sd_version_is_sdxl(version)) {
             LOG_WARN("timestep shifting is only supported for SDXL models!");
@@ -1511,11 +1511,11 @@ public:
                 LOG_WARN("EasyCache requested but not supported for this model type");
             } else {
                 EasyCacheConfig easycache_config;
-                easycache_config.enabled          = true;
-                easycache_config.reuse_threshold  = std::max(0.0f, easycache_params->reuse_threshold);
-                easycache_config.start_percent    = easycache_params->start_percent;
-                easycache_config.end_percent      = easycache_params->end_percent;
-                bool percent_valid = easycache_config.start_percent >= 0.0f &&
+                easycache_config.enabled         = true;
+                easycache_config.reuse_threshold = std::max(0.0f, easycache_params->reuse_threshold);
+                easycache_config.start_percent   = easycache_params->start_percent;
+                easycache_config.end_percent     = easycache_params->end_percent;
+                bool percent_valid               = easycache_config.start_percent >= 0.0f &&
                                      easycache_config.start_percent < 1.0f &&
                                      easycache_config.end_percent > 0.0f &&
                                      easycache_config.end_percent <= 1.0f &&
@@ -1612,7 +1612,7 @@ public:
             DiffusionParams diffusion_params;
 
             const bool easycache_step_active = easycache_enabled && step > 0;
-            int easycache_step_index          = easycache_step_active ? (step - 1) : -1;
+            int easycache_step_index         = easycache_step_active ? (step - 1) : -1;
             if (easycache_step_active) {
                 easycache_state.begin_step(easycache_step_index, sigma);
             }
@@ -1728,12 +1728,12 @@ public:
                     control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector);
                     controls = control_net->controls;
                 }
-                current_step_skipped = easycache_step_is_skipped();
+                current_step_skipped      = easycache_step_is_skipped();
                 diffusion_params.controls = controls;
                 diffusion_params.context  = uncond.c_crossattn;
                 diffusion_params.c_concat = uncond.c_concat;
                 diffusion_params.y        = uncond.c_vector;
-                bool skip_uncond = easycache_before_condition(&uncond, out_uncond);
+                bool skip_uncond          = easycache_before_condition(&uncond, out_uncond);
                 if (!skip_uncond) {
                     work_diffusion_model->compute(n_threads,
                                                   diffusion_params,
@@ -1748,7 +1748,7 @@ public:
                 diffusion_params.context  = img_cond.c_crossattn;
                 diffusion_params.c_concat = img_cond.c_concat;
                 diffusion_params.y        = img_cond.c_vector;
-                bool skip_img_cond = easycache_before_condition(&img_cond, out_img_cond);
+                bool skip_img_cond        = easycache_before_condition(&img_cond, out_img_cond);
                 if (!skip_img_cond) {
                     work_diffusion_model->compute(n_threads,
                                                   diffusion_params,
@@ -2403,8 +2403,8 @@ enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
 }
 
 void sd_easycache_params_init(sd_easycache_params_t* easycache_params) {
-    *easycache_params              = {};
-    easycache_params->enabled      = false;
+    *easycache_params                 = {};
+    easycache_params->enabled         = false;
     easycache_params->reuse_threshold = 0.2f;
     easycache_params->start_percent   = 0.15f;
     easycache_params->end_percent     = 0.95f;
@@ -2702,8 +2702,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     std::vector<sd_image_t*> ref_images,
                                     std::vector<ggml_tensor*> ref_latents,
                                     bool increase_ref_index,
-                                    ggml_tensor* concat_latent = nullptr,
-                                    ggml_tensor* denoise_mask  = nullptr,
+                                    ggml_tensor* concat_latent                    = nullptr,
+                                    ggml_tensor* denoise_mask                     = nullptr,
                                     const sd_easycache_params_t* easycache_params = nullptr) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
