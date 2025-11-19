@@ -90,7 +90,7 @@ struct SDRequestParams {
     int clip_skip = -1;  // <= 0 represents unspecified
 
     // TODO: img2img support
-    // sd_image_t init_image;
+    sd_image_t init_image              = {512, 512, 3, NULL};
     std::vector<sd_image_t> ref_images = {};
     bool auto_resize_ref_image         = true;
     bool increase_ref_index            = false;
@@ -775,6 +775,92 @@ static void log_server_request(const httplib::Request& req, const httplib::Respo
     printf("request: %s %s (%s)\n", req.method.c_str(), req.path.c_str(), req.body.c_str());
 }
 
+uint8_t* load_image_from_memory(const std::string image_bin, int& width, int& height, int& channel, int expected_width = 0, int expected_height = 0, int expected_channel = 3) {
+    uint8_t* image_buffer = stbi_load_from_memory((const stbi_uc*)image_bin.c_str(), image_bin.size(), &width, &height, &channel, expected_channel);
+    if (image_buffer == nullptr) {
+        sd_log(sd_log_level_t::SD_LOG_ERROR, "load image from binary data failed\n");
+        return nullptr;
+    }
+    if (channel < expected_channel) {
+        sd_log(sd_log_level_t::SD_LOG_ERROR,
+               "the number of channels for the input image must be >= %d,"
+               "but got %d channels",
+               expected_channel,
+               channel);
+        free(image_buffer);
+        return nullptr;
+    }
+    if (width <= 0) {
+        sd_log(sd_log_level_t::SD_LOG_ERROR, "error: the width of image must be greater than 0\n");
+        free(image_buffer);
+        return nullptr;
+    }
+    if (height <= 0) {
+        sd_log(sd_log_level_t::SD_LOG_ERROR, "error: the height of image must be greater than 0\n");
+        free(image_buffer);
+        return nullptr;
+    }
+
+    // Resize input image ...
+    if ((expected_width > 0 && expected_height > 0) && (height != expected_height || width != expected_width)) {
+        float dst_aspect = (float)expected_width / (float)expected_height;
+        float src_aspect = (float)width / (float)height;
+
+        int crop_x = 0, crop_y = 0;
+        int crop_w = width, crop_h = height;
+
+        if (src_aspect > dst_aspect) {
+            crop_w = (int)(height * dst_aspect);
+            crop_x = (width - crop_w) / 2;
+        } else if (src_aspect < dst_aspect) {
+            crop_h = (int)(width / dst_aspect);
+            crop_y = (height - crop_h) / 2;
+        }
+
+        if (crop_x != 0 || crop_y != 0) {
+            sd_log(sd_log_level_t::SD_LOG_INFO, "crop input image from %dx%d to %dx%d\n", width, height, crop_w, crop_h);
+            uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
+            if (cropped_image_buffer == nullptr) {
+                sd_log(sd_log_level_t::SD_LOG_ERROR, "error: allocate memory for crop\n");
+                free(image_buffer);
+                return nullptr;
+            }
+            for (int row = 0; row < crop_h; row++) {
+                uint8_t* src = image_buffer + ((crop_y + row) * width + crop_x) * expected_channel;
+                uint8_t* dst = cropped_image_buffer + (row * crop_w) * expected_channel;
+                memcpy(dst, src, crop_w * expected_channel);
+            }
+
+            width  = crop_w;
+            height = crop_h;
+            free(image_buffer);
+            image_buffer = cropped_image_buffer;
+        }
+
+        sd_log(sd_log_level_t::SD_LOG_INFO, "resize input image from %dx%d to %dx%d\n", width, height, expected_width, expected_height);
+        int resized_height = expected_height;
+        int resized_width  = expected_width;
+
+        uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * expected_channel);
+        if (resized_image_buffer == nullptr) {
+            sd_log(sd_log_level_t::SD_LOG_ERROR, "error: allocate memory for resize input image\n");
+            free(image_buffer);
+            return nullptr;
+        }
+        stbir_resize(image_buffer, width, height, 0,
+                     resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
+                     expected_channel, STBIR_ALPHA_CHANNEL_NONE, 0,
+                     STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
+                     STBIR_FILTER_BOX, STBIR_FILTER_BOX,
+                     STBIR_COLORSPACE_SRGB, nullptr);
+        width  = resized_width;
+        height = resized_height;
+        free(image_buffer);
+        image_buffer = resized_image_buffer;
+    }
+    return image_buffer;
+}
+
 struct StringOptionJson {
     std::string name;
     std::string* target;
@@ -1095,9 +1181,32 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  return parse_json_options(o, tiling_options);
              }},
             {"init_image", [&](const json& o) -> bool {
-                 // TODO (probably convert base64 to sd_image_t)
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "init_image not implemented yet\n");
-                 return false;
+                 // assumes base64 encoded png or jpg image
+                 std::string b64_data = o.get<std::string>();
+                 // empty string means no init image, cleanup previous one if exists
+                 if (b64_data.empty()) {
+                     if (params->lastRequest.init_image.data) {
+                         free(params->lastRequest.init_image.data);
+                         params->lastRequest.init_image.data = NULL;
+                     }
+                     return true;
+                 }
+
+                 std::string bin_data = base64_decode(b64_data);
+                 int width, height, c;
+                 // int_options are processed before manual_options, so we can use the width and height here
+                 uint8_t* image_buffer = load_image_from_memory(bin_data, width, height, c, params->lastRequest.width, params->lastRequest.height);
+                 if (image_buffer == NULL) {
+                     sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to load image from memory\n");
+                 }
+                 if (params->lastRequest.init_image.data) {
+                     free(params->lastRequest.init_image.data);
+                 }
+                 params->lastRequest.init_image = sd_image_t{(uint32_t)width, (uint32_t)height, (uint32_t)c, image_buffer};
+
+                 sd_log(sd_log_level_t::SD_LOG_INFO, "Loaded image from memory: %dx%d, %d channels\n", width, height, c);
+
+                 return true;
              }},
             {"mask_image", [&](const json& o) -> bool {
                  // TODO (probably convert base64 to sd_image_t)
@@ -1811,14 +1920,20 @@ nlohmann::json serv_generate_image(sd_ctx_t*& sd_ctx, SDParams& params, int& n_p
             params.lastRequest.sample_params.guidance.slg.layers      = params.lastRequest.skip_layers.data();
             params.lastRequest.sample_params.guidance.slg.layer_count = params.lastRequest.skip_layers.size();
 
-            sd_image_t empty_image = {
+            sd_image_t init_image = params.lastRequest.init_image;
+
+            std::vector<uint8_t> ones(params.lastRequest.width * params.lastRequest.height, 0xFF);
+            sd_image_t mask_img = {
+                (uint32_t)params.lastRequest.width,
+                (uint32_t)params.lastRequest.height,
+                1,
+                ones.data()};
+            std::vector<uint8_t> zeros(params.lastRequest.width * params.lastRequest.height * 3, 0);
+            sd_image_t control_img = {
                 (uint32_t)params.lastRequest.width,
                 (uint32_t)params.lastRequest.height,
                 3,
-                NULL};
-            sd_image_t input_image = empty_image;
-            sd_image_t mask_img    = empty_image;
-            sd_image_t control_img = empty_image;
+                zeros.data()};
 
             params.lastRequest.pm_params.id_embed_path   = params.input_id_images_path.c_str();
             params.lastRequest.pm_params.id_images       = params.lastRequest.pm_images_vec.data();
@@ -1828,7 +1943,7 @@ nlohmann::json serv_generate_image(sd_ctx_t*& sd_ctx, SDParams& params, int& n_p
                 params.lastRequest.prompt.c_str(),
                 params.lastRequest.negative_prompt.c_str(),
                 params.lastRequest.clip_skip,
-                input_image,
+                init_image,
                 params.lastRequest.ref_images.data(),
                 (int)params.lastRequest.ref_images.size(),
                 params.lastRequest.auto_resize_ref_image,
