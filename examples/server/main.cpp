@@ -2026,6 +2026,7 @@ void start_server(SDParams params) {
                 task_results[task_id] = result;
             } else {
                 res.set_content("Cannot find task " + task_id + " in queue", "text/plain");
+                res.status = 404;
             }
         } catch (...) {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Error when fetching result");
