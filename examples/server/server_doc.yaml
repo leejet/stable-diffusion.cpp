@@ -85,7 +85,7 @@ paths:
             application/json:
               schema:
                 type: object
-        '200 (Text)':
+        '404':
           description: Task not found
           content:
             text/plain:
@@ -322,6 +322,8 @@ components:
         data:
           type: array
           description: Array of generated image objects (usually base64).
+          items:
+            type: string
         id:
           type: string
           description: Task ID if processed asynchronously.
@@ -475,7 +477,8 @@ components:
               type: array
               deprecated: true
               description: Not implemented yet.
-
+              items:
+                type: string
         preview_method:
           type: string
           description: Method used for preview generation.
