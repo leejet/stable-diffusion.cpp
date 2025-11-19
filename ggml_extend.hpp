@@ -997,6 +997,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_conv_2d(struct ggml_context* ctx,
     if (scale != 1.f) {
         x = ggml_scale(ctx, x, scale);
     }
+    if (w->ne[2] != x->ne[2] && ggml_n_dims(w) == 2) {
+        w = ggml_reshape_4d(ctx, w, 1, 1, w->ne[0], w->ne[1]);
+    }
     if (direct) {
         x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
     } else {
