@@ -1130,7 +1130,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     parse_json_options(payload, request_options);
 
     // CTX
-    
+
     const int MODEL_UNLOAD = -2;
     const int MODEL_KEEP   = -1;
 
@@ -1286,39 +1286,114 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  bool change      = false;
                  std::string type = o.get<std::string>();
                  if (type != "") {
+                     bool found = false;
                      for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
                          auto trait = ggml_get_type_traits((ggml_type)i);
                          std::string name(trait->type_name);
                          if (name == "f32" || trait->to_float && trait->type_size) {
                              if (type == name) {
+                                 if (params->ctxParams.wtype != (enum sd_type_t)i) {
+                                     change = true;
+                                 }
                                  params->ctxParams.wtype = (enum sd_type_t)i;
-                                 change                  = true;
+                                 found                   = true;
                                  break;
                              }
                          }
+                     }
+                     if (!found) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown wtype: %s\n", type.c_str());
                      }
                  }
                  return change;
              }},
             {"rng_type", [&](const json& o) -> bool {
-                 // TODO
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "rng_type not implemented yet\n");
-                 return false;
+                 bool change          = false;
+                 std::string type_str = o.get<std::string>();
+                 if (type_str != "") {
+                     bool found = false;
+                     for (size_t i = 0; i < RNG_TYPE_COUNT; i++) {
+                         enum rng_type_t type = (enum rng_type_t)i;
+                         if (type_str == std::string(sd_rng_type_name(type))) {
+                             if (type != params->ctxParams.rng_type) {
+                                 change = true;
+                             }
+                             params->ctxParams.rng_type = type;
+                             found                      = true;
+                             break;
+                         }
+                     }
+                     if (!found) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown rng_type: %s\n", type_str.c_str());
+                     }
+                 }
+                 return change;
              }},
             {"sampler_rng_type", [&](const json& o) -> bool {
-                 // TODO
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "sampler_rng_type not implemented yet\n");
-                 return false;
+                 bool change          = false;
+                 std::string type_str = o.get<std::string>();
+                 if (type_str != "") {
+                     bool found = false;
+                     for (size_t i = 0; i < RNG_TYPE_COUNT; i++) {
+                         enum rng_type_t type = (enum rng_type_t)i;
+                         if (type_str == std::string(sd_rng_type_name(type))) {
+                             if (type != params->ctxParams.sampler_rng_type) {
+                                 change = true;
+                             }
+                             params->ctxParams.sampler_rng_type = type;
+                             found                              = true;
+                             break;
+                         }
+                     }
+                     if (!found) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown sampler_rng_type: %s\n", type_str.c_str());
+                     }
+                 }
+                 return change;
              }},
             {"prediction", [&](const json& o) -> bool {
-                 // TODO
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "prediction not implemented yet\n");
-                 return false;
+                 bool change          = false;
+                 std::string pred_str = o.get<std::string>();
+                 if (pred_str != "") {
+                     bool found = false;
+                     for (size_t i = 0; i < PREDICTION_COUNT; i++) {
+                         enum prediction_t pred = (enum prediction_t)i;
+                         if (pred_str == std::string(sd_prediction_name(pred))) {
+                             if (pred != params->ctxParams.prediction) {
+                                 change = true;
+                             }
+                             params->ctxParams.prediction = pred;
+                             found                        = true;
+                             break;
+                         }
+                     }
+                     if (!found) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown prediction: %s\n", pred_str.c_str());
+                     }
+                 }
+                 return change;
              }},
             {"lora_apply_mode", [&](const json& o) -> bool {
-                 // TODO
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "lora_apply_mode not implemented yet\n");
-                 return false;
+                 bool change          = false;
+                 std::string mode_str = o.get<std::string>();
+                 if (mode_str != "") {
+                     bool found = false;
+                     for (size_t i = 0; i < LORA_APPLY_MODE_COUNT; i++) {
+                         enum lora_apply_mode_t mode = (enum lora_apply_mode_t)i;
+                         if (mode_str == std::string(sd_lora_apply_mode_name(mode))) {
+                             if (mode != params->ctxParams.lora_apply_mode) {
+                                 change = true;
+                             }
+                             params->ctxParams.lora_apply_mode = mode;
+                             found                             = true;
+                             break;
+                         }
+                     }
+                     if (!found) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown lora_apply_mode: %s\n", mode_str.c_str());
+                     }
+                 }
+                 return change;
              }},
         }};
 
@@ -1418,7 +1493,6 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     } catch (...) {
     }
 
-
     try {
         std::string input_id_images_path = payload["input_id_images_path"];
         // TODO replace with b64 image maybe?
@@ -1459,7 +1533,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     // ctxParams zone
 
     try {
-        //renamed to wtype in new API
+        // renamed to wtype in new API
         std::string type = payload["type"];
         if (type != "") {
             for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
@@ -1593,6 +1667,227 @@ bool is_model_file(const std::string& path) {
     return (file_extension == "gguf" || file_extension == "safetensors" || file_extension == "sft" || file_extension == "ckpt");
 }
 
+nlohmann::json serv_generate_image(sd_ctx_t* sd_ctx, SDParams& params, int& n_prompts, const httplib::Request& req) {
+    using json          = nlohmann::json;
+    std::string task_id = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+
+    {
+        json pending_task_json      = json::object();
+        pending_task_json["status"] = "Pending";
+        pending_task_json["data"]   = json::array();
+        pending_task_json["step"]   = -1;
+        pending_task_json["steps"]  = 0;
+        pending_task_json["eta"]    = "?";
+
+        std::lock_guard<std::mutex> results_lock(results_mutex);
+        task_results[task_id] = pending_task_json;
+    }
+
+    auto task = [req, &sd_ctx, &params, &n_prompts, task_id]() {
+        running_task_id = task_id;
+        // LOG_DEBUG("raw body is: %s\n", req.body.c_str());
+        sd_log(sd_log_level_t::SD_LOG_DEBUG, "raw body is: %s\n", req.body.c_str());
+        // parse req.body as json using jsoncpp
+        bool updateCTX = params.ctxParams.free_params_immediately;
+        try {
+            std::string json_str = req.body;
+            updateCTX            = parseJsonPrompt(json_str, &params) || updateCTX;
+        } catch (json::parse_error& e) {
+            // assume the request is just a prompt
+            // LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
+            std::string prompt = req.body;
+            if (!prompt.empty()) {
+                params.lastRequest.prompt = prompt;
+            } else {
+                params.lastRequest.seed += 1;
+            }
+        } catch (...) {
+            // Handle any other type of exception
+            // LOG_ERROR("An unexpected error occurred\n");
+            sd_log(sd_log_level_t::SD_LOG_ERROR, "An unexpected error occurred\n");
+        }
+        // LOG_DEBUG("prompt is: %s\n", params.prompt.c_str());
+        sd_log(sd_log_level_t::SD_LOG_INFO, "prompt is: %s\n", params.lastRequest.prompt.c_str());
+
+        if (updateCTX && sd_ctx != NULL) {
+            free_sd_ctx(sd_ctx);
+            sd_ctx = NULL;
+        }
+
+        if (sd_ctx == NULL) {
+            printf("Loading sd_ctx\n");
+            {
+                json task_json      = json::object();
+                task_json["status"] = "Loading";
+                task_json["data"]   = json::array();
+                task_json["step"]   = -1;
+                task_json["steps"]  = 0;
+                task_json["eta"]    = "?";
+
+                std::lock_guard<std::mutex> results_lock(results_mutex);
+                task_results[task_id] = task_json;
+            }
+            sd_ctx_params_t sd_ctx_params = {
+                params.ctxParams.model_path.c_str(),
+                params.ctxParams.clip_l_path.c_str(),
+                params.ctxParams.clip_g_path.c_str(),
+                params.ctxParams.clip_vision_path.c_str(),
+                params.ctxParams.t5xxl_path.c_str(),
+                params.ctxParams.qwen2vl_path.c_str(),
+                params.ctxParams.qwen2vl_vision_path.c_str(),
+                params.ctxParams.diffusion_model_path.c_str(),
+                params.ctxParams.high_noise_diffusion_model_path.c_str(),
+                params.ctxParams.vae_path.c_str(),
+                params.ctxParams.taesd_path.c_str(),
+                params.ctxParams.control_net_path.c_str(),
+                params.ctxParams.lora_model_dir.c_str(),
+                params.ctxParams.embeddings_path.c_str(),
+                params.ctxParams.photo_maker_path.c_str(),
+                params.ctxParams.tensor_type_rules.c_str(),
+                params.ctxParams.vae_decode_only,
+                params.ctxParams.free_params_immediately,
+                params.ctxParams.n_threads,
+                params.ctxParams.wtype,
+                params.ctxParams.rng_type,
+                params.ctxParams.sampler_rng_type,
+                params.ctxParams.prediction,
+                params.ctxParams.lora_apply_mode,
+                params.ctxParams.offload_params_to_cpu,
+                params.ctxParams.keep_clip_on_cpu,
+                params.ctxParams.keep_control_net_on_cpu,
+                params.ctxParams.keep_vae_on_cpu,
+                params.ctxParams.diffusion_flash_attn,
+                params.ctxParams.taesd_preview,
+                params.ctxParams.diffusion_conv_direct,
+                params.ctxParams.vae_conv_direct,
+                params.ctxParams.force_sdxl_vae_conv_scale,
+                params.ctxParams.chroma_use_dit_mask,
+                params.ctxParams.chroma_use_t5_mask,
+                params.ctxParams.chroma_t5_mask_pad,
+                params.ctxParams.flow_shift};
+
+            sd_ctx = new_sd_ctx(&sd_ctx_params);
+            if (sd_ctx == NULL) {
+                printf("new_sd_ctx_t failed\n");
+                std::lock_guard<std::mutex> results_lock(results_mutex);
+                task_results[task_id]["status"] = "Failed";
+                return;
+            }
+        }
+
+        {
+            json started_task_json      = json::object();
+            started_task_json["status"] = "Working";
+            started_task_json["data"]   = json::array();
+            started_task_json["step"]   = 0;
+            started_task_json["steps"]  = params.lastRequest.sample_params.sample_steps;
+            started_task_json["eta"]    = "?";
+
+            std::lock_guard<std::mutex> results_lock(results_mutex);
+            task_results[task_id] = started_task_json;
+        }
+
+        {
+            sd_image_t* results;
+            params.lastRequest.sample_params.guidance.slg.layers      = params.lastRequest.skip_layers.data();
+            params.lastRequest.sample_params.guidance.slg.layer_count = params.lastRequest.skip_layers.size();
+
+            sd_image_t empty_image = {
+                (uint32_t)params.lastRequest.width,
+                (uint32_t)params.lastRequest.height,
+                3,
+                NULL};
+            sd_image_t input_image = empty_image;
+            sd_image_t mask_img    = empty_image;
+            sd_image_t control_img = empty_image;
+
+            params.lastRequest.pm_params.id_embed_path   = params.input_id_images_path.c_str();
+            params.lastRequest.pm_params.id_images       = params.lastRequest.pm_images_vec.data();
+            params.lastRequest.pm_params.id_images_count = params.lastRequest.pm_images_vec.size();
+
+            sd_img_gen_params_t gen_params = {
+                params.lastRequest.prompt.c_str(),
+                params.lastRequest.negative_prompt.c_str(),
+                params.lastRequest.clip_skip,
+                input_image,
+                params.lastRequest.ref_images.data(),
+                (int)params.lastRequest.ref_images.size(),
+                params.lastRequest.auto_resize_ref_image,
+                params.lastRequest.increase_ref_index,
+                mask_img,
+                params.lastRequest.width,
+                params.lastRequest.height,
+                params.lastRequest.sample_params,
+                params.lastRequest.strength,
+                params.lastRequest.seed,
+                params.lastRequest.batch_count,
+                control_img,
+                params.lastRequest.control_strength,
+                params.lastRequest.pm_params,
+                params.lastRequest.tiling_params};
+            sd_set_preview_callback((sd_preview_cb_t)step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, !params.lastRequest.preview_noisy, params.lastRequest.preview_noisy);
+
+            results = generate_image(sd_ctx, &gen_params);
+
+            if (results == NULL) {
+                printf("generate failed\n");
+                free_sd_ctx(sd_ctx);
+                std::lock_guard<std::mutex> results_lock(results_mutex);
+                task_results[task_id]["status"] = "Failed";
+                return;
+            }
+
+            size_t last            = params.output_path.find_last_of(".");
+            std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
+            json images_json       = json::array();
+            for (int i = 0; i < params.lastRequest.batch_count; i++) {
+                if (results[i].data == NULL) {
+                    continue;
+                }
+                // TODO allow disable save to disk
+                std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1 + n_prompts * params.lastRequest.batch_count) + ".png" : dummy_name + ".png";
+                stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                               results[i].data, 0, get_image_params(params, params.lastRequest.seed + i).c_str());
+                printf("save result image to '%s'\n", final_image_path.c_str());
+                // Todo: return base64 encoded image via httplib::Response& res
+
+                int len;
+                unsigned char* png = stbi_write_png_to_mem((const unsigned char*)results[i].data, 0, results[i].width, results[i].height, results[i].channel, &len, get_image_params(params, params.lastRequest.seed + i).c_str());
+
+                std::string data_str(png, png + len);
+                std::string encoded_img = base64_encode(data_str);
+
+                images_json.push_back({{"width", results[i].width},
+                                       {"height", results[i].height},
+                                       {"channel", results[i].channel},
+                                       {"data", encoded_img},
+                                       {"encoding", "png"}});
+
+                free(results[i].data);
+                results[i].data = NULL;
+            }
+            free(results);
+            n_prompts++;
+            // res.set_content(images_json.dump(), "application/json");
+            json end_task_json      = json::object();
+            end_task_json["status"] = "Done";
+            end_task_json["data"]   = images_json;
+            end_task_json["step"]   = -1;
+            end_task_json["steps"]  = 0;
+            end_task_json["eta"]    = "?";
+            std::lock_guard<std::mutex> results_lock(results_mutex);
+            task_results[task_id] = end_task_json;
+        }
+    };
+    // Add the task to the queue
+    add_task(task_id, task);
+
+    json response       = json::object();
+    response["task_id"] = task_id;
+    return response;
+}
+
 void start_server(SDParams params) {
     preview_path = params.preview_path.c_str();
     sd_set_log_callback(sd_log_cb, (void*)&params);
@@ -1632,222 +1927,16 @@ void start_server(SDParams params) {
     }
 
     svr->Post("/txt2img", [&sd_ctx, &params, &n_prompts](const httplib::Request& req, httplib::Response& res) {
-        using json          = nlohmann::json;
-        std::string task_id = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+        // Deprecated
+        sd_log(SD_LOG_WARN, "/txt2img endpoint is soon to be deprecated, use /generate_image instead");
+        using json    = nlohmann::json;
+        json response = serv_generate_image(sd_ctx, params, n_prompts, req);
+        res.set_content(response.dump(), "application/json");
+    });
 
-        {
-            json pending_task_json      = json::object();
-            pending_task_json["status"] = "Pending";
-            pending_task_json["data"]   = json::array();
-            pending_task_json["step"]   = -1;
-            pending_task_json["steps"]  = 0;
-            pending_task_json["eta"]    = "?";
-
-            std::lock_guard<std::mutex> results_lock(results_mutex);
-            task_results[task_id] = pending_task_json;
-        }
-
-        auto task = [req, &sd_ctx, &params, &n_prompts, task_id]() {
-            running_task_id = task_id;
-            // LOG_DEBUG("raw body is: %s\n", req.body.c_str());
-            sd_log(sd_log_level_t::SD_LOG_DEBUG, "raw body is: %s\n", req.body.c_str());
-            // parse req.body as json using jsoncpp
-            bool updateCTX = params.ctxParams.free_params_immediately;
-            try {
-                std::string json_str = req.body;
-                updateCTX            = parseJsonPrompt(json_str, &params) || updateCTX;
-            } catch (json::parse_error& e) {
-                // assume the request is just a prompt
-                // LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
-                sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
-                std::string prompt = req.body;
-                if (!prompt.empty()) {
-                    params.lastRequest.prompt = prompt;
-                } else {
-                    params.lastRequest.seed += 1;
-                }
-            } catch (...) {
-                // Handle any other type of exception
-                // LOG_ERROR("An unexpected error occurred\n");
-                sd_log(sd_log_level_t::SD_LOG_ERROR, "An unexpected error occurred\n");
-            }
-            // LOG_DEBUG("prompt is: %s\n", params.prompt.c_str());
-            sd_log(sd_log_level_t::SD_LOG_INFO, "prompt is: %s\n", params.lastRequest.prompt.c_str());
-
-            if (updateCTX && sd_ctx != NULL) {
-                free_sd_ctx(sd_ctx);
-                sd_ctx = NULL;
-            }
-
-            if (sd_ctx == NULL) {
-                printf("Loading sd_ctx\n");
-                {
-                    json task_json      = json::object();
-                    task_json["status"] = "Loading";
-                    task_json["data"]   = json::array();
-                    task_json["step"]   = -1;
-                    task_json["steps"]  = 0;
-                    task_json["eta"]    = "?";
-
-                    std::lock_guard<std::mutex> results_lock(results_mutex);
-                    task_results[task_id] = task_json;
-                }
-                sd_ctx_params_t sd_ctx_params = {
-                    params.ctxParams.model_path.c_str(),
-                    params.ctxParams.clip_l_path.c_str(),
-                    params.ctxParams.clip_g_path.c_str(),
-                    params.ctxParams.clip_vision_path.c_str(),
-                    params.ctxParams.t5xxl_path.c_str(),
-                    params.ctxParams.qwen2vl_path.c_str(),
-                    params.ctxParams.qwen2vl_vision_path.c_str(),
-                    params.ctxParams.diffusion_model_path.c_str(),
-                    params.ctxParams.high_noise_diffusion_model_path.c_str(),
-                    params.ctxParams.vae_path.c_str(),
-                    params.ctxParams.taesd_path.c_str(),
-                    params.ctxParams.control_net_path.c_str(),
-                    params.ctxParams.lora_model_dir.c_str(),
-                    params.ctxParams.embeddings_path.c_str(),
-                    params.ctxParams.photo_maker_path.c_str(),
-                    params.ctxParams.tensor_type_rules.c_str(),
-                    params.ctxParams.vae_decode_only,
-                    params.ctxParams.free_params_immediately,
-                    params.ctxParams.n_threads,
-                    params.ctxParams.wtype,
-                    params.ctxParams.rng_type,
-                    params.ctxParams.sampler_rng_type,
-                    params.ctxParams.prediction,
-                    params.ctxParams.lora_apply_mode,
-                    params.ctxParams.offload_params_to_cpu,
-                    params.ctxParams.keep_clip_on_cpu,
-                    params.ctxParams.keep_control_net_on_cpu,
-                    params.ctxParams.keep_vae_on_cpu,
-                    params.ctxParams.diffusion_flash_attn,
-                    params.ctxParams.taesd_preview,
-                    params.ctxParams.diffusion_conv_direct,
-                    params.ctxParams.vae_conv_direct,
-                    params.ctxParams.force_sdxl_vae_conv_scale,
-                    params.ctxParams.chroma_use_dit_mask,
-                    params.ctxParams.chroma_use_t5_mask,
-                    params.ctxParams.chroma_t5_mask_pad,
-                    params.ctxParams.flow_shift};
-
-                sd_ctx = new_sd_ctx(&sd_ctx_params);
-                if (sd_ctx == NULL) {
-                    printf("new_sd_ctx_t failed\n");
-                    std::lock_guard<std::mutex> results_lock(results_mutex);
-                    task_results[task_id]["status"] = "Failed";
-                    return;
-                }
-            }
-
-            {
-                json started_task_json      = json::object();
-                started_task_json["status"] = "Working";
-                started_task_json["data"]   = json::array();
-                started_task_json["step"]   = 0;
-                started_task_json["steps"]  = params.lastRequest.sample_params.sample_steps;
-                started_task_json["eta"]    = "?";
-
-                std::lock_guard<std::mutex> results_lock(results_mutex);
-                task_results[task_id] = started_task_json;
-            }
-
-            {
-                sd_image_t* results;
-                params.lastRequest.sample_params.guidance.slg.layers      = params.lastRequest.skip_layers.data();
-                params.lastRequest.sample_params.guidance.slg.layer_count = params.lastRequest.skip_layers.size();
-
-                sd_image_t empty_image = {
-                    (uint32_t)params.lastRequest.width,
-                    (uint32_t)params.lastRequest.height,
-                    3,
-                    NULL};
-                sd_image_t input_image = empty_image;
-                sd_image_t mask_img    = empty_image;
-                sd_image_t control_img = empty_image;
-
-                params.lastRequest.pm_params.id_embed_path   = params.input_id_images_path.c_str();
-                params.lastRequest.pm_params.id_images       = params.lastRequest.pm_images_vec.data();
-                params.lastRequest.pm_params.id_images_count = params.lastRequest.pm_images_vec.size();
-
-                sd_img_gen_params_t gen_params = {
-                    params.lastRequest.prompt.c_str(),
-                    params.lastRequest.negative_prompt.c_str(),
-                    params.lastRequest.clip_skip,
-                    input_image,
-                    params.lastRequest.ref_images.data(),
-                    (int)params.lastRequest.ref_images.size(),
-                    params.lastRequest.auto_resize_ref_image,
-                    params.lastRequest.increase_ref_index,
-                    mask_img,
-                    params.lastRequest.width,
-                    params.lastRequest.height,
-                    params.lastRequest.sample_params,
-                    params.lastRequest.strength,
-                    params.lastRequest.seed,
-                    params.lastRequest.batch_count,
-                    control_img,
-                    params.lastRequest.control_strength,
-                    params.lastRequest.pm_params,
-                    params.lastRequest.tiling_params};
-                sd_set_preview_callback((sd_preview_cb_t)step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, !params.lastRequest.preview_noisy, params.lastRequest.preview_noisy);
-                results = generate_image(sd_ctx, &gen_params);
-
-                if (results == NULL) {
-                    printf("generate failed\n");
-                    free_sd_ctx(sd_ctx);
-                    std::lock_guard<std::mutex> results_lock(results_mutex);
-                    task_results[task_id]["status"] = "Failed";
-                    return;
-                }
-
-                size_t last            = params.output_path.find_last_of(".");
-                std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
-                json images_json       = json::array();
-                for (int i = 0; i < params.lastRequest.batch_count; i++) {
-                    if (results[i].data == NULL) {
-                        continue;
-                    }
-                    // TODO allow disable save to disk
-                    std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1 + n_prompts * params.lastRequest.batch_count) + ".png" : dummy_name + ".png";
-                    stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                                   results[i].data, 0, get_image_params(params, params.lastRequest.seed + i).c_str());
-                    printf("save result image to '%s'\n", final_image_path.c_str());
-                    // Todo: return base64 encoded image via httplib::Response& res
-
-                    int len;
-                    unsigned char* png = stbi_write_png_to_mem((const unsigned char*)results[i].data, 0, results[i].width, results[i].height, results[i].channel, &len, get_image_params(params, params.lastRequest.seed + i).c_str());
-
-                    std::string data_str(png, png + len);
-                    std::string encoded_img = base64_encode(data_str);
-
-                    images_json.push_back({{"width", results[i].width},
-                                           {"height", results[i].height},
-                                           {"channel", results[i].channel},
-                                           {"data", encoded_img},
-                                           {"encoding", "png"}});
-
-                    free(results[i].data);
-                    results[i].data = NULL;
-                }
-                free(results);
-                n_prompts++;
-                // res.set_content(images_json.dump(), "application/json");
-                json end_task_json      = json::object();
-                end_task_json["status"] = "Done";
-                end_task_json["data"]   = images_json;
-                end_task_json["step"]   = -1;
-                end_task_json["steps"]  = 0;
-                end_task_json["eta"]    = "?";
-                std::lock_guard<std::mutex> results_lock(results_mutex);
-                task_results[task_id] = end_task_json;
-            }
-        };
-        // Add the task to the queue
-        add_task(task_id, task);
-
-        json response       = json::object();
-        response["task_id"] = task_id;
+    svr->Post("/generate_image", [&sd_ctx, &params, &n_prompts](const httplib::Request& req, httplib::Response& res) {
+        using json    = nlohmann::json;
+        json response = serv_generate_image(sd_ctx, params, n_prompts, req);
         res.set_content(response.dump(), "application/json");
     });
 
