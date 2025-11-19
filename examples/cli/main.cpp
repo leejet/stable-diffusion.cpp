@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <cctype>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -105,6 +106,9 @@ struct SDParams {
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
     sd_sample_params_t high_noise_sample_params;
 
+    std::string easycache_option;
+    sd_easycache_params_t easycache_params;
+
     float moe_boundary  = 0.875f;
     int video_frames    = 1;
     int fps             = 16;
@@ -154,6 +158,7 @@ struct SDParams {
         sd_sample_params_init(&sample_params);
         sd_sample_params_init(&high_noise_sample_params);
         high_noise_sample_params.sample_steps = -1;
+        sd_easycache_params_init(&easycache_params);
     }
 };
 
@@ -225,6 +230,11 @@ void print_params(SDParams params) {
     printf("    chroma_use_t5_mask:                %s\n", params.chroma_use_t5_mask ? "true" : "false");
     printf("    chroma_t5_mask_pad:                %d\n", params.chroma_t5_mask_pad);
     printf("    video_frames:                      %d\n", params.video_frames);
+    printf("    easycache:                         %s (threshold=%.3f, start=%.2f, end=%.2f)\n",
+           params.easycache_params.enabled ? "enabled" : "disabled",
+           params.easycache_params.reuse_threshold,
+           params.easycache_params.start_percent,
+           params.easycache_params.end_percent);
     printf("    vace_strength:                     %.2f\n", params.vace_strength);
     printf("    fps:                               %d\n", params.fps);
     printf("    preview_mode:                      %s (%s)\n", previews_str[params.preview_method], params.preview_noisy ? "noisy" : "denoised");
@@ -1128,6 +1138,38 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
+    auto on_easycache_arg = [&](int argc, const char** argv, int index) {
+        const std::string default_values = "0.2,0.15,0.95";
+        auto looks_like_value            = [](const std::string& token) {
+            if (token.empty()) {
+                return false;
+            }
+            if (token[0] != '-') {
+                return true;
+            }
+            if (token.size() == 1) {
+                return false;
+            }
+            unsigned char next = static_cast<unsigned char>(token[1]);
+            return std::isdigit(next) || token[1] == '.';
+        };
+
+        std::string option_value;
+        int consumed = 0;
+        if (index + 1 < argc) {
+            std::string next_arg = argv[index + 1];
+            if (looks_like_value(next_arg)) {
+                option_value = argv_to_utf8(index + 1, argv);
+                consumed     = 1;
+            }
+        }
+        if (option_value.empty()) {
+            option_value = default_values;
+        }
+        params.easycache_option = option_value;
+        return consumed;
+    };
+
     options.manual_options = {
         {"-M",
          "--mode",
@@ -1208,11 +1250,68 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--preview",
          std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[PREVIEW_NONE] + ")\n",
          on_preview_arg},
+        {"",
+         "--easycache",
+         "enable EasyCache for DiT models with optional \"threshold,start_percent,end_percent\" (default: 0.2,0.15,0.95)",
+         on_easycache_arg},
     };
 
     if (!parse_options(argc, argv, options)) {
         print_usage(argc, argv, options);
         exit(1);
+    }
+
+    if (!params.easycache_option.empty()) {
+        float values[3] = {0.0f, 0.0f, 0.0f};
+        std::stringstream ss(params.easycache_option);
+        std::string token;
+        int idx = 0;
+        while (std::getline(ss, token, ',')) {
+            auto trim = [](std::string& s) {
+                const char* whitespace = " \t\r\n";
+                auto start             = s.find_first_not_of(whitespace);
+                if (start == std::string::npos) {
+                    s.clear();
+                    return;
+                }
+                auto end = s.find_last_not_of(whitespace);
+                s        = s.substr(start, end - start + 1);
+            };
+            trim(token);
+            if (token.empty()) {
+                fprintf(stderr, "error: invalid easycache option '%s'\n", params.easycache_option.c_str());
+                exit(1);
+            }
+            if (idx >= 3) {
+                fprintf(stderr, "error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
+                exit(1);
+            }
+            try {
+                values[idx] = std::stof(token);
+            } catch (const std::exception&) {
+                fprintf(stderr, "error: invalid easycache value '%s'\n", token.c_str());
+                exit(1);
+            }
+            idx++;
+        }
+        if (idx != 3) {
+            fprintf(stderr, "error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
+            exit(1);
+        }
+        if (values[0] < 0.0f) {
+            fprintf(stderr, "error: easycache threshold must be non-negative\n");
+            exit(1);
+        }
+        if (values[1] < 0.0f || values[1] >= 1.0f || values[2] <= 0.0f || values[2] > 1.0f || values[1] >= values[2]) {
+            fprintf(stderr, "error: easycache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
+            exit(1);
+        }
+        params.easycache_params.enabled         = true;
+        params.easycache_params.reuse_threshold = values[0];
+        params.easycache_params.start_percent   = values[1];
+        params.easycache_params.end_percent     = values[2];
+    } else {
+        params.easycache_params.enabled = false;
     }
 
     if (params.n_threads <= 0) {
@@ -1852,6 +1951,7 @@ int main(int argc, const char* argv[]) {
                     params.pm_style_strength,
                 },  // pm_params
                 params.vae_tiling_params,
+                params.easycache_params,
             };
 
             results     = generate_image(sd_ctx, &img_gen_params);
@@ -1874,6 +1974,7 @@ int main(int argc, const char* argv[]) {
                 params.seed,
                 params.video_frames,
                 params.vace_strength,
+                params.easycache_params,
             };
 
             results = generate_video(sd_ctx, &vid_gen_params, &num_results);
