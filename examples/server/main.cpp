@@ -1070,9 +1070,34 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         {},
         {
             {"id_images", [&](const json& o) -> bool {
-                 // TODO fill up params->lastRequest.pm_images_vec
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "id_images not implemented yet\n");
-                 return false;
+                 // fill up params->lastRequest.pm_images_vec
+                 std::vector<std::string> b64_data = o.get<std::vector<std::string>>();
+
+                 // empty the vector if the new data is empty
+                 if (b64_data.empty()) {
+                     if (params->lastRequest.pm_images_vec.size() > 0) {
+                         for (auto& img : params->lastRequest.pm_images_vec) {
+                             free(img.data);
+                         }
+                         params->lastRequest.pm_images_vec.clear();
+                         return true;
+                     }
+                     return false;
+                 }
+
+                 for (auto& b64_image : b64_data) {
+                     // decode the base64 image
+                     std::string bin_image = base64_decode(b64_image);
+                     int width, height, channels;
+                     uint8_t* image = load_image_from_memory(bin_image, width, height, channels);
+                     if (image == nullptr) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to load image from memory\n");
+                         continue;
+                     }
+                     sd_image_t img = {(uint32_t)width, (uint32_t)height, 3, image};
+                     params->lastRequest.pm_images_vec.push_back(img);
+                 }
+                 return true;
              }},
             {"id_embed_path", [&](const json& o) -> bool {
                  // TODO: avoid parsing paths, rather use ids and convert to path server-side
@@ -1331,7 +1356,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
             }
             model_part_path = "";
         } else if (index != MODEL_KEEP) {
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid t5xxl index: %d\n", index);
+            sd_log(sd_log_level_t::SD_LOG_WARN, "Invalid model index: %d out of %d\n", index, model_part_files.size());
         }
         return change;
     };
@@ -2122,9 +2147,11 @@ void start_server(SDParams params) {
         res.set_header("Access-Control-Allow-Headers", "*");
         return res.set_content("", "text/html");  // blank response, no data
     });
-    if (params.verbose) {
-        svr->set_logger(log_server_request);
-    }
+
+    // TODO new flag for extra verbose to log all requests
+    // if (params.verbose) {
+    //     svr->set_logger(log_server_request);
+    // }
 
     svr->Post("/txt2img", [&sd_ctx, &params, &n_prompts](const httplib::Request& req, httplib::Response& res) {
         // Deprecated
@@ -2314,6 +2341,9 @@ void start_server(SDParams params) {
         json vision_models;
         json vaes;
         json taes;
+        json controlnets;
+        json photomakers;
+
         for (size_t i = 0; i < params.models_files.size(); i++) {
             if (is_model_file(params.models_files[i])) {
                 models.push_back({{"id", i}, {"name", params.models_files[i]}});
@@ -2344,12 +2374,25 @@ void start_server(SDParams params) {
                 taes.push_back({{"id", i}, {"name", params.tae_files[i]}});
             }
         }
+        for (size_t i = 0; i < params.controlnet_files.size(); i++) {
+            if (is_model_file(params.controlnet_files[i])) {
+                controlnets.push_back({{"id", i}, {"name", params.controlnet_files[i]}});
+            }
+        }
+        for (size_t i = 0; i < params.photomaker_files.size(); i++) {
+            if (is_model_file(params.photomaker_files[i])) {
+                photomakers.push_back({{"id", i}, {"name", params.photomaker_files[i]}});
+            }
+        }
+
         response["models"]           = models;
         response["diffusion_models"] = diffusion_models;
         response["text_encoders"]    = text_encoders;
         response["vision_models"]    = vision_models;
         response["vaes"]             = vaes;
         response["taes"]             = taes;
+        response["control_nets"]     = controlnets;
+        response["photo_makers"]     = photomakers;
 
         for (size_t i = 0; i < lora_files.size(); i++) {
             std::string lora_name = lora_files[i];
@@ -2428,6 +2471,12 @@ void start_server(SDParams params) {
         }
         if (!params.ctxParams.taesd_path.empty()) {
             response["tae"] = sd_basename(params.ctxParams.taesd_path);
+        }
+        if (!params.ctxParams.controlnet_path.empty()) {
+            response["control_net"] = sd_basename(params.ctxParams.controlnet_path);
+        }
+        if (!params.ctxParams.photomaker_path.empty()) {
+            response["photo_maker"] = sd_basename(params.ctxParams.photomaker_path);
         }
         res.set_content(response.dump(), "application/json");
     });

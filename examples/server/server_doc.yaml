@@ -140,6 +140,10 @@ paths:
                     $ref: '#/components/schemas/ModelList'
                   taes:
                     $ref: '#/components/schemas/ModelList'
+                  control_nets:
+                    $ref: '#/components/schemas/ModelList'
+                  photo_makers:
+                    $ref: '#/components/schemas/ModelList'
                   loras:
                     type: array
                     items:
@@ -167,10 +171,17 @@ paths:
                 properties:
                   model: { type: string }
                   diffusion_model: { type: string }
+                  high_noise_diffusion_model: { type: string }
                   clip_l: { type: string }
                   clip_g: { type: string }
                   t5xxl: { type: string }
+                  qwen2vl: { type: string }
+                  clip_vision: { type: string }
+                  qwen2vl_vision: { type: string }
                   vae: { type: string }
+                  tae: { type: string }
+                  control_net: { type: string }
+                  photo_maker: { type: string }
                   # ... includes other loaded components
 
   /schedulers:
@@ -472,8 +483,7 @@ components:
               type: string
             id_images:
               type: array
-              deprecated: true
-              description: Not implemented yet.
+              description: Array of base64 encoded ID images for PhotoMaker.
               items:
                 type: string
         preview_method:
