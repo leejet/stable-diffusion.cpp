@@ -77,85 +77,27 @@ jobs:
 
       - name: Setup ROCm (Ubuntu)
         run: |
-          # Clean any existing ROCm installations to avoid conflicts
-          sudo apt remove --purge -y rocm-* hip-* || true
-          sudo apt autoremove -y
-          sudo apt autoclean
-          
-          # Update package lists and install prerequisites
+          # Install ROCm 7.1
           sudo apt update
-          sudo apt install -y wget gnupg software-properties-common curl
+          sudo apt install -y wget gnupg
           
-          # Remove any existing ROCm repositories
-          sudo rm -f /etc/apt/sources.list.d/rocm*.list
-          sudo rm -f /etc/apt/sources.list.d/amdgpu*.list
-          sudo rm -f /etc/apt/preferences.d/rocm*
+          # Add ROCm repository
+          wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | sudo apt-key add -
+          echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/7.1/ noble main" | sudo tee /etc/apt/sources.list.d/rocm.list
           
-          # Add ROCm 7.1 repository using newer GPG method
-          curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/rocm.gpg
-          
-          # Use jammy (22.04) instead of noble for better ROCm 7.1 compatibility
-          echo "deb [arch=amd64 signed-by=/etc/apt/trusted.gpg.d/rocm.gpg] https://repo.radeon.com/rocm/apt/7.1/ jammy main" | sudo tee /etc/apt/sources.list.d/rocm.list
-          
-          # Create package pinning to prioritize ROCm packages
-          cat << 'EOF' | sudo tee /etc/apt/preferences.d/rocm-pin-600
-Package: *
-Pin: origin repo.radeon.com
-Pin-Priority: 1001
-EOF
-          
-          # Update package lists
           sudo apt update
-          
-          # Install packages step by step to handle dependencies properly
-          echo "Installing basic build tools..."
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y cmake build-essential git
-          
-          echo "Installing ROCm runtime and HIP..."
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-            rocm-core hip-runtime-amd hip-dev || {
-            echo "Failed to install hip-dev, trying alternatives..."
-            sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-              hip-runtime-amd hip-devel
-          }
-          
-          echo "Installing BLAS libraries..."
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-            hipblas-dev rocblas-dev || {
-            echo "Failed to install BLAS dev packages, trying lib versions..."
-            sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-              libhipblas-dev librocblas-dev || {
-              echo "Installing without dev packages, runtime only..."
-              sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-                hipblas rocblas
-            }
-          }
-          
-          echo "Attempting to install additional ROCm tools (optional)..."
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-            rocm-dev-tools rocm-cmake hipcc || echo "Optional tools installation failed, continuing..."
-          
-          # Verify installation and set environment
-          echo "Verifying ROCm installation:"
-          ls -la /opt/rocm/ || echo "ROCm directory not found"
-          
-          if [ -f "/opt/rocm/bin/rocminfo" ]; then
-            /opt/rocm/bin/rocminfo || echo "rocminfo execution failed"
-          else
-            echo "rocminfo not found"
-          fi
-          
-          if [ -f "/opt/rocm/bin/hipcc" ]; then
-            /opt/rocm/bin/hipcc --version || echo "hipcc execution failed"
-          else
-            echo "hipcc not found, checking alternatives..."
-            which hipcc && hipcc --version || echo "No hipcc found in PATH"
-          fi
-          
-          # Set environment variables
+          sudo apt install -y \
+            rocm-dev \
+            hip-dev \
+            hipblas-dev \
+            rocblas-dev \
+            hipblaslt-dev \
+            cmake \
+            build-essential
+            
+          # Verify installation
+          /opt/rocm/bin/rocminfo || true
           echo "ROCm_DIR=/opt/rocm" >> $GITHUB_ENV
-          echo "HIP_PATH=/opt/rocm" >> $GITHUB_ENV
-          echo "ROCM_PATH=/opt/rocm" >> $GITHUB_ENV
 
       - name: Cache build
         uses: actions/cache@v4
