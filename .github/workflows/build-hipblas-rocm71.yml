@@ -82,74 +82,80 @@ jobs:
           sudo apt autoremove -y
           sudo apt autoclean
           
-          # Update package lists
+          # Update package lists and install prerequisites
           sudo apt update
-          sudo apt install -y wget gnupg software-properties-common apt-transport-https ca-certificates
+          sudo apt install -y wget gnupg software-properties-common curl
           
           # Remove any existing ROCm repositories
           sudo rm -f /etc/apt/sources.list.d/rocm*.list
           sudo rm -f /etc/apt/sources.list.d/amdgpu*.list
           sudo rm -f /etc/apt/preferences.d/rocm*
           
-          # Detect Ubuntu version
-          UBUNTU_VERSION=$(lsb_release -rs)
-          UBUNTU_CODENAME=$(lsb_release -cs)
-          echo "Detected Ubuntu $UBUNTU_VERSION ($UBUNTU_CODENAME)"
+          # Add ROCm 7.1 repository using newer GPG method
+          curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/rocm.gpg
           
-          # Add ROCm 7.1 repository with correct Ubuntu version detection
-          wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/rocm.gpg
+          # Use jammy (22.04) instead of noble for better ROCm 7.1 compatibility
+          echo "deb [arch=amd64 signed-by=/etc/apt/trusted.gpg.d/rocm.gpg] https://repo.radeon.com/rocm/apt/7.1/ jammy main" | sudo tee /etc/apt/sources.list.d/rocm.list
           
-          # Use focal (20.04) repo for better compatibility with ROCm 7.1
-          echo "deb [arch=amd64 signed-by=/etc/apt/trusted.gpg.d/rocm.gpg] https://repo.radeon.com/rocm/apt/7.1/ focal main" | sudo tee /etc/apt/sources.list.d/rocm.list
-          
-          # Set package pinning to prioritize ROCm repository
-          cat << EOF | sudo tee /etc/apt/preferences.d/rocm-pin-600
+          # Create package pinning to prioritize ROCm packages
+          cat << 'EOF' | sudo tee /etc/apt/preferences.d/rocm-pin-600
 Package: *
 Pin: origin repo.radeon.com
 Pin-Priority: 1001
-
-Package: hipcc rocm-cmake rocm-utils
-Pin: version 1.1.1.70100-20~24.04
-Pin-Priority: 1001
 EOF
           
-          # Update package lists with new repository
+          # Update package lists
           sudo apt update
           
-          # Install ROCm 7.1 packages step by step to handle dependencies
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-            cmake \
-            build-essential \
-            git
+          # Install packages step by step to handle dependencies properly
+          echo "Installing basic build tools..."
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y cmake build-essential git
           
-          # Install ROCm core packages first
+          echo "Installing ROCm runtime and HIP..."
           sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-            rocm-core \
-            hip-runtime-amd \
-            hip-dev
+            rocm-core hip-runtime-amd hip-dev || {
+            echo "Failed to install hip-dev, trying alternatives..."
+            sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
+              hip-runtime-amd hip-devel
+          }
           
-          # Install BLAS packages
+          echo "Installing BLAS libraries..."
           sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-            hipblas-dev \
-            rocblas-dev || \
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-            libhipblas-dev \
-            librocblas-dev
+            hipblas-dev rocblas-dev || {
+            echo "Failed to install BLAS dev packages, trying lib versions..."
+            sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
+              libhipblas-dev librocblas-dev || {
+              echo "Installing without dev packages, runtime only..."
+              sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
+                hipblas rocblas
+            }
+          }
           
-          # Install additional ROCm development tools (optional)
+          echo "Attempting to install additional ROCm tools (optional)..."
           sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
-            rocm-dev-tools || echo "rocm-dev-tools installation failed, continuing without it"
+            rocm-dev-tools rocm-cmake hipcc || echo "Optional tools installation failed, continuing..."
           
-          # Verify installation
+          # Verify installation and set environment
           echo "Verifying ROCm installation:"
           ls -la /opt/rocm/ || echo "ROCm directory not found"
-          /opt/rocm/bin/rocminfo || echo "rocminfo not available"
-          /opt/rocm/bin/hipcc --version || echo "hipcc not available"
-          echo "ROCm_DIR=/opt/rocm" >> $GITHUB_ENV
           
-          # Add ROCm to PATH and library path
-          echo "PATH=/opt/rocm/bin:$PATH" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          if [ -f "/opt/rocm/bin/rocminfo" ]; then
+            /opt/rocm/bin/rocminfo || echo "rocminfo execution failed"
+          else
+            echo "rocminfo not found"
+          fi
+          
+          if [ -f "/opt/rocm/bin/hipcc" ]; then
+            /opt/rocm/bin/hipcc --version || echo "hipcc execution failed"
+          else
+            echo "hipcc not found, checking alternatives..."
+            which hipcc && hipcc --version || echo "No hipcc found in PATH"
+          fi
+          
+          # Set environment variables
+          echo "ROCm_DIR=/opt/rocm" >> $GITHUB_ENV
+          echo "HIP_PATH=/opt/rocm" >> $GITHUB_ENV
+          echo "ROCM_PATH=/opt/rocm" >> $GITHUB_ENV
 
       - name: Cache build
         uses: actions/cache@v4
