@@ -89,13 +89,12 @@ struct SDRequestParams {
     std::string negative_prompt;
     int clip_skip = -1;  // <= 0 represents unspecified
 
-    // TODO: img2img support
     sd_image_t init_image              = {512, 512, 3, NULL};
     std::vector<sd_image_t> ref_images = {};
     bool auto_resize_ref_image         = true;
     bool increase_ref_index            = false;
 
-    // sd_image_t mask_image;
+    sd_image_t mask_image = {512, 512, 1, NULL};
 
     int width  = 512;
     int height = 512;
@@ -116,8 +115,8 @@ struct SDRequestParams {
     int64_t seed    = 42;
     int batch_count = 1;
 
-    // sd_image_t control_image;
-    float control_strength = 0.9f;
+    sd_image_t control_image = {512, 512, 3, NULL};
+    float control_strength   = 0.9f;
 
     // pm_images_vec should be turned into a vector of sd_image_t at the beginning of sd_pm_params
     std::vector<sd_image_t> pm_images_vec = {};
@@ -857,6 +856,7 @@ uint8_t* load_image_from_memory(const std::string image_bin, int& width, int& he
         height = resized_height;
         free(image_buffer);
         image_buffer = resized_image_buffer;
+        channel      = expected_channel;
     }
     return image_buffer;
 }
@@ -1188,12 +1188,13 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                      if (params->lastRequest.init_image.data) {
                          free(params->lastRequest.init_image.data);
                          params->lastRequest.init_image.data = NULL;
+                         return true;
                      }
-                     return true;
+                     return false;
                  }
 
                  std::string bin_data = base64_decode(b64_data);
-                 int width, height, c;
+                 int width = 0, height = 0, c = 0;
                  // int_options are processed before manual_options, so we can use the width and height here
                  uint8_t* image_buffer = load_image_from_memory(bin_data, width, height, c, params->lastRequest.width, params->lastRequest.height);
                  if (image_buffer == NULL) {
@@ -1203,26 +1204,88 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                      free(params->lastRequest.init_image.data);
                  }
                  params->lastRequest.init_image = sd_image_t{(uint32_t)width, (uint32_t)height, (uint32_t)c, image_buffer};
-
                  sd_log(sd_log_level_t::SD_LOG_INFO, "Loaded image from memory: %dx%d, %d channels\n", width, height, c);
-
                  return true;
              }},
             {"mask_image", [&](const json& o) -> bool {
-                 // TODO (probably convert base64 to sd_image_t)
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "mask_image not implemented yet\n");
-                 return false;
+                 // base64 encoded png or jpg monochrome image
+                 std::string b64_data = o.get<std::string>();
+                 // empty string means no mask image, cleanup previous one if exists
+                 if (b64_data.empty()) {
+                     if (params->lastRequest.mask_image.data) {
+                         free(params->lastRequest.mask_image.data);
+                         params->lastRequest.mask_image.data = NULL;
+                         return true;
+                     }
+                     return false;
+                 }
+
+                 std::string bin_data = base64_decode(b64_data);
+                 int width = 0, height = 0, c = 0;
+                 uint8_t* image_buffer = load_image_from_memory(bin_data, width, height, c, params->lastRequest.width, params->lastRequest.height, 1);  // force 1 channel
+                 if (image_buffer == NULL) {
+                     sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to load image from memory\n");
+                 }
+                 if (params->lastRequest.mask_image.data) {
+                     free(params->lastRequest.mask_image.data);
+                 }
+                 params->lastRequest.mask_image = sd_image_t{(uint32_t)width, (uint32_t)height, (uint32_t)c, image_buffer};
+                 sd_log(sd_log_level_t::SD_LOG_INFO, "Loaded image from memory: %dx%d, %d channels\n", width, height, c);
+                 return true;
              }},
             {"control_image", [&](const json& o) -> bool {
-                 // TODO (probably convert base64 to sd_image_t)
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "control_image not implemented yet\n");
-                 return false;
+                 // base64 encoded png or jpg rgb image
+                 std::string b64_data = o.get<std::string>();
+                 // empty string means no control image, cleanup previous one if exists
+                 if (b64_data.empty()) {
+                     if (params->lastRequest.control_image.data) {
+                         free(params->lastRequest.control_image.data);
+                         params->lastRequest.control_image.data = NULL;
+                         return true;
+                     }
+                     return false;
+                 }
+
+                 std::string bin_data = base64_decode(b64_data);
+                 int width = 0, height = 0, c = 0;
+                 // int_options are processed before manual_options, so we can use the width and height here
+                 uint8_t* image_buffer = load_image_from_memory(bin_data, width, height, c, params->lastRequest.width, params->lastRequest.height);
+                 if (image_buffer == NULL) {
+                     sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to load image from memory\n");
+                 }
+                 if (params->lastRequest.control_image.data) {
+                     free(params->lastRequest.control_image.data);
+                 }
+                 params->lastRequest.control_image = sd_image_t{(uint32_t)width, (uint32_t)height, (uint32_t)3, image_buffer};
+                 sd_log(sd_log_level_t::SD_LOG_INFO, "Loaded image from memory: %dx%d, %d channels\n", width, height, c);
+                 return true;
              }},
             // ref images
             {"ref_images", [&](const json& o) -> bool {
-                 // TODO (probably convert base64 list to vector of sd_image_t)
-                 sd_log(sd_log_level_t::SD_LOG_WARN, "ref_images not implemented yet\n");
-                 return false;
+                 // base64 encoded png or jpg rgb images
+                 std::vector<std::string> b64_data = o.get<std::vector<std::string>>();
+                 // empty array means no ref images, cleanup previous ones if exists
+                 if (b64_data.empty()) {
+                     if (params->lastRequest.ref_images.size() > 0) {
+                         for (auto& ref_image : params->lastRequest.ref_images) {
+                             free(ref_image.data);
+                         }
+                         params->lastRequest.ref_images.clear();
+                         return true;
+                     }
+                     return false;
+                 }
+
+                 for (auto& b64_image : b64_data) {
+                     std::string bin_data = base64_decode(b64_image);
+                     int width = 0, height = 0, c = 0;
+                     uint8_t* image_buffer = load_image_from_memory(bin_data, width, height, c);
+                     if (image_buffer == NULL) {
+                         sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to load image from memory\n");
+                     }
+                     params->lastRequest.ref_images.push_back(sd_image_t{(uint32_t)width, (uint32_t)height, (uint32_t)c, image_buffer});
+                 }
+                 return true;
              }},
             // preview_method
             {"preview_method", [&](const json& o) -> bool {
@@ -1922,18 +1985,17 @@ nlohmann::json serv_generate_image(sd_ctx_t*& sd_ctx, SDParams& params, int& n_p
 
             sd_image_t init_image = params.lastRequest.init_image;
 
+            sd_image_t mask_img = params.lastRequest.mask_image;
             std::vector<uint8_t> ones(params.lastRequest.width * params.lastRequest.height, 0xFF);
-            sd_image_t mask_img = {
-                (uint32_t)params.lastRequest.width,
-                (uint32_t)params.lastRequest.height,
-                1,
-                ones.data()};
-            std::vector<uint8_t> zeros(params.lastRequest.width * params.lastRequest.height * 3, 0);
-            sd_image_t control_img = {
-                (uint32_t)params.lastRequest.width,
-                (uint32_t)params.lastRequest.height,
-                3,
-                zeros.data()};
+            if (init_image.data != NULL && params.lastRequest.mask_image.data == NULL) {
+                mask_img = {
+                    (uint32_t)params.lastRequest.width,
+                    (uint32_t)params.lastRequest.height,
+                    1,
+                    ones.data()};
+            }
+
+            sd_image_t control_img = params.lastRequest.control_image;
 
             params.lastRequest.pm_params.id_embed_path   = params.input_id_images_path.c_str();
             params.lastRequest.pm_params.id_images       = params.lastRequest.pm_images_vec.data();
