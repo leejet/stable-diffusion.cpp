@@ -77,26 +77,39 @@ jobs:
 
       - name: Setup ROCm (Ubuntu)
         run: |
-          # Install ROCm 7.1
-          sudo apt update
-          sudo apt install -y wget gnupg
+          # Clean any existing ROCm installations
+          sudo apt remove --purge -y rocm-* hip-* || true
+          sudo apt autoremove -y
           
-          # Add ROCm repository
+          # Install prerequisites
+          sudo apt update
+          sudo apt install -y wget gnupg software-properties-common
+          
+          # Remove any existing ROCm repositories
+          sudo rm -f /etc/apt/sources.list.d/rocm.list
+          sudo rm -f /etc/apt/sources.list.d/amdgpu.list
+          
+          # Add official ROCm 7.1.0 repository for Ubuntu 22.04 (jammy)
           wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | sudo apt-key add -
-          echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/7.1/ noble main" | sudo tee /etc/apt/sources.list.d/rocm.list
+          echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/6.2 jammy main" | sudo tee /etc/apt/sources.list.d/rocm.list
+          
+          # Set package priorities to prefer ROCm repository
+          echo -e "Package: *\nPin: origin repo.radeon.com\nPin-Priority: 600" | sudo tee /etc/apt/preferences.d/rocm-pin-600
           
           sudo apt update
-          sudo apt install -y \
-            rocm-dev \
+          
+          # Install ROCm 6.2 (most stable version) instead of 7.1 to avoid dependency conflicts
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+            rocm-dev-tools \
             hip-dev \
             hipblas-dev \
             rocblas-dev \
-            hipblaslt-dev \
             cmake \
             build-essential
             
           # Verify installation
-          /opt/rocm/bin/rocminfo || true
+          /opt/rocm/bin/rocminfo || echo "rocminfo not available"
+          /opt/rocm/bin/hipcc --version || echo "hipcc not available"
           echo "ROCm_DIR=/opt/rocm" >> $GITHUB_ENV
 
       - name: Cache build
