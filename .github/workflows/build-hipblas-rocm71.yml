@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   get-default-branch:
-    runs-on: ubuntu-latest
+    runs-on: github-runner
     outputs:
       branch: ${{ steps.branch.outputs.branch }}
     steps:
@@ -60,7 +60,7 @@ jobs:
       matrix:
         gpu_target: [gfx1201, gfx1200, gfx1100, gfx1101, gfx1151]
 
-    runs-on: ubuntu-24.04
+    runs-on: github-runner
     needs: get-default-branch
 
     env:
