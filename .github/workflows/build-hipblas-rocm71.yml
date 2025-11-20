@@ -77,40 +77,79 @@ jobs:
 
       - name: Setup ROCm (Ubuntu)
         run: |
-          # Clean any existing ROCm installations
+          # Clean any existing ROCm installations to avoid conflicts
           sudo apt remove --purge -y rocm-* hip-* || true
           sudo apt autoremove -y
+          sudo apt autoclean
           
-          # Install prerequisites
+          # Update package lists
           sudo apt update
-          sudo apt install -y wget gnupg software-properties-common
+          sudo apt install -y wget gnupg software-properties-common apt-transport-https ca-certificates
           
           # Remove any existing ROCm repositories
-          sudo rm -f /etc/apt/sources.list.d/rocm.list
-          sudo rm -f /etc/apt/sources.list.d/amdgpu.list
+          sudo rm -f /etc/apt/sources.list.d/rocm*.list
+          sudo rm -f /etc/apt/sources.list.d/amdgpu*.list
+          sudo rm -f /etc/apt/preferences.d/rocm*
           
-          # Add official ROCm 7.1.0 repository for Ubuntu 22.04 (jammy)
-          wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | sudo apt-key add -
-          echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/6.2 jammy main" | sudo tee /etc/apt/sources.list.d/rocm.list
+          # Detect Ubuntu version
+          UBUNTU_VERSION=$(lsb_release -rs)
+          UBUNTU_CODENAME=$(lsb_release -cs)
+          echo "Detected Ubuntu $UBUNTU_VERSION ($UBUNTU_CODENAME)"
           
-          # Set package priorities to prefer ROCm repository
-          echo -e "Package: *\nPin: origin repo.radeon.com\nPin-Priority: 600" | sudo tee /etc/apt/preferences.d/rocm-pin-600
+          # Add ROCm 7.1 repository with correct Ubuntu version detection
+          wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/rocm.gpg
           
+          # Use focal (20.04) repo for better compatibility with ROCm 7.1
+          echo "deb [arch=amd64 signed-by=/etc/apt/trusted.gpg.d/rocm.gpg] https://repo.radeon.com/rocm/apt/7.1/ focal main" | sudo tee /etc/apt/sources.list.d/rocm.list
+          
+          # Set package pinning to prioritize ROCm repository
+          cat << EOF | sudo tee /etc/apt/preferences.d/rocm-pin-600
+Package: *
+Pin: origin repo.radeon.com
+Pin-Priority: 1001
+
+Package: hipcc rocm-cmake rocm-utils
+Pin: version 1.1.1.70100-20~24.04
+Pin-Priority: 1001
+EOF
+          
+          # Update package lists with new repository
           sudo apt update
           
-          # Install ROCm 6.2 (most stable version) instead of 7.1 to avoid dependency conflicts
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
-            rocm-dev-tools \
-            hip-dev \
-            hipblas-dev \
-            rocblas-dev \
+          # Install ROCm 7.1 packages step by step to handle dependencies
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
             cmake \
-            build-essential
-            
+            build-essential \
+            git
+          
+          # Install ROCm core packages first
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
+            rocm-core \
+            hip-runtime-amd \
+            hip-dev
+          
+          # Install BLAS packages
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
+            hipblas-dev \
+            rocblas-dev || \
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
+            libhipblas-dev \
+            librocblas-dev
+          
+          # Install additional ROCm development tools (optional)
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y --allow-downgrades \
+            rocm-dev-tools || echo "rocm-dev-tools installation failed, continuing without it"
+          
           # Verify installation
+          echo "Verifying ROCm installation:"
+          ls -la /opt/rocm/ || echo "ROCm directory not found"
           /opt/rocm/bin/rocminfo || echo "rocminfo not available"
           /opt/rocm/bin/hipcc --version || echo "hipcc not available"
           echo "ROCm_DIR=/opt/rocm" >> $GITHUB_ENV
+          
+          # Add ROCm to PATH and library path
+          echo "PATH=/opt/rocm/bin:$PATH" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
       - name: Cache build
         uses: actions/cache@v4
