@@ -60,7 +60,7 @@ jobs:
       matrix:
         gpu_target: [gfx1201, gfx1200, gfx1100, gfx1101, gfx1151]
 
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     needs: get-default-branch
 
     env:
@@ -83,7 +83,7 @@ jobs:
           
           # Add ROCm repository
           wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | sudo apt-key add -
-          echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/7.1/ focal main" | sudo tee /etc/apt/sources.list.d/rocm.list
+          echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/7.1/ noble main" | sudo tee /etc/apt/sources.list.d/rocm.list
           
           sudo apt update
           sudo apt install -y \
