@@ -335,7 +335,7 @@ components:
           description: Array of generated image objects (usually base64).
           items:
             type: string
-        id:
+        task_id:
           type: string
           description: Task ID if processed asynchronously.
         status:
