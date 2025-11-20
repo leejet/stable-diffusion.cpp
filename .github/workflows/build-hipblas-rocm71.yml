@@ -109,8 +109,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-rocm71-${{ matrix.gpu_target }}-
 
-      - name: Build with CMake (Linux)
-        if: runner.os == 'Linux'
+      - name: Build with CMake
         run: |
           # Setup ccache
           sudo apt install -y ccache
@@ -119,67 +118,38 @@ jobs:
           mkdir -p build
           cd build
           
-          # Configure with ROCm 7.1 and specific GPU targets
+          echo "Building for GPU target: ${{ matrix.gpu_target }}"
+          
+          # Configure with ROCm 7.1 and specific GPU target
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=/opt/rocm/bin/clang \
             -DCMAKE_CXX_COMPILER=/opt/rocm/bin/clang++ \
             -DCMAKE_PREFIX_PATH=/opt/rocm \
-            -DGPU_TARGETS="${GPU_TARGETS_CONVERTED}" \
+            -DGPU_TARGETS="${{ env.GPU_TARGET }}" \
             -DHIP_PLATFORM=amd \
-            ${{ matrix.defines }}
+            ${{ env.SD_DEFINES }}
           
           # Build with all available cores
           cmake --build . --config Release --parallel $(nproc)
 
-      - name: Build with CMake (Windows)  
-        if: runner.os == 'Windows'
-        run: |
-          mkdir build
-          cd build
-          
-          # Configure with ROCm 7.1 and specific GPU targets
-          cmake .. `
-            -G "Unix Makefiles" `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_C_COMPILER=clang `
-            -DCMAKE_CXX_COMPILER=clang++ `
-            -DCMAKE_PREFIX_PATH="${env:CMAKE_PREFIX_PATH}" `
-            -DGPU_TARGETS="${{ env.GPU_TARGETS }}" `
-            -DHIP_PLATFORM=amd `
-            ${{ matrix.defines }}
-          
-          # Build with all available cores
-          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
-
       - name: Test HipBLAS build
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            cd build
-            # Test if hipblas libraries are linked correctly
-            ldd bin/* 2>/dev/null | grep -i hip || echo "No direct HIP dependencies found"
-            ldd bin/* 2>/dev/null | grep -i rocm || echo "No ROCm dependencies found"
-            ls -la bin/
-          else
-            cd build
-            # Windows - check if DLLs are present
-            Get-ChildItem -Path "bin" -Name
-            Get-ChildItem -Path "bin" -Filter "*.exe" | ForEach-Object { Write-Host "Built: $($_.Name)" }
-          fi
+          cd build
+          # Test if hipblas libraries are linked correctly
+          ldd bin/* 2>/dev/null | grep -i hip || echo "No direct HIP dependencies found"
+          ldd bin/* 2>/dev/null | grep -i rocm || echo "No ROCm dependencies found"
+          echo "Built binaries for GPU target ${{ matrix.gpu_target }}:"
+          ls -la bin/
 
       - name: Get commit hash
         id: commit
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true' }}
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            echo "short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
-          else
-            $shortHash = git rev-parse --short=7 HEAD
-            echo "short=$shortHash" >> $env:GITHUB_OUTPUT
-          fi
+          echo "short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Package artifacts (Linux)
-        if: ${{ runner.os == 'Linux' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
+      - name: Package artifacts
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true' }}
         run: |
           cd build
           
@@ -196,66 +166,39 @@ jobs:
             cp /opt/rocm/lib/libhipblaslt.so* package/lib/ 2>/dev/null || echo "hipblaslt lib not found"
           fi
           
-          # Create archive
-          tar -czf ../sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-x64.tar.gz -C package .
-
-      - name: Package artifacts (Windows)
-        if: ${{ runner.os == 'Windows' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
-        run: |
-          cd build
-          
-          # Create package directories
-          New-Item -ItemType Directory -Force -Path "package\bin"
-          New-Item -ItemType Directory -Force -Path "package\lib" 
-          New-Item -ItemType Directory -Force -Path "package\rocblas\library"
-          New-Item -ItemType Directory -Force -Path "package\hipblaslt\library"
-          
-          # Copy binaries
-          Copy-Item "bin\*" "package\bin\" -Recurse -ErrorAction SilentlyContinue
-          
-          # Copy ROCm DLLs
-          if (Test-Path "${env:HIP_PATH}\bin") {
-            Copy-Item "${env:HIP_PATH}\bin\hipblas.dll" "package\bin\" -ErrorAction SilentlyContinue
-            Copy-Item "${env:HIP_PATH}\bin\hipblaslt.dll" "package\bin\" -ErrorAction SilentlyContinue  
-            Copy-Item "${env:HIP_PATH}\bin\rocblas.dll" "package\bin\" -ErrorAction SilentlyContinue
-            Copy-Item "${env:HIP_PATH}\bin\rocblas\library\*" "package\rocblas\library\" -ErrorAction SilentlyContinue
-            Copy-Item "${env:HIP_PATH}\bin\hipblaslt\library\*" "package\hipblaslt\library\" -ErrorAction SilentlyContinue
-          }
-          
-          # Create archive
-          Compress-Archive -Path "package\*" -DestinationPath "..\sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm71-x64.zip"
+          # Create archive with GPU target in filename
+          tar -czf ../sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-${{ matrix.gpu_target }}-x64.tar.gz -C package .
 
       - name: Upload artifacts
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ matrix.build }}-x64
+          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-${{ matrix.gpu_target }}-x64
           path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-*-rocm71-x64.*
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-${{ matrix.gpu_target }}-x64.tar.gz
           retention-days: 7
 
       - name: Create Release
         if: ${{ github.event.inputs.create_release == 'true' && github.ref == 'refs/heads/master' }}
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: rocm71-${{ steps.commit.outputs.short }}
-          name: ROCm 7.1 HipBLAS Build ${{ steps.commit.outputs.short }}
+          tag_name: rocm71-${{ matrix.gpu_target }}-${{ steps.commit.outputs.short }}
+          name: ROCm 7.1 HipBLAS Build ${{ matrix.gpu_target }} ${{ steps.commit.outputs.short }}
           body: |
-            ## ROCm 7.1 HipBLAS Build
+            ## ROCm 7.1 HipBLAS Build for ${{ matrix.gpu_target }}
             
-            **GPU Targets:** `${{ env.GPU_TARGETS }}`
+            **GPU Target:** `${{ matrix.gpu_target }}`
             **Commit:** ${{ steps.commit.outputs.short }}
             
             Built with:
             - ROCm 7.1.0
             - HipBLAS support
-            - GPU targets: gfx1201, gfx1200, gfx1100, gfx1101, gfx1151
+            - Optimized for GPU architecture: ${{ matrix.gpu_target }}
             
             ### Downloads
-            - Linux: `sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-x64.tar.gz`  
-            - Windows: `sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm71-x64.zip`
+            - Linux: `sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-${{ matrix.gpu_target }}-x64.tar.gz`
           files: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-*-rocm71-x64.*
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-${{ matrix.gpu_target }}-x64.tar.gz
           draft: false
           prerelease: false
         env:
