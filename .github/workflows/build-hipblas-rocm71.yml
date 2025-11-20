@@ -99,69 +99,15 @@ jobs:
           /opt/rocm/bin/rocminfo || true
           echo "ROCm_DIR=/opt/rocm" >> $GITHUB_ENV
 
-      - name: Setup ROCm (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          $ErrorActionPreference = "Stop"
-          
-          # Download and install ROCm 7.1 for Windows
-          $rocmUrl = "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-23.Q4-WinSvr2022-For-HIP.exe"
-          $installerPath = "${env:RUNNER_TEMP}\rocm-install.exe"
-          
-          write-host "Downloading ROCm 7.1 installer..."
-          Invoke-WebRequest -Uri $rocmUrl -OutFile $installerPath
-          
-          write-host "Installing ROCm 7.1..."
-          $proc = Start-Process $installerPath -ArgumentList '-install' -NoNewWindow -PassThru
-          $completed = $proc.WaitForExit(900000) # 15 minutes timeout
-          
-          if (-not $completed) {
-              Write-Error "ROCm installation timed out"
-              $proc.Kill()
-              exit 1
-          }
-          
-          if ($proc.ExitCode -ne 0) {
-              Write-Error "ROCm installation failed with exit code $($proc.ExitCode)"
-              exit 1
-          }
-          
-          # Verify installation and set environment
-          $rocmPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*' | Select-Object -First 1
-          if (-not $rocmPath) {
-              Write-Error "ROCm installation not found"
-              exit 1
-          }
-          
-          $hipPath = $rocmPath.FullName
-          echo "HIP_PATH=$hipPath" >> $env:GITHUB_ENV
-          echo "ROCm_DIR=$hipPath" >> $env:GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=$hipPath" >> $env:GITHUB_ENV
-          
-          # Test installation
-          & "$hipPath\bin\clang.exe" --version
-
-      - name: Cache build (Linux)
-        if: runner.os == 'Linux'
+      - name: Cache build
         uses: actions/cache@v4
         with:
           path: |
             ~/.ccache
             build
-          key: ${{ runner.os }}-rocm71-${{ matrix.build }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
+          key: ${{ runner.os }}-rocm71-${{ matrix.gpu_target }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
           restore-keys: |
-            ${{ runner.os }}-rocm71-${{ matrix.build }}-
-
-      - name: Cache build (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~\AppData\Local\ccache
-            build
-          key: ${{ runner.os }}-rocm71-${{ matrix.build }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
-          restore-keys: |
-            ${{ runner.os }}-rocm71-${{ matrix.build }}-
+            ${{ runner.os }}-rocm71-${{ matrix.gpu_target }}-
 
       - name: Build with CMake (Linux)
         if: runner.os == 'Linux'
