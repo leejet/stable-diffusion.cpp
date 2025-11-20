@@ -1,0 +1,316 @@
+name: Build HipBLAS ROCm 7.1
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: "Create new release"
+        required: false
+        type: boolean
+        default: false
+      gpu_targets:
+        description: "GPU Targets (comma separated)"
+        required: false
+        type: string
+        default: "gfx1201,gfx1200,gfx1100,gfx1101,gfx1151"
+  push:
+    branches:
+      - master
+      - ci
+    paths:
+      [
+        ".github/workflows/build-hipblas-rocm71.yml",
+        "**/CMakeLists.txt",
+        "**/*.h",
+        "**/*.hpp",
+        "**/*.c",
+        "**/*.cpp",
+        "**/*.cu",
+      ]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      [
+        ".github/workflows/build-hipblas-rocm71.yml",
+        "**/CMakeLists.txt",
+        "**/*.h",
+        "**/*.hpp",
+        "**/*.c",
+        "**/*.cpp",
+        "**/*.cu",
+      ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  get-default-branch:
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.branch.outputs.branch }}
+    steps:
+      - name: Get default branch
+        id: branch
+        run: echo "branch=${{ github.event.repository.default_branch || 'master' }}" >> $GITHUB_OUTPUT
+
+  rocm71-hipblas-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        gpu_target: [gfx1201, gfx1200, gfx1100, gfx1101, gfx1151]
+
+    runs-on: ubuntu-20.04
+    needs: get-default-branch
+
+    env:
+      BRANCH_NAME: ${{ needs.get-default-branch.outputs.branch }}
+      ROCM_VERSION: "7.1.0"
+      # Individual GPU target for this build
+      GPU_TARGET: ${{ matrix.gpu_target }}
+      SD_DEFINES: -DSD_HIPBLAS=ON -DSD_BUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup ROCm (Ubuntu)
+        run: |
+          # Install ROCm 7.1
+          sudo apt update
+          sudo apt install -y wget gnupg
+          
+          # Add ROCm repository
+          wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | sudo apt-key add -
+          echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/7.1/ focal main" | sudo tee /etc/apt/sources.list.d/rocm.list
+          
+          sudo apt update
+          sudo apt install -y \
+            rocm-dev \
+            hip-dev \
+            hipblas-dev \
+            rocblas-dev \
+            hipblaslt-dev \
+            cmake \
+            build-essential
+            
+          # Verify installation
+          /opt/rocm/bin/rocminfo || true
+          echo "ROCm_DIR=/opt/rocm" >> $GITHUB_ENV
+
+      - name: Setup ROCm (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $ErrorActionPreference = "Stop"
+          
+          # Download and install ROCm 7.1 for Windows
+          $rocmUrl = "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-23.Q4-WinSvr2022-For-HIP.exe"
+          $installerPath = "${env:RUNNER_TEMP}\rocm-install.exe"
+          
+          write-host "Downloading ROCm 7.1 installer..."
+          Invoke-WebRequest -Uri $rocmUrl -OutFile $installerPath
+          
+          write-host "Installing ROCm 7.1..."
+          $proc = Start-Process $installerPath -ArgumentList '-install' -NoNewWindow -PassThru
+          $completed = $proc.WaitForExit(900000) # 15 minutes timeout
+          
+          if (-not $completed) {
+              Write-Error "ROCm installation timed out"
+              $proc.Kill()
+              exit 1
+          }
+          
+          if ($proc.ExitCode -ne 0) {
+              Write-Error "ROCm installation failed with exit code $($proc.ExitCode)"
+              exit 1
+          }
+          
+          # Verify installation and set environment
+          $rocmPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*' | Select-Object -First 1
+          if (-not $rocmPath) {
+              Write-Error "ROCm installation not found"
+              exit 1
+          }
+          
+          $hipPath = $rocmPath.FullName
+          echo "HIP_PATH=$hipPath" >> $env:GITHUB_ENV
+          echo "ROCm_DIR=$hipPath" >> $env:GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$hipPath" >> $env:GITHUB_ENV
+          
+          # Test installation
+          & "$hipPath\bin\clang.exe" --version
+
+      - name: Cache build (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            build
+          key: ${{ runner.os }}-rocm71-${{ matrix.build }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
+          restore-keys: |
+            ${{ runner.os }}-rocm71-${{ matrix.build }}-
+
+      - name: Cache build (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\ccache
+            build
+          key: ${{ runner.os }}-rocm71-${{ matrix.build }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
+          restore-keys: |
+            ${{ runner.os }}-rocm71-${{ matrix.build }}-
+
+      - name: Build with CMake (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # Setup ccache
+          sudo apt install -y ccache
+          export PATH="/usr/lib/ccache:$PATH"
+          
+          mkdir -p build
+          cd build
+          
+          # Configure with ROCm 7.1 and specific GPU targets
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=/opt/rocm/bin/clang \
+            -DCMAKE_CXX_COMPILER=/opt/rocm/bin/clang++ \
+            -DCMAKE_PREFIX_PATH=/opt/rocm \
+            -DGPU_TARGETS="${GPU_TARGETS_CONVERTED}" \
+            -DHIP_PLATFORM=amd \
+            ${{ matrix.defines }}
+          
+          # Build with all available cores
+          cmake --build . --config Release --parallel $(nproc)
+
+      - name: Build with CMake (Windows)  
+        if: runner.os == 'Windows'
+        run: |
+          mkdir build
+          cd build
+          
+          # Configure with ROCm 7.1 and specific GPU targets
+          cmake .. `
+            -G "Unix Makefiles" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang `
+            -DCMAKE_CXX_COMPILER=clang++ `
+            -DCMAKE_PREFIX_PATH="${env:CMAKE_PREFIX_PATH}" `
+            -DGPU_TARGETS="${{ env.GPU_TARGETS }}" `
+            -DHIP_PLATFORM=amd `
+            ${{ matrix.defines }}
+          
+          # Build with all available cores
+          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
+
+      - name: Test HipBLAS build
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cd build
+            # Test if hipblas libraries are linked correctly
+            ldd bin/* 2>/dev/null | grep -i hip || echo "No direct HIP dependencies found"
+            ldd bin/* 2>/dev/null | grep -i rocm || echo "No ROCm dependencies found"
+            ls -la bin/
+          else
+            cd build
+            # Windows - check if DLLs are present
+            Get-ChildItem -Path "bin" -Name
+            Get-ChildItem -Path "bin" -Filter "*.exe" | ForEach-Object { Write-Host "Built: $($_.Name)" }
+          fi
+
+      - name: Get commit hash
+        id: commit
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true' }}
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+          else
+            $shortHash = git rev-parse --short=7 HEAD
+            echo "short=$shortHash" >> $env:GITHUB_OUTPUT
+          fi
+
+      - name: Package artifacts (Linux)
+        if: ${{ runner.os == 'Linux' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
+        run: |
+          cd build
+          
+          # Create package directory
+          mkdir -p package/lib package/bin package/include
+          
+          # Copy binaries
+          cp -r bin/* package/bin/ || echo "No binaries to copy"
+          
+          # Copy ROCm libraries if needed
+          if [ -d "/opt/rocm/lib" ]; then
+            cp /opt/rocm/lib/libhipblas.so* package/lib/ 2>/dev/null || echo "hipblas lib not found"
+            cp /opt/rocm/lib/librocblas.so* package/lib/ 2>/dev/null || echo "rocblas lib not found"
+            cp /opt/rocm/lib/libhipblaslt.so* package/lib/ 2>/dev/null || echo "hipblaslt lib not found"
+          fi
+          
+          # Create archive
+          tar -czf ../sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-x64.tar.gz -C package .
+
+      - name: Package artifacts (Windows)
+        if: ${{ runner.os == 'Windows' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
+        run: |
+          cd build
+          
+          # Create package directories
+          New-Item -ItemType Directory -Force -Path "package\bin"
+          New-Item -ItemType Directory -Force -Path "package\lib" 
+          New-Item -ItemType Directory -Force -Path "package\rocblas\library"
+          New-Item -ItemType Directory -Force -Path "package\hipblaslt\library"
+          
+          # Copy binaries
+          Copy-Item "bin\*" "package\bin\" -Recurse -ErrorAction SilentlyContinue
+          
+          # Copy ROCm DLLs
+          if (Test-Path "${env:HIP_PATH}\bin") {
+            Copy-Item "${env:HIP_PATH}\bin\hipblas.dll" "package\bin\" -ErrorAction SilentlyContinue
+            Copy-Item "${env:HIP_PATH}\bin\hipblaslt.dll" "package\bin\" -ErrorAction SilentlyContinue  
+            Copy-Item "${env:HIP_PATH}\bin\rocblas.dll" "package\bin\" -ErrorAction SilentlyContinue
+            Copy-Item "${env:HIP_PATH}\bin\rocblas\library\*" "package\rocblas\library\" -ErrorAction SilentlyContinue
+            Copy-Item "${env:HIP_PATH}\bin\hipblaslt\library\*" "package\hipblaslt\library\" -ErrorAction SilentlyContinue
+          }
+          
+          # Create archive
+          Compress-Archive -Path "package\*" -DestinationPath "..\sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm71-x64.zip"
+
+      - name: Upload artifacts
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ matrix.build }}-x64
+          path: |
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-*-rocm71-x64.*
+          retention-days: 7
+
+      - name: Create Release
+        if: ${{ github.event.inputs.create_release == 'true' && github.ref == 'refs/heads/master' }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: rocm71-${{ steps.commit.outputs.short }}
+          name: ROCm 7.1 HipBLAS Build ${{ steps.commit.outputs.short }}
+          body: |
+            ## ROCm 7.1 HipBLAS Build
+            
+            **GPU Targets:** `${{ env.GPU_TARGETS }}`
+            **Commit:** ${{ steps.commit.outputs.short }}
+            
+            Built with:
+            - ROCm 7.1.0
+            - HipBLAS support
+            - GPU targets: gfx1201, gfx1200, gfx1100, gfx1101, gfx1151
+            
+            ### Downloads
+            - Linux: `sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-x64.tar.gz`  
+            - Windows: `sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm71-x64.zip`
+          files: |
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-*-rocm71-x64.*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
