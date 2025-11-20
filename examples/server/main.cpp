@@ -2472,11 +2472,11 @@ void start_server(SDParams params) {
         if (!params.ctxParams.taesd_path.empty()) {
             response["tae"] = sd_basename(params.ctxParams.taesd_path);
         }
-        if (!params.ctxParams.controlnet_path.empty()) {
-            response["control_net"] = sd_basename(params.ctxParams.controlnet_path);
+        if (!params.ctxParams.control_net_path.empty()) {
+            response["control_net"] = sd_basename(params.ctxParams.control_net_path);
         }
-        if (!params.ctxParams.photomaker_path.empty()) {
-            response["photo_maker"] = sd_basename(params.ctxParams.photomaker_path);
+        if (!params.ctxParams.photo_maker_path.empty()) {
+            response["photo_maker"] = sd_basename(params.ctxParams.photo_maker_path);
         }
         res.set_content(response.dump(), "application/json");
     });
