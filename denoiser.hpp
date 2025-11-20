@@ -342,6 +342,49 @@ struct Denoiser {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
         return scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
     }
+
+    virtual void init_scheduler(scheduler_t sched, SDVersion version) {
+        switch (sched) {
+            case DEFAULT:
+            case DISCRETE:
+                LOG_INFO("running with discrete scheduler");
+                scheduler = std::make_shared<DiscreteSchedule>();
+                break;
+            case KARRAS:
+                LOG_INFO("running with Karras scheduler");
+                scheduler = std::make_shared<KarrasSchedule>();
+                break;
+            case EXPONENTIAL:
+                LOG_INFO("running with exponential scheduler");
+                scheduler = std::make_shared<ExponentialSchedule>();
+                break;
+            case AYS:
+                LOG_INFO("Running with Align-Your-Steps scheduler");
+                scheduler = std::make_shared<AYSSchedule>();
+                break;
+            case GITS:
+                LOG_INFO("Running with GITS scheduler");
+                scheduler = std::make_shared<GITSSchedule>();
+                break;
+            case SGM_UNIFORM:
+                LOG_INFO("Running with SGM Uniform scheduler");
+                scheduler = std::make_shared<SGMUniformSchedule>();
+                break;
+            case SIMPLE:
+                LOG_INFO("Running with Simple scheduler");
+                scheduler = std::make_shared<SimpleSchedule>();
+                break;
+            case SMOOTHSTEP:
+                LOG_INFO("Running with SmoothStep scheduler");
+                scheduler = std::make_shared<SmoothStepSchedule>();
+                break;
+            default:
+                LOG_ERROR("Unknown scheduler %i", (int)sched);
+                abort();
+        }
+        scheduler->version = version;
+    }
+
 };
 
 struct CompVisDenoiser : public Denoiser {
@@ -427,6 +470,10 @@ struct EDMVDenoiser : public CompVisVDenoiser {
     EDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0)
         : min_sigma(min_sigma), max_sigma(max_sigma) {
         scheduler = std::make_shared<ExponentialSchedule>();
+    }
+
+    void init_scheduler(scheduler_t sched, SDVersion version) override {
+        CompVisVDenoiser::init_scheduler(sched == DEFAULT ? EXPONENTIAL : sched, version);
     }
 
     float t_to_sigma(float t) override {
