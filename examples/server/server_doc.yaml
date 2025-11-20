@@ -84,7 +84,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: '#/components/schemas/ResultResponse'
         '404':
           description: Task not found
           content:
@@ -327,14 +327,44 @@ components:
           name:
             type: string
 
+    ResultResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Can be one of [""Pending"", "Loading", ""Working"", ""Decoding"", ""Done"", ""Failed""]
+        data:
+          type: array
+          description: Array of generated image objects.
+          items:
+            type: object
+            properties:
+              width:
+                type: integer
+              height:
+                type: integer
+              channel:
+                type: integer
+              data:
+                type: string
+                description: Base64 encoded image data.
+              encoding:
+                type: string
+                description: Encoding format (e.g., "png").
+        step:
+          type: integer
+          description: Current step number to track progress of the tasks current status
+        steps:
+          type: integer
+          description: Total number of steps for the task's current status
+        eta:
+          deprecated: true
+          description: Not implemented
+
+
     GenerationResponse:
       type: object
       properties:
-        data:
-          type: array
-          description: Array of generated image objects (usually base64).
-          items:
-            type: string
         task_id:
           type: string
           description: Task ID if processed asynchronously.
