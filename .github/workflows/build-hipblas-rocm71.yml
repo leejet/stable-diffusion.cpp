@@ -119,14 +119,29 @@ jobs:
           sudo groupadd video 2>/dev/null || true
           sudo groupadd nogroup 2>/dev/null || true
           
-          # Add user to groups
+          # Add user to groups (including root)
           sudo usermod -aG render,video $USER 2>/dev/null || true
           sudo usermod -aG nogroup $USER 2>/dev/null || true
+          
+          # For root user, ensure direct group membership
+          if [ "$USER" = "root" ]; then
+            echo "Configuring root user for ROCm access..."
+            # Add root to groups in /etc/group directly
+            sudo sed -i '/^render:/s/$/,root/' /etc/group 2>/dev/null || true
+            sudo sed -i '/^video:/s/$/,root/' /etc/group 2>/dev/null || true  
+            sudo sed -i '/^nogroup:/s/$/,root/' /etc/group 2>/dev/null || true
+            # Remove duplicate commas
+            sudo sed -i 's/,,/,/g; s/:,/:/' /etc/group
+          fi
 
           sudo chown $USER:render /dev/kfd 2>/dev/null || true
           sudo chown $USER:render /dev/dri/render* 2>/dev/null || true
           sudo chmod 666 /dev/kfd 2>/dev/null || true
           sudo chmod 666 /dev/dri/render* 2>/dev/null || true
+          
+          # Verify group membership
+          echo "Current user groups:"
+          groups $USER || id $USER
           
           # Verify installation
           /opt/rocm/bin/rocminfo || true
