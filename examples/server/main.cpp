@@ -1345,9 +1345,10 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         bool change = false;
         int index   = o.get<int>();
         if (index >= 0 && index < model_part_files.size()) {
-            std::string new_path = model_part_dir + model_part_files[index];
-            if (model_part_path != new_path) {
-                model_part_path = new_path;
+            std::filesystem::path new_path = std::filesystem::path(model_part_dir) / model_part_files[index];
+            std::string new_path_str       = new_path.string();
+            if (model_part_path != new_path_str) {
+                model_part_path = new_path_str;
                 change          = true;
             }
         } else if (index == MODEL_UNLOAD) {
@@ -1397,9 +1398,10 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  bool change     = false;
                  int model_index = o.get<int>();
                  if (model_index >= 0 && model_index < params->models_files.size()) {
-                     std::string new_path = params->models_dir + params->models_files[model_index];
-                     if (params->ctxParams.model_path != new_path) {
-                         params->ctxParams.model_path           = new_path;
+                     std::filesystem::path new_path = std::filesystem::path(params->models_dir) / params->models_files[model_index];
+                     std::string new_path_str       = new_path.string();
+                     if (params->ctxParams.model_path != new_path_str) {
+                         params->ctxParams.model_path           = new_path_str;
                          params->ctxParams.diffusion_model_path = "";
                          change                                 = true;
                      }
@@ -1419,9 +1421,10 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  bool change     = false;
                  int model_index = o.get<int>();
                  if (model_index >= 0 && model_index < params->diffusion_models_files.size()) {
-                     std::string new_path = params->diffusion_models_dir + params->diffusion_models_files[model_index];
-                     if (params->ctxParams.diffusion_model_path != new_path) {
-                         params->ctxParams.diffusion_model_path = new_path;
+                     std::filesystem::path new_path = std::filesystem::path(params->diffusion_models_dir) / params->diffusion_models_files[model_index];
+                     std::string new_path_str       = new_path.string();
+                     if (params->ctxParams.diffusion_model_path != new_path_str) {
+                         params->ctxParams.diffusion_model_path = new_path_str;
                          params->ctxParams.model_path           = "";
                          change                                 = true;
                      }
@@ -1441,9 +1444,10 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  bool change     = false;
                  int model_index = o.get<int>();
                  if (model_index >= 0 && model_index < params->diffusion_models_files.size()) {
-                     std::string new_path = params->diffusion_models_dir + params->diffusion_models_files[model_index];
-                     if (params->ctxParams.high_noise_diffusion_model_path != new_path) {
-                         params->ctxParams.high_noise_diffusion_model_path = new_path;
+                     std::filesystem::path new_path = std::filesystem::path(params->diffusion_models_dir) / params->diffusion_models_files[model_index];
+                     std::string new_path_str       = new_path.string();
+                     if (params->ctxParams.high_noise_diffusion_model_path != new_path_str) {
+                         params->ctxParams.high_noise_diffusion_model_path = new_path_str;
                          change                                            = true;
                      }
                  } else {
