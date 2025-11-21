@@ -910,8 +910,10 @@ bool parse_json_options(nlohmann::json payload, JsonOptions& options) {
     for (auto& option : options.string_options) {
         try {
             if (payload.contains(option.name)) {
+                if (option.target->compare(payload[option.name].get<std::string>()) != 0) {
+                    has_anything_changed = true;
+                }
                 option.target->assign(payload[option.name].get<std::string>());
-                has_anything_changed = true;
             }
         } catch (...) {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse string option: %s\n", option.name.c_str());
@@ -920,8 +922,10 @@ bool parse_json_options(nlohmann::json payload, JsonOptions& options) {
     for (auto& option : options.int_options) {
         try {
             if (payload.contains(option.name)) {
-                *option.target       = payload[option.name].get<int>();
-                has_anything_changed = true;
+                if (*option.target != payload[option.name].get<int>()) {
+                    has_anything_changed = true;
+                }
+                *option.target = payload[option.name].get<int>();
             }
         } catch (...) {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse int option: %s\n", option.name.c_str());
@@ -930,8 +934,10 @@ bool parse_json_options(nlohmann::json payload, JsonOptions& options) {
     for (auto& option : options.long_options) {
         try {
             if (payload.contains(option.name)) {
-                *option.target       = payload[option.name].get<int64_t>();
-                has_anything_changed = true;
+                if (*option.target != payload[option.name].get<int64_t>()) {
+                    has_anything_changed = true;
+                }
+                *option.target = payload[option.name].get<int64_t>();
             }
         } catch (...) {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse long option: %s\n", option.name.c_str());
@@ -940,8 +946,10 @@ bool parse_json_options(nlohmann::json payload, JsonOptions& options) {
     for (auto& option : options.float_options) {
         try {
             if (payload.contains(option.name)) {
-                *option.target       = payload[option.name].get<float>();
-                has_anything_changed = true;
+                if (*option.target != payload[option.name].get<float>()) {
+                    has_anything_changed = true;
+                }
+                *option.target = payload[option.name].get<float>();
             }
         } catch (...) {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse float option: %s\n", option.name.c_str());
@@ -951,8 +959,10 @@ bool parse_json_options(nlohmann::json payload, JsonOptions& options) {
     for (auto& option : options.bool_options) {
         try {
             if (payload.contains(option.name)) {
-                *option.target       = payload[option.name].get<bool>();
-                has_anything_changed = true;
+                if (*option.target != payload[option.name].get<bool>()) {
+                    has_anything_changed = true;
+                }
+                *option.target = payload[option.name].get<bool>();
             }
         } catch (...) {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse bool option: %s\n", option.name.c_str());
