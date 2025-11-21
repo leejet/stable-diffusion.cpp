@@ -181,6 +181,8 @@ struct SDParams {
     // server things
     int port         = 8080;
     std::string host = "127.0.0.1";
+
+    std::string custom_frontend_path = "";
 };
 
 void print_params(SDParams params) {
@@ -525,7 +527,9 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--control-net-dir", "path to controlnet models directory", &params.controlnet_dir},
         {"", "--photo-maker-dir", "path to PHOTOMAKER models directory", &params.photomaker_dir},
         {"", "--upscaler-dir", "path to upscaler models directory", &params.upscaler_dir},
-        {"", "--host", "host to listen on (default: 0.0.0.0)", &params.host}};
+        {"", "--host", "host to listen on (default: 0.0.0.0)", &params.host},
+        {"", "--custom-frontend-path", "path to custom frontend directory", &params.custom_frontend_path},
+    };
 
     options.int_options = {
         {"-t", "--threads", "number of threads to use during computation (default: -1). If threads <= 0, then threads will be set to the number of CPU physical cores", &params.ctxParams.n_threads},
@@ -2489,8 +2493,31 @@ void start_server(SDParams params) {
     });
 
     // redirect base url to index
-    svr->Get("/", [](const httplib::Request& req, httplib::Response& res) {
-        res.set_redirect("/index.html");
+    svr->Get("/", [&params](const httplib::Request& req, httplib::Response& res) {
+        if (params.custom_frontend_path != "") {
+            res.set_redirect("/frontend-custom.html");
+        } else {
+            res.set_redirect("/index.html");
+        }
+    });
+
+    svr->Get("/frontend-custom.html", [&params](const httplib::Request& req, httplib::Response& res) {
+        try {
+            std::string def_frontend_path = params.custom_frontend_path;
+            std::string html              = "";
+            std::ifstream file(def_frontend_path);
+            if (file.is_open()) {
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                html = buffer.str();
+                file.close();
+            } else {
+                html = "Error: Unable to open file " + def_frontend_path;
+            }
+            res.set_content(html, "text/html");
+        } catch (const std::exception& e) {
+            res.set_content("Error loading page", "text/plain");
+        }
     });
 
     // bind HTTP listen port, run the HTTP server in a thread
