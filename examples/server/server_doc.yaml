@@ -149,11 +149,13 @@ paths:
                     items:
                       type: string
                   embeddings:
-                    type: object
-                    additionalProperties:
-                      type: array
-                      items:
-                        type: string
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties:
+                        type: array
+                        items:
+                          type: string
 
   /model:
     get:
