@@ -146,7 +146,7 @@ jobs:
             -DSD_HIPBLAS=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DGPU_TARGETS="${{ env.GPU_TARGET }}" \
-            -GPU_TARGETS="${{ env.GPU_TARGET }}" \
+            -DAMDGPU_TARGETS="${{ env.GPU_TARGET }}" \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           
@@ -179,12 +179,34 @@ jobs:
           # Copy binaries
           cp -r bin/* package/bin/ || echo "No binaries to copy"
           
-          # Copy ROCm libraries if needed
+          # Copy ROCm libraries and their dependencies
           if [ -d "/opt/rocm/lib" ]; then
+            echo "Copying ROCm libraries..."
+            # Copy HipBLAS libraries
             cp /opt/rocm/lib/libhipblas.so* package/lib/ 2>/dev/null || echo "hipblas lib not found"
             cp /opt/rocm/lib/librocblas.so* package/lib/ 2>/dev/null || echo "rocblas lib not found"
             cp /opt/rocm/lib/libhipblaslt.so* package/lib/ 2>/dev/null || echo "hipblaslt lib not found"
+            
+            # Copy HIP runtime libraries
+            cp /opt/rocm/lib/libamdhip64.so* package/lib/ 2>/dev/null || echo "amdhip64 lib not found"
+            cp /opt/rocm/lib/libhiprtc.so* package/lib/ 2>/dev/null || echo "hiprtc lib not found"
+            
+            # Copy ROCm runtime libraries
+            cp /opt/rocm/lib/libhsa-runtime64.so* package/lib/ 2>/dev/null || echo "hsa-runtime64 lib not found"
+            cp /opt/rocm/lib/librccl.so* package/lib/ 2>/dev/null || echo "rccl lib not found"
+            
+            # Copy additional ROCm libraries that might be needed
+            cp /opt/rocm/lib/librocm_smi64.so* package/lib/ 2>/dev/null || echo "rocm_smi64 lib not found"
           fi
+          
+          # Create a launch script that sets up the library path
+                    cat > package/bin/run_sd.sh << 'EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+          export LD_LIBRARY_PATH="$SCRIPT_DIR/../lib:/opt/rocm/lib:$LD_LIBRARY_PATH"
+          exec "$SCRIPT_DIR/sd" "$@"
+          EOF
+                    chmod +x package/bin/run_sd.sh
           
           # Create archive with GPU target in filename
           tar -czf ../sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-linux-rocm71-${{ matrix.gpu_target }}-x64.tar.gz -C package .
