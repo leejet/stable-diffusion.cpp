@@ -131,6 +131,8 @@ jobs:
           sudo apt install -y ccache
           export PATH="/usr/lib/ccache:$PATH"
           
+          # Clean and create build directory
+          rm -rf build
           mkdir -p build
           cd build
           
