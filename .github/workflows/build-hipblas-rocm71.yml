@@ -68,7 +68,6 @@ jobs:
       ROCM_VERSION: "7.1.0"
       # Individual GPU target for this build
       GPU_TARGET: ${{ matrix.gpu_target }}
-      SD_DEFINES: -DSD_HIPBLAS=ON -DSD_BUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF
 
     steps:
       - uses: actions/checkout@v4
@@ -140,15 +139,14 @@ jobs:
           
           # Configure with ROCm 7.1 and specific GPU target (following official build guide)
           cmake .. \
-            -G "Ninja" \
+            -G "Unix Makefiles" \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DSD_HIPBLAS=ON \
+            -DSD_BUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DGPU_TARGETS="${{ env.GPU_TARGET }}" \
             -DAMDGPU_TARGETS="${{ env.GPU_TARGET }}" \
-            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           
           # Build with all available cores
           cmake --build . --config Release
