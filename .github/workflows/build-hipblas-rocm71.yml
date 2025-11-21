@@ -105,6 +105,8 @@ jobs:
           sudo apt update
           sudo apt install -y \
             rocm-dev \
+            hipblas-dev \
+            rocblas-dev \
             cmake \
             build-essential \
             logrotate
