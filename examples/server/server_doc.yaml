@@ -3,7 +3,7 @@ info:
   title: sd.cpp HTTP Server
   description: |
     API documentation for the sd.cpp HTTP server. 
-    
+
     **Note on Model Loading:** This server allows changing loaded models dynamically via the `/generate_image` POST request by providing the `id` of the model found in the `/models` endpoint. 
     - ID `-1`: Keep current model.
     - ID `-2`: Unload model.
@@ -35,14 +35,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/GenerationRequest'
+              $ref: "#/components/schemas/GenerationRequest"
       responses:
-        '200':
+        "200":
           description: Successful generation
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GenerationResponse'
+                $ref: "#/components/schemas/GenerationResponse"
 
   /txt2img:
     post:
@@ -56,14 +56,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/GenerationRequest'
+              $ref: "#/components/schemas/GenerationRequest"
       responses:
-        '200':
+        "200":
           description: Successful generation
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GenerationResponse'
+                $ref: "#/components/schemas/GenerationResponse"
 
   /result:
     get:
@@ -79,13 +79,13 @@ paths:
           required: true
           description: The ID of the generation task.
       responses:
-        '200':
+        "200":
           description: Task result found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResultResponse'
-        '404':
+                $ref: "#/components/schemas/ResultResponse"
+        "404":
           description: Task not found
           content:
             text/plain:
@@ -100,7 +100,7 @@ paths:
       summary: Get Current Parameters
       description: Returns the current configuration of the server (last used generation params and current system context).
       responses:
-        '200':
+        "200":
           description: Current parameters
           content:
             application/json:
@@ -121,7 +121,7 @@ paths:
       summary: List all available models
       description: Returns lists of models, VAEs, LoRAs, embeddings, etc., available on the filesystem. Use the `id` from these lists to switch models in `/generate_image`.
       responses:
-        '200':
+        "200":
           description: List of assets
           content:
             application/json:
@@ -129,21 +129,21 @@ paths:
                 type: object
                 properties:
                   models:
-                    $ref: '#/components/schemas/ModelList'
+                    $ref: "#/components/schemas/ModelList"
                   diffusion_models:
-                    $ref: '#/components/schemas/ModelList'
+                    $ref: "#/components/schemas/ModelList"
                   text_encoders:
-                    $ref: '#/components/schemas/ModelList'
+                    $ref: "#/components/schemas/ModelList"
                   vision_models:
-                    $ref: '#/components/schemas/ModelList'
+                    $ref: "#/components/schemas/ModelList"
                   vaes:
-                    $ref: '#/components/schemas/ModelList'
+                    $ref: "#/components/schemas/ModelList"
                   taes:
-                    $ref: '#/components/schemas/ModelList'
+                    $ref: "#/components/schemas/ModelList"
                   control_nets:
-                    $ref: '#/components/schemas/ModelList'
+                    $ref: "#/components/schemas/ModelList"
                   photo_makers:
-                    $ref: '#/components/schemas/ModelList'
+                    $ref: "#/components/schemas/ModelList"
                   loras:
                     type: array
                     items:
@@ -164,7 +164,7 @@ paths:
       summary: Get currently loaded models
       description: Returns the filenames of the currently loaded models in memory.
       responses:
-        '200':
+        "200":
           description: Currently loaded models
           content:
             application/json:
@@ -192,7 +192,7 @@ paths:
         - Options
       summary: Get available schedulers
       responses:
-        '200':
+        "200":
           description: List of scheduler names
           content:
             application/json:
@@ -208,7 +208,7 @@ paths:
       deprecated: true
       description: Use /schedulers instead.
       responses:
-        '200':
+        "200":
           description: List of scheduler names
           content:
             application/json:
@@ -222,7 +222,7 @@ paths:
         - Options
       summary: Get available sampling methods
       responses:
-        '200':
+        "200":
           description: List of sampling methods
           content:
             application/json:
@@ -237,7 +237,7 @@ paths:
       summary: Get weight types
       description: Available quantization types (e.g., f32, f16, q4_0).
       responses:
-        '200':
+        "200":
           description: List of types
           content:
             application/json:
@@ -253,7 +253,7 @@ paths:
       deprecated: true
       description: Use /wtypes instead.
       responses:
-        '200':
+        "200":
           description: List of types
           content:
             application/json:
@@ -267,7 +267,7 @@ paths:
         - Options
       summary: Get RNG types
       responses:
-        '200':
+        "200":
           description: List of RNG types
           content:
             application/json:
@@ -281,7 +281,7 @@ paths:
         - Options
       summary: Get Prediction types
       responses:
-        '200':
+        "200":
           description: List of prediction types
           content:
             application/json:
@@ -295,21 +295,21 @@ paths:
         - Options
       summary: Get Preview methods
       responses:
-        '200':
+        "200":
           description: List of preview methods
           content:
             application/json:
               schema:
                 type: array
                 items: { type: string }
-  
+
   /lora_apply_modes:
     get:
       tags:
         - Options
       summary: Get LoRA apply modes
       responses:
-        '200':
+        "200":
           description: List of apply modes
           content:
             application/json:
@@ -363,15 +363,12 @@ components:
           deprecated: true
           description: Not implemented
 
-
     GenerationResponse:
       type: object
       properties:
         task_id:
           type: string
-          description: Task ID if processed asynchronously.
-        status:
-          type: string
+          description: Task ID
 
     # The complex request body parsing logic
     GenerationRequest:
@@ -400,6 +397,7 @@ components:
           type: integer
           format: int64
           default: -1
+          description: Seed for the RNG. -1 for random seed.
         strength:
           type: number
           format: float
@@ -407,7 +405,8 @@ components:
         control_strength:
           type: number
           format: float
-        
+          description: ControlNet strength.
+
         # --- Booleans ---
         auto_resize_ref_image:
           type: boolean
@@ -432,6 +431,9 @@ components:
           type: array
           items: { type: string }
           description: Array of base64 encoded reference images (for edit models).
+        preview_method:
+          type: string
+          description: Method used for preview generation.
 
         # --- Structured Parameters ---
         sample_params:
@@ -446,8 +448,10 @@ components:
               format: float
             scheduler:
               type: string
+              description: Scheduler name. Call /schedulers endpoint for available options. 
             sample_method:
               type: string
+              description: Sampling method name. Call /sample_methods endpoint for available options.
             guidance:
               type: object
               properties:
@@ -457,11 +461,14 @@ components:
                 img_cfg:
                   type: number
                   format: float
+                  description: Advanced option, used for editing and inpaint models 
                 distilled_guidance:
                   type: number
                   format: float
+                  description: Used for guidance-distilled models such as Flux.1[Dev]
                 slg:
                   type: object
+                  description: Skip-Layer Guidance (Advanced, can improve results on SD3.5 models)
                   properties:
                     layer_start:
                       type: number
@@ -474,6 +481,7 @@ components:
                       format: float
                     layers:
                       type: array
+                      description: Array of layers to skip for SLG pass
                       items:
                         type: integer
 
@@ -501,7 +509,7 @@ components:
                 - type: integer
                 - type: string
                 - type: array
-                  items: 
+                  items:
                     type: integer
 
         pm_params:
@@ -513,14 +521,12 @@ components:
               format: float
             id_embed_path:
               type: string
+              description: Path to the ID embedding file for PhotoMaker-v2. Should correspond exactly to the id_images.
             id_images:
               type: array
               description: Array of base64 encoded ID images for PhotoMaker.
               items:
                 type: string
-        preview_method:
-          type: string
-          description: Method used for preview generation.
 
         # --- Context / System Parameters (Trigger Reloads) ---
         n_threads:
@@ -536,11 +542,12 @@ components:
           type: string
         lora_apply_mode:
           type: string
-        
+
         vae_decode_only:
           type: boolean
         free_params_immediately:
           type: boolean
+          description: Free parameters immediately after generation. Enabling it will cause the model to reload on every generation.
         offload_params_to_cpu:
           type: boolean
         keep_clip_on_cpu:
@@ -553,9 +560,24 @@ components:
           type: boolean
         taesd_preview:
           type: boolean
+          description: Prevents TAE model from replacing VAE when decoding the final image, only uisng TAE for preview
+        diffusion_conv_direct:
+          type: boolean
+        vae_conv_direct:
+          type: boolean
+        force_sdxl_vae_conv_scale:
+          type: boolean
+        chroma_use_dit_mask:
+          type: boolean
+          description: Better results with Chroma models when kept to true; but might cause issues on some backends
+        chroma_use_t5_mask:
+          type: boolean
+          description: Should be kept to false unless you know what you are doing
         chroma_t5_mask_pad:
           type: integer
-        
+        flow_shift:
+          type: float
+
         # --- Model Loading (Index based) ---
         # Index: -1 (Keep), -2 (Unload), >=0 (Load from list)
         model: { type: integer }
