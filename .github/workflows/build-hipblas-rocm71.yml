@@ -122,6 +122,11 @@ jobs:
           # Add user to groups
           sudo usermod -aG render,video $USER 2>/dev/null || true
           sudo usermod -aG nogroup $USER 2>/dev/null || true
+
+          sudo chown $USER:render /dev/kfd 2>/dev/null || true
+          sudo chown $USER:render /dev/dri/render* 2>/dev/null || true
+          sudo chmod 666 /dev/kfd 2>/dev/null || true
+          sudo chmod 666 /dev/dri/render* 2>/dev/null || true
           
           # Verify installation
           /opt/rocm/bin/rocminfo || true
