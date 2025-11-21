@@ -105,10 +105,12 @@ jobs:
           sudo apt update
           sudo apt install -y \
             rocm-dev \
+            clang \
             hip-dev \
             hipblas-dev \
             rocblas-dev \
             cmake \
+            ninja-build \
             build-essential \
             logrotate
 
@@ -133,54 +135,20 @@ jobs:
           
           echo "Building for GPU target: ${{ matrix.gpu_target }}"
           
-          # Detect available compilers (prioritize ROCm-specific compilers)
-          if [ -f "/opt/rocm/bin/hipcc" ] && [ -f "/opt/rocm/bin/amdclang++" ]; then
-            C_COMPILER="/opt/rocm/bin/hipcc"
-            CXX_COMPILER="/opt/rocm/bin/amdclang++"
-            echo "Using ROCm hipcc and amdclang++ compilers"
-          elif [ -f "/opt/rocm/bin/clang" ]; then
-            C_COMPILER="/opt/rocm/bin/clang"
-            CXX_COMPILER="/opt/rocm/bin/clang++"
-            echo "Using ROCm clang compilers"
-          elif [ -f "/opt/rocm/llvm/bin/clang" ]; then
-            C_COMPILER="/opt/rocm/llvm/bin/clang"
-            CXX_COMPILER="/opt/rocm/llvm/bin/clang++"
-            echo "Using ROCm LLVM compilers"
-          else
-            C_COMPILER="clang"
-            CXX_COMPILER="clang++"
-            echo "Using system compilers"
-            # Install system clang if not available
-            sudo apt install -y clang
-          fi
-          
-          echo "Using C compiler: $C_COMPILER"
-          echo "Using CXX compiler: $CXX_COMPILER"
-          
-          # Verify compilers exist
-          $C_COMPILER --version || echo "C compiler not working"
-          $CXX_COMPILER --version || echo "CXX compiler not working"
-          
-          # Configure with ROCm 7.1 and specific GPU target
+          # Configure with ROCm 7.1 and specific GPU target (following official build guide)
           cmake .. \
+            -G "Ninja" \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DSD_HIPBLAS=ON \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER="$C_COMPILER" \
-            -DCMAKE_CXX_COMPILER="$CXX_COMPILER" \
-            -DCMAKE_PREFIX_PATH="/opt/rocm;/opt/rocm/lib/cmake" \
             -DGPU_TARGETS="${{ env.GPU_TARGET }}" \
-            -DHIP_PLATFORM=amd \
-            -DGGML_HIP=ON \
-            -DGGML_CUDA=OFF \
-            -Dhipblas_DIR="/opt/rocm/lib/cmake/hipblas" \
-            -Drocblas_DIR="/opt/rocm/lib/cmake/rocblas" \
-            -DHIP_ROOT_DIR="/opt/rocm" \
-            -DHIP_PATH="/opt/rocm" \
-            -DCMAKE_HIP_COMPILER="/opt/rocm/bin/hipcc" \
-            -DCMAKE_HIP_ARCHITECTURES="${{ env.GPU_TARGET }}" \
-            ${{ env.SD_DEFINES }}
+            -DAMDGPU_TARGETS="${{ env.GPU_TARGET }}" \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           
           # Build with all available cores
-          cmake --build . --config Release --parallel $(nproc)
+          cmake --build . --config Release
 
       - name: Test HipBLAS build
         run: |
