@@ -12,7 +12,8 @@ on:
         description: "GPU Targets (comma separated)"
         required: false
         type: string
-        default: "gfx1201,gfx1200,gfx1100,gfx1101,gfx1151"
+        #default: "gfx1201,gfx1200,gfx1100,gfx1101,gfx1151"
+        default: "gfx1151"
   push:
     branches:
       - master
