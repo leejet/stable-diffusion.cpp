@@ -325,14 +325,14 @@ jobs:
           cd build
           $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
           cmake .. `
-            -G "Unix Makefiles" `
-            -DSD_HIPBLAS=ON `
-            -DSD_BUILD_SHARED_LIBS=ON `
-            -DGGML_NATIVE=OFF `
+            -G "Ninja" `
             -DCMAKE_C_COMPILER=clang `
             -DCMAKE_CXX_COMPILER=clang++ `
+            -DSD_HIPBLAS=ON `
             -DCMAKE_BUILD_TYPE=Release `
             -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON `
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON 
           cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
 
       - name: Get commit hash

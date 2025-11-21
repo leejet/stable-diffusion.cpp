@@ -12,7 +12,6 @@ on:
         description: "GPU Targets (comma separated)"
         required: false
         type: string
-        #default: "gfx1201,gfx1200,gfx1100,gfx1101,gfx1151"
         default: "gfx1201,gfx1200,gfx1100,gfx1101,gfx1151"
   push:
     branches:
@@ -59,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gpu_target: [gfx1201, gfx1200, gfx1100, gfx1101, gfx1151]
+        gpu_target: [gfx1151]
 
     runs-on: self-hosted
     needs: get-default-branch
@@ -147,7 +146,7 @@ jobs:
             -DSD_HIPBLAS=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DGPU_TARGETS="${{ env.GPU_TARGET }}" \
-            -DAMDGPU_TARGETS="${{ env.GPU_TARGET }}" \
+            -GPU_TARGETS="${{ env.GPU_TARGET }}" \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           
