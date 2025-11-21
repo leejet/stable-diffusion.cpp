@@ -1232,7 +1232,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  if (params->lastRequest.init_image.data) {
                      free(params->lastRequest.init_image.data);
                  }
-                 params->lastRequest.init_image = sd_image_t{(uint32_t)width, (uint32_t)height, (uint32_t)c, image_buffer};
+                 params->lastRequest.init_image = sd_image_t{(uint32_t)width, (uint32_t)height, 3, image_buffer};
                  sd_log(sd_log_level_t::SD_LOG_INFO, "Loaded image from memory: %dx%d, %d channels\n", width, height, c);
                  return true;
              }},
@@ -1312,7 +1312,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                      if (image_buffer == NULL) {
                          sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to load image from memory\n");
                      }
-                     params->lastRequest.ref_images.push_back(sd_image_t{(uint32_t)width, (uint32_t)height, (uint32_t)c, image_buffer});
+                     params->lastRequest.ref_images.push_back(sd_image_t{(uint32_t)width, (uint32_t)height, 3, image_buffer});
                  }
                  return true;
              }},
