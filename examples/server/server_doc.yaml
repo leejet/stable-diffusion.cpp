@@ -576,7 +576,8 @@ components:
         chroma_t5_mask_pad:
           type: integer
         flow_shift:
-          type: float
+          type: number
+          format: float
 
         # --- Model Loading (Index based) ---
         # Index: -1 (Keep), -2 (Unload), >=0 (Load from list)
