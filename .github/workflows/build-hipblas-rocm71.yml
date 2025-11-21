@@ -4,7 +4,7 @@ on:
   workflow_dispatch: # allows manual triggering
     inputs:
       create_release:
-        description: "Create new release"
+        description: "Create rocm release"
         required: false
         type: boolean
         default: false
