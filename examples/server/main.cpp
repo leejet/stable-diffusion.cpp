@@ -1254,7 +1254,7 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  if (params->lastRequest.mask_image.data) {
                      free(params->lastRequest.mask_image.data);
                  }
-                 params->lastRequest.mask_image = sd_image_t{(uint32_t)width, (uint32_t)height, (uint32_t)c, image_buffer};
+                 params->lastRequest.mask_image = sd_image_t{(uint32_t)width, (uint32_t)height, 1, image_buffer};
                  sd_log(sd_log_level_t::SD_LOG_INFO, "Loaded image from memory: %dx%d, %d channels\n", width, height, c);
                  return true;
              }},
@@ -1741,11 +1741,6 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         } else {
             sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown preview: %s\n", preview.c_str());
         }
-    } catch (...) {
-    }
-    try {
-        int interval                         = payload["preview_interval"];
-        params->lastRequest.preview_interval = interval;
     } catch (...) {
     }
 
