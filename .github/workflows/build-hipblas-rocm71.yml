@@ -77,6 +77,10 @@ jobs:
 
       - name: Setup ROCm (Ubuntu)
         run: |
+          # Remove existing ROCm packages to avoid conflicts
+          sudo apt remove --purge -y rocm-* hip-* || true
+          sudo apt autoremove -y
+          
           # Install ROCm 7.1
           sudo apt update
           sudo apt install -y wget gnupg
