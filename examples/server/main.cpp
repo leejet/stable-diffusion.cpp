@@ -1774,7 +1774,7 @@ std::vector<std::string> list_files(const std::string& dir_path) {
     if (dir_path != "")
         for (const auto& entry : fs::recursive_directory_iterator(dir_path)) {
             if (entry.is_regular_file()) {
-                auto relative_path   = fs::relative(entry.path(), dir_path);
+                auto relative_path   = entry.path().lexically_relative(dir_path);
                 std::string path_str = relative_path.string();
                 std::replace(path_str.begin(), path_str.end(), '\\', '/');
                 files.push_back(path_str);
