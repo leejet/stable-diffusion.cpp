@@ -113,7 +113,8 @@ jobs:
             cmake \
             ninja-build \
             build-essential \
-            logrotate
+            logrotate \
+            ninja-build
 
       - name: Cache build
         uses: actions/cache@v4
