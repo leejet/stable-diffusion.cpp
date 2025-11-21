@@ -130,26 +130,30 @@ jobs:
           sudo apt install -y ccache
           export PATH="/usr/lib/ccache:$PATH"
           
+          # Set HIP_PATH environment variable
+          export HIP_PATH="/opt/rocm"
+          export CMAKE_PREFIX_PATH="/opt/rocm"
+          
           # Clean and create build directory
-          rm -rf build
           mkdir -p build
           cd build
           
           echo "Building for GPU target: ${{ matrix.gpu_target }}"
           
-          # Configure with ROCm 7.1 and specific GPU target (following official build guide)
+          # Configure with ROCm 7.1 and specific GPU target (Ubuntu 24.04 version)
           cmake .. \
             -G "Unix Makefiles" \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DSD_HIPBLAS=ON \
-            -DSD_BUILD_SHARED_LIBS=OFF \
+            -DSD_BUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DGPU_TARGETS="${{ env.GPU_TARGET }}" \
-            -DAMDGPU_TARGETS="${{ env.GPU_TARGET }}" \
+            -DAMDGPU_TARGETS="${{ env.GPU_TARGET }}"
           
           # Build with all available cores
-          cmake --build . --config Release
+          cmake --build . --config Release --parallel $(nproc)
 
       - name: Test HipBLAS build
         run: |
@@ -180,10 +184,19 @@ jobs:
           # Copy ROCm libraries and their dependencies
           if [ -d "/opt/rocm/lib" ]; then
             echo "Copying ROCm libraries..."
+            
+            # Create rocblas and hipblaslt library directories
+            mkdir -p package/lib/rocblas/library
+            mkdir -p package/lib/hipblaslt/library
+            
             # Copy HipBLAS libraries
             cp /opt/rocm/lib/libhipblas.so* package/lib/ 2>/dev/null || echo "hipblas lib not found"
             cp /opt/rocm/lib/librocblas.so* package/lib/ 2>/dev/null || echo "rocblas lib not found"
             cp /opt/rocm/lib/libhipblaslt.so* package/lib/ 2>/dev/null || echo "hipblaslt lib not found"
+            
+            # Copy rocblas and hipblaslt library files
+            cp -r /opt/rocm/lib/rocblas/library/* package/lib/rocblas/library/ 2>/dev/null || echo "rocblas library files not found"
+            cp -r /opt/rocm/lib/hipblaslt/library/* package/lib/hipblaslt/library/ 2>/dev/null || echo "hipblaslt library files not found"
             
             # Copy HIP runtime libraries
             cp /opt/rocm/lib/libamdhip64.so* package/lib/ 2>/dev/null || echo "amdhip64 lib not found"
