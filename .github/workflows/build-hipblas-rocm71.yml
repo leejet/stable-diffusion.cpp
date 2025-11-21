@@ -105,6 +105,7 @@ jobs:
           sudo apt update
           sudo apt install -y \
             rocm-dev \
+            hip-dev \
             hipblas-dev \
             rocblas-dev \
             cmake \
@@ -168,10 +169,14 @@ jobs:
             -DCMAKE_PREFIX_PATH="/opt/rocm;/opt/rocm/lib/cmake" \
             -DGPU_TARGETS="${{ env.GPU_TARGET }}" \
             -DHIP_PLATFORM=amd \
+            -DGGML_HIP=ON \
+            -DGGML_CUDA=OFF \
             -Dhipblas_DIR="/opt/rocm/lib/cmake/hipblas" \
             -Drocblas_DIR="/opt/rocm/lib/cmake/rocblas" \
             -DHIP_ROOT_DIR="/opt/rocm" \
             -DHIP_PATH="/opt/rocm" \
+            -DCMAKE_HIP_COMPILER="/opt/rocm/bin/hipcc" \
+            -DCMAKE_HIP_ARCHITECTURES="${{ env.GPU_TARGET }}" \
             ${{ env.SD_DEFINES }}
           
           # Build with all available cores
