@@ -114,9 +114,14 @@ jobs:
             logrotate
             
           # Fix ROCm permissions and groups
-          sudo usermod -aG render,video $USER || true
+          # Create required groups first
+          sudo groupadd render 2>/dev/null || true
+          sudo groupadd video 2>/dev/null || true
           sudo groupadd nogroup 2>/dev/null || true
-          sudo usermod -aG nogroup $USER || true
+          
+          # Add user to groups
+          sudo usermod -aG render,video $USER 2>/dev/null || true
+          sudo usermod -aG nogroup $USER 2>/dev/null || true
           
           # Create/fix ROCm device permissions
           sudo chmod 666 /dev/kfd 2>/dev/null || echo "KFD device not available"
@@ -125,15 +130,11 @@ jobs:
           # For self-hosted runners, ensure proper permissions for root
           if [ "$USER" = "root" ]; then
             echo "Running as root, setting up device access..."
-            sudo groupadd render 2>/dev/null || true
-            sudo groupadd video 2>/dev/null || true
-            sudo groupadd nogroup 2>/dev/null || true
-            echo "root" | sudo tee -a /etc/group | grep -E "(render|video|nogroup)" || true
-            # Alternative: create udev rules for device access
-            sudo tee /etc/udev/rules.d/70-rocm.rules << 'UDEV_EOF'
+            # Create udev rules for device access
+            sudo tee /etc/udev/rules.d/70-rocm.rules << 'EOF'
             SUBSYSTEM=="kfd", KERNEL=="kfd", TAG+="uaccess", GROUP="nogroup", MODE="0666"
             SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="uaccess", GROUP="render", MODE="0666"
-            UDEV_EOF
+            EOF
             sudo udevadm control --reload-rules 2>/dev/null || true
             sudo udevadm trigger 2>/dev/null || true
           fi
