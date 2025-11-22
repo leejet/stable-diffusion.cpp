@@ -26,7 +26,7 @@ struct DiffusionParams {
 
 struct DiffusionModel {
     virtual std::string get_desc()                                                      = 0;
-    virtual void compute(int n_threads,
+    virtual bool compute(int n_threads,
                          DiffusionParams diffusion_params,
                          struct ggml_tensor** output     = nullptr,
                          struct ggml_context* output_ctx = nullptr)                     = 0;
@@ -86,7 +86,7 @@ struct UNetModel : public DiffusionModel {
         unet.set_flash_attention_enabled(enabled);
     }
 
-    void compute(int n_threads,
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
@@ -147,7 +147,7 @@ struct MMDiTModel : public DiffusionModel {
         mmdit.set_flash_attention_enabled(enabled);
     }
 
-    void compute(int n_threads,
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
@@ -209,7 +209,7 @@ struct FluxModel : public DiffusionModel {
         flux.set_flash_attention_enabled(enabled);
     }
 
-    void compute(int n_threads,
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
@@ -276,7 +276,7 @@ struct WanModel : public DiffusionModel {
         wan.set_flash_attention_enabled(enabled);
     }
 
-    void compute(int n_threads,
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
@@ -342,7 +342,7 @@ struct QwenImageModel : public DiffusionModel {
         qwen_image.set_flash_attention_enabled(enabled);
     }
 
-    void compute(int n_threads,
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
