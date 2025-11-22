@@ -1197,7 +1197,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          on_lora_apply_mode_arg},
         {"",
          "--scheduler",
-         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete",
+         "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm], default: discrete",
          on_scheduler_arg},
         {"",
          "--skip-layers",

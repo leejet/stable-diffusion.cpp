@@ -2268,6 +2268,7 @@ const char* scheduler_to_str[] = {
     "sgm_uniform",
     "simple",
     "smoothstep",
+    "lcm",
 };
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {

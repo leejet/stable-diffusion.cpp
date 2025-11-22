@@ -253,6 +253,23 @@ struct SGMUniformScheduler : SigmaScheduler {
     }
 };
 
+struct LCMScheduler : SigmaScheduler {
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
+        std::vector<float> result;
+        result.reserve(n + 1);
+        const int original_steps = 50;
+        const int k              = TIMESTEPS / original_steps;
+        for (int i = 0; i < n; i++) {
+            // the rounding ensures we match the training schedule of the LCM model
+            int index    = (i * original_steps) / n;
+            int timestep = (original_steps - index) * k - 1;
+            result.push_back(t_to_sigma(timestep));
+        }
+        result.push_back(0.0f);
+        return result;
+    }
+};
+
 struct KarrasScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         // These *COULD* be function arguments here,
@@ -374,6 +391,10 @@ struct Denoiser {
             case SMOOTHSTEP_SCHEDULER:
                 LOG_INFO("get_sigmas with SmoothStep scheduler");
                 scheduler = std::make_shared<SmoothStepScheduler>();
+                break;
+            case LCM_SCHEDULER:
+                LOG_INFO("get_sigmas with LCM scheduler");
+                scheduler = std::make_shared<LCMScheduler>();
                 break;
             default:
                 LOG_INFO("get_sigmas with discrete scheduler (default)");
