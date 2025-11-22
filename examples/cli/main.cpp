@@ -912,28 +912,14 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         return 1;
     };
 
-    auto on_schedule_arg = [&](int argc, const char** argv, int index) {
+    auto on_scheduler_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
             return -1;
         }
         const char* arg                = argv[index];
-        params.sample_params.scheduler = str_to_schedule(arg);
-        if (params.sample_params.scheduler == SCHEDULE_COUNT) {
+        params.sample_params.scheduler = str_to_scheduler(arg);
+        if (params.sample_params.scheduler == SCHEDULER_COUNT) {
             fprintf(stderr, "error: invalid scheduler %s\n",
-                    arg);
-            return -1;
-        }
-        return 1;
-    };
-
-    auto on_high_noise_schedule_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        const char* arg                           = argv[index];
-        params.high_noise_sample_params.scheduler = str_to_schedule(arg);
-        if (params.high_noise_sample_params.scheduler == SCHEDULE_COUNT) {
-            fprintf(stderr, "error: invalid high noise scheduler %s\n",
                     arg);
             return -1;
         }
@@ -1212,7 +1198,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"",
          "--scheduler",
          "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete",
-         on_schedule_arg},
+         on_scheduler_arg},
         {"",
          "--skip-layers",
          "layers to skip for SLG steps (default: [7,8,9])",
@@ -1222,10 +1208,6 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd]"
          " default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_high_noise_sample_method_arg},
-        {"",
-         "--high-noise-scheduler",
-         "(high noise) denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple], default: discrete",
-         on_high_noise_schedule_arg},
         {"",
          "--high-noise-skip-layers",
          "(high noise) layers to skip for SLG steps (default: [7,8,9])",
@@ -1442,8 +1424,8 @@ std::string get_image_params(SDParams params, int64_t seed) {
         parameter_string += "Sampler RNG: " + std::string(sd_rng_type_name(params.sampler_rng_type)) + ", ";
     }
     parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.sample_params.sample_method));
-    if (params.sample_params.scheduler != DEFAULT) {
-        parameter_string += " " + std::string(sd_schedule_name(params.sample_params.scheduler));
+    if (params.sample_params.scheduler != SCHEDULER_COUNT) {
+        parameter_string += " " + std::string(sd_scheduler_name(params.sample_params.scheduler));
     }
     parameter_string += ", ";
     for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path, params.qwen2vl_path, params.qwen2vl_vision_path}) {
@@ -1922,6 +1904,10 @@ int main(int argc, const char* argv[]) {
 
         if (params.sample_params.sample_method == SAMPLE_METHOD_DEFAULT) {
             params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
+        }
+
+        if (params.sample_params.scheduler == SCHEDULER_COUNT) {
+            params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx);
         }
 
         if (params.mode == IMG_GEN) {
