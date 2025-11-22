@@ -870,53 +870,6 @@ public:
         return true;
     }
 
-    void init_scheduler(scheduler_t scheduler) {
-        switch (scheduler) {
-            case DISCRETE:
-                LOG_INFO("running with discrete scheduler");
-                denoiser->scheduler = std::make_shared<DiscreteSchedule>();
-                break;
-            case KARRAS:
-                LOG_INFO("running with Karras scheduler");
-                denoiser->scheduler = std::make_shared<KarrasSchedule>();
-                break;
-            case EXPONENTIAL:
-                LOG_INFO("running exponential scheduler");
-                denoiser->scheduler = std::make_shared<ExponentialSchedule>();
-                break;
-            case AYS:
-                LOG_INFO("Running with Align-Your-Steps scheduler");
-                denoiser->scheduler          = std::make_shared<AYSSchedule>();
-                denoiser->scheduler->version = version;
-                break;
-            case GITS:
-                LOG_INFO("Running with GITS scheduler");
-                denoiser->scheduler          = std::make_shared<GITSSchedule>();
-                denoiser->scheduler->version = version;
-                break;
-            case SGM_UNIFORM:
-                LOG_INFO("Running with SGM Uniform schedule");
-                denoiser->scheduler          = std::make_shared<SGMUniformSchedule>();
-                denoiser->scheduler->version = version;
-                break;
-            case SIMPLE:
-                LOG_INFO("Running with Simple schedule");
-                denoiser->scheduler          = std::make_shared<SimpleSchedule>();
-                denoiser->scheduler->version = version;
-                break;
-            case SMOOTHSTEP:
-                LOG_INFO("Running with SmoothStep scheduler");
-                denoiser->scheduler = std::make_shared<SmoothStepSchedule>();
-                break;
-            case DEFAULT:
-                // Don't touch anything.
-                break;
-            default:
-                LOG_ERROR("Unknown scheduler %i", scheduler);
-                abort();
-        }
-    }
-
     bool is_using_v_parameterization_for_sd2(ggml_context* work_ctx, bool is_inpaint = false) {
         struct ggml_tensor* x_t = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 4, 1);
         ggml_set_f32(x_t, 0.5);
@@ -2306,8 +2259,7 @@ enum sample_method_t str_to_sample_method(const char* str) {
     return SAMPLE_METHOD_COUNT;
 }
 
-const char* schedule_to_str[] = {
-    "default",
+const char* scheduler_to_str[] = {
     "discrete",
     "karras",
     "exponential",
@@ -2318,20 +2270,20 @@ const char* schedule_to_str[] = {
     "smoothstep",
 };
 
-const char* sd_schedule_name(enum scheduler_t scheduler) {
-    if (scheduler < SCHEDULE_COUNT) {
-        return schedule_to_str[scheduler];
+const char* sd_scheduler_name(enum scheduler_t scheduler) {
+    if (scheduler < SCHEDULER_COUNT) {
+        return scheduler_to_str[scheduler];
     }
     return NONE_STR;
 }
 
-enum scheduler_t str_to_schedule(const char* str) {
-    for (int i = 0; i < SCHEDULE_COUNT; i++) {
-        if (!strcmp(str, schedule_to_str[i])) {
+enum scheduler_t str_to_scheduler(const char* str) {
+    for (int i = 0; i < SCHEDULER_COUNT; i++) {
+        if (!strcmp(str, scheduler_to_str[i])) {
             return (enum scheduler_t)i;
         }
     }
-    return SCHEDULE_COUNT;
+    return SCHEDULER_COUNT;
 }
 
 const char* prediction_to_str[] = {
@@ -2515,7 +2467,7 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->guidance.slg.layer_start    = 0.01f;
     sample_params->guidance.slg.layer_end      = 0.2f;
     sample_params->guidance.slg.scale          = 0.f;
-    sample_params->scheduler                   = DEFAULT;
+    sample_params->scheduler                   = SCHEDULER_COUNT;
     sample_params->sample_method               = SAMPLE_METHOD_DEFAULT;
     sample_params->sample_steps                = 20;
 }
@@ -2548,7 +2500,7 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              sample_params->guidance.slg.layer_start,
              sample_params->guidance.slg.layer_end,
              sample_params->guidance.slg.scale,
-             sd_schedule_name(sample_params->scheduler),
+             sd_scheduler_name(sample_params->scheduler),
              sd_sample_method_name(sample_params->sample_method),
              sample_params->sample_steps,
              sample_params->eta,
@@ -2681,6 +2633,14 @@ enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
             return EULER_A;
     }
     return SAMPLE_METHOD_COUNT;
+}
+
+enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx) {
+    auto edm_v_denoiser = std::dynamic_pointer_cast<EDMVDenoiser>(sd_ctx->sd->denoiser);
+    if (edm_v_denoiser) {
+        return EXPONENTIAL_SCHEDULER;
+    }
+    return DISCRETE_SCHEDULER;
 }
 
 sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
@@ -3099,8 +3059,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
 
     size_t t0 = ggml_time_ms();
 
-    sd_ctx->sd->init_scheduler(sd_img_gen_params->sample_params.scheduler);
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps);
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps, sd_img_gen_params->sample_params.scheduler, sd_ctx->sd->version);
 
     ggml_tensor* init_latent   = nullptr;
     ggml_tensor* concat_latent = nullptr;
@@ -3342,11 +3301,8 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     int vae_scale_factor = sd_ctx->sd->get_vae_scale_factor();
 
-    sd_ctx->sd->init_scheduler(sd_vid_gen_params->sample_params.scheduler);
-
     int high_noise_sample_steps = 0;
     if (sd_ctx->sd->high_noise_diffusion_model) {
-        sd_ctx->sd->init_scheduler(sd_vid_gen_params->high_noise_sample_params.scheduler);
         high_noise_sample_steps = sd_vid_gen_params->high_noise_sample_params.sample_steps;
     }
 
@@ -3355,7 +3311,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     if (high_noise_sample_steps > 0) {
         total_steps += high_noise_sample_steps;
     }
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps);
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps, sd_vid_gen_params->sample_params.scheduler, sd_ctx->sd->version);
 
     if (high_noise_sample_steps < 0) {
         // timesteps ∝ sigmas for Flow models (like wan2.2 a14b)

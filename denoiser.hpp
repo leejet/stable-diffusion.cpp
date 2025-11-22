@@ -11,14 +11,13 @@
 #define TIMESTEPS 1000
 #define FLUX_TIMESTEPS 1000
 
-struct SigmaSchedule {
-    int version = 0;
+struct SigmaScheduler {
     typedef std::function<float(float)> t_to_sigma_t;
 
     virtual std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) = 0;
 };
 
-struct DiscreteSchedule : SigmaSchedule {
+struct DiscreteScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         std::vector<float> result;
 
@@ -42,7 +41,7 @@ struct DiscreteSchedule : SigmaSchedule {
     }
 };
 
-struct ExponentialSchedule : SigmaSchedule {
+struct ExponentialScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         std::vector<float> sigmas;
 
@@ -149,7 +148,10 @@ std::vector<float> log_linear_interpolation(std::vector<float> sigma_in,
 /*
 https://research.nvidia.com/labs/toronto-ai/AlignYourSteps/howto.html
 */
-struct AYSSchedule : SigmaSchedule {
+struct AYSScheduler : SigmaScheduler {
+    SDVersion version;
+    explicit AYSScheduler(SDVersion version)
+        : version(version) {}
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         const std::vector<float> noise_levels[] = {
             /* SD1.5 */
@@ -169,19 +171,19 @@ struct AYSSchedule : SigmaSchedule {
         std::vector<float> results(n + 1);
 
         if (sd_version_is_sd2((SDVersion)version)) {
-            LOG_WARN("AYS not designed for SD2.X models");
+            LOG_WARN("AYS_SCHEDULER not designed for SD2.X models");
         } /* fallthrough */
         else if (sd_version_is_sd1((SDVersion)version)) {
-            LOG_INFO("AYS using SD1.5 noise levels");
+            LOG_INFO("AYS_SCHEDULER using SD1.5 noise levels");
             inputs = noise_levels[0];
         } else if (sd_version_is_sdxl((SDVersion)version)) {
-            LOG_INFO("AYS using SDXL noise levels");
+            LOG_INFO("AYS_SCHEDULER using SDXL noise levels");
             inputs = noise_levels[1];
         } else if (version == VERSION_SVD) {
-            LOG_INFO("AYS using SVD noise levels");
+            LOG_INFO("AYS_SCHEDULER using SVD noise levels");
             inputs = noise_levels[2];
         } else {
-            LOG_ERROR("Version not compatible with AYS scheduler");
+            LOG_ERROR("Version not compatible with AYS_SCHEDULER scheduler");
             return results;
         }
 
@@ -203,7 +205,7 @@ struct AYSSchedule : SigmaSchedule {
 /*
  * GITS Scheduler: https://github.com/zju-pi/diff-sampler/tree/main/gits-main
  */
-struct GITSSchedule : SigmaSchedule {
+struct GITSScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         if (sigma_max <= 0.0f) {
             return std::vector<float>{};
@@ -232,7 +234,7 @@ struct GITSSchedule : SigmaSchedule {
     }
 };
 
-struct SGMUniformSchedule : SigmaSchedule {
+struct SGMUniformScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min_in, float sigma_max_in, t_to_sigma_t t_to_sigma_func) override {
         std::vector<float> result;
         if (n == 0) {
@@ -251,7 +253,7 @@ struct SGMUniformSchedule : SigmaSchedule {
     }
 };
 
-struct KarrasSchedule : SigmaSchedule {
+struct KarrasScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         // These *COULD* be function arguments here,
         // but does anybody ever bother to touch them?
@@ -270,7 +272,7 @@ struct KarrasSchedule : SigmaSchedule {
     }
 };
 
-struct SimpleSchedule : SigmaSchedule {
+struct SimpleScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         std::vector<float> result_sigmas;
 
@@ -299,8 +301,8 @@ struct SimpleSchedule : SigmaSchedule {
     }
 };
 
-// Close to Beta Schedule, but increadably simple in code.
-struct SmoothStepSchedule : SigmaSchedule {
+// Close to Beta Scheduler, but increadably simple in code.
+struct SmoothStepScheduler : SigmaScheduler {
     static constexpr float smoothstep(float x) {
         return x * x * (3.0f - 2.0f * x);
     }
@@ -329,7 +331,6 @@ struct SmoothStepSchedule : SigmaSchedule {
 };
 
 struct Denoiser {
-    std::shared_ptr<SigmaSchedule> scheduler                                                 = std::make_shared<DiscreteSchedule>();
     virtual float sigma_min()                                                                = 0;
     virtual float sigma_max()                                                                = 0;
     virtual float sigma_to_t(float sigma)                                                    = 0;
@@ -338,8 +339,47 @@ struct Denoiser {
     virtual ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) = 0;
     virtual ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent)             = 0;
 
-    virtual std::vector<float> get_sigmas(uint32_t n) {
+    virtual std::vector<float> get_sigmas(uint32_t n, scheduler_t scheduler_type, SDVersion version) {
         auto bound_t_to_sigma = std::bind(&Denoiser::t_to_sigma, this, std::placeholders::_1);
+        std::shared_ptr<SigmaScheduler> scheduler;
+        switch (scheduler_type) {
+            case DISCRETE_SCHEDULER:
+                LOG_INFO("get_sigmas with discrete scheduler");
+                scheduler = std::make_shared<DiscreteScheduler>();
+                break;
+            case KARRAS_SCHEDULER:
+                LOG_INFO("get_sigmas with Karras scheduler");
+                scheduler = std::make_shared<KarrasScheduler>();
+                break;
+            case EXPONENTIAL_SCHEDULER:
+                LOG_INFO("get_sigmas exponential scheduler");
+                scheduler = std::make_shared<ExponentialScheduler>();
+                break;
+            case AYS_SCHEDULER:
+                LOG_INFO("get_sigmas with Align-Your-Steps scheduler");
+                scheduler = std::make_shared<AYSScheduler>(version);
+                break;
+            case GITS_SCHEDULER:
+                LOG_INFO("get_sigmas with GITS scheduler");
+                scheduler = std::make_shared<GITSScheduler>();
+                break;
+            case SGM_UNIFORM_SCHEDULER:
+                LOG_INFO("get_sigmas with SGM Uniform scheduler");
+                scheduler = std::make_shared<SGMUniformScheduler>();
+                break;
+            case SIMPLE_SCHEDULER:
+                LOG_INFO("get_sigmas with Simple scheduler");
+                scheduler = std::make_shared<SimpleScheduler>();
+                break;
+            case SMOOTHSTEP_SCHEDULER:
+                LOG_INFO("get_sigmas with SmoothStep scheduler");
+                scheduler = std::make_shared<SmoothStepScheduler>();
+                break;
+            default:
+                LOG_INFO("get_sigmas with discrete scheduler (default)");
+                scheduler = std::make_shared<DiscreteScheduler>();
+                break;
+        }
         return scheduler->get_sigmas(n, sigma_min(), sigma_max(), bound_t_to_sigma);
     }
 };
@@ -426,7 +466,6 @@ struct EDMVDenoiser : public CompVisVDenoiser {
 
     EDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0)
         : min_sigma(min_sigma), max_sigma(max_sigma) {
-        scheduler = std::make_shared<ExponentialSchedule>();
     }
 
     float t_to_sigma(float t) override {
@@ -1109,7 +1148,7 @@ static void sample_k_diffusion(sample_method_t method,
             // end beta) (which unfortunately k-diffusion's data
             // structure hides from the denoiser), and the sigmas are
             // also needed to invert the behavior of CompVisDenoiser
-            // (k-diffusion's LMSDiscreteScheduler)
+            // (k-diffusion's LMSDiscreteSchedulerr)
             float beta_start = 0.00085f;
             float beta_end   = 0.0120f;
             std::vector<double> alphas_cumprod;
@@ -1137,7 +1176,7 @@ static void sample_k_diffusion(sample_method_t method,
 
             for (int i = 0; i < steps; i++) {
                 // The "trailing" DDIM timestep, see S. Lin et al.,
-                // "Common Diffusion Noise Schedules and Sample Steps
+                // "Common Diffusion Noise Schedulers and Sample Steps
                 // are Flawed", arXiv:2305.08891 [cs], p. 4, Table
                 // 2. Most variables below follow Diffusers naming
                 //
