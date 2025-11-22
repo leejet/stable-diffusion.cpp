@@ -187,6 +187,7 @@ static sd_progress_cb_t sd_progress_cb = nullptr;
 void* sd_progress_cb_data              = nullptr;
 
 static sd_preview_cb_t sd_preview_cb = nullptr;
+static void* sd_preview_cb_data      = nullptr;
 preview_t sd_preview_mode            = PREVIEW_NONE;
 int sd_preview_interval              = 1;
 bool sd_preview_denoised             = true;
@@ -335,8 +336,9 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
 }
-void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode = PREVIEW_PROJ, int interval = 1, bool denoised = true, bool noisy = false) {
+void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data) {
     sd_preview_cb       = cb;
+    sd_preview_cb_data  = data;
     sd_preview_mode     = mode;
     sd_preview_interval = interval;
     sd_preview_denoised = denoised;
@@ -345,6 +347,9 @@ void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode = PREVIEW_PROJ, 
 
 sd_preview_cb_t sd_get_preview_callback() {
     return sd_preview_cb;
+}
+void* sd_get_preview_callback_data() {
+    return sd_preview_cb_data;
 }
 
 preview_t sd_get_preview_mode() {
