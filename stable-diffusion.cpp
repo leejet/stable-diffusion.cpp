@@ -47,10 +47,10 @@ const char* model_version_to_str[] = {
 };
 
 const char* sampling_methods_str[] = {
-    "default",
     "Euler",
+    "Euler A",
     "Heun",
-    "DPM2",
+    "DPM2_SAMPLE_METHOD",
     "DPM++ (2s)",
     "DPM++ (2M)",
     "modified DPM++ (2M)",
@@ -59,7 +59,6 @@ const char* sampling_methods_str[] = {
     "LCM",
     "DDIM \"trailing\"",
     "TCD",
-    "Euler A",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -2228,8 +2227,8 @@ enum rng_type_t str_to_rng_type(const char* str) {
 }
 
 const char* sample_method_to_str[] = {
-    "default",
     "euler",
+    "euler_a",
     "heun",
     "dpm2",
     "dpm++2s_a",
@@ -2240,7 +2239,6 @@ const char* sample_method_to_str[] = {
     "lcm",
     "ddim_trailing",
     "tcd",
-    "euler_a",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -2468,7 +2466,7 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->guidance.slg.layer_end      = 0.2f;
     sample_params->guidance.slg.scale          = 0.f;
     sample_params->scheduler                   = SCHEDULER_COUNT;
-    sample_params->sample_method               = SAMPLE_METHOD_DEFAULT;
+    sample_params->sample_method               = SAMPLE_METHOD_COUNT;
     sample_params->sample_steps                = 20;
 }
 
@@ -2626,19 +2624,19 @@ void free_sd_ctx(sd_ctx_t* sd_ctx) {
 
 enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
     if (sd_ctx != nullptr && sd_ctx->sd != nullptr) {
-        SDVersion version = sd_ctx->sd->version;
-        if (sd_version_is_dit(version))
-            return EULER;
-        else
-            return EULER_A;
+        if (sd_version_is_dit(sd_ctx->sd->version)) {
+            return EULER_SAMPLE_METHOD;
+        }
     }
-    return SAMPLE_METHOD_COUNT;
+    return EULER_A_SAMPLE_METHOD;
 }
 
 enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx) {
-    auto edm_v_denoiser = std::dynamic_pointer_cast<EDMVDenoiser>(sd_ctx->sd->denoiser);
-    if (edm_v_denoiser) {
-        return EXPONENTIAL_SCHEDULER;
+    if (sd_ctx != nullptr && sd_ctx->sd != nullptr) {
+        auto edm_v_denoiser = std::dynamic_pointer_cast<EDMVDenoiser>(sd_ctx->sd->denoiser);
+        if (edm_v_denoiser) {
+            return EXPONENTIAL_SCHEDULER;
+        }
     }
     return DISCRETE_SCHEDULER;
 }
@@ -2826,7 +2824,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     int C = sd_ctx->sd->get_latent_channel();
     int W = width / sd_ctx->sd->get_vae_scale_factor();
     int H = height / sd_ctx->sd->get_vae_scale_factor();
-    LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
 
     struct ggml_tensor* control_latent = nullptr;
     if (sd_version_is_control(sd_ctx->sd->version) && image_hint != nullptr) {
@@ -3055,10 +3052,15 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     sd_ctx->sd->rng->manual_seed(seed);
     sd_ctx->sd->sampler_rng->manual_seed(seed);
 
-    int sample_steps = sd_img_gen_params->sample_params.sample_steps;
-
     size_t t0 = ggml_time_ms();
 
+    enum sample_method_t sample_method = sd_img_gen_params->sample_params.sample_method;
+    if (sample_method == SAMPLE_METHOD_COUNT) {
+        sample_method = sd_get_default_sample_method(sd_ctx);
+    }
+    LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
+
+    int sample_steps          = sd_img_gen_params->sample_params.sample_steps;
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps, sd_img_gen_params->sample_params.scheduler, sd_ctx->sd->version);
 
     ggml_tensor* init_latent   = nullptr;
@@ -3247,11 +3249,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         LOG_INFO("encode_first_stage completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
     }
 
-    enum sample_method_t sample_method = sd_img_gen_params->sample_params.sample_method;
-    if (sample_method == SAMPLE_METHOD_DEFAULT) {
-        sample_method = sd_get_default_sample_method(sd_ctx);
-    }
-
     sd_image_t* result_images = generate_image_internal(sd_ctx,
                                                         work_ctx,
                                                         init_latent,
@@ -3300,6 +3297,12 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     LOG_INFO("generate_video %dx%dx%d", width, height, frames);
 
     int vae_scale_factor = sd_ctx->sd->get_vae_scale_factor();
+
+    enum sample_method_t sample_method = sd_vid_gen_params->sample_params.sample_method;
+    if (sample_method == SAMPLE_METHOD_COUNT) {
+        sample_method = sd_get_default_sample_method(sd_ctx);
+    }
+    LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
 
     int high_noise_sample_steps = 0;
     if (sd_ctx->sd->high_noise_diffusion_model) {
@@ -3569,6 +3572,12 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     // High Noise Sample
     if (high_noise_sample_steps > 0) {
         LOG_DEBUG("sample(high noise) %dx%dx%d", W, H, T);
+        enum sample_method_t high_noise_sample_method = sd_vid_gen_params->high_noise_sample_params.sample_method;
+        if (high_noise_sample_method == SAMPLE_METHOD_COUNT) {
+            high_noise_sample_method = sd_get_default_sample_method(sd_ctx);
+        }
+        LOG_INFO("sampling(high noise) using %s method", sampling_methods_str[high_noise_sample_method]);
+
         int64_t sampling_start = ggml_time_ms();
 
         std::vector<float> high_noise_sigmas = std::vector<float>(sigmas.begin(), sigmas.begin() + high_noise_sample_steps + 1);
@@ -3587,7 +3596,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                  sd_vid_gen_params->high_noise_sample_params.guidance,
                                  sd_vid_gen_params->high_noise_sample_params.eta,
                                  sd_vid_gen_params->high_noise_sample_params.shifted_timestep,
-                                 sd_vid_gen_params->high_noise_sample_params.sample_method,
+                                 high_noise_sample_method,
                                  high_noise_sigmas,
                                  -1,
                                  {},
@@ -3624,7 +3633,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           sd_vid_gen_params->sample_params.guidance,
                                           sd_vid_gen_params->sample_params.eta,
                                           sd_vid_gen_params->sample_params.shifted_timestep,
-                                          sd_vid_gen_params->sample_params.sample_method,
+                                          sample_method,
                                           sigmas,
                                           -1,
                                           {},
