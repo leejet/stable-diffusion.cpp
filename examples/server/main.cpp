@@ -107,8 +107,8 @@ struct SDRequestParams {
             1,
             3.5,
             sd_slg_params_t{NULL, 0, 0.01, 0.2, 0}},
-        DEFAULT,
-        SAMPLE_METHOD_DEFAULT,
+        SCHEDULER_COUNT,
+        SAMPLE_METHOD_COUNT,
         20,
         0, 0};
     float strength  = 1.f;
@@ -219,7 +219,7 @@ void print_params(SDParams params) {
     printf("    width:             %d\n", params.lastRequest.width);
     printf("    height:            %d\n", params.lastRequest.height);
     printf("    sample_method:     %s\n", sd_sample_method_name(params.lastRequest.sample_params.sample_method));
-    printf("    schedule:          %s\n", sd_schedule_name(params.lastRequest.sample_params.scheduler));
+    printf("    schedule:          %s\n", sd_scheduler_name(params.lastRequest.sample_params.scheduler));
     printf("    sample_steps:      %d\n", params.lastRequest.sample_params.sample_steps);
     printf("    strength(img2img): %.2f\n", params.lastRequest.strength);
     printf("    rng:               %s\n", sd_rng_type_name(params.ctxParams.rng_type));
@@ -580,8 +580,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
             return -1;
         }
         const char* arg                            = argv[index];
-        params.lastRequest.sample_params.scheduler = str_to_schedule(arg);
-        if (params.lastRequest.sample_params.scheduler == SCHEDULE_COUNT) {
+        params.lastRequest.sample_params.scheduler = str_to_scheduler(arg);
+        if (params.lastRequest.sample_params.scheduler == SCHEDULER_COUNT) {
             fprintf(stderr, "error: invalid scheduler %s\n",
                     arg);
             return -1;
@@ -707,7 +707,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
     parameter_string += "Model: " + sd_basename(params.ctxParams.model_path) + ", ";
     parameter_string += "RNG: " + std::string(sd_rng_type_name(params.ctxParams.rng_type)) + ", ";
     parameter_string += "Sampler: " + std::string(sd_sample_method_name(params.lastRequest.sample_params.sample_method));
-    if (params.lastRequest.sample_params.scheduler == KARRAS) {
+    if (params.lastRequest.sample_params.scheduler == KARRAS_SCHEDULER) {
         parameter_string += " karras";
     }
     parameter_string += ", ";
@@ -1048,9 +1048,9 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
              }},
             {"scheduler", [&](const json& o) -> bool {
                  std::string schedule       = o.get<std::string>();
-                 scheduler_t schedule_found = str_to_schedule(schedule.c_str());
+                 scheduler_t schedule_found = str_to_scheduler(schedule.c_str());
                  bool change                = false;
-                 if (schedule_found != SCHEDULE_COUNT) {
+                 if (schedule_found != SCHEDULER_COUNT) {
                      if (params->lastRequest.sample_params.scheduler != schedule_found) {
                          params->lastRequest.sample_params.scheduler = schedule_found;
                          change                                      = true;
@@ -1710,8 +1710,8 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
     }
     try {
         std::string schedule       = payload["schedule"];
-        scheduler_t schedule_found = str_to_schedule(schedule.c_str());
-        if (schedule_found != SCHEDULE_COUNT) {
+        scheduler_t schedule_found = str_to_scheduler(schedule.c_str());
+        if (schedule_found != SCHEDULER_COUNT) {
             if (params->lastRequest.sample_params.scheduler != schedule_found) {
                 params->lastRequest.sample_params.scheduler = schedule_found;
             }
@@ -2214,7 +2214,7 @@ void start_server(SDParams params) {
         context_params["n_threads"]               = params.ctxParams.n_threads;
         context_params["wtype"]                   = params.ctxParams.wtype;
         context_params["rng_type"]                = params.ctxParams.rng_type;
-        context_params["schedule"]                = sd_schedule_name(params.lastRequest.sample_params.scheduler);
+        context_params["schedule"]                = sd_scheduler_name(params.lastRequest.sample_params.scheduler);
         context_params["keep_clip_on_cpu"]        = params.ctxParams.keep_clip_on_cpu;
         context_params["keep_control_net_on_cpu"] = params.ctxParams.keep_control_net_on_cpu;
         context_params["keep_vae_on_cpu"]         = params.ctxParams.keep_vae_on_cpu;
@@ -2302,8 +2302,8 @@ void start_server(SDParams params) {
         sd_log(SD_LOG_WARN, "/schedules endpoint is soon to be deprecated, use /schedulers instead");
         using json = nlohmann::json;
         json response;
-        for (int s = 0; s < SCHEDULE_COUNT; s++) {
-            response.push_back(sd_schedule_name((scheduler_t)s));
+        for (int s = 0; s < SCHEDULER_COUNT; s++) {
+            response.push_back(sd_scheduler_name((scheduler_t)s));
         }
         res.set_content(response.dump(), "application/json");
     });
@@ -2311,8 +2311,8 @@ void start_server(SDParams params) {
     svr->Get("/schedulers", [](const httplib::Request& req, httplib::Response& res) {
         using json = nlohmann::json;
         json response;
-        for (int s = 0; s < SCHEDULE_COUNT; s++) {
-            response.push_back(sd_schedule_name((scheduler_t)s));
+        for (int s = 0; s < SCHEDULER_COUNT; s++) {
+            response.push_back(sd_scheduler_name((scheduler_t)s));
         }
         res.set_content(response.dump(), "application/json");
     });
