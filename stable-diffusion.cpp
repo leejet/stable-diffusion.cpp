@@ -2800,7 +2800,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                 LOG_WARN("Turn off PhotoMaker");
                 sd_ctx->sd->stacked_id = false;
             } else {
-                if (pm_params.id_images_count != id_embeds->ne[1]) {
+                if (pmv2 && pm_params.id_images_count != id_embeds->ne[1]) {
                     LOG_WARN("PhotoMaker image count (%d) does NOT match ID embeds (%d). You should run face_detect.py again.", pm_params.id_images_count, id_embeds->ne[1]);
                     LOG_WARN("Turn off PhotoMaker");
                     sd_ctx->sd->stacked_id = false;
