@@ -1834,12 +1834,12 @@ int main(int argc, const char* argv[]) {
             std::string final_image_path = i > 0 ? base_path + "_" + std::to_string(i + 1) + file_ext : base_path + file_ext;
             if (is_jpg) {
                 write_ok = stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                               results[i].data, 90, get_image_params(params, params.seed + i).c_str());
-                printf("save result JPEG image to '%s' (%s)\n", final_image_path.c_str(), write_ok==0 ? "failure":"success");
+                                          results[i].data, 90, get_image_params(params, params.seed + i).c_str());
+                printf("save result JPEG image to '%s' (%s)\n", final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
             } else {
                 write_ok = stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                               results[i].data, 0, get_image_params(params, params.seed + i).c_str());
-                printf("save result PNG image to '%s' (%s)\n", final_image_path.c_str(), write_ok==0 ? "failure":"success");
+                                          results[i].data, 0, get_image_params(params, params.seed + i).c_str());
+                printf("save result PNG image to '%s' (%s)\n", final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
             }
         }
     }
