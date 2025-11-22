@@ -53,17 +53,16 @@ enum sample_method_t {
 };
 
 enum scheduler_t {
-    DEFAULT,
-    DISCRETE,
-    KARRAS,
-    EXPONENTIAL,
-    AYS,
-    GITS,
-    SGM_UNIFORM,
-    SIMPLE,
-    SMOOTHSTEP,
+    DISCRETE_SCHEDULER,
+    KARRAS_SCHEDULER,
+    EXPONENTIAL_SCHEDULER,
+    AYS_SCHEDULER,
+    GITS_SCHEDULER,
+    SGM_UNIFORM_SCHEDULER,
+    SIMPLE_SCHEDULER,
+    SMOOTHSTEP_SCHEDULER,
     LCM_SCHEDULER,
-    SCHEDULE_COUNT
+    SCHEDULER_COUNT
 };
 
 enum prediction_t {
@@ -231,6 +230,13 @@ typedef struct {
 } sd_pm_params_t;  // photo maker
 
 typedef struct {
+    bool enabled;
+    float reuse_threshold;
+    float start_percent;
+    float end_percent;
+} sd_easycache_params_t;
+
+typedef struct {
     const char* prompt;
     const char* negative_prompt;
     int clip_skip;
@@ -250,6 +256,7 @@ typedef struct {
     float control_strength;
     sd_pm_params_t pm_params;
     sd_tiling_params_t vae_tiling_params;
+    sd_easycache_params_t easycache;
 } sd_img_gen_params_t;
 
 typedef struct {
@@ -269,6 +276,7 @@ typedef struct {
     int64_t seed;
     int video_frames;
     float vace_strength;
+    sd_easycache_params_t easycache;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
@@ -289,8 +297,8 @@ SD_API const char* sd_rng_type_name(enum rng_type_t rng_type);
 SD_API enum rng_type_t str_to_rng_type(const char* str);
 SD_API const char* sd_sample_method_name(enum sample_method_t sample_method);
 SD_API enum sample_method_t str_to_sample_method(const char* str);
-SD_API const char* sd_schedule_name(enum scheduler_t scheduler);
-SD_API enum scheduler_t str_to_schedule(const char* str);
+SD_API const char* sd_scheduler_name(enum scheduler_t scheduler);
+SD_API enum scheduler_t str_to_scheduler(const char* str);
 SD_API const char* sd_prediction_name(enum prediction_t prediction);
 SD_API enum prediction_t str_to_prediction(const char* str);
 SD_API const char* sd_preview_name(enum preview_t preview);
@@ -298,15 +306,19 @@ SD_API enum preview_t str_to_preview(const char* str);
 SD_API const char* sd_lora_apply_mode_name(enum lora_apply_mode_t mode);
 SD_API enum lora_apply_mode_t str_to_lora_apply_mode(const char* str);
 
+SD_API void sd_easycache_params_init(sd_easycache_params_t* easycache_params);
+
 SD_API void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params);
 SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
 
 SD_API sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params);
 SD_API void free_sd_ctx(sd_ctx_t* sd_ctx);
-SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
 
 SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
 SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
+
+SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
+SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx);
 
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);

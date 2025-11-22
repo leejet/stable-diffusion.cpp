@@ -2075,15 +2075,19 @@ namespace WAN {
                     wan_params.text_len  = 512;
                 } else {
                     if (wan_params.vace_layers > 0) {
-                        desc = "Wan2.1-VACE-1.3B";
+                        desc              = "Wan2.1-VACE-1.3B";
+                        wan_params.in_dim = 16;
+                    } else if (wan_params.model_type == "i2v") {
+                        desc              = "Wan2.1-I2V-1.3B";
+                        wan_params.in_dim = 36;
                     } else {
-                        desc = "Wan2.1-T2V-1.3B";
+                        desc              = "Wan2.1-T2V-1.3B";
+                        wan_params.in_dim = 16;
                     }
                     wan_params.dim       = 1536;
                     wan_params.eps       = 1e-06;
                     wan_params.ffn_dim   = 8960;
                     wan_params.freq_dim  = 256;
-                    wan_params.in_dim    = 16;
                     wan_params.num_heads = 12;
                     wan_params.out_dim   = 16;
                     wan_params.text_len  = 512;
