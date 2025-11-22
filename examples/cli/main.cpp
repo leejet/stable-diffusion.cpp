@@ -1902,8 +1902,12 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
 
-        if (params.sample_params.sample_method == SAMPLE_METHOD_DEFAULT) {
+        if (params.sample_params.sample_method == SAMPLE_METHOD_COUNT) {
             params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
+        }
+
+        if (params.high_noise_sample_params.sample_method == SAMPLE_METHOD_COUNT) {
+            params.high_noise_sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
         }
 
         if (params.sample_params.scheduler == SCHEDULER_COUNT) {

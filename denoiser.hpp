@@ -640,7 +640,7 @@ static void sample_k_diffusion(sample_method_t method,
     size_t steps = sigmas.size() - 1;
     // sample_euler_ancestral
     switch (method) {
-        case EULER_A: {
+        case EULER_A_SAMPLE_METHOD: {
             struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
@@ -693,7 +693,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case EULER:  // Implemented without any sigma churn
+        case EULER_SAMPLE_METHOD:  // Implemented without any sigma churn
         {
             struct ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
 
@@ -726,7 +726,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case HEUN: {
+        case HEUN_SAMPLE_METHOD: {
             struct ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
@@ -776,7 +776,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case DPM2: {
+        case DPM2_SAMPLE_METHOD: {
             struct ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
@@ -828,7 +828,7 @@ static void sample_k_diffusion(sample_method_t method,
             }
 
         } break;
-        case DPMPP2S_A: {
+        case DPMPP2S_A_SAMPLE_METHOD: {
             struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
@@ -892,7 +892,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case DPMPP2M:  // DPM++ (2M) from Karras et al (2022)
+        case DPMPP2M_SAMPLE_METHOD:  // DPM++ (2M) from Karras et al (2022)
         {
             struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -931,7 +931,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case DPMPP2Mv2:  // Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
+        case DPMPP2Mv2_SAMPLE_METHOD:  // Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
         {
             struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -974,7 +974,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case IPNDM:  // iPNDM sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
+        case IPNDM_SAMPLE_METHOD:  // iPNDM sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
         {
             int max_order       = 4;
             ggml_tensor* x_next = x;
@@ -1049,7 +1049,7 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case IPNDM_V:  // iPNDM_v sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
+        case IPNDM_V_SAMPLE_METHOD:  // iPNDM_v sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
         {
             int max_order = 4;
             std::vector<ggml_tensor*> buffer_model;
@@ -1123,7 +1123,7 @@ static void sample_k_diffusion(sample_method_t method,
                 d_cur = ggml_dup_tensor(work_ctx, x_next);
             }
         } break;
-        case LCM:  // Latent Consistency Models
+        case LCM_SAMPLE_METHOD:  // Latent Consistency Models
         {
             struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
@@ -1158,8 +1158,8 @@ static void sample_k_diffusion(sample_method_t method,
                 }
             }
         } break;
-        case DDIM_TRAILING:  // Denoising Diffusion Implicit Models
-                             // with the "trailing" timestep spacing
+        case DDIM_TRAILING_SAMPLE_METHOD:  // Denoising Diffusion Implicit Models
+                                           // with the "trailing" timestep spacing
         {
             // See J. Song et al., "Denoising Diffusion Implicit
             // Models", arXiv:2010.02502 [cs.LG]
@@ -1352,8 +1352,8 @@ static void sample_k_diffusion(sample_method_t method,
                 // factor c_in.
             }
         } break;
-        case TCD:  // Strategic Stochastic Sampling (Algorithm 4) in
-                   // Trajectory Consistency Distillation
+        case TCD_SAMPLE_METHOD:  // Strategic Stochastic Sampling (Algorithm 4) in
+                                 // Trajectory Consistency Distillation
         {
             // See J. Zheng et al., "Trajectory Consistency
             // Distillation: Improved Latent Consistency Distillation
