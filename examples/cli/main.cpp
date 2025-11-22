@@ -1648,7 +1648,7 @@ bool load_images_from_dir(const std::string dir,
     return true;
 }
 
-const char* preview_path;
+std::string preview_path;
 float preview_fps;
 
 void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) {
@@ -1657,16 +1657,16 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) 
     // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
     // unused in this app, it will either be always noisy or always denoised here
     if (frame_count == 1) {
-        stbi_write_png(preview_path, image->width, image->height, image->channel, image->data, 0);
+        stbi_write_png(preview_path.c_str(), image->width, image->height, image->channel, image->data, 0);
     } else {
-        create_mjpg_avi_from_sd_images(preview_path, image, frame_count, preview_fps);
+        create_mjpg_avi_from_sd_images(preview_path.c_str(), image, frame_count, preview_fps);
     }
 }
 
 int main(int argc, const char* argv[]) {
     SDParams params;
     parse_args(argc, argv, params);
-    preview_path = params.preview_path.c_str();
+    preview_path = params.preview_path;
     if (params.video_frames > 4) {
         size_t last_dot_pos   = params.preview_path.find_last_of(".");
         std::string base_path = params.preview_path;
@@ -1677,8 +1677,7 @@ int main(int argc, const char* argv[]) {
             std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
         }
         if (file_ext == ".png") {
-            base_path    = base_path + ".avi";
-            preview_path = base_path.c_str();
+            preview_path = base_path + ".avi";
         }
     }
     preview_fps = params.fps;
