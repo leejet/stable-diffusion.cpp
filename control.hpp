@@ -430,8 +430,12 @@ struct ControlNet : public GGMLRunner {
             return build_graph(x, hint, timesteps, context, y);
         };
 
-        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
-        guided_hint_cached = true;
+        bool res = GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        if (res) {
+            // cache guided_hint
+            guided_hint_cached = true;
+        }
+        return res;
     }
 
     bool load_from_file(const std::string& file_path, int n_threads) {
