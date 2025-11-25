@@ -87,6 +87,38 @@ file(GLOB SD_LIB_SOURCES
     "*.hpp"
 )
 
+find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
+if(GIT_EXE)
+    execute_process(COMMAND ${GIT_EXE} describe --tags --abbrev=7 --dirty=+
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE SDCPP_BUILD_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    execute_process(COMMAND ${GIT_EXE} rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE SDCPP_BUILD_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+endif()
+
+if(NOT SDCPP_BUILD_VERSION)
+    set(SDCPP_BUILD_VERSION unknown)
+endif()
+message(STATUS "stable-diffusion.cpp version ${SDCPP_BUILD_VERSION}")
+
+if(NOT SDCPP_BUILD_COMMIT)
+    set(SDCPP_BUILD_COMMIT unknown)
+endif()
+message(STATUS "stable-diffusion.cpp commit ${SDCPP_BUILD_COMMIT}")
+
+set_property(
+  SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/version.cpp
+  APPEND PROPERTY COMPILE_DEFINITIONS
+  SDCPP_BUILD_COMMIT=${SDCPP_BUILD_COMMIT} SDCPP_BUILD_VERSION=${SDCPP_BUILD_VERSION}
+)
+
 if(SD_BUILD_SHARED_LIBS)
     message("-- Build shared library")
     message(${SD_LIB_SOURCES})

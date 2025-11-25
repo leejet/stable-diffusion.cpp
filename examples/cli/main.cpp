@@ -1646,6 +1646,11 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) 
 }
 
 int main(int argc, const char* argv[]) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--verbose") == 0) {
+            printf("stable-diffusion.cpp version %s, commit %s\n", sd_version(), sd_commit());
+        }
+    }
     SDParams params;
     parse_args(argc, argv, params);
     preview_path = params.preview_path;
