@@ -324,6 +324,7 @@ struct SDCliParams {
     std::string output_path = "output.png";
 
     bool verbose          = false;
+    bool version          = false;
     bool canny_preprocess = false;
 
     preview_t preview_method = PREVIEW_NONE;
@@ -366,6 +367,10 @@ struct SDCliParams {
              "--verbose",
              "print extra info",
              true, &verbose},
+            {"",
+             "--version",
+             "print stable-diffusion.cpp version",
+             true, &version},
             {"",
              "--color",
              "colors the logging tags according to level",
@@ -1598,7 +1603,12 @@ struct SDGenerationParams {
     }
 };
 
+static std::string version_string() {
+    return std::string("stable-diffusion.cpp version ") + sd_version() + ", commit " + sd_commit();
+}
+
 void print_usage(int argc, const char* argv[], const std::vector<ArgOptions>& options_list) {
+    std::cout << version_string() << "\n";
     std::cout << "Usage: " << argv[0] << " [options]\n\n";
     std::cout << "CLI Options:\n";
     options_list[0].print();
@@ -1881,11 +1891,20 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
 }
 
 int main(int argc, const char* argv[]) {
+
+    if (argc > 1 && std::string(argv[1]) == "--version") {
+        std::cout << version_string() << "\n";
+        return EXIT_SUCCESS;
+    }
+
     SDCliParams cli_params;
     SDContextParams ctx_params;
     SDGenerationParams gen_params;
 
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
+    if (cli_params.verbose || cli_params.version) {
+        std::cout << version_string() << "\n";
+    }
     if (gen_params.video_frames > 4) {
         size_t last_dot_pos   = cli_params.preview_path.find_last_of(".");
         std::string base_path = cli_params.preview_path;
