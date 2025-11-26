@@ -12,6 +12,9 @@
 #include <unordered_set>
 #include <vector>
 #include "preprocessing.hpp"
+#include "ggml-cpu.h"
+#include "ggml.h"
+#include "stable-diffusion.h"
 
 #if defined(__APPLE__) && defined(__MACH__)
 #include <sys/sysctl.h>
@@ -23,9 +26,17 @@
 #include <unistd.h>
 #endif
 
-#include "ggml-cpu.h"
-#include "ggml.h"
-#include "stable-diffusion.h"
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+
+#else  // Unix
+#include <dirent.h>
+#include <sys/stat.h>
+
+#endif
+
+namespace sd_internal {
 
 bool ends_with(const std::string& str, const std::string& ending) {
     if (str.length() >= ending.length()) {
@@ -82,8 +93,6 @@ int round_up_to(int value, int base) {
 }
 
 #ifdef _WIN32  // code for windows
-#define NOMINMAX
-#include <windows.h>
 
 bool file_exists(const std::string& filename) {
     DWORD attributes = GetFileAttributesA(filename.c_str());
@@ -110,8 +119,6 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
 }
 
 #else  // Unix
-#include <dirent.h>
-#include <sys/stat.h>
 
 bool file_exists(const std::string& filename) {
     struct stat buffer;
@@ -144,6 +151,8 @@ std::string get_full_path(const std::string& dir, const std::string& filename) {
 }
 
 #endif
+
+}
 
 // get_num_physical_cores is copy from
 // https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
@@ -182,6 +191,8 @@ int32_t get_num_physical_cores() {
     unsigned int n_threads = std::thread::hardware_concurrency();
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
+
+namespace sd_internal {
 
 static sd_progress_cb_t sd_progress_cb = nullptr;
 void* sd_progress_cb_data              = nullptr;
@@ -327,6 +338,8 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     va_end(args);
 }
 
+}
+
 void sd_set_log_callback(sd_log_cb_t cb, void* data) {
     sd_log_cb      = cb;
     sd_log_cb_data = data;
@@ -342,6 +355,8 @@ void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode = PREVIEW_PROJ, 
     sd_preview_denoised = denoised;
     sd_preview_noisy    = noisy;
 }
+
+namespace sd_internal {
 
 sd_preview_cb_t sd_get_preview_callback() {
     return sd_preview_cb;
@@ -366,6 +381,9 @@ sd_progress_cb_t sd_get_progress_callback() {
 void* sd_get_progress_callback_data() {
     return sd_progress_cb_data;
 }
+
+}
+
 const char* sd_get_system_info() {
     static char buffer[1024];
     std::stringstream ss;
@@ -386,6 +404,8 @@ const char* sd_get_system_info() {
     snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
     return buffer;
 }
+
+namespace sd_internal {
 
 sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image) {
     sd_image_f32_t converted_image;
@@ -650,4 +670,6 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
     }
 
     return res;
+}
+
 }
