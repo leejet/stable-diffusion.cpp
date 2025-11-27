@@ -2,6 +2,7 @@
 #define __CONDITIONER_HPP__
 
 #include "clip.hpp"
+#include "qwen3.hpp"
 #include "qwenvl.hpp"
 #include "t5.hpp"
 
@@ -1826,6 +1827,131 @@ struct Qwen2_5_VLCLIPEmbedder : public Conditioner {
 
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
+        return {new_hidden_states, nullptr, nullptr};
+    }
+};
+
+struct ZImageConditioner : public Conditioner {
+    Qwen::Qwen2Tokenizer tokenizer;
+    std::shared_ptr<Qwen3::Qwen3Runner> qwen3;
+    std::string chat_template = "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n";
+    int64_t skip_token_count  = 0;  // Use full sequence for Z-Image
+
+    ZImageConditioner(ggml_backend_t backend,
+                      bool offload_params_to_cpu,
+                      const String2TensorStorage& tensor_storage_map = {},
+                      const std::string& prefix                      = "text_encoders.qwen3") {
+        qwen3 = std::make_shared<Qwen3::Qwen3Runner>(backend,
+                                                      offload_params_to_cpu,
+                                                      tensor_storage_map,
+                                                      prefix);
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+        qwen3->get_param_tensors(tensors, "text_encoders.qwen3");
+    }
+
+    void alloc_params_buffer() override {
+        qwen3->alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        qwen3->free_params_buffer();
+    }
+
+    size_t get_params_buffer_size() override {
+        return qwen3->get_params_buffer_size();
+    }
+
+    std::string apply_chat_template(const std::string& text) {
+        std::string result = chat_template;
+        size_t pos         = result.find("{}");
+        if (pos != std::string::npos) {
+            result.replace(pos, 2, text);
+        }
+        return result;
+    }
+
+    std::tuple<std::vector<int>, std::vector<float>> tokenize(std::string text,
+                                                              size_t max_length = 0,
+                                                              bool padding      = false) {
+        auto parsed_attention = parse_prompt_attention(text);
+        std::vector<int> tokens;
+        std::vector<float> weights;
+        for (const auto& item : parsed_attention) {
+            const std::string& curr_text = item.first;
+            float curr_weight            = item.second;
+            std::vector<int> curr_tokens = tokenizer.tokenize(curr_text, nullptr);
+            tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
+            weights.insert(weights.end(), curr_tokens.size(), curr_weight);
+        }
+        tokenizer.pad_tokens(tokens, weights, max_length, padding);
+        return {tokens, weights};
+    }
+
+    SDCondition get_learned_condition(ggml_context* work_ctx,
+                                      int n_threads,
+                                      const ConditionerParams& conditioner_params) override {
+        std::string prompt = apply_chat_template(conditioner_params.text);
+        LOG_DEBUG("ZImageConditioner prompt: %s", prompt.c_str());
+        auto tokens_and_weights = tokenize(prompt, 0, false);
+        auto& tokens            = std::get<0>(tokens_and_weights);
+        auto& weights           = std::get<1>(tokens_and_weights);
+        LOG_DEBUG("ZImageConditioner token count: %zu", tokens.size());
+
+        int64_t t0                        = ggml_time_ms();
+        struct ggml_tensor* hidden_states = nullptr;
+
+        auto input_ids = vector_to_ggml_tensor_i32(work_ctx, tokens);
+        LOG_DEBUG("ZImageConditioner input_ids shape: [%lld, %lld]", input_ids->ne[0], input_ids->ne[1]);
+
+        qwen3->compute(n_threads,
+                       input_ids,
+                       &hidden_states,
+                       work_ctx);
+        LOG_DEBUG("ZImageConditioner hidden_states shape: [%lld, %lld, %lld]",
+                  hidden_states->ne[0], hidden_states->ne[1], hidden_states->ne[2]);
+        {
+            auto tensor         = hidden_states;
+            float original_mean = ggml_ext_tensor_mean(tensor);
+            for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
+                for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
+                    for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
+                        float value = ggml_ext_tensor_get_f32(tensor, i0, i1, i2);
+                        value *= weights[i1];
+                        ggml_ext_tensor_set_f32(tensor, value, i0, i1, i2);
+                    }
+                }
+            }
+            float new_mean = ggml_ext_tensor_mean(tensor);
+            if (new_mean > 0) {
+                ggml_ext_tensor_scale_inplace(tensor, (original_mean / new_mean));
+            }
+        }
+
+        int64_t skip_count = skip_token_count;
+        int64_t output_seq_len = hidden_states->ne[1] - skip_count;
+        if (output_seq_len <= 0) {
+            LOG_WARN("ZImageConditioner: output sequence length would be %lld (hidden_states seq=%lld, skip=%lld), using full sequence",
+                     output_seq_len, hidden_states->ne[1], skip_count);
+            output_seq_len = hidden_states->ne[1];
+            skip_count = 0;
+        }
+        LOG_DEBUG("ZImageConditioner output_seq_len: %lld, skip_count: %lld", output_seq_len, skip_count);
+
+        ggml_tensor* new_hidden_states = ggml_new_tensor_3d(work_ctx,
+                                                            GGML_TYPE_F32,
+                                                            hidden_states->ne[0],
+                                                            output_seq_len,
+                                                            hidden_states->ne[2]);
+
+        ggml_ext_tensor_iter(new_hidden_states, [&](ggml_tensor* new_hidden_states, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+            float value = ggml_ext_tensor_get_f32(hidden_states, i0, i1 + skip_count, i2, i3);
+            ggml_ext_tensor_set_f32(new_hidden_states, value, i0, i1, i2, i3);
+        });
+
+        int64_t t1 = ggml_time_ms();
+        LOG_DEBUG("computing Z-Image condition graph completed, taking %" PRId64 " ms", t1 - t0);
         return {new_hidden_states, nullptr, nullptr};
     }
 };

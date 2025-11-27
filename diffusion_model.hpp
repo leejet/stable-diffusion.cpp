@@ -6,6 +6,7 @@
 #include "qwen_image.hpp"
 #include "unet.hpp"
 #include "wan.hpp"
+#include "zimage.hpp"
 
 struct DiffusionParams {
     struct ggml_tensor* x                     = nullptr;
@@ -354,6 +355,65 @@ struct QwenImageModel : public DiffusionModel {
                                   true,  // increase_ref_index
                                   output,
                                   output_ctx);
+    }
+};
+
+struct ZImageDiffusionModel : public DiffusionModel {
+    std::string prefix;
+    ZImage::ZImageRunner zimage;
+
+    ZImageDiffusionModel(ggml_backend_t backend,
+                         bool offload_params_to_cpu,
+                         const String2TensorStorage& tensor_storage_map = {},
+                         const std::string prefix                       = "model.diffusion_model")
+        : prefix(prefix), zimage(backend, offload_params_to_cpu, tensor_storage_map, prefix) {
+    }
+
+    std::string get_desc() override {
+        return zimage.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        zimage.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        zimage.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        zimage.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+        zimage.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return zimage.get_params_buffer_size();
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 0;
+    }
+
+    void set_flash_attn_enabled(bool enabled) {
+    }
+
+    void compute(int n_threads,
+                 DiffusionParams diffusion_params,
+                 struct ggml_tensor** output     = nullptr,
+                 struct ggml_context* output_ctx = nullptr) override {
+        int height = diffusion_params.x->ne[1] * 8;
+        int width  = diffusion_params.x->ne[0] * 8;
+        return zimage.compute(n_threads,
+                              diffusion_params.x,
+                              diffusion_params.timesteps,
+                              diffusion_params.context,
+                              height,
+                              width,
+                              output,
+                              output_ctx);
     }
 };
 

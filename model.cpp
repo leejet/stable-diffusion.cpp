@@ -1062,6 +1062,10 @@ SDVersion ModelLoader::get_sd_version() {
             if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
                 return VERSION_QWEN_IMAGE;
             }
+            if (tensor_storage.name.find("model.diffusion_model.context_refiner.") != std::string::npos ||
+                tensor_storage.name.find("model.diffusion_model.noise_refiner.") != std::string::npos) {
+                return VERSION_ZIMAGE;
+            }
             if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
                 is_wan = true;
             }

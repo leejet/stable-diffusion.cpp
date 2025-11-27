@@ -158,6 +158,7 @@ typedef struct {
     const char* t5xxl_path;
     const char* qwen2vl_path;
     const char* qwen2vl_vision_path;
+    const char* qwen3_path;
     const char* diffusion_model_path;
     const char* high_noise_diffusion_model_path;
     const char* vae_path;

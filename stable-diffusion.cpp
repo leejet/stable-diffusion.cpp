@@ -44,6 +44,7 @@ const char* model_version_to_str[] = {
     "Wan 2.2 I2V",
     "Wan 2.2 TI2V",
     "Qwen Image",
+    "Z-Image",
 };
 
 const char* sampling_methods_str[] = {
@@ -282,6 +283,13 @@ public:
             }
         }
 
+        if (strlen(SAFE_STR(sd_ctx_params->qwen3_path)) > 0) {
+            LOG_INFO("loading qwen3 from '%s'", sd_ctx_params->qwen3_path);
+            if (!model_loader.init_from_file(sd_ctx_params->qwen3_path, "text_encoders.qwen3.")) {
+                LOG_WARN("loading qwen3 from '%s' failed", sd_ctx_params->qwen3_path);
+            }
+        }
+
         if (strlen(SAFE_STR(sd_ctx_params->qwen2vl_vision_path)) > 0) {
             LOG_INFO("loading qwen2vl vision from '%s'", sd_ctx_params->qwen2vl_vision_path);
             if (!model_loader.init_from_file(sd_ctx_params->qwen2vl_vision_path, "text_encoders.qwen2vl.visual.")) {
@@ -381,6 +389,9 @@ public:
             shift_factor = 0.1159f;
         } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
             scale_factor = 1.0f;
+        } else if (sd_version_is_zimage(version)) {
+            scale_factor = 0.3611f;
+            shift_factor = 0.1159f;
         }
 
         if (sd_version_is_control(version)) {
@@ -479,6 +490,13 @@ public:
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
                                                                    version);
+            } else if (sd_version_is_zimage(version)) {
+                cond_stage_model = std::make_shared<ZImageConditioner>(clip_backend,
+                                                                       offload_params_to_cpu,
+                                                                       tensor_storage_map);
+                diffusion_model  = std::make_shared<ZImageDiffusionModel>(backend,
+                                                                          offload_params_to_cpu,
+                                                                          tensor_storage_map);
             } else {  // SD1.x SD2.x SDXL
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
@@ -844,6 +862,13 @@ public:
                     shift = 3.0;
                 }
                 denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
+            } else if (sd_version_is_zimage(version)) {
+                LOG_INFO("running in Z-Image FLOW mode");
+                float shift = sd_ctx_params->flow_shift;
+                if (shift == INFINITY) {
+                    shift = 3.0;
+                }
+                denoiser = std::make_shared<FluxFlowDenoiser>(shift);
             } else if (is_using_v_parameterization) {
                 LOG_INFO("running in v-prediction mode");
                 denoiser = std::make_shared<CompVisVDenoiser>();
@@ -2398,6 +2423,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "t5xxl_path: %s\n"
              "qwen2vl_path: %s\n"
              "qwen2vl_vision_path: %s\n"
+             "qwen3_path: %s\n"
              "diffusion_model_path: %s\n"
              "high_noise_diffusion_model_path: %s\n"
              "vae_path: %s\n"
@@ -2429,6 +2455,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->t5xxl_path),
              SAFE_STR(sd_ctx_params->qwen2vl_path),
              SAFE_STR(sd_ctx_params->qwen2vl_vision_path),
+             SAFE_STR(sd_ctx_params->qwen3_path),
              SAFE_STR(sd_ctx_params->diffusion_model_path),
              SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path),
              SAFE_STR(sd_ctx_params->vae_path),

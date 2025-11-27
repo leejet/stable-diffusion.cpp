@@ -72,6 +72,7 @@ struct SDParams {
     std::string t5xxl_path;
     std::string qwen2vl_path;
     std::string qwen2vl_vision_path;
+    std::string qwen3_path;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
     std::string vae_path;
@@ -176,6 +177,7 @@ void print_params(SDParams params) {
     printf("    t5xxl_path:                        %s\n", params.t5xxl_path.c_str());
     printf("    qwen2vl_path:                      %s\n", params.qwen2vl_path.c_str());
     printf("    qwen2vl_vision_path:               %s\n", params.qwen2vl_vision_path.c_str());
+    printf("    qwen3_path:                        %s\n", params.qwen3_path.c_str());
     printf("    diffusion_model_path:              %s\n", params.diffusion_model_path.c_str());
     printf("    high_noise_diffusion_model_path:   %s\n", params.high_noise_diffusion_model_path.c_str());
     printf("    vae_path:                          %s\n", params.vae_path.c_str());
@@ -540,6 +542,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "--qwen2vl_vision",
          "path to the qwen2vl vit",
          &params.qwen2vl_vision_path},
+        {"",
+         "--qwen3",
+         "path to the qwen3 text encoder (for Z-Image)",
+         &params.qwen3_path},
         {"",
          "--diffusion-model",
          "path to the standalone diffusion model",
@@ -1428,7 +1434,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
         parameter_string += " " + std::string(sd_scheduler_name(params.sample_params.scheduler));
     }
     parameter_string += ", ";
-    for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path, params.qwen2vl_path, params.qwen2vl_vision_path}) {
+    for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path, params.qwen2vl_path, params.qwen2vl_vision_path, params.qwen3_path}) {
         if (!te.empty()) {
             parameter_string += "TE: " + sd_basename(te) + ", ";
         }
@@ -1847,6 +1853,7 @@ int main(int argc, const char* argv[]) {
         params.t5xxl_path.c_str(),
         params.qwen2vl_path.c_str(),
         params.qwen2vl_vision_path.c_str(),
+        params.qwen3_path.c_str(),
         params.diffusion_model_path.c_str(),
         params.high_noise_diffusion_model_path.c_str(),
         params.vae_path.c_str(),
