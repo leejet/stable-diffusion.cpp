@@ -868,7 +868,7 @@ public:
                 if (shift == INFINITY) {
                     shift = 3.0;
                 }
-                denoiser = std::make_shared<FluxFlowDenoiser>(shift);
+                denoiser = std::make_shared<ZImageFlowDenoiser>(shift);
             } else if (is_using_v_parameterization) {
                 LOG_INFO("running in v-prediction mode");
                 denoiser = std::make_shared<CompVisVDenoiser>();

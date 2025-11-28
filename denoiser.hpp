@@ -627,6 +627,66 @@ struct FluxFlowDenoiser : public Denoiser {
     }
 };
 
+// Z-Image specific denoiser
+// Z-Image uses flow matching where the model predicts velocity
+// The diffusers pipeline explicitly negates the model output (line 1461: noise_pred = -noise_pred)
+struct ZImageFlowDenoiser : public Denoiser {
+    float sigmas[TIMESTEPS];
+    float shift = 3.0f;
+
+    ZImageFlowDenoiser(float shift = 3.0f) {
+        this->shift = shift;
+        // Initialize sigmas using the correct formula
+        for (int i = 0; i < TIMESTEPS; i++) {
+            sigmas[i] = t_to_sigma(i);
+        }
+    }
+
+    float sigma_min() override {
+        return sigmas[0];
+    }
+
+    float sigma_max() override {
+        return sigmas[TIMESTEPS - 1];
+    }
+
+    // Z-Image timestep: (1 - sigma) scaled by 1000 in embedder matches diffusers
+    float sigma_to_t(float sigma) override {
+        return 1.0f - sigma;
+    }
+
+    // Diffusers FlowMatchEulerDiscreteScheduler uses:
+    // shifted_sigma = shift * sigma / (1 + (shift - 1) * sigma)
+    // where sigma = t / num_train_timesteps
+    float t_to_sigma(float t) override {
+        float sigma_raw = (t + 1) / TIMESTEPS;  // +1 because t starts from 0
+        return shift * sigma_raw / (1.0f + (shift - 1.0f) * sigma_raw);
+    }
+
+    std::vector<float> get_scalings(float sigma) override {
+        float c_skip = 1.0f;
+        // Z-Image negates model output before scheduler step
+        // To get d = -v (matching diffusers' negation), we use c_out = +sigma:
+        // denoised = x + sigma*v, then d = (x - denoised)/sigma = -v
+        float c_out  = sigma;
+        float c_in   = 1.0f;
+        return {c_skip, c_out, c_in};
+    }
+
+    // Flow matching noise scaling: x_t = sigma * noise + (1 - sigma) * x_0
+    ggml_tensor* noise_scaling(float sigma, ggml_tensor* noise, ggml_tensor* latent) override {
+        ggml_ext_tensor_scale_inplace(noise, sigma);
+        ggml_ext_tensor_scale_inplace(latent, 1.0f - sigma);
+        ggml_ext_tensor_add_inplace(latent, noise);
+        return latent;
+    }
+
+    ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) override {
+        ggml_ext_tensor_scale_inplace(latent, 1.0f / (1.0f - sigma));
+        return latent;
+    }
+};
+
 typedef std::function<ggml_tensor*(ggml_tensor*, float, int)> denoise_cb_t;
 
 // k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
