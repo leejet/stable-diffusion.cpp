@@ -25,8 +25,8 @@ namespace ZImage {
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
 
-            // Z-Image uses t directly without scaling (unlike SD models that scale by 1000)
-            // t is already in [0, 1] range where t = 1 - sigma
+            // Z-Image uses normalized timesteps in [0, 1] range where t = 1 - sigma
+            // Unlike Flux which scales by 1000, Z-Image was trained with [0, 1] timesteps
             auto t_freq = ggml_ext_timestep_embedding(ctx->ggml_ctx, t, (int)frequency_embedding_size, 10000, 1.0f);
             auto t_emb  = mlp_0->forward(ctx, t_freq);
             t_emb       = ggml_silu_inplace(ctx->ggml_ctx, t_emb);
@@ -333,8 +333,9 @@ namespace ZImage {
             LOG_DEBUG("ZImage forward: after x_embedder x=[%lld, %lld, %lld]", x->ne[0], x->ne[1], x->ne[2]);
 
             LOG_DEBUG("ZImage forward: calling t_embedder");
-            // Timestep is passed as sigma (0=clean, 1=noise), scaled by 1000 inside t_embedder
-            auto c = t_embedder->forward(ctx, t);
+            // Scale timestep by t_scale before embedding (diffusers: t = t * self.t_scale)
+            auto t_scaled = ggml_scale(ctx->ggml_ctx, t, t_scale);
+            auto c = t_embedder->forward(ctx, t_scaled);
             LOG_DEBUG("ZImage forward: after t_embedder c=[%lld, %lld]", c->ne[0], c->ne[1]);
 
             LOG_DEBUG("ZImage forward: calling cap_norm");
