@@ -166,17 +166,28 @@ namespace Qwen3 {
             blocks["norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
         }
 
+        // For Z-Image, we need hidden_states[-2] (second-to-last layer output, before final norm)
+        // This matches the diffusers implementation which uses .hidden_states[-2]
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos) {
+                                    struct ggml_tensor* input_pos,
+                                    bool return_second_to_last = false) {
             auto embed_tokens = std::dynamic_pointer_cast<Embedding>(blocks["embed_tokens"]);
             auto norm         = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
 
             auto x = embed_tokens->forward(ctx, input_ids);
 
+            struct ggml_tensor* second_to_last = nullptr;
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<Qwen3Block>(blocks["layers." + std::to_string(i)]);
                 x          = block->forward(ctx, x, input_pos);
+                if (i == num_layers - 2) {
+                    second_to_last = x;  // Save output from second-to-last layer
+                }
+            }
+
+            if (return_second_to_last && second_to_last != nullptr) {
+                return second_to_last;  // Return without final norm
             }
 
             x = norm->forward(ctx, x);
@@ -216,9 +227,10 @@ namespace Qwen3 {
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos) {
+                                    struct ggml_tensor* input_pos,
+                                    bool return_second_to_last = false) {
             auto model = std::dynamic_pointer_cast<Qwen3TextModel>(blocks["model"]);
-            auto x     = model->forward(ctx, input_ids, input_pos);
+            auto x     = model->forward(ctx, input_ids, input_pos, return_second_to_last);
             return x;
         }
     };
@@ -227,6 +239,7 @@ namespace Qwen3 {
         Qwen3Params params;
         Qwen3 model;
         std::vector<int> input_pos_vec;
+        bool return_second_to_last = true;  // For Z-Image, return hidden_states[-2]
 
         Qwen3Runner(ggml_backend_t backend,
                     bool offload_params_to_cpu,
@@ -248,7 +261,7 @@ namespace Qwen3 {
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
                                     struct ggml_tensor* input_pos) {
-            auto hidden_states = model.forward(ctx, input_ids, input_pos);
+            auto hidden_states = model.forward(ctx, input_ids, input_pos, return_second_to_last);
             return hidden_states;
         }
 
