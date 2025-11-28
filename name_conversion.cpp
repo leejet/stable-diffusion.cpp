@@ -620,7 +620,7 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_unet_to_original_sdxl(name);
     } else if (sd_version_is_sd3(version)) {
         name = convert_diffusers_dit_to_original_sd3(name);
-    } else if (sd_version_is_flux(version)) {
+    } else if (sd_version_is_flux(version) || sd_version_is_flux2(version)) {
         name = convert_diffusers_dit_to_original_flux(name);
     }
     return name;
@@ -722,6 +722,11 @@ std::string convert_diffusers_vae_to_original_sd1(std::string name) {
 }
 
 std::string convert_first_stage_model_name(std::string name, std::string prefix) {
+    static std::unordered_map<std::string, std::string> vae_name_map = {
+        {"decoder.post_quant_conv.", "post_quant_conv."},
+        {"encoder.quant_conv.", "quant_conv."},
+    };
+    replace_with_prefix_map(name, vae_name_map);
     name = convert_diffusers_vae_to_original_sd1(name);
     return name;
 }

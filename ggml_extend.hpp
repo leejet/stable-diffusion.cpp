@@ -760,6 +760,21 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_ext_chunk(struct ggml_co
     return chunks;
 }
 
+__STATIC_INLINE__ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x) {
+    // x: [ne3, ne2, ne1, ne0]
+    // return: [ne3, ne2, ne1, ne0/2]
+
+    auto x_vec = ggml_ext_chunk(ctx, x, 2, 0);
+    auto x1    = x_vec[0];  // [ne3, ne2, ne1, ne0/2]
+    auto x2    = x_vec[1];  // [ne3, ne2, ne1, ne0/2]
+
+    x1 = ggml_gelu_inplace(ctx, x1);
+
+    x = ggml_mul(ctx, x1, x2);  // [ne3, ne2, ne1, ne0/2]
+
+    return x;
+}
+
 typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
 __STATIC_INLINE__ void sd_tiling_calc_tiles(int& num_tiles_dim,
