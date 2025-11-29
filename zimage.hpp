@@ -112,13 +112,15 @@ namespace ZImage {
             }
 
             if (pe != nullptr) {
+                float kv_scale = ctx->flash_attn_enabled ? (1.0f / 256.0f) : 1.0f;
                 // Z-Image uses interleaved RoPE format
-                x = Rope::attention(ctx, q, k, v, pe, attn_mask, 1.0f, true);
+                x = Rope::attention(ctx, q, k, v, pe, attn_mask, kv_scale, true);
             } else {
+                float kv_scale = ctx->flash_attn_enabled ? (1.0f / 256.0f) : 1.0f;
                 q = ggml_reshape_3d(ctx->ggml_ctx, q, dim, n_token, N);
                 k = ggml_reshape_3d(ctx->ggml_ctx, k, dim, n_token, N);
                 v = ggml_reshape_3d(ctx->ggml_ctx, v, dim, n_token, N);
-                x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attn_mask, false, false, ctx->flash_attn_enabled, 1.0f);
+                x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attn_mask, false, false, ctx->flash_attn_enabled, kv_scale);
             }
             x = out->forward(ctx, x);
             return x;
@@ -549,6 +551,8 @@ namespace ZImage {
         ZImageTransformer2DModel model;
 
         std::vector<float> unified_pe_vec;
+        std::vector<float> img_pe_vec;
+        std::vector<float> cap_pe_vec;
         std::vector<float> timestep_vec;
 
         ZImageRunner(ggml_backend_t backend,
@@ -652,7 +656,7 @@ namespace ZImage {
 
                 LOG_DEBUG("ZImage: generating img_ids with axis0_offset=%d...", img_axis0_offset);
                 auto img_ids = gen_zimage_img_ids(H, W, patch_size, B, img_axis0_offset);
-                auto img_pe_vec = Rope::embed_nd(img_ids, B, theta, axes_dims_int);
+                img_pe_vec   = Rope::embed_nd(img_ids, B, theta, axes_dims_int);
 
                 x_freqs_cis = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, emb_dim, x_seq_len);
                 set_backend_tensor_data(x_freqs_cis, img_pe_vec.data());
@@ -660,14 +664,14 @@ namespace ZImage {
                 LOG_DEBUG("ZImage: generating cap_pe with axis0_start=1...");
                 // Caption IDs use original (not padded) length, but axis_0 = 1, 2, 3, ...
                 auto cap_ids = gen_zimage_cap_ids(cap_seq_len, B, 1);
-                auto cap_pe_vec = Rope::embed_nd(cap_ids, B, theta, axes_dims_int);
+                cap_pe_vec   = Rope::embed_nd(cap_ids, B, theta, axes_dims_int);
                 cap_freqs_cis = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, emb_dim, cap_seq_len);
                 set_backend_tensor_data(cap_freqs_cis, cap_pe_vec.data());
 
                 LOG_DEBUG("ZImage: generating unified_pe (image first, then caption - DIFFUSERS order)...");
                 // DIFFUSERS order: image first, then caption
-                auto unified_ids = Rope::concat_ids(img_ids, cap_ids, B);
-                auto unified_pe_vec = Rope::embed_nd(unified_ids, B, theta, axes_dims_int);
+                auto unified_ids  = Rope::concat_ids(img_ids, cap_ids, B);
+                unified_pe_vec    = Rope::embed_nd(unified_ids, B, theta, axes_dims_int);
                 int64_t unified_seq_len = x_seq_len + cap_seq_len;  // image + caption
                 unified_freqs_cis = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, emb_dim, unified_seq_len);
                 set_backend_tensor_data(unified_freqs_cis, unified_pe_vec.data());
@@ -765,7 +769,8 @@ namespace ZImage {
             auto get_graph = [&]() -> struct ggml_cgraph* {
                 return build_graph_patchified(x_patchified, timestep, cap_feats, height, width, H_patches, W_patches);
             };
-            GGMLRunner::compute(get_graph, n_threads, true, &patchified_output, temp_ctx);
+            bool free_compute_buffer_immediately = !flash_attn_enabled;
+            GGMLRunner::compute(get_graph, n_threads, free_compute_buffer_immediately, &patchified_output, temp_ctx);
 
             // Copy patchified output to vector for unpatchify
             // Note: patchified_output is a CPU tensor - data is in patchified_output->data, not backend buffer
@@ -830,18 +835,18 @@ namespace ZImage {
             int64_t cap_padded_len = pad_cap_len(cap_seq_len);
             int img_axis0_offset = (int)(cap_padded_len + 1);
 
-            auto img_ids = gen_zimage_img_ids(H, W, patch_size, B, img_axis0_offset);
-            auto img_pe_vec = Rope::embed_nd(img_ids, B, theta, axes_dims_int);
-            x_freqs_cis = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, emb_dim, x_seq_len);
+            auto img_ids   = gen_zimage_img_ids(H, W, patch_size, B, img_axis0_offset);
+            img_pe_vec     = Rope::embed_nd(img_ids, B, theta, axes_dims_int);
+            x_freqs_cis    = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, emb_dim, x_seq_len);
             set_backend_tensor_data(x_freqs_cis, img_pe_vec.data());
 
-            auto cap_ids = gen_zimage_cap_ids(cap_seq_len, B, 1);
-            auto cap_pe_vec = Rope::embed_nd(cap_ids, B, theta, axes_dims_int);
-            cap_freqs_cis = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, emb_dim, cap_seq_len);
+            auto cap_ids   = gen_zimage_cap_ids(cap_seq_len, B, 1);
+            cap_pe_vec     = Rope::embed_nd(cap_ids, B, theta, axes_dims_int);
+            cap_freqs_cis  = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, emb_dim, cap_seq_len);
             set_backend_tensor_data(cap_freqs_cis, cap_pe_vec.data());
 
-            auto unified_ids = Rope::concat_ids(img_ids, cap_ids, B);
-            auto unified_pe_vec = Rope::embed_nd(unified_ids, B, theta, axes_dims_int);
+            auto unified_ids  = Rope::concat_ids(img_ids, cap_ids, B);
+            unified_pe_vec    = Rope::embed_nd(unified_ids, B, theta, axes_dims_int);
             int64_t unified_seq_len = x_seq_len + cap_seq_len;
             unified_freqs_cis = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, emb_dim, unified_seq_len);
             set_backend_tensor_data(unified_freqs_cis, unified_pe_vec.data());
@@ -859,6 +864,7 @@ namespace ZImage {
 
             // Keep output in patchified form - unpatchify will be done on CPU
             ggml_build_forward_expand(gf, out);
+
             return gf;
         }
     };

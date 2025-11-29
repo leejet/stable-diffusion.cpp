@@ -398,6 +398,7 @@ struct ZImageDiffusionModel : public DiffusionModel {
     }
 
     void set_flash_attn_enabled(bool enabled) {
+        zimage.set_flash_attention_enabled(enabled);
     }
 
     void compute(int n_threads,
