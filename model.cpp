@@ -105,8 +105,8 @@ const char* unused_tensors[] = {
     "denoiser.sigmas",
     "edm_vpred.sigma_max",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
-    "text_encoders.qwen2vl.output.weight",
-    "text_encoders.qwen2vl.lm_head.",
+    "text_encoders.llm.output.weight",
+    "text_encoders.llm.lm_head.",
     "first_stage_model.bn.",
 };
 

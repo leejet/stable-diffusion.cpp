@@ -1549,7 +1549,7 @@ namespace LLM {
             ggml_type model_data_type = GGML_TYPE_COUNT;
 
             ModelLoader model_loader;
-            if (!model_loader.init_from_file_and_convert_name(file_path, "text_encoders.qwen2vl.")) {
+            if (!model_loader.init_from_file_and_convert_name(file_path, "text_encoders.llm.")) {
                 LOG_ERROR("init model loader from file failed: '%s'", file_path.c_str());
                 return;
             }
@@ -1569,12 +1569,12 @@ namespace LLM {
                                                                              backend,
                                                                              true,
                                                                              tensor_storage_map,
-                                                                             "text_encoders.qwen2vl",
+                                                                             "text_encoders.llm",
                                                                              true);
 
             llm->alloc_params_buffer();
             std::map<std::string, ggml_tensor*> tensors;
-            llm->get_param_tensors(tensors, "text_encoders.qwen2vl");
+            llm->get_param_tensors(tensors, "text_encoders.llm");
 
             bool success = model_loader.load_tensors(tensors);
 

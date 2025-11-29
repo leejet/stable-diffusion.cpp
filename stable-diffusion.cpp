@@ -276,17 +276,17 @@ public:
             }
         }
 
-        if (strlen(SAFE_STR(sd_ctx_params->qwen2vl_path)) > 0) {
-            LOG_INFO("loading qwen2vl from '%s'", sd_ctx_params->qwen2vl_path);
-            if (!model_loader.init_from_file(sd_ctx_params->qwen2vl_path, "text_encoders.qwen2vl.")) {
-                LOG_WARN("loading qwen2vl from '%s' failed", sd_ctx_params->qwen2vl_path);
+        if (strlen(SAFE_STR(sd_ctx_params->llm_path)) > 0) {
+            LOG_INFO("loading llm from '%s'", sd_ctx_params->llm_path);
+            if (!model_loader.init_from_file(sd_ctx_params->llm_path, "text_encoders.llm.")) {
+                LOG_WARN("loading llm from '%s' failed", sd_ctx_params->llm_path);
             }
         }
 
-        if (strlen(SAFE_STR(sd_ctx_params->qwen2vl_vision_path)) > 0) {
-            LOG_INFO("loading qwen2vl vision from '%s'", sd_ctx_params->qwen2vl_vision_path);
-            if (!model_loader.init_from_file(sd_ctx_params->qwen2vl_vision_path, "text_encoders.qwen2vl.visual.")) {
-                LOG_WARN("loading qwen2vl vision from '%s' failed", sd_ctx_params->qwen2vl_vision_path);
+        if (strlen(SAFE_STR(sd_ctx_params->llm_vision_path)) > 0) {
+            LOG_INFO("loading llm vision from '%s'", sd_ctx_params->llm_vision_path);
+            if (!model_loader.init_from_file(sd_ctx_params->llm_vision_path, "text_encoders.llm.visual.")) {
+                LOG_WARN("loading llm vision from '%s' failed", sd_ctx_params->llm_vision_path);
             }
         }
 
@@ -307,7 +307,7 @@ public:
 
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
         for (auto& [name, tensor_storage] : tensor_storage_map) {
-            if (contains(name, "qwen2vl") &&
+            if (contains(name, "llm") &&
                 ends_with(name, "weight") &&
                 (tensor_storage.type == GGML_TYPE_F32 || tensor_storage.type == GGML_TYPE_BF16)) {
                 tensor_storage.expected_type = GGML_TYPE_F16;
@@ -684,7 +684,7 @@ public:
             ignore_tensors.insert("first_stage_model.encoder");
             ignore_tensors.insert("first_stage_model.conv1");
             ignore_tensors.insert("first_stage_model.quant");
-            ignore_tensors.insert("text_encoders.qwen2vl.visual.");
+            ignore_tensors.insert("text_encoders.llm.visual.");
         }
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
@@ -2465,8 +2465,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "clip_g_path: %s\n"
              "clip_vision_path: %s\n"
              "t5xxl_path: %s\n"
-             "qwen2vl_path: %s\n"
-             "qwen2vl_vision_path: %s\n"
+             "llm_path: %s\n"
+             "llm_vision_path: %s\n"
              "diffusion_model_path: %s\n"
              "high_noise_diffusion_model_path: %s\n"
              "vae_path: %s\n"
@@ -2496,8 +2496,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->clip_g_path),
              SAFE_STR(sd_ctx_params->clip_vision_path),
              SAFE_STR(sd_ctx_params->t5xxl_path),
-             SAFE_STR(sd_ctx_params->qwen2vl_path),
-             SAFE_STR(sd_ctx_params->qwen2vl_vision_path),
+             SAFE_STR(sd_ctx_params->llm_path),
+             SAFE_STR(sd_ctx_params->llm_vision_path),
              SAFE_STR(sd_ctx_params->diffusion_model_path),
              SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path),
              SAFE_STR(sd_ctx_params->vae_path),

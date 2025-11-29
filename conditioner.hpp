@@ -2,7 +2,7 @@
 #define __CONDITIONER_HPP__
 
 #include "clip.hpp"
-#include "qwenvl.hpp"
+#include "llm.hpp"
 #include "t5.hpp"
 
 struct SDCondition {
@@ -1648,12 +1648,12 @@ struct LLMEmbedder : public Conditioner {
                                                backend,
                                                offload_params_to_cpu,
                                                tensor_storage_map,
-                                               "text_encoders.qwen2vl",
+                                               "text_encoders.llm",
                                                enable_vision);
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
-        llm->get_param_tensors(tensors, "text_encoders.qwen2vl");
+        llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
     void alloc_params_buffer() override {
