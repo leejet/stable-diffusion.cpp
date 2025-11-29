@@ -45,6 +45,7 @@ const char* model_version_to_str[] = {
     "Wan 2.2 TI2V",
     "Qwen Image",
     "Flux.2",
+    "Z Image",
 };
 
 const char* sampling_methods_str[] = {
@@ -377,7 +378,7 @@ public:
         } else if (sd_version_is_sd3(version)) {
             scale_factor = 1.5305f;
             shift_factor = 0.0609f;
-        } else if (sd_version_is_flux(version)) {
+        } else if (sd_version_is_flux(version) || sd_version_is_z_image(version)) {
             scale_factor = 0.3611f;
             shift_factor = 0.1159f;
         } else if (sd_version_is_wan(version) ||
@@ -495,6 +496,16 @@ public:
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
                                                                    version);
+            } else if (sd_version_is_z_image(version)) {
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 version);
+                diffusion_model  = std::make_shared<ZImageModel>(backend,
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map,
+                                                                "model.diffusion_model",
+                                                                version);
             } else {  // SD1.x SD2.x SDXL
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
@@ -866,6 +877,13 @@ public:
                 float shift = sd_ctx_params->flow_shift;
                 if (shift == INFINITY) {
                     shift = 3.0;
+                }
+                denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
+            } else if (sd_version_is_z_image(version)) {
+                LOG_INFO("running in FLOW mode");
+                float shift = sd_ctx_params->flow_shift;
+                if (shift == INFINITY) {
+                    shift = 3.0f;
                 }
                 denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
             } else if (is_using_v_parameterization) {
@@ -1633,6 +1651,8 @@ public:
                 shifted_t             = std::max((int64_t)0, std::min((int64_t)(TIMESTEPS - 1), shifted_t));
                 LOG_DEBUG("shifting timestep from %.2f to %" PRId64 " (sigma: %.4f)", t, shifted_t, sigma);
                 timesteps_vec.assign(1, (float)shifted_t);
+            } else if (sd_version_is_z_image(version)) {
+                timesteps_vec.assign(1, 1000.f - t);
             } else {
                 timesteps_vec.assign(1, t);
             }

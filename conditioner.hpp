@@ -1638,6 +1638,8 @@ struct LLMEmbedder : public Conditioner {
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (sd_version_is_flux2(version)) {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
+        } else if (sd_version_is_z_image(version)) {
+            arch = LLM::LLMArch::QWEN3;
         }
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2) {
             tokenizer = std::make_shared<LLM::MistralTokenizer>();
@@ -1785,9 +1787,9 @@ struct LLMEmbedder : public Conditioner {
             prompt = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n";
             prompt += img_prompt;
 
-            prompt_attn_range.first = prompt.size();
+            prompt_attn_range.first = static_cast<int>(prompt.size());
             prompt += conditioner_params.text;
-            prompt_attn_range.second = prompt.size();
+            prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (sd_version_is_flux2(version)) {
@@ -1796,19 +1798,30 @@ struct LLMEmbedder : public Conditioner {
 
             prompt = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
 
-            prompt_attn_range.first = prompt.size();
+            prompt_attn_range.first = static_cast<int>(prompt.size());
             prompt += conditioner_params.text;
-            prompt_attn_range.second = prompt.size();
+            prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "[/INST]";
+        } else if (sd_version_is_z_image(version)) {
+            prompt_template_encode_start_idx = 0;
+            out_layers                       = {35};  // -2
+
+            prompt = "<|im_start|>user\n";
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else {
             prompt_template_encode_start_idx = 34;
 
             prompt = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
 
-            prompt_attn_range.first = prompt.size();
+            prompt_attn_range.first = static_cast<int>(prompt.size());
             prompt += conditioner_params.text;
-            prompt_attn_range.second = prompt.size();
+            prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         }
