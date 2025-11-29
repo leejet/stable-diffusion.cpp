@@ -166,7 +166,6 @@ namespace Qwen3 {
             blocks["norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
         }
 
-        // For Z-Image, we need hidden_states[-2] (second-to-last layer output, before final norm)
         // This matches the diffusers implementation which uses .hidden_states[-2]
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
