@@ -408,12 +408,6 @@ struct ZImageDiffusionModel : public DiffusionModel {
         int height = diffusion_params.x->ne[1] * 8;
         int width  = diffusion_params.x->ne[0] * 8;
 
-        // Z-Image timestep handling:
-        // FluxFlowDenoiser sigma_to_t returns sigma directly (pass-through)
-        // sigma is in [~0, ~1] range where 1=noise, 0=clean
-        // TODO: Diffusers expects (1-sigma) before scaling by 1000
-        // For now, passing sigma directly to diagnose other issues
-
         zimage.compute(n_threads,
                        diffusion_params.x,
                        diffusion_params.timesteps,
@@ -422,7 +416,6 @@ struct ZImageDiffusionModel : public DiffusionModel {
                        width,
                        output,
                        output_ctx);
-        // Note: Output negation is done inside zimage.hpp build_graph using ggml_neg
     }
 };
 

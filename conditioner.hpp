@@ -1893,24 +1893,19 @@ struct ZImageConditioner : public Conditioner {
                                       int n_threads,
                                       const ConditionerParams& conditioner_params) override {
         std::string prompt = apply_chat_template(conditioner_params.text);
-        LOG_DEBUG("ZImageConditioner prompt: %s", prompt.c_str());
         auto tokens_and_weights = tokenize(prompt, 0, false);
         auto& tokens            = std::get<0>(tokens_and_weights);
         auto& weights           = std::get<1>(tokens_and_weights);
-        LOG_DEBUG("ZImageConditioner token count: %zu", tokens.size());
 
         int64_t t0                        = ggml_time_ms();
         struct ggml_tensor* hidden_states = nullptr;
 
         auto input_ids = vector_to_ggml_tensor_i32(work_ctx, tokens);
-        LOG_DEBUG("ZImageConditioner input_ids shape: [%lld, %lld]", input_ids->ne[0], input_ids->ne[1]);
 
         qwen3->compute(n_threads,
                        input_ids,
                        &hidden_states,
                        work_ctx);
-        LOG_DEBUG("ZImageConditioner hidden_states shape: [%lld, %lld, %lld]",
-                  hidden_states->ne[0], hidden_states->ne[1], hidden_states->ne[2]);
         {
             auto tensor         = hidden_states;
             float original_mean = ggml_ext_tensor_mean(tensor);
@@ -1937,7 +1932,6 @@ struct ZImageConditioner : public Conditioner {
             output_seq_len = hidden_states->ne[1];
             skip_count = 0;
         }
-        LOG_DEBUG("ZImageConditioner output_seq_len: %lld, skip_count: %lld", output_seq_len, skip_count);
 
         ggml_tensor* new_hidden_states = ggml_new_tensor_3d(work_ctx,
                                                             GGML_TYPE_F32,
