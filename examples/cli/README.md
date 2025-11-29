@@ -101,7 +101,7 @@ Options:
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
                                            tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)
-  --prediction                             prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow]
+  --prediction                             prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, flux2_flow]
   --lora-apply-mode                        the way to apply LoRA, one of [auto, immediately, at_runtime], default is auto. In auto mode, if the model weights
                                            contain any quantized parameters, the at_runtime mode will be used; otherwise,
                                            immediately will be used.The immediately mode may have precision and

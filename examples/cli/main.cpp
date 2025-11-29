@@ -1193,7 +1193,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          on_sample_method_arg},
         {"",
          "--prediction",
-         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow]",
+         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, flux2_flow]",
          on_prediction_arg},
         {"",
          "--lora-apply-mode",

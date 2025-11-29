@@ -802,6 +802,11 @@ public:
                     denoiser = std::make_shared<FluxFlowDenoiser>(shift);
                     break;
                 }
+                case FLUX2_FLOW_PRED: {
+                    LOG_INFO("running in Flux2 FLOW mode");
+                    denoiser = std::make_shared<Flux2FlowDenoiser>();
+                    break;
+                }
                 default: {
                     LOG_ERROR("Unknown parametrization %i", sd_ctx_params->prediction);
                     return false;
@@ -834,7 +839,7 @@ public:
                     shift = 3.0;
                 }
                 denoiser = std::make_shared<DiscreteFlowDenoiser>(shift);
-            } else if (sd_version_is_flux(version) || sd_version_is_flux2(version)) {
+            } else if (sd_version_is_flux(version)) {
                 LOG_INFO("running in Flux FLOW mode");
                 float shift = sd_ctx_params->flow_shift;
                 if (shift == INFINITY) {
@@ -844,11 +849,11 @@ public:
                             shift = 1.15f;
                         }
                     }
-                    if (sd_version_is_flux2(version)) {
-                        shift = 2.05f;
-                    }
                 }
                 denoiser = std::make_shared<FluxFlowDenoiser>(shift);
+            } else if (sd_version_is_flux2(version)) {
+                LOG_INFO("running in Flux2 FLOW mode");
+                denoiser = std::make_shared<Flux2FlowDenoiser>();
             } else if (sd_version_is_wan(version)) {
                 LOG_INFO("running in FLOW mode");
                 float shift = sd_ctx_params->flow_shift;
@@ -1869,6 +1874,11 @@ public:
         return latent_channel;
     }
 
+    int get_image_seq_len(int h, int w) {
+        int vae_scale_factor = get_vae_scale_factor();
+        return (h / vae_scale_factor) * (w / vae_scale_factor);
+    }
+
     ggml_tensor* generate_init_latent(ggml_context* work_ctx,
                                       int width,
                                       int height,
@@ -2361,6 +2371,7 @@ const char* prediction_to_str[] = {
     "edm_v",
     "sd3_flow",
     "flux_flow",
+    "flux2_flow",
 };
 
 const char* sd_prediction_name(enum prediction_t prediction) {
@@ -3131,7 +3142,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
 
     int sample_steps          = sd_img_gen_params->sample_params.sample_steps;
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps, sd_img_gen_params->sample_params.scheduler, sd_ctx->sd->version);
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
+                                                                 sd_ctx->sd->get_image_seq_len(height, width),
+                                                                 sd_img_gen_params->sample_params.scheduler,
+                                                                 sd_ctx->sd->version);
 
     ggml_tensor* init_latent   = nullptr;
     ggml_tensor* concat_latent = nullptr;
@@ -3384,7 +3398,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     if (high_noise_sample_steps > 0) {
         total_steps += high_noise_sample_steps;
     }
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps, sd_vid_gen_params->sample_params.scheduler, sd_ctx->sd->version);
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps, 0, sd_vid_gen_params->sample_params.scheduler, sd_ctx->sd->version);
 
     if (high_noise_sample_steps < 0) {
         // timesteps ∝ sigmas for Flow models (like wan2.2 a14b)

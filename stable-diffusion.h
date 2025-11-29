@@ -71,6 +71,7 @@ enum prediction_t {
     EDM_V_PRED,
     SD3_FLOW_PRED,
     FLUX_FLOW_PRED,
+    FLUX2_FLOW_PRED,
     PREDICTION_COUNT
 };
 
