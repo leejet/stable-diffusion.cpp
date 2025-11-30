@@ -151,6 +151,7 @@ struct SDParams {
     preview_t preview_method = PREVIEW_NONE;
     int preview_interval     = 1;
     std::string preview_path = "preview.png";
+    float preview_fps        = 16;
     bool taesd_preview       = false;
     bool preview_noisy       = false;
 
@@ -1638,25 +1639,22 @@ bool load_images_from_dir(const std::string dir,
     return true;
 }
 
-std::string preview_path;
-float preview_fps;
-
-void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) {
+void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data) {
     (void)step;
     (void)is_noisy;
+    SDParams* params = (SDParams*)data;
     // is_noisy is set to true if the preview corresponds to noisy latents, false if it's denoised latents
     // unused in this app, it will either be always noisy or always denoised here
     if (frame_count == 1) {
-        stbi_write_png(preview_path.c_str(), image->width, image->height, image->channel, image->data, 0);
+        stbi_write_png(params->preview_path.c_str(), image->width, image->height, image->channel, image->data, 0);
     } else {
-        create_mjpg_avi_from_sd_images(preview_path.c_str(), image, frame_count, preview_fps);
+        create_mjpg_avi_from_sd_images(params->preview_path.c_str(), image, frame_count, params->preview_fps);
     }
 }
 
 int main(int argc, const char* argv[]) {
     SDParams params;
     parse_args(argc, argv, params);
-    preview_path = params.preview_path;
     if (params.video_frames > 4) {
         size_t last_dot_pos   = params.preview_path.find_last_of(".");
         std::string base_path = params.preview_path;
@@ -1667,12 +1665,12 @@ int main(int argc, const char* argv[]) {
             std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
         }
         if (file_ext == ".png") {
-            preview_path = base_path + ".avi";
+            params.preview_path = base_path + ".avi";
         }
     }
-    preview_fps = params.fps;
+    params.preview_fps = params.fps;
     if (params.preview_method == PREVIEW_PROJ)
-        preview_fps /= 4.0f;
+        params.preview_fps /= 4.0f;
 
     params.sample_params.guidance.slg.layers                 = params.skip_layers.data();
     params.sample_params.guidance.slg.layer_count            = params.skip_layers.size();
@@ -1680,7 +1678,7 @@ int main(int argc, const char* argv[]) {
     params.high_noise_sample_params.guidance.slg.layer_count = params.high_noise_skip_layers.size();
 
     sd_set_log_callback(sd_log_cb, (void*)&params);
-    sd_set_preview_callback((sd_preview_cb_t)step_callback, params.preview_method, params.preview_interval, !params.preview_noisy, params.preview_noisy);
+    sd_set_preview_callback(step_callback, params.preview_method, params.preview_interval, !params.preview_noisy, params.preview_noisy, (void*)&params);
 
     if (params.verbose) {
         print_params(params);
