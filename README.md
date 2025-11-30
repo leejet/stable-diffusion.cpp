@@ -15,7 +15,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
-* **2025/10/13** 🚀 stable-diffusion.cpp now supports **FLUX.2-dev**  
+* **2025/11/30** 🚀 stable-diffusion.cpp now supports **FLUX.2-dev**  
   👉 Details: [PR #1016](https://github.com/leejet/stable-diffusion.cpp/pull/1016)
 
 * **2025/10/13** 🚀 stable-diffusion.cpp now supports **Qwen-Image-Edit / Qwen-Image-Edit 2509**  
