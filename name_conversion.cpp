@@ -133,6 +133,8 @@ std::string convert_cond_stage_model_name(std::string name, std::string prefix) 
         {"attn_q.", "self_attn.q_proj."},
         {"attn_k.", "self_attn.k_proj."},
         {"attn_v.", "self_attn.v_proj."},
+        {"attn_q_norm.", "self_attn.q_norm."},
+        {"attn_k_norm.", "self_attn.k_norm."},
         {"attn_output.", "self_attn.o_proj."},
         {"attn_norm.", "input_layernorm."},
         {"ffn_down.", "mlp.down_proj."},
