@@ -1814,6 +1814,17 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
+        } else if (sd_version_is_flux2(version)) {
+            prompt_template_encode_start_idx = 0;
+            out_layers                       = {10, 20, 30};
+
+            prompt = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
+
+            prompt_attn_range.first = prompt.size();
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = prompt.size();
+
+            prompt += "[/INST]";
         } else {
             prompt_template_encode_start_idx = 34;
 
