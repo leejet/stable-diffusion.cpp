@@ -17,6 +17,7 @@
 #include "stable-diffusion.h"
 #include "util.h"
 #include "vocab.hpp"
+#include "vocab_mistral.hpp"
 #include "vocab_qwen.hpp"
 #include "vocab_umt5.hpp"
 
@@ -104,8 +105,9 @@ const char* unused_tensors[] = {
     "denoiser.sigmas",
     "edm_vpred.sigma_max",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
-    "text_encoders.qwen2vl.output.weight",
-    "text_encoders.qwen2vl.lm_head.",
+    "text_encoders.llm.output.weight",
+    "text_encoders.llm.lm_head.",
+    "first_stage_model.bn.",
 };
 
 bool is_unused_tensor(std::string name) {
@@ -1062,6 +1064,9 @@ SDVersion ModelLoader::get_sd_version() {
             if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
                 return VERSION_QWEN_IMAGE;
             }
+            if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
+                return VERSION_FLUX2;
+            }
             if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
                 is_wan = true;
             }
@@ -1318,6 +1323,16 @@ std::string ModelLoader::load_merges() {
 std::string ModelLoader::load_qwen2_merges() {
     std::string merges_utf8_str(reinterpret_cast<const char*>(qwen2_merges_utf8_c_str), sizeof(qwen2_merges_utf8_c_str));
     return merges_utf8_str;
+}
+
+std::string ModelLoader::load_mistral_merges() {
+    std::string merges_utf8_str(reinterpret_cast<const char*>(mistral_merges_utf8_c_str), sizeof(mistral_merges_utf8_c_str));
+    return merges_utf8_str;
+}
+
+std::string ModelLoader::load_mistral_vocab_json() {
+    std::string json_str(reinterpret_cast<const char*>(mistral_vocab_json_utf8_c_str), sizeof(mistral_vocab_json_utf8_c_str));
+    return json_str;
 }
 
 std::string ModelLoader::load_t5_tokenizer_json() {

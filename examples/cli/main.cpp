@@ -70,8 +70,8 @@ struct SDParams {
     std::string clip_g_path;
     std::string clip_vision_path;
     std::string t5xxl_path;
-    std::string qwen2vl_path;
-    std::string qwen2vl_vision_path;
+    std::string llm_path;
+    std::string llm_vision_path;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
     std::string vae_path;
@@ -174,8 +174,8 @@ void print_params(SDParams params) {
     printf("    clip_g_path:                       %s\n", params.clip_g_path.c_str());
     printf("    clip_vision_path:                  %s\n", params.clip_vision_path.c_str());
     printf("    t5xxl_path:                        %s\n", params.t5xxl_path.c_str());
-    printf("    qwen2vl_path:                      %s\n", params.qwen2vl_path.c_str());
-    printf("    qwen2vl_vision_path:               %s\n", params.qwen2vl_vision_path.c_str());
+    printf("    llm_path:                          %s\n", params.llm_path.c_str());
+    printf("    llm_vision_path:                   %s\n", params.llm_vision_path.c_str());
     printf("    diffusion_model_path:              %s\n", params.diffusion_model_path.c_str());
     printf("    high_noise_diffusion_model_path:   %s\n", params.high_noise_diffusion_model_path.c_str());
     printf("    vae_path:                          %s\n", params.vae_path.c_str());
@@ -533,13 +533,21 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          "path to the t5xxl text encoder",
          &params.t5xxl_path},
         {"",
+         "--llm",
+         "path to the llm text encoder. For example: (qwenvl2.5 for qwen-image, mistral-small3.2 for flux2, ...)",
+         &params.llm_path},
+        {"",
+         "--llm_vision",
+         "path to the llm vit",
+         &params.llm_vision_path},
+        {"",
          "--qwen2vl",
-         "path to the qwen2vl text encoder",
-         &params.qwen2vl_path},
+         "alias of --llm. Deprecated.",
+         &params.llm_path},
         {"",
          "--qwen2vl_vision",
-         "path to the qwen2vl vit",
-         &params.qwen2vl_vision_path},
+         "alias of --llm_vision. Deprecated.",
+         &params.llm_vision_path},
         {"",
          "--diffusion-model",
          "path to the standalone diffusion model",
@@ -1185,7 +1193,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          on_sample_method_arg},
         {"",
          "--prediction",
-         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow]",
+         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, flux2_flow]",
          on_prediction_arg},
         {"",
          "--lora-apply-mode",
@@ -1230,7 +1238,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
          on_relative_tile_size_arg},
         {"",
          "--preview",
-         std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[PREVIEW_NONE] + ")\n",
+         std::string("preview method. must be one of the following [") + previews_str[0] + ", " + previews_str[1] + ", " + previews_str[2] + ", " + previews_str[3] + "] (default is " + previews_str[PREVIEW_NONE] + ")",
          on_preview_arg},
         {"",
          "--easycache",
@@ -1428,7 +1436,7 @@ std::string get_image_params(SDParams params, int64_t seed) {
         parameter_string += " " + std::string(sd_scheduler_name(params.sample_params.scheduler));
     }
     parameter_string += ", ";
-    for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path, params.qwen2vl_path, params.qwen2vl_vision_path}) {
+    for (const auto& te : {params.clip_l_path, params.clip_g_path, params.t5xxl_path, params.llm_path, params.llm_vision_path}) {
         if (!te.empty()) {
             parameter_string += "TE: " + sd_basename(te) + ", ";
         }
@@ -1845,8 +1853,8 @@ int main(int argc, const char* argv[]) {
         params.clip_g_path.c_str(),
         params.clip_vision_path.c_str(),
         params.t5xxl_path.c_str(),
-        params.qwen2vl_path.c_str(),
-        params.qwen2vl_vision_path.c_str(),
+        params.llm_path.c_str(),
+        params.llm_vision_path.c_str(),
         params.diffusion_model_path.c_str(),
         params.high_noise_diffusion_model_path.c_str(),
         params.vae_path.c_str(),

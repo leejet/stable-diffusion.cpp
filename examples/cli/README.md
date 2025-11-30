@@ -9,8 +9,10 @@ Options:
   --clip_g <string>                        path to the clip-g text encoder
   --clip_vision <string>                   path to the clip-vision encoder
   --t5xxl <string>                         path to the t5xxl text encoder
-  --qwen2vl <string>                       path to the qwen2vl text encoder
-  --qwen2vl_vision <string>                path to the qwen2vl vit
+  --llm <string>                           path to the llm text encoder. For example: (qwenvl2.5 for qwen-image, mistral-small3.2 for flux2, ...)
+  --llm_vision <string>                    path to the llm vit
+  --qwen2vl <string>                       alias of --llm. Deprecated.
+  --qwen2vl_vision <string>                alias of --llm_vision. Deprecated.
   --diffusion-model <string>               path to the standalone diffusion model
   --high-noise-diffusion-model <string>    path to the standalone high noise diffusion model
   --vae <string>                           path to standalone vae model
@@ -33,7 +35,6 @@ Options:
   -p, --prompt <string>                    the prompt to render
   -n, --negative-prompt <string>           the negative prompt (default: "")
   --preview-path <string>                  path to write preview image to (default: ./preview.png)
-  --easycache <string>                     enable EasyCache for DiT models, accepts optional "threshold,start_percent,end_percent" values (defaults to 0.2,0.15,0.95)
   --upscale-model <string>                 path to esrgan model.
   -t, --threads <int>                      number of threads to use during computation (default: -1). If threads <= 0, then threads will be set to the number of
                                            CPU physical cores
@@ -100,20 +101,18 @@ Options:
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
                                            tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)
-  --prediction                             prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow]
+  --prediction                             prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, flux2_flow]
   --lora-apply-mode                        the way to apply LoRA, one of [auto, immediately, at_runtime], default is auto. In auto mode, if the model weights
                                            contain any quantized parameters, the at_runtime mode will be used; otherwise,
                                            immediately will be used.The immediately mode may have precision and
                                            compatibility issues with quantized parameters, but it usually offers faster inference
-                                           speed and, in some cases, lower memory usage. The at_runtime mode, on the other
-                                           hand, is exactly the opposite.
+                                           speed and, in some cases, lower memory usage. The at_runtime mode, on the
+                                           other hand, is exactly the opposite.
   --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm],
                                            default: discrete
   --skip-layers                            layers to skip for SLG steps (default: [7,8,9])
   --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm,
                                            ddim_trailing, tcd] default: euler for Flux/SD3/Wan, euler_a otherwise
-  --high-noise-scheduler                   (high noise) denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform,
-                                           simple], default: discrete
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)
   -h, --help                               show this help message and exit
@@ -121,4 +120,5 @@ Options:
   --vae-relative-tile-size                 relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1
                                            (overrides --vae-tile-size)
   --preview                                preview method. must be one of the following [none, proj, tae, vae] (default is none)
+  --easycache                              enable EasyCache for DiT models with optional "threshold,start_percent,end_percent" (default: 0.2,0.15,0.95)
 ```

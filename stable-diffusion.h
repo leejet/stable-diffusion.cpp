@@ -71,6 +71,7 @@ enum prediction_t {
     EDM_V_PRED,
     SD3_FLOW_PRED,
     FLUX_FLOW_PRED,
+    FLUX2_FLOW_PRED,
     PREDICTION_COUNT
 };
 
@@ -156,8 +157,8 @@ typedef struct {
     const char* clip_g_path;
     const char* clip_vision_path;
     const char* t5xxl_path;
-    const char* qwen2vl_path;
-    const char* qwen2vl_vision_path;
+    const char* llm_path;
+    const char* llm_vision_path;
     const char* diffusion_model_path;
     const char* high_noise_diffusion_model_path;
     const char* vae_path;
