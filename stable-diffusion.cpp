@@ -991,6 +991,9 @@ public:
             int64_t t0 = ggml_time_ms();
 
             auto lora = load_lora_model_from_file(kv.first, kv.second, backend);
+            if (!lora || lora->lora_tensors.empty()) {
+                continue;
+            }
             lora->apply(tensors, version, n_threads);
             lora->free_params_buffer();
 
