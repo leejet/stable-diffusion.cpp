@@ -15,6 +15,9 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2025/12/01** 🚀 stable-diffusion.cpp now supports **Z-Image**  
+  👉 Details: [PR #1020](https://github.com/leejet/stable-diffusion.cpp/pull/1020)
+
 * **2025/11/30** 🚀 stable-diffusion.cpp now supports **FLUX.2-dev**  
   👉 Details: [PR #1016](https://github.com/leejet/stable-diffusion.cpp/pull/1016)
 
