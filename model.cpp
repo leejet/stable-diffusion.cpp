@@ -265,8 +265,8 @@ void convert_tensor(void* src,
         } else {
             auto qtype = ggml_get_type_traits(src_type);
             if (qtype->to_float == nullptr) {
-                throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
-                                                ggml_type_name(src_type)));
+                throw std::runtime_error(sd_format("type %s unsupported for integer quantization: no dequantization available",
+                                                   ggml_type_name(src_type)));
             }
             qtype->to_float(src, (float*)dst, n);
         }
@@ -275,8 +275,8 @@ void convert_tensor(void* src,
         // src_type is quantized => dst_type == GGML_TYPE_F16 or dst_type is quantized
         auto qtype = ggml_get_type_traits(src_type);
         if (qtype->to_float == nullptr) {
-            throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
-                                            ggml_type_name(src_type)));
+            throw std::runtime_error(sd_format("type %s unsupported for integer quantization: no dequantization available",
+                                               ggml_type_name(src_type)));
         }
         std::vector<char> buf;
         buf.resize(sizeof(float) * n);
@@ -1355,7 +1355,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     std::atomic<int64_t> copy_to_backend_time_ms(0);
     std::atomic<int64_t> convert_time_ms(0);
 
-    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : get_num_physical_cores();
+    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : sd_get_num_physical_cores();
     LOG_DEBUG("using %d threads for model loading", num_threads_to_use);
 
     int64_t start_time = ggml_time_ms();
