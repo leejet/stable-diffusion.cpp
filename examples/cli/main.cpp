@@ -1652,14 +1652,8 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
     }
 }
 
-#include "z_image.hpp"
-
 int main(int argc, const char* argv[]) {
     SDParams params;
-    // params.verbose = true;
-    // sd_set_log_callback(sd_log_cb, (void*)&params);
-    // ZImage::ZImageRunner::load_from_file_and_test(argv[1]);
-    // return 1;
     parse_args(argc, argv, params);
     if (params.video_frames > 4) {
         size_t last_dot_pos   = params.preview_path.find_last_of(".");
