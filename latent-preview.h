@@ -91,7 +91,7 @@ const float flux_latent_rgb_proj[16][3] = {
     {-0.111849f, -0.055589f, -0.032361f}};
 float flux_latent_rgb_bias[3] = {0.024600f, -0.006937f, -0.008089f};
 
-const float flux_2_latent_rgb_proj[32][3] = {
+const float flux2_latent_rgb_proj[32][3] = {
     {0.000736f, -0.008385f, -0.019710f},
     {-0.001352f, -0.016392f, 0.020693f},
     {-0.006376f, 0.002428f, 0.036736f},
@@ -124,7 +124,7 @@ const float flux_2_latent_rgb_proj[32][3] = {
     {-0.034560f, -0.008740f, 0.012996f},
     {0.000166f, 0.001079f, -0.012153f},
     {0.017772f, 0.000937f, -0.011953f}};
-float flux_2_latent_rgb_bias[3] = {-0.028738f, -0.098463f, -0.107619f};
+float flux2_latent_rgb_bias[3] = {-0.028738f, -0.098463f, -0.107619f};
 
 // This one was taken straight from
 // https://github.com/Stability-AI/sd3.5/blob/8565799a3b41eb0c7ba976d18375f0f753f56402/sd3_impls.py#L288-L303
