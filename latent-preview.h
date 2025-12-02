@@ -163,143 +163,43 @@ const float sd_latent_rgb_proj[4][3] = {
     {-0.178022f, -0.200862f, -0.678514f}};
 float sd_latent_rgb_bias[3] = {-0.017478f, -0.055834f, -0.105825f};
 
-void unpatchify_latents(ggml_tensor* latents, int patch_size, char* dst_buf) {
-    const int64_t N    = latents->ne[3];
-    const int64_t C_in = latents->ne[2];
-    const int64_t H_in = latents->ne[1];
-    const int64_t W_in = latents->ne[0];
 
-    const int64_t C_out = C_in / (patch_size * patch_size);
-    const int64_t H_out = H_in * patch_size;
-    const int64_t W_out = W_in * patch_size;
-
-    const char* src_ptr = (char*)latents->data;
-    size_t elem_size    = latents->nb[0];
-
-    bool alloc_dst_buf  = dst_buf == nullptr;
-    size_t dst_buf_size = latents->nb[3];
-    if (alloc_dst_buf) {
-        dst_buf = (char*)malloc(dst_buf_size);
-    }
-
-    size_t dst_stride_w = elem_size;
-    size_t dst_stride_h = dst_stride_w * W_out;
-    size_t dst_stride_c = dst_stride_h * H_out;
-    size_t dst_stride_n = dst_stride_c * C_out;
-
-    size_t dst_step_w = dst_stride_w * patch_size;
-    size_t dst_step_h = dst_stride_h * patch_size;
-
-    for (int64_t n = 0; n < N; ++n) {
-        for (int64_t c = 0; c < C_in; ++c) {
-            int64_t c_out = c / (patch_size * patch_size);
-            int64_t rem   = c % (patch_size * patch_size);
-            int64_t py    = rem / patch_size;
-            int64_t px    = rem % patch_size;
-
-            char* dst_layer = dst_buf + n * dst_stride_n + c_out * dst_stride_c + py * dst_stride_h + px * dst_stride_w;
-
-            for (int64_t y = 0; y < H_in; ++y) {
-                char* dst_row = dst_layer + y * dst_step_h;
-
-                for (int64_t x = 0; x < W_in; ++x) {
-                    memcpy(dst_row + x * dst_step_w, src_ptr, elem_size);
-                    src_ptr += elem_size;
-                }
-            }
-        }
-    }
-
-    memcpy(latents->data, dst_buf, dst_buf_size);
-
-    latents->ne[0] = W_out;
-    latents->ne[1] = H_out;
-    latents->ne[2] = C_out;
-
-    latents->nb[0] = dst_stride_w;
-    latents->nb[1] = dst_stride_h;
-    latents->nb[2] = dst_stride_c;
-    latents->nb[3] = dst_stride_n;
-    if (alloc_dst_buf) {
-        free(dst_buf);
-    }
-}
-
-void repatchify_latents(ggml_tensor* latents, int patch_size, char* dst_buf) {
-    const int64_t N     = latents->ne[3];
-    const int64_t C_in  = latents->ne[2];
-    const int64_t H_in  = latents->ne[1];
-    const int64_t W_in  = latents->ne[0];
-    
-    const int64_t C_out = C_in * patch_size * patch_size;
-    const int64_t H_out = H_in / patch_size;
-    const int64_t W_out = W_in / patch_size;
-
-    const char* src_base   = (char*)latents->data;
-    const size_t elem_size = latents->nb[0];
-
-    const size_t src_stride_w = latents->nb[0];
-    const size_t src_stride_h = latents->nb[1];
-    const size_t src_stride_c = latents->nb[2];
-    const size_t src_stride_n = latents->nb[3];
-
-    bool alloc_dst_buf  = dst_buf == nullptr;
-    size_t dst_buf_size = src_stride_n;
-    if (alloc_dst_buf) {
-        dst_buf = (char*)malloc(dst_buf_size);
-    }
-
-    char* dst_ptr = dst_buf;
-
-    const size_t src_step_h = src_stride_h * patch_size;
-    const size_t src_step_w = src_stride_w * patch_size;
-
-    for (int64_t n = 0; n < N; ++n) {
-        for (int64_t c = 0; c < C_out; ++c) {
-            int64_t c_rem = c % (patch_size * patch_size);
-            int64_t c_in  = c / (patch_size * patch_size);
-            int64_t py    = c_rem / patch_size;
-            int64_t px    = c_rem % patch_size;
-
-            const char* src_layer = src_base + n * src_stride_n + c_in * src_stride_c + py * src_stride_h + px * src_stride_w;
-
-            for (int64_t y = 0; y < H_out; ++y) {
-                const char* src_row = src_layer + y * src_step_h;
-
-                for (int64_t x = 0; x < W_out; ++x) {
-                    memcpy(dst_ptr, src_row + x * src_step_w, elem_size);
-                    dst_ptr += elem_size;
-                }
-            }
-        }
-    }
-
-    memcpy(latents->data, dst_buf, dst_buf_size);
-
-    latents->ne[0] = W_out;
-    latents->ne[1] = H_out;
-    latents->ne[2] = C_out;
-
-    latents->nb[0] = elem_size;
-    latents->nb[1] = latents->nb[0] * W_out;
-    latents->nb[2] = latents->nb[1] * H_out;
-    latents->nb[3] = latents->nb[2] * C_out;
-
-    if (alloc_dst_buf) {
-        free(dst_buf);
-    }
-}
-
-void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int width, int height, int frames, int dim) {
+void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size) {
     size_t buffer_head = 0;
+
+    uint32_t latent_width  = latents->ne[0];
+    uint32_t latent_height = latents->ne[1];
+    uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
+    uint32_t frames        = 1;
+    if (ggml_n_dims(latents) == 4) {
+        frames = latents->ne[2];
+    }
+
+    uint32_t rgb_width  = latent_width * patch_size;
+    uint32_t rgb_height = latent_height * patch_size;
+
+    uint32_t unpatched_dim = dim / (patch_size * patch_size);
+
     for (int k = 0; k < frames; k++) {
-        for (int j = 0; j < height; j++) {
-            for (int i = 0; i < width; i++) {
-                size_t latent_id = (i * latents->nb[0] + j * latents->nb[1] + k * latents->nb[2]);
+        for (int rgb_x = 0; rgb_x < rgb_width; rgb_x++) {
+            for (int rgb_y = 0; rgb_y < rgb_height; rgb_y++) {
+                int latent_x = rgb_x / patch_size;
+                int latent_y = rgb_y / patch_size;
+
+                int channel_offset = 0;
+                if (patch_size > 1) {
+                    channel_offset = ((rgb_y % patch_size) * patch_size + (rgb_x % patch_size));
+                }
+
+                size_t latent_id = (latent_x * latents->nb[0] + latent_y * latents->nb[1] + k * latents->nb[2]);
+
+                // should be incremented by 1 for each pixel
+                size_t pixel_id = k * rgb_width * rgb_height + rgb_y * rgb_width + rgb_x;
+
                 float r = 0, g = 0, b = 0;
                 if (latent_rgb_proj != nullptr) {
-                    for (int d = 0; d < dim; d++) {
-                        float value = *(float*)((char*)latents->data + latent_id + d * latents->nb[ggml_n_dims(latents) - 1]);
+                    for (int d = 0; d < unpatched_dim; d++) {
+                        float value = *(float*)((char*)latents->data + latent_id + (d * patch_size * patch_size + channel_offset) * latents->nb[ggml_n_dims(latents) - 1]);
                         r += value * latent_rgb_proj[d][0];
                         g += value * latent_rgb_proj[d][1];
                         b += value * latent_rgb_proj[d][2];
@@ -326,9 +226,9 @@ void preview_latent_video(uint8_t* buffer, struct ggml_tensor* latents, const fl
                 g = g >= 0 ? g <= 1 ? g : 1 : 0;
                 b = b >= 0 ? b <= 1 ? b : 1 : 0;
 
-                buffer[buffer_head++] = (uint8_t)(r * 255);
-                buffer[buffer_head++] = (uint8_t)(g * 255);
-                buffer[buffer_head++] = (uint8_t)(b * 255);
+                buffer[pixel_id * 3 + 0] = (uint8_t)(r * 255);
+                buffer[pixel_id * 3 + 1] = (uint8_t)(g * 255);
+                buffer[pixel_id * 3 + 2] = (uint8_t)(b * 255);
             }
         }
     }
