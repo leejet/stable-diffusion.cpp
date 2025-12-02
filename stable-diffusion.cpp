@@ -1337,8 +1337,72 @@ public:
         uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
 
         if (preview_mode == PREVIEW_PROJ) {
-            const float(*latent_rgb_proj)[channel] = nullptr;
-            float* latent_rgb_bias                 = nullptr;
+            int64_t patch_sz = 1;
+            if (sd_version_is_flux2(version)) {
+                patch_sz = 2;
+            }
+            if (patch_sz != 1) {
+                // unshuffle latents
+                const int64_t N    = latents->ne[3];
+                const int64_t C_in = latents->ne[2];
+                const int64_t H_in = latents->ne[1];
+                const int64_t W_in = latents->ne[0];
+
+                const int64_t C_out = C_in / (patch_sz * patch_sz);
+                const int64_t H_out = H_in * patch_sz;
+                const int64_t W_out = W_in * patch_sz;
+
+                const char* src_ptr = (char*)latents->data;
+                size_t elem_size    = latents->nb[0];
+
+                std::vector<char> dst_buffer(N * C_out * H_out * W_out * elem_size);
+                char* dst_base = dst_buffer.data();
+
+                size_t dst_stride_w = elem_size;
+                size_t dst_stride_h = dst_stride_w * W_out;
+                size_t dst_stride_c = dst_stride_h * H_out;
+                size_t dst_stride_n = dst_stride_c * C_out;
+
+                size_t dst_step_w = dst_stride_w * patch_sz;
+                size_t dst_step_h = dst_stride_h * patch_sz;
+
+                for (int64_t n = 0; n < N; ++n) {
+                    for (int64_t c = 0; c < C_in; ++c) {
+                        int64_t c_out = c / (patch_sz * patch_sz);
+                        int64_t rem   = c % (patch_sz * patch_sz);
+                        int64_t py    = rem / patch_sz;
+                        int64_t px    = rem % patch_sz;
+
+                        char* dst_layer = dst_base + n * dst_stride_n + c_out * dst_stride_c + py * dst_stride_h + px * dst_stride_w;
+
+                        for (int64_t y = 0; y < H_in; ++y) {
+                            char* dst_row = dst_layer + y * dst_step_h;
+
+                            for (int64_t x = 0; x < W_in; ++x) {
+                                memcpy(dst_row + x * dst_step_w, src_ptr, elem_size);
+                                src_ptr += elem_size;
+                            }
+                        }
+                    }
+                }
+
+                memcpy(latents->data, dst_buffer.data(), dst_buffer.size());
+
+                latents->ne[0] = W_out;
+                latents->ne[1] = H_out;
+                latents->ne[2] = C_out;
+
+                latents->nb[0] = dst_stride_w;
+                latents->nb[1] = dst_stride_h;
+                latents->nb[2] = dst_stride_c;
+                latents->nb[3] = dst_stride_n;
+
+                width  = W_out;
+                height = H_out;
+                dim    = C_out;
+            }
+            const float (*latent_rgb_proj)[channel] = nullptr;
+            float* latent_rgb_bias                  = nullptr;
 
             if (dim == 48) {
                 if (sd_version_is_wan(version)) {
@@ -1408,6 +1472,63 @@ public:
             step_callback(step, frames, images, is_noisy, step_callback_data);
             free(data);
             free(images);
+
+            if (patch_sz != 1) {
+                // restore shuffled latents
+                const int64_t N        = latents->ne[3];
+                const int64_t C_in     = latents->ne[2];
+                const int64_t H_in     = latents->ne[1];
+                const int64_t W_in     = latents->ne[0];
+
+                const int64_t C_out = C_in * patch_sz * patch_sz;
+                const int64_t H_out   = H_in / patch_sz;
+                const int64_t W_out   = W_in / patch_sz;
+
+                const char* src_base   = (char*)latents->data;
+                const size_t elem_size = latents->nb[0];
+
+                const size_t src_stride_w = latents->nb[0];
+                const size_t src_stride_h = latents->nb[1];
+                const size_t src_stride_c = latents->nb[2];
+                const size_t src_stride_n = latents->nb[3];
+
+                std::vector<char> dst_buffer(N * C_out * H_out * W_out * elem_size);
+                char* dst_ptr = dst_buffer.data();
+
+                const size_t src_step_h = src_stride_h * patch_sz;
+                const size_t src_step_w = src_stride_w * patch_sz;
+
+                for (int64_t n = 0; n < N; ++n) {
+                    for (int64_t c = 0; c < C_out; ++c) {
+                        int64_t c_rem = c % (patch_sz * patch_sz);
+                        int64_t c_in  = c / (patch_sz * patch_sz);
+                        int64_t py    = c_rem / patch_sz;
+                        int64_t px    = c_rem % patch_sz;
+
+                        const char* src_layer = src_base + n * src_stride_n + c_in * src_stride_c + py * src_stride_h + px * src_stride_w;
+
+                        for (int64_t y = 0; y < H_out; ++y) {
+                            const char* src_row = src_layer + y * src_step_h;
+
+                            for (int64_t x = 0; x < W_out; ++x) {
+                                memcpy(dst_ptr, src_row + x * src_step_w, elem_size);
+                                dst_ptr += elem_size;
+                            }
+                        }
+                    }
+                }
+
+                memcpy(latents->data, dst_buffer.data(), dst_buffer.size());
+
+                latents->ne[0] = W_out;
+                latents->ne[1] = H_out;
+                latents->ne[2] = C_out;
+
+                latents->nb[0] = elem_size;
+                latents->nb[1] = latents->nb[0] * W_out;
+                latents->nb[2] = latents->nb[1] * H_out;
+                latents->nb[3] = latents->nb[2] * C_out;
+            }
         } else {
             if (preview_mode == PREVIEW_VAE) {
                 process_latent_out(latents);
