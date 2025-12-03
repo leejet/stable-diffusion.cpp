@@ -44,6 +44,18 @@ cmake .. -DSD_CUDA=ON
 cmake --build . --config Release
 ```
 
+### CUDA Architectures
+
+Different NVIDIA GPUs have different CUDA architecture: [CUDA GPU Compute Capability](https://developer.nvidia.com/cuda-gpus)
+
+Example, for _GeForce RTX 4070_, use `-DCMAKE_CUDA_ARCHITECTURES=89` additional flag:
+
+```shell
+mkdir build && cd build
+cmake .. -DSD_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
+cmake --build . --config Release
+```
+
 ## Build with HipBLAS
 
 This provides GPU acceleration using AMD GPU. Make sure to have the ROCm toolkit installed.
