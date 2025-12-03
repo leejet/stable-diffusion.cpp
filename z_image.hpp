@@ -30,7 +30,7 @@ namespace ZImage {
         JointAttention(int64_t hidden_size, int64_t head_dim, int64_t num_heads, int64_t num_kv_heads, bool qk_norm)
             : head_dim(head_dim), num_heads(num_heads), num_kv_heads(num_kv_heads), qk_norm(qk_norm) {
             blocks["qkv"] = std::make_shared<Linear>(hidden_size, (num_heads + num_kv_heads * 2) * head_dim, false);
-            float scale = 1.f;
+            float scale   = 1.f;
 #if GGML_USE_HIP
             // Prevent NaN issues with certain ROCm setups
             scale = 1.f / 16.f;
