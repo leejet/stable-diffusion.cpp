@@ -48,11 +48,11 @@ cmake --build . --config Release
 
 Different NVIDIA GPUs have different CUDA architecture: [CUDA GPU Compute Capability](https://developer.nvidia.com/cuda-gpus)
 
-Example, for _GeForce RTX 4070_, use `-DCMAKE_CUDA_ARCHITECTURES=89` additional flag:
+To build for multiple GPU architectures (matching the GitHub CI releases), use `-DCMAKE_CUDA_ARCHITECTURES=90;89;86;80;75`:
 
 ```shell
 mkdir build && cd build
-cmake .. -DSD_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
+cmake .. -DSD_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=90;89;86;80;75
 cmake --build . --config Release
 ```
 
