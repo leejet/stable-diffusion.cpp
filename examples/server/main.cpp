@@ -631,7 +631,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 
     if (params.ctxParams.n_threads <= 0) {
-        params.ctxParams.n_threads = get_num_physical_cores();
+        params.ctxParams.n_threads = sd_get_num_physical_cores();
     }
 
     if (params.lastRequest.prompt.length() == 0) {
@@ -678,7 +678,7 @@ void parse_args(int argc, const char** argv, SDParams& params) {
     }
 
     if (params.ctxParams.n_threads <= 0) {
-        params.ctxParams.n_threads = get_num_physical_cores();
+        params.ctxParams.n_threads = sd_get_num_physical_cores();
     }
 }
 
@@ -1836,7 +1836,8 @@ void add_task(std::string task_id, std::function<void()> task) {
 const char* preview_path;
 float preview_fps = 24;  // TODO : video
 
-void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy) {
+void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data) {
+    (void) data;
     using json = nlohmann::json;
     if (frame_count > 1) {
         return;
@@ -2059,7 +2060,7 @@ nlohmann::json serv_generate_image(sd_ctx_t*& sd_ctx, SDParams& params, int& n_p
                 params.lastRequest.control_strength,
                 params.lastRequest.pm_params,
                 params.lastRequest.tiling_params};
-            sd_set_preview_callback((sd_preview_cb_t)step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, !params.lastRequest.preview_noisy, params.lastRequest.preview_noisy);
+            sd_set_preview_callback((sd_preview_cb_t)step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, !params.lastRequest.preview_noisy, params.lastRequest.preview_noisy, NULL);
 
             results = generate_image(sd_ctx, &gen_params);
 
