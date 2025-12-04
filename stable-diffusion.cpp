@@ -1683,8 +1683,11 @@ public:
             std::vector<struct ggml_tensor*> controls;
 
             if (control_hint != nullptr && control_net != nullptr) {
-                control_net->compute(n_threads, noised_input, control_hint, timesteps, cond.c_crossattn, cond.c_vector);
-                controls = control_net->controls;
+                if (control_net->compute(n_threads, noised_input, control_hint, timesteps, cond.c_crossattn, cond.c_vector)) {
+                    controls = control_net->controls;
+                } else {
+                    LOG_ERROR("controlnet compute failed");
+                }
                 // print_ggml_tensor(controls[12]);
                 // GGML_ASSERT(0);
             }
@@ -1716,9 +1719,12 @@ public:
 
             bool skip_model = easycache_before_condition(active_condition, *active_output);
             if (!skip_model) {
-                work_diffusion_model->compute(n_threads,
-                                              diffusion_params,
-                                              active_output);
+                if (!work_diffusion_model->compute(n_threads,
+                                                   diffusion_params,
+                                                   active_output)) {
+                    LOG_ERROR("diffusion model compute failed");
+                    return nullptr;
+                }
                 easycache_after_condition(active_condition, *active_output);
             }
 
@@ -1728,8 +1734,11 @@ public:
             if (has_unconditioned) {
                 // uncond
                 if (!current_step_skipped && control_hint != nullptr && control_net != nullptr) {
-                    control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector);
-                    controls = control_net->controls;
+                    if (control_net->compute(n_threads, noised_input, control_hint, timesteps, uncond.c_crossattn, uncond.c_vector)) {
+                        controls = control_net->controls;
+                    } else {
+                        LOG_ERROR("controlnet compute failed");
+                    }
                 }
                 current_step_skipped      = easycache_step_is_skipped();
                 diffusion_params.controls = controls;
@@ -1738,9 +1747,12 @@ public:
                 diffusion_params.y        = uncond.c_vector;
                 bool skip_uncond          = easycache_before_condition(&uncond, out_uncond);
                 if (!skip_uncond) {
-                    work_diffusion_model->compute(n_threads,
-                                                  diffusion_params,
-                                                  &out_uncond);
+                    if (!work_diffusion_model->compute(n_threads,
+                                                       diffusion_params,
+                                                       &out_uncond)) {
+                        LOG_ERROR("diffusion model compute failed");
+                        return nullptr;
+                    }
                     easycache_after_condition(&uncond, out_uncond);
                 }
                 negative_data = (float*)out_uncond->data;
@@ -1753,9 +1765,12 @@ public:
                 diffusion_params.y        = img_cond.c_vector;
                 bool skip_img_cond        = easycache_before_condition(&img_cond, out_img_cond);
                 if (!skip_img_cond) {
-                    work_diffusion_model->compute(n_threads,
-                                                  diffusion_params,
-                                                  &out_img_cond);
+                    if (!work_diffusion_model->compute(n_threads,
+                                                       diffusion_params,
+                                                       &out_img_cond)) {
+                        LOG_ERROR("diffusion model compute failed");
+                        return nullptr;
+                    }
                     easycache_after_condition(&img_cond, out_img_cond);
                 }
                 img_cond_data = (float*)out_img_cond->data;
@@ -1772,9 +1787,12 @@ public:
                     diffusion_params.c_concat    = cond.c_concat;
                     diffusion_params.y           = cond.c_vector;
                     diffusion_params.skip_layers = skip_layers;
-                    work_diffusion_model->compute(n_threads,
-                                                  diffusion_params,
-                                                  &out_skip);
+                    if (!work_diffusion_model->compute(n_threads,
+                                                       diffusion_params,
+                                                       &out_skip)) {
+                        LOG_ERROR("diffusion model compute failed");
+                        return nullptr;
+                    }
                 }
                 skip_layer_data = (float*)out_skip->data;
             }
@@ -1837,7 +1855,15 @@ public:
             return denoised;
         };
 
-        sample_k_diffusion(method, denoise, work_ctx, x, sigmas, sampler_rng, eta);
+        if (!sample_k_diffusion(method, denoise, work_ctx, x, sigmas, sampler_rng, eta)) {
+            LOG_ERROR("Diffusion model sampling failed");
+            if (control_net) {
+                control_net->free_control_ctx();
+                control_net->free_compute_buffer();
+            }
+            diffusion_model->free_compute_buffer();
+            return NULL;
+        }
 
         if (easycache_enabled) {
             size_t total_steps = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
@@ -3064,10 +3090,14 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      nullptr,
                                                      1.0f,
                                                      easycache_params);
-        // print_ggml_tensor(x_0);
-        int64_t sampling_end = ggml_time_ms();
-        LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
-        final_latents.push_back(x_0);
+        int64_t sampling_end    = ggml_time_ms();
+        if (x_0 != nullptr) {
+            // print_ggml_tensor(x_0);
+            LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
+            final_latents.push_back(x_0);
+        } else {
+            LOG_ERROR("sampling for image %d/%d failed after %.2fs", b + 1, batch_count, (sampling_end - sampling_start) * 1.0f / 1000);
+        }
     }
 
     if (sd_ctx->sd->free_params_immediately) {
