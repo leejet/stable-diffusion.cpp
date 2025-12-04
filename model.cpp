@@ -17,6 +17,7 @@
 #include "stable-diffusion.h"
 #include "util.h"
 #include "vocab.hpp"
+#include "vocab_mistral.hpp"
 #include "vocab_qwen.hpp"
 #include "vocab_umt5.hpp"
 
@@ -102,10 +103,15 @@ const char* unused_tensors[] = {
     "model_ema.diffusion_model",
     "embedding_manager",
     "denoiser.sigmas",
-    "edm_vpred.sigma_max",
     "text_encoders.t5xxl.transformer.encoder.embed_tokens.weight",  // only used during training
-    "text_encoders.qwen2vl.output.weight",
-    "text_encoders.qwen2vl.lm_head.",
+    "ztsnr",  // Found in some SDXL vpred models
+    "edm_vpred.sigma_min", // Found in CosXL
+    // TODO: find another way to avoid the "unknown tensor" for these two
+    // "edm_vpred.sigma_max", // Used to detect CosXL
+    // "v_pred", // Used to detect SDXL vpred models
+    "text_encoders.llm.output.weight",
+    "text_encoders.llm.lm_head.",
+    "first_stage_model.bn.",
 };
 
 bool is_unused_tensor(std::string name) {
@@ -263,8 +269,8 @@ void convert_tensor(void* src,
         } else {
             auto qtype = ggml_get_type_traits(src_type);
             if (qtype->to_float == nullptr) {
-                throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
-                                                ggml_type_name(src_type)));
+                throw std::runtime_error(sd_format("type %s unsupported for integer quantization: no dequantization available",
+                                                   ggml_type_name(src_type)));
             }
             qtype->to_float(src, (float*)dst, n);
         }
@@ -273,8 +279,8 @@ void convert_tensor(void* src,
         // src_type is quantized => dst_type == GGML_TYPE_F16 or dst_type is quantized
         auto qtype = ggml_get_type_traits(src_type);
         if (qtype->to_float == nullptr) {
-            throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available",
-                                            ggml_type_name(src_type)));
+            throw std::runtime_error(sd_format("type %s unsupported for integer quantization: no dequantization available",
+                                               ggml_type_name(src_type)));
         }
         std::vector<char> buf;
         buf.resize(sizeof(float) * n);
@@ -1062,6 +1068,12 @@ SDVersion ModelLoader::get_sd_version() {
             if (tensor_storage.name.find("model.diffusion_model.transformer_blocks.0.img_mod.1.weight") != std::string::npos) {
                 return VERSION_QWEN_IMAGE;
             }
+            if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
+                return VERSION_FLUX2;
+            }
+            if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
+                return VERSION_Z_IMAGE;
+            }
             if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
                 is_wan = true;
             }
@@ -1320,6 +1332,16 @@ std::string ModelLoader::load_qwen2_merges() {
     return merges_utf8_str;
 }
 
+std::string ModelLoader::load_mistral_merges() {
+    std::string merges_utf8_str(reinterpret_cast<const char*>(mistral_merges_utf8_c_str), sizeof(mistral_merges_utf8_c_str));
+    return merges_utf8_str;
+}
+
+std::string ModelLoader::load_mistral_vocab_json() {
+    std::string json_str(reinterpret_cast<const char*>(mistral_vocab_json_utf8_c_str), sizeof(mistral_vocab_json_utf8_c_str));
+    return json_str;
+}
+
 std::string ModelLoader::load_t5_tokenizer_json() {
     std::string json_str(reinterpret_cast<const char*>(t5_tokenizer_json_str), sizeof(t5_tokenizer_json_str));
     return json_str;
@@ -1337,7 +1359,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     std::atomic<int64_t> copy_to_backend_time_ms(0);
     std::atomic<int64_t> convert_time_ms(0);
 
-    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : get_num_physical_cores();
+    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : sd_get_num_physical_cores();
     LOG_DEBUG("using %d threads for model loading", num_threads_to_use);
 
     int64_t start_time = ggml_time_ms();

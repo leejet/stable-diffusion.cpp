@@ -14,7 +14,7 @@ bool ends_with(const std::string& str, const std::string& ending);
 bool starts_with(const std::string& str, const std::string& start);
 bool contains(const std::string& str, const std::string& substr);
 
-std::string format(const char* fmt, ...);
+std::string sd_format(const char* fmt, ...);
 
 void replace_all_chars(std::string& str, char target, char replacement);
 
@@ -58,6 +58,7 @@ sd_progress_cb_t sd_get_progress_callback();
 void* sd_get_progress_callback_data();
 
 sd_preview_cb_t sd_get_preview_callback();
+void* sd_get_preview_callback_data();
 preview_t sd_get_preview_mode();
 int sd_get_preview_interval();
 bool sd_should_preview_denoised();
