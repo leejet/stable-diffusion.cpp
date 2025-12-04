@@ -177,9 +177,9 @@ paths:
                   clip_l: { type: string }
                   clip_g: { type: string }
                   t5xxl: { type: string }
-                  qwen2vl: { type: string }
+                  llm: { type: string }
                   clip_vision: { type: string }
-                  qwen2vl_vision: { type: string }
+                  llm_vision: { type: string }
                   vae: { type: string }
                   tae: { type: string }
                   control_net: { type: string }
@@ -590,8 +590,8 @@ components:
         t5xxl: { type: integer }
         vae: { type: integer }
         tae: { type: integer }
-        qwen2vl: { type: integer }
-        qwen2vl_vision: { type: integer }
+        llm: { type: integer }
+        llm_vision: { type: integer }
         control_net: { type: integer }
         photo_maker: { type: integer }
         upscale_model: { type: integer }

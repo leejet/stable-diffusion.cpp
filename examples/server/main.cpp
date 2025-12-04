@@ -43,8 +43,8 @@ struct SDCtxParams {
     std::string clip_g_path;
     std::string clip_vision_path;
     std::string t5xxl_path;
-    std::string qwen2vl_path;
-    std::string qwen2vl_vision_path;
+    std::string llm_path;
+    std::string llm_vision_path;
     std::string diffusion_model_path;
     std::string high_noise_diffusion_model_path;
     std::string vae_path;
@@ -505,8 +505,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--clip_g", "path to the clip-g text encoder", &params.ctxParams.clip_g_path},
         {"", "--clip_vision", "path to the clip-vision encoder", &params.ctxParams.clip_vision_path},
         {"", "--t5xxl", "path to the t5xxl text encoder", &params.ctxParams.t5xxl_path},
-        {"", "--qwen2vl", "path to the qwen2vl text encoder", &params.ctxParams.qwen2vl_path},
-        {"", "--qwen2vl_vision", "path to the qwen2vl vit", &params.ctxParams.qwen2vl_vision_path},
+        {"", "--llm", "path to the llm text encoder", &params.ctxParams.llm_path},
+        {"", "--llm_vision", "path to the llm vit", &params.ctxParams.llm_vision_path},
         {"", "--diffusion-model", "path to the standalone diffusion model", &params.ctxParams.diffusion_model_path},
         {"", "--high-noise-diffusion-model", "path to the standalone high noise diffusion model", &params.ctxParams.high_noise_diffusion_model_path},
         {"", "--vae", "path to standalone vae model", &params.ctxParams.vae_path},
@@ -1494,11 +1494,11 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
             {"tae", [&](const json& o) -> bool {
                  return parse_model_part(o, params->tae_files, params->tae_dir, params->ctxParams.taesd_path);
              }},
-            {"qwen2vl", [&](const json& o) -> bool {
-                 return parse_model_part(o, params->clip_files, params->clip_dir, params->ctxParams.qwen2vl_path);
+            {"llm", [&](const json& o) -> bool {
+                 return parse_model_part(o, params->clip_files, params->clip_dir, params->ctxParams.llm_path);
              }},
-            {"qwen2vl_vision", [&](const json& o) -> bool {
-                 return parse_model_part(o, params->clip_vision_files, params->clip_vision_dir, params->ctxParams.qwen2vl_vision_path);
+            {"llm_vision", [&](const json& o) -> bool {
+                 return parse_model_part(o, params->clip_vision_files, params->clip_vision_dir, params->ctxParams.llm_vision_path);
              }},
             {"control_net", [&](const json& o) -> bool {
                  return parse_model_part(o, params->controlnet_files, params->controlnet_dir, params->ctxParams.control_net_path);
@@ -1963,8 +1963,8 @@ nlohmann::json serv_generate_image(sd_ctx_t*& sd_ctx, SDParams& params, int& n_p
                 params.ctxParams.clip_g_path.c_str(),
                 params.ctxParams.clip_vision_path.c_str(),
                 params.ctxParams.t5xxl_path.c_str(),
-                params.ctxParams.qwen2vl_path.c_str(),
-                params.ctxParams.qwen2vl_vision_path.c_str(),
+                params.ctxParams.llm_path.c_str(),
+                params.ctxParams.llm_vision_path.c_str(),
                 params.ctxParams.diffusion_model_path.c_str(),
                 params.ctxParams.high_noise_diffusion_model_path.c_str(),
                 params.ctxParams.vae_path.c_str(),
@@ -2469,15 +2469,15 @@ void start_server(SDParams params) {
         if (!params.ctxParams.t5xxl_path.empty()) {
             response["t5xxl"] = sd_basename(params.ctxParams.t5xxl_path);
         }
-        if (!params.ctxParams.qwen2vl_path.empty()) {
-            response["qwen2vl"] = sd_basename(params.ctxParams.qwen2vl_path);
+        if (!params.ctxParams.llm_path.empty()) {
+            response["llm"] = sd_basename(params.ctxParams.llm_path);
         }
 
         if (!params.ctxParams.clip_vision_path.empty()) {
             response["clip_vision"] = sd_basename(params.ctxParams.clip_vision_path);
         }
-        if (!params.ctxParams.qwen2vl_vision_path.empty()) {
-            response["qwen2vl_vision"] = sd_basename(params.ctxParams.qwen2vl_vision_path);
+        if (!params.ctxParams.llm_vision_path.empty()) {
+            response["llm_vision"] = sd_basename(params.ctxParams.llm_vision_path);
         }
 
         if (!params.ctxParams.vae_path.empty()) {
