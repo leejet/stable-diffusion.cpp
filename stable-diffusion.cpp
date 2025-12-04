@@ -3090,8 +3090,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      nullptr,
                                                      1.0f,
                                                      easycache_params);
-                                                     int64_t sampling_end = ggml_time_ms();
-        if(x_0 != nullptr){
+        int64_t sampling_end    = ggml_time_ms();
+        if (x_0 != nullptr) {
             // print_ggml_tensor(x_0);
             LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
             final_latents.push_back(x_0);

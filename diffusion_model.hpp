@@ -406,7 +406,7 @@ struct ZImageModel : public DiffusionModel {
         z_image.set_flash_attention_enabled(enabled);
     }
 
-    void compute(int n_threads,
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {

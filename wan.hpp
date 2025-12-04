@@ -1193,7 +1193,7 @@ namespace WAN {
                     return build_graph_partial(z, decode_graph, i);
                 };
                 struct ggml_tensor* out = nullptr;
-                bool res = GGMLRunner::compute(get_graph, n_threads, true, &out, output_ctx);
+                bool res                = GGMLRunner::compute(get_graph, n_threads, true, &out, output_ctx);
                 ae.clear_cache();
                 if (t == 1) {
                     *output = out;
