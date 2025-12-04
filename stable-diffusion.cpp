@@ -998,6 +998,12 @@ public:
             lora_state_diff[lora_name] -= curr_multiplier;
         }
 
+        if (lora_state_diff.empty()) {
+            return;
+        }
+
+        LOG_INFO("apply lora immediately");
+
         size_t rm = lora_state_diff.size() - lora_state.size();
         if (rm != 0) {
             LOG_INFO("attempting to apply %lu LoRAs (removing %lu applied LoRAs)", lora_state.size(), rm);
@@ -1027,6 +1033,10 @@ public:
         cond_stage_lora_models.clear();
         diffusion_lora_models.clear();
         first_stage_lora_models.clear();
+        if (lora_state.empty()) {
+            return;
+        }
+        LOG_INFO("apply lora at runtime");
         if (cond_stage_model) {
             std::vector<std::shared_ptr<LoraModel>> lora_models;
             auto lora_state_diff = lora_state;
@@ -1161,10 +1171,8 @@ public:
         }
         int64_t t0 = ggml_time_ms();
         if (apply_lora_immediately) {
-            LOG_INFO("apply lora immediately");
             apply_loras_immediately(lora_f2m);
         } else {
-            LOG_INFO("apply at runtime");
             apply_loras_at_runtime(lora_f2m);
         }
         int64_t t1 = ggml_time_ms();
