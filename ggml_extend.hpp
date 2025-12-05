@@ -2214,7 +2214,7 @@ public:
           in_features(in_features),
           out_features_vec(out_features_vec),
           bias(bias),
-          force_f32(force_f32),
+          force_f32(true),
           force_prec_f32(force_prec_f32),
           scale(scale) {}
 
