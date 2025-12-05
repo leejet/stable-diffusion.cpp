@@ -73,7 +73,7 @@ struct SDCtxParams {
 
     rng_type_t rng_type               = CUDA_RNG;
     rng_type_t sampler_rng_type       = CUDA_RNG;
-    prediction_t prediction           = DEFAULT_PRED;
+    prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
     bool offload_params_to_cpu   = false;
