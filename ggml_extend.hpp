@@ -2209,6 +2209,75 @@ public:
     }
 };
 
+class SplitLinear : public Linear {
+protected:
+    int64_t in_features;
+    std::vector<int64_t> out_features_vec;
+    bool bias;
+    bool force_f32;
+    bool force_prec_f32;
+    float scale;
+    std::string prefix;
+
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        this->prefix         = prefix;
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
+        if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
+            wtype = GGML_TYPE_F32;
+        }
+        params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features_vec[0]);
+        for (int i = 1; i < out_features_vec.size(); i++) {
+            // most likely same type as the first weight
+            params["weight." + std::to_string(i)] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features_vec[i]);
+        }
+        if (bias) {
+            enum ggml_type wtype = GGML_TYPE_F32;
+            params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_features_vec[0]);
+            for (int i = 1; i < out_features_vec.size(); i++) {
+                params["bias." + std::to_string(i)] = ggml_new_tensor_1d(ctx, wtype, out_features_vec[i]);
+            }
+        }
+    }
+
+public:
+    SplitLinear(int64_t in_features,
+                std::vector<int64_t> out_features_vec,
+                bool bias           = true,
+                bool force_f32      = false,
+                bool force_prec_f32 = false,
+                float scale         = 1.f)
+        : Linear(in_features, out_features_vec[0], bias, force_f32, force_prec_f32, scale),
+          in_features(in_features),
+          out_features_vec(out_features_vec),
+          bias(bias),
+          force_f32(force_f32),
+          force_prec_f32(force_prec_f32),
+          scale(scale) {}
+
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* w = params["weight"];
+        struct ggml_tensor* b = nullptr;
+        if (bias) {
+            b = params["bias"];
+        }
+        // concat all weights and biases together
+        for (int i = 1; i < out_features_vec.size(); i++) {
+            w = ggml_concat(ctx->ggml_ctx, w, params["weight." + std::to_string(i)], 1);
+            if (bias) {
+                b = ggml_concat(ctx->ggml_ctx, b, params["bias." + std::to_string(i)], 0);
+            }
+        }
+        if (ctx->weight_adapter) {
+            WeightAdapter::ForwardParams forward_params;
+            forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
+            forward_params.linear.force_prec_f32 = force_prec_f32;
+            forward_params.linear.scale          = scale;
+            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
+        }
+        return ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
+    }
+};
+
 __STATIC_INLINE__ bool support_get_rows(ggml_type wtype) {
     std::set<ggml_type> allow_types = {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
     if (allow_types.find(wtype) != allow_types.end()) {
