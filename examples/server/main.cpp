@@ -7,8 +7,17 @@
 #include <string>
 #include <vector>
 
+#include <fstream>
+#include <unordered_set>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 // #include "preprocessing.hpp"
-#include "flux.hpp"
 #include "stable-diffusion.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -183,6 +192,8 @@ struct SDParams {
     std::string host = "127.0.0.1";
 
     std::string custom_frontend_path = "";
+
+    bool restore_state = false;
 };
 
 void print_params(SDParams params) {
@@ -544,7 +555,8 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--cfg-scale", "unconditional guidance scale: (default: 7.0)", &params.lastRequest.sample_params.guidance.txt_cfg},
         {"", "--guidance", "distilled guidance scale for models with guidance input (default: 3.5)", &params.lastRequest.sample_params.guidance.distilled_guidance}};
 
-    options.bool_options = {
+    static bool dummy_worker_mode = false;
+    options.bool_options          = {
         {"", "--vae-tiling", "process vae in tiles to reduce memory usage", true, &params.lastRequest.tiling_params.enabled},
         {"", "--force-sdxl-vae-conv-scale", "force use of conv scale on sdxl vae", true, &params.ctxParams.force_sdxl_vae_conv_scale},
         {"", "--offload-to-cpu", "place the weights in RAM to save VRAM, and automatically load them into VRAM when needed", true, &params.ctxParams.offload_params_to_cpu},
@@ -556,7 +568,10 @@ void parse_args(int argc, const char** argv, SDParams& params) {
         {"", "--vae-conv-direct", "use ggml_conv2d_direct in the vae model", true, &params.ctxParams.vae_conv_direct},
         {"-v", "--verbose", "print extra info", true, &params.verbose},
         {"", "--color", "colors the logging tags according to level", true, &params.color},
-        {"", "--preview-noisy", "enables previewing noisy inputs of the models rather than the denoised outputs", true, &params.lastRequest.preview_noisy}};
+        {"", "--preview-noisy", "enables previewing noisy inputs of the models rather than the denoised outputs", true, &params.lastRequest.preview_noisy},
+        {"", "--worker-process-mode", "[internal] run in worker process mode (no supervisor process)", true, &dummy_worker_mode},
+        {"", "--restore-state", "[internal] restore server state from disk on startup (file: server_state_dump.json)", true, &params.restore_state},
+    };
 
     auto on_rng_arg = [&](int argc, const char** argv, int index) {
         if (++index >= argc) {
@@ -722,7 +737,10 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     const char* level_str;
     FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
 
-    if (!log || (!params->verbose && level <= SD_LOG_DEBUG)) {
+    bool verbose = params ? params->verbose : false;
+    bool color   = params ? params->color : false;
+
+    if (!log || (!verbose && level <= SD_LOG_DEBUG)) {
         return;
     }
 
@@ -749,7 +767,7 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
             break;
     }
 
-    if (params->color == true) {
+    if (color == true) {
         fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
     } else {
         fprintf(out_stream, "[%-5s] ", level_str);
@@ -1520,19 +1538,10 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
                  std::string type = o.get<std::string>();
                  if (type != "") {
                      bool found = false;
-                     for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
-                         auto trait = ggml_get_type_traits((ggml_type)i);
-                         std::string name(trait->type_name);
-                         if (name == "f32" || trait->to_float && trait->type_size) {
-                             if (type == name) {
-                                 if (params->ctxParams.wtype != (enum sd_type_t)i) {
-                                     change = true;
-                                 }
-                                 params->ctxParams.wtype = (enum sd_type_t)i;
-                                 found                   = true;
-                                 break;
-                             }
-                         }
+                     auto wtype = str_to_sd_type(type.c_str());
+                     if (wtype != SD_TYPE_COUNT) {
+                         found                   = true;
+                         params->ctxParams.wtype = wtype;
                      }
                      if (!found) {
                          sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown wtype: %s\n", type.c_str());
@@ -1764,16 +1773,14 @@ bool parseJsonPrompt(std::string json_str, SDParams* params) {
         // renamed to wtype in new API
         std::string type = payload["type"];
         if (type != "") {
-            for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
-                auto trait = ggml_get_type_traits((ggml_type)i);
-                std::string name(trait->type_name);
-                if (name == "f32" || trait->to_float && trait->type_size) {
-                    if (type == name) {
-                        params->ctxParams.wtype = (enum sd_type_t)i;
-                        updatectx               = true;
-                        break;
-                    }
-                }
+            bool found = false;
+            auto wtype = str_to_sd_type(type.c_str());
+            if (wtype != SD_TYPE_COUNT) {
+                found                   = true;
+                params->ctxParams.wtype = wtype;
+            }
+            if (!found) {
+                sd_log(sd_log_level_t::SD_LOG_WARN, "Unknown type: %s\n", type.c_str());
             }
         }
     } catch (...) {
@@ -1796,58 +1803,47 @@ std::vector<std::string> list_files(const std::string& dir_path) {
     return files;
 }
 
-//--------------------------------------//
-// Thread-safe queue
-std::queue<std::function<void()>> task_queue;
-std::mutex queue_mutex;
-std::condition_variable queue_cond;
-bool stop_worker = false;
-std::atomic<bool> is_busy(false);
-std::string running_task_id("");
+// 1. Data Structure for persistent queueing
+struct TaskData {
+    std::string task_id;
+    std::string req_body;  // Raw JSON to be parsed later
+};
 
-std::unordered_map<std::string, nlohmann::json> task_results;
-std::mutex results_mutex;
+// 2. Global Contexts (Must exist globally to be freed/reloaded)
+SDParams g_params;
+sd_ctx_t* g_sd_ctx = NULL;
+int g_n_prompts    = 0;
 
-void worker_thread() {
-    while (!stop_worker) {
-        std::unique_lock<std::mutex> lock(queue_mutex);
-        queue_cond.wait(lock, [] { return !task_queue.empty() || stop_worker; });
+// 3. Queue & Thread Synchronization
+std::queue<TaskData> g_task_queue;
+std::mutex g_queue_mutex;
+std::condition_variable g_queue_cond;
+std::atomic<bool> g_stop_worker(false);
+std::atomic<bool> g_is_busy(false);
+std::string g_running_task_id("");
 
-        if (!task_queue.empty()) {
-            is_busy   = true;
-            auto task = task_queue.front();
-            task_queue.pop();
-            lock.unlock();
-            task();
-            is_busy         = false;
-            running_task_id = "";
-        }
-    }
-}
+// 4. Results & Cancellation
+std::unordered_map<std::string, nlohmann::json> g_task_results;
+std::mutex g_results_mutex;
+std::unordered_set<std::string> g_cancelled_tasks;  // To skip queued tasks
+std::mutex g_cancel_mutex;
+std::atomic<bool> g_abort_flag(false);  // To signal running task to stop
 
-void add_task(std::string task_id, std::function<void()> task) {
-    std::lock_guard<std::mutex> lock(queue_mutex);
-    task_queue.push([task_id, task]() {
-        task();
-    });
-    queue_cond.notify_one();
-}
-
-const char* preview_path;
-float preview_fps = 24;  // TODO : video
+const char* g_preview_path;
+float g_preview_fps = 24;  // TODO : video
 
 void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data) {
-    (void) data;
+    (void)data;
     using json = nlohmann::json;
     if (frame_count > 1) {
         return;
     }
 
-    if (preview_path) {
-        stbi_write_png(preview_path, image->width, image->height, image->channel, image->data, 0);
+    if (g_preview_path) {
+        stbi_write_png(g_preview_path, image->width, image->height, image->channel, image->data, 0);
     }
 
-    json task_json = task_results[running_task_id];
+    json task_json = g_task_results[g_running_task_id];
     if (task_json == NULL) {
         // shouldn't happen
         task_json = json::object();
@@ -1865,21 +1861,256 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
                                  {"data", encoded_img},
                                  {"encoding", "png"}});
 
-    std::lock_guard<std::mutex> results_lock(results_mutex);
-    task_results[running_task_id] = task_json;
+    std::lock_guard<std::mutex> results_lock(g_results_mutex);
+    g_task_results[g_running_task_id] = task_json;
+}
+
+void process_generation_task(TaskData task) {
+    g_running_task_id = task.task_id;
+    g_abort_flag      = false;
+    using json        = nlohmann::json;
+
+    bool updateCTX = g_params.ctxParams.free_params_immediately;
+    try {
+        updateCTX = parseJsonPrompt(task.req_body, &g_params) || updateCTX;
+    } catch (json::parse_error& e) {
+        sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
+        std::string prompt = task.req_body;
+        if (!prompt.empty()) {
+            g_params.lastRequest.prompt = prompt;
+        } else {
+            g_params.lastRequest.seed += 1;
+        }
+    } catch (...) {
+        sd_log(sd_log_level_t::SD_LOG_ERROR, "An unexpected error occurred\n");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_cancel_mutex);
+        if (g_cancelled_tasks.count(task.task_id)) {
+            g_cancelled_tasks.erase(task.task_id);
+            std::lock_guard<std::mutex> res_lock(g_results_mutex);
+            g_task_results[task.task_id]["status"] = "Cancelled";
+            g_running_task_id                      = "";
+            if (updateCTX) {
+                // ctx g_params have been changed, must cleanup before next uncancelled task
+                free_sd_ctx(g_sd_ctx);
+                g_sd_ctx = NULL;
+            }
+            sd_log(sd_log_level_t::SD_LOG_INFO, "Task %s was cancelled before execution, skipping\n", task.task_id.c_str());
+            return;
+        }
+    }
+
+    sd_log(sd_log_level_t::SD_LOG_INFO, "prompt is: %s\n", g_params.lastRequest.prompt.c_str());
+
+    // 3. Reload Context if needed
+    if (updateCTX && g_sd_ctx != NULL) {
+        free_sd_ctx(g_sd_ctx);
+        g_sd_ctx = NULL;
+    }
+    if (g_sd_ctx == NULL) {
+        printf("Loading sd_ctx\n");
+        {
+            json task_json      = json::object();
+            task_json["status"] = "Loading";
+            task_json["data"]   = json::array();
+            task_json["step"]   = -1;
+            task_json["steps"]  = 0;
+            task_json["eta"]    = "?";
+
+            std::lock_guard<std::mutex> results_lock(g_results_mutex);
+            g_task_results[task.task_id] = task_json;
+        }
+        sd_ctx_params_t sd_ctx_params = {
+            g_params.ctxParams.model_path.c_str(),
+            g_params.ctxParams.clip_l_path.c_str(),
+            g_params.ctxParams.clip_g_path.c_str(),
+            g_params.ctxParams.clip_vision_path.c_str(),
+            g_params.ctxParams.t5xxl_path.c_str(),
+            g_params.ctxParams.llm_path.c_str(),
+            g_params.ctxParams.llm_vision_path.c_str(),
+            g_params.ctxParams.diffusion_model_path.c_str(),
+            g_params.ctxParams.high_noise_diffusion_model_path.c_str(),
+            g_params.ctxParams.vae_path.c_str(),
+            g_params.ctxParams.taesd_path.c_str(),
+            g_params.ctxParams.control_net_path.c_str(),
+            g_params.ctxParams.lora_model_dir.c_str(),
+            g_params.ctxParams.embeddings_path.c_str(),
+            g_params.ctxParams.photo_maker_path.c_str(),
+            g_params.ctxParams.tensor_type_rules.c_str(),
+            g_params.ctxParams.vae_decode_only,
+            g_params.ctxParams.free_params_immediately,
+            g_params.ctxParams.n_threads,
+            g_params.ctxParams.wtype,
+            g_params.ctxParams.rng_type,
+            g_params.ctxParams.sampler_rng_type,
+            g_params.ctxParams.prediction,
+            g_params.ctxParams.lora_apply_mode,
+            g_params.ctxParams.offload_params_to_cpu,
+            g_params.ctxParams.keep_clip_on_cpu,
+            g_params.ctxParams.keep_control_net_on_cpu,
+            g_params.ctxParams.keep_vae_on_cpu,
+            g_params.ctxParams.diffusion_flash_attn,
+            g_params.ctxParams.taesd_preview,
+            g_params.ctxParams.diffusion_conv_direct,
+            g_params.ctxParams.vae_conv_direct,
+            g_params.ctxParams.force_sdxl_vae_conv_scale,
+            g_params.ctxParams.chroma_use_dit_mask,
+            g_params.ctxParams.chroma_use_t5_mask,
+            g_params.ctxParams.chroma_t5_mask_pad,
+            g_params.ctxParams.flow_shift};
+
+        g_sd_ctx = new_sd_ctx(&sd_ctx_params);
+        if (g_sd_ctx == NULL) {
+            printf("new_sd_ctx_t failed\n");
+            std::lock_guard<std::mutex> results_lock(g_results_mutex);
+            g_task_results[task.task_id]["status"] = "Failed";
+            return;
+        }
+    }
+
+    // 4. Update Status
+    {
+        std::lock_guard<std::mutex> lock(g_results_mutex);
+        g_task_results[task.task_id]["status"] = "Working";
+        g_task_results[task.task_id]["step"]   = 0;
+        g_task_results[task.task_id]["steps"]  = g_params.lastRequest.sample_params.sample_steps;
+        g_task_results[task.task_id]["eta"]    = "?";
+        g_task_results[task.task_id]["data"]   = json::array();
+    }
+
+    {
+        sd_image_t* results;
+        g_params.lastRequest.sample_params.guidance.slg.layers      = g_params.lastRequest.skip_layers.data();
+        g_params.lastRequest.sample_params.guidance.slg.layer_count = g_params.lastRequest.skip_layers.size();
+
+        sd_image_t init_image = g_params.lastRequest.init_image;
+
+        sd_image_t mask_img = g_params.lastRequest.mask_image;
+        std::vector<uint8_t> ones(g_params.lastRequest.width * g_params.lastRequest.height, 0xFF);
+        if (init_image.data != NULL && g_params.lastRequest.mask_image.data == NULL) {
+            mask_img = {
+                (uint32_t)g_params.lastRequest.width,
+                (uint32_t)g_params.lastRequest.height,
+                1,
+                ones.data()};
+        }
+
+        sd_image_t control_img = g_params.lastRequest.control_image;
+
+        g_params.lastRequest.pm_params.id_embed_path   = g_params.input_id_images_path.c_str();
+        g_params.lastRequest.pm_params.id_images       = g_params.lastRequest.pm_images_vec.data();
+        g_params.lastRequest.pm_params.id_images_count = g_params.lastRequest.pm_images_vec.size();
+
+        sd_img_gen_params_t gen_params = {
+            g_params.lastRequest.prompt.c_str(),
+            g_params.lastRequest.negative_prompt.c_str(),
+            g_params.lastRequest.clip_skip,
+            init_image,
+            g_params.lastRequest.ref_images.data(),
+            (int)g_params.lastRequest.ref_images.size(),
+            g_params.lastRequest.auto_resize_ref_image,
+            g_params.lastRequest.increase_ref_index,
+            mask_img,
+            g_params.lastRequest.width,
+            g_params.lastRequest.height,
+            g_params.lastRequest.sample_params,
+            g_params.lastRequest.strength,
+            g_params.lastRequest.seed,
+            g_params.lastRequest.batch_count,
+            control_img,
+            g_params.lastRequest.control_strength,
+            g_params.lastRequest.pm_params,
+            g_params.lastRequest.tiling_params};
+        sd_set_preview_callback((sd_preview_cb_t)step_callback, g_params.lastRequest.preview_method, g_params.lastRequest.preview_interval, !g_params.lastRequest.preview_noisy, g_params.lastRequest.preview_noisy, NULL);
+
+        results = generate_image(g_sd_ctx, &gen_params);
+
+        if (results == NULL) {
+            printf("generate failed\n");
+            free_sd_ctx(g_sd_ctx);
+            std::lock_guard<std::mutex> g_results_lock(g_results_mutex);
+            g_task_results[task.task_id]["status"] = "Failed";
+            return;
+        }
+
+        size_t last            = g_params.output_path.find_last_of(".");
+        std::string dummy_name = last != std::string::npos ? g_params.output_path.substr(0, last) : g_params.output_path;
+        json images_json       = json::array();
+        for (int i = 0; i < g_params.lastRequest.batch_count; i++) {
+            if (results[i].data == NULL) {
+                continue;
+            }
+            // TODO allow disable save to disk
+            std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1 + g_n_prompts * g_params.lastRequest.batch_count) + ".png" : dummy_name + ".png";
+            stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                           results[i].data, 0, get_image_params(g_params, g_params.lastRequest.seed + i).c_str());
+            printf("save result image to '%s'\n", final_image_path.c_str());
+            // Todo: return base64 encoded image via httplib::Response& res
+
+            int len;
+            unsigned char* png = stbi_write_png_to_mem((const unsigned char*)results[i].data, 0, results[i].width, results[i].height, results[i].channel, &len, get_image_params(g_params, g_params.lastRequest.seed + i).c_str());
+
+            std::string data_str(png, png + len);
+            std::string encoded_img = base64_encode(data_str);
+
+            images_json.push_back({{"width", results[i].width},
+                                   {"height", results[i].height},
+                                   {"channel", results[i].channel},
+                                   {"data", encoded_img},
+                                   {"encoding", "png"}});
+
+            free(results[i].data);
+            results[i].data = NULL;
+        }
+        free(results);
+        g_n_prompts++;
+        // res.set_content(images_json.dump(), "application/json");
+        json end_task_json      = json::object();
+        end_task_json["status"] = "Done";
+        end_task_json["data"]   = images_json;
+        end_task_json["step"]   = -1;
+        end_task_json["steps"]  = 0;
+        end_task_json["eta"]    = "?";
+        std::lock_guard<std::mutex> results_lock(g_results_mutex);
+        g_task_results[task.task_id] = end_task_json;
+    }
+    g_running_task_id = "";
+}
+
+void worker_thread() {
+    while (!g_stop_worker) {
+        TaskData task;
+        bool has_task = false;
+        {
+            std::unique_lock<std::mutex> lock(g_queue_mutex);
+            g_queue_cond.wait(lock, [] { return !g_task_queue.empty() || g_stop_worker; });
+            if (!g_task_queue.empty() && !g_stop_worker) {
+                task = g_task_queue.front();
+                g_task_queue.pop();
+                has_task  = true;
+                g_is_busy = true;
+            }
+        }
+        if (has_task) {
+            process_generation_task(task);
+            g_is_busy = false;
+        }
+    }
 }
 
 void update_progress_cb(int step, int steps, float time, void* _data) {
     using json = nlohmann::json;
-    if (running_task_id != "") {
-        std::lock_guard<std::mutex> results_lock(results_mutex);
-        json running_task_json = task_results[running_task_id];
+    if (g_running_task_id != "") {
+        std::lock_guard<std::mutex> results_lock(g_results_mutex);
+        json running_task_json = g_task_results[g_running_task_id];
         if (running_task_json["status"] == "Working" && running_task_json["step"] == running_task_json["steps"]) {
             running_task_json["status"] = "Decoding";
         }
-        running_task_json["step"]     = step;
-        running_task_json["steps"]    = steps;
-        task_results[running_task_id] = running_task_json;
+        running_task_json["step"]         = step;
+        running_task_json["steps"]        = steps;
+        g_task_results[g_running_task_id] = running_task_json;
     }
 }
 
@@ -1896,7 +2127,7 @@ bool is_model_file(const std::string& path) {
     return (file_extension == "gguf" || file_extension == "safetensors" || file_extension == "sft" || file_extension == "ckpt");
 }
 
-nlohmann::json serv_generate_image(sd_ctx_t*& sd_ctx, SDParams& params, int& n_prompts, const httplib::Request& req) {
+nlohmann::json serv_generate_image(const httplib::Request& req) {
     using json          = nlohmann::json;
     std::string task_id = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
 
@@ -1908,222 +2139,369 @@ nlohmann::json serv_generate_image(sd_ctx_t*& sd_ctx, SDParams& params, int& n_p
         pending_task_json["steps"]  = 0;
         pending_task_json["eta"]    = "?";
 
-        std::lock_guard<std::mutex> results_lock(results_mutex);
-        task_results[task_id] = pending_task_json;
+        std::lock_guard<std::mutex> results_lock(g_results_mutex);
+        g_task_results[task_id] = pending_task_json;
     }
 
-    auto task = [req, &sd_ctx, &params, &n_prompts, task_id]() {
-        running_task_id = task_id;
-        // LOG_DEBUG("raw body is: %s\n", req.body.c_str());
-        sd_log(sd_log_level_t::SD_LOG_DEBUG, "raw body is: %s\n", req.body.c_str());
-        // parse req.body as json using jsoncpp
-        bool updateCTX = params.ctxParams.free_params_immediately;
-        try {
-            std::string json_str = req.body;
-            updateCTX            = parseJsonPrompt(json_str, &params) || updateCTX;
-        } catch (json::parse_error& e) {
-            // assume the request is just a prompt
-            // LOG_WARN("Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
-            sd_log(sd_log_level_t::SD_LOG_WARN, "Failed to parse json: %s\n Assuming it's just a prompt...\n", e.what());
-            std::string prompt = req.body;
-            if (!prompt.empty()) {
-                params.lastRequest.prompt = prompt;
-            } else {
-                params.lastRequest.seed += 1;
-            }
-        } catch (...) {
-            // Handle any other type of exception
-            // LOG_ERROR("An unexpected error occurred\n");
-            sd_log(sd_log_level_t::SD_LOG_ERROR, "An unexpected error occurred\n");
-        }
-        // LOG_DEBUG("prompt is: %s\n", params.prompt.c_str());
-        sd_log(sd_log_level_t::SD_LOG_INFO, "prompt is: %s\n", params.lastRequest.prompt.c_str());
-
-        if (updateCTX && sd_ctx != NULL) {
-            free_sd_ctx(sd_ctx);
-            sd_ctx = NULL;
-        }
-
-        if (sd_ctx == NULL) {
-            printf("Loading sd_ctx\n");
-            {
-                json task_json      = json::object();
-                task_json["status"] = "Loading";
-                task_json["data"]   = json::array();
-                task_json["step"]   = -1;
-                task_json["steps"]  = 0;
-                task_json["eta"]    = "?";
-
-                std::lock_guard<std::mutex> results_lock(results_mutex);
-                task_results[task_id] = task_json;
-            }
-            sd_ctx_params_t sd_ctx_params = {
-                params.ctxParams.model_path.c_str(),
-                params.ctxParams.clip_l_path.c_str(),
-                params.ctxParams.clip_g_path.c_str(),
-                params.ctxParams.clip_vision_path.c_str(),
-                params.ctxParams.t5xxl_path.c_str(),
-                params.ctxParams.llm_path.c_str(),
-                params.ctxParams.llm_vision_path.c_str(),
-                params.ctxParams.diffusion_model_path.c_str(),
-                params.ctxParams.high_noise_diffusion_model_path.c_str(),
-                params.ctxParams.vae_path.c_str(),
-                params.ctxParams.taesd_path.c_str(),
-                params.ctxParams.control_net_path.c_str(),
-                params.ctxParams.lora_model_dir.c_str(),
-                params.ctxParams.embeddings_path.c_str(),
-                params.ctxParams.photo_maker_path.c_str(),
-                params.ctxParams.tensor_type_rules.c_str(),
-                params.ctxParams.vae_decode_only,
-                params.ctxParams.free_params_immediately,
-                params.ctxParams.n_threads,
-                params.ctxParams.wtype,
-                params.ctxParams.rng_type,
-                params.ctxParams.sampler_rng_type,
-                params.ctxParams.prediction,
-                params.ctxParams.lora_apply_mode,
-                params.ctxParams.offload_params_to_cpu,
-                params.ctxParams.keep_clip_on_cpu,
-                params.ctxParams.keep_control_net_on_cpu,
-                params.ctxParams.keep_vae_on_cpu,
-                params.ctxParams.diffusion_flash_attn,
-                params.ctxParams.taesd_preview,
-                params.ctxParams.diffusion_conv_direct,
-                params.ctxParams.vae_conv_direct,
-                params.ctxParams.force_sdxl_vae_conv_scale,
-                params.ctxParams.chroma_use_dit_mask,
-                params.ctxParams.chroma_use_t5_mask,
-                params.ctxParams.chroma_t5_mask_pad,
-                params.ctxParams.flow_shift};
-
-            sd_ctx = new_sd_ctx(&sd_ctx_params);
-            if (sd_ctx == NULL) {
-                printf("new_sd_ctx_t failed\n");
-                std::lock_guard<std::mutex> results_lock(results_mutex);
-                task_results[task_id]["status"] = "Failed";
-                return;
-            }
-        }
-
-        {
-            json started_task_json      = json::object();
-            started_task_json["status"] = "Working";
-            started_task_json["data"]   = json::array();
-            started_task_json["step"]   = 0;
-            started_task_json["steps"]  = params.lastRequest.sample_params.sample_steps;
-            started_task_json["eta"]    = "?";
-
-            std::lock_guard<std::mutex> results_lock(results_mutex);
-            task_results[task_id] = started_task_json;
-        }
-
-        {
-            sd_image_t* results;
-            params.lastRequest.sample_params.guidance.slg.layers      = params.lastRequest.skip_layers.data();
-            params.lastRequest.sample_params.guidance.slg.layer_count = params.lastRequest.skip_layers.size();
-
-            sd_image_t init_image = params.lastRequest.init_image;
-
-            sd_image_t mask_img = params.lastRequest.mask_image;
-            std::vector<uint8_t> ones(params.lastRequest.width * params.lastRequest.height, 0xFF);
-            if (init_image.data != NULL && params.lastRequest.mask_image.data == NULL) {
-                mask_img = {
-                    (uint32_t)params.lastRequest.width,
-                    (uint32_t)params.lastRequest.height,
-                    1,
-                    ones.data()};
-            }
-
-            sd_image_t control_img = params.lastRequest.control_image;
-
-            params.lastRequest.pm_params.id_embed_path   = params.input_id_images_path.c_str();
-            params.lastRequest.pm_params.id_images       = params.lastRequest.pm_images_vec.data();
-            params.lastRequest.pm_params.id_images_count = params.lastRequest.pm_images_vec.size();
-
-            sd_img_gen_params_t gen_params = {
-                params.lastRequest.prompt.c_str(),
-                params.lastRequest.negative_prompt.c_str(),
-                params.lastRequest.clip_skip,
-                init_image,
-                params.lastRequest.ref_images.data(),
-                (int)params.lastRequest.ref_images.size(),
-                params.lastRequest.auto_resize_ref_image,
-                params.lastRequest.increase_ref_index,
-                mask_img,
-                params.lastRequest.width,
-                params.lastRequest.height,
-                params.lastRequest.sample_params,
-                params.lastRequest.strength,
-                params.lastRequest.seed,
-                params.lastRequest.batch_count,
-                control_img,
-                params.lastRequest.control_strength,
-                params.lastRequest.pm_params,
-                params.lastRequest.tiling_params};
-            sd_set_preview_callback((sd_preview_cb_t)step_callback, params.lastRequest.preview_method, params.lastRequest.preview_interval, !params.lastRequest.preview_noisy, params.lastRequest.preview_noisy, NULL);
-
-            results = generate_image(sd_ctx, &gen_params);
-
-            if (results == NULL) {
-                printf("generate failed\n");
-                free_sd_ctx(sd_ctx);
-                std::lock_guard<std::mutex> results_lock(results_mutex);
-                task_results[task_id]["status"] = "Failed";
-                return;
-            }
-
-            size_t last            = params.output_path.find_last_of(".");
-            std::string dummy_name = last != std::string::npos ? params.output_path.substr(0, last) : params.output_path;
-            json images_json       = json::array();
-            for (int i = 0; i < params.lastRequest.batch_count; i++) {
-                if (results[i].data == NULL) {
-                    continue;
-                }
-                // TODO allow disable save to disk
-                std::string final_image_path = i > 0 ? dummy_name + "_" + std::to_string(i + 1 + n_prompts * params.lastRequest.batch_count) + ".png" : dummy_name + ".png";
-                stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                               results[i].data, 0, get_image_params(params, params.lastRequest.seed + i).c_str());
-                printf("save result image to '%s'\n", final_image_path.c_str());
-                // Todo: return base64 encoded image via httplib::Response& res
-
-                int len;
-                unsigned char* png = stbi_write_png_to_mem((const unsigned char*)results[i].data, 0, results[i].width, results[i].height, results[i].channel, &len, get_image_params(params, params.lastRequest.seed + i).c_str());
-
-                std::string data_str(png, png + len);
-                std::string encoded_img = base64_encode(data_str);
-
-                images_json.push_back({{"width", results[i].width},
-                                       {"height", results[i].height},
-                                       {"channel", results[i].channel},
-                                       {"data", encoded_img},
-                                       {"encoding", "png"}});
-
-                free(results[i].data);
-                results[i].data = NULL;
-            }
-            free(results);
-            n_prompts++;
-            // res.set_content(images_json.dump(), "application/json");
-            json end_task_json      = json::object();
-            end_task_json["status"] = "Done";
-            end_task_json["data"]   = images_json;
-            end_task_json["step"]   = -1;
-            end_task_json["steps"]  = 0;
-            end_task_json["eta"]    = "?";
-            std::lock_guard<std::mutex> results_lock(results_mutex);
-            task_results[task_id] = end_task_json;
-        }
-    };
     // Add the task to the queue
-    add_task(task_id, task);
+    {
+        std::lock_guard<std::mutex> lock(g_queue_mutex);
+        g_task_queue.push({task_id, req.body});
+    }
+    g_queue_cond.notify_one();
 
     json response       = json::object();
     response["task_id"] = task_id;
     return response;
 }
 
-void start_server(SDParams params) {
-    preview_path = params.preview_path.c_str();
+// Helper to safely get a string from json
+std::string j_get_str(const nlohmann::json& j, const std::string& key, const std::string& def) {
+    if (j.contains(key) && j[key].is_string())
+        return j[key].get<std::string>();
+    return def;
+}
+
+// Helper to safely get primitives
+template <typename T>
+T j_get(const nlohmann::json& j, const std::string& key, T def) {
+    if (j.contains(key))
+        return j[key].get<T>();
+    return def;
+}
+
+nlohmann::json serialize_server_state(const SDParams& p) {
+    using json = nlohmann::json;
+    json j;
+
+    j["prompt"]          = p.lastRequest.prompt;
+    j["negative_prompt"] = p.lastRequest.negative_prompt;
+    j["clip_skip"]       = p.lastRequest.clip_skip;
+
+    j["init_image"] = {
+        {"width", p.lastRequest.init_image.width},
+        {"height", p.lastRequest.init_image.height},
+        {"channel", p.lastRequest.init_image.channel}};
+
+    j["auto_resize_ref_image"] = p.lastRequest.auto_resize_ref_image;
+    j["increase_ref_index"]    = p.lastRequest.increase_ref_index;
+
+    j["mask_image"] = {
+        {"width", p.lastRequest.mask_image.width},
+        {"height", p.lastRequest.mask_image.height},
+        {"channel", p.lastRequest.mask_image.channel}};
+
+    j["width"]       = p.lastRequest.width;
+    j["height"]      = p.lastRequest.height;
+    j["skip_layers"] = p.lastRequest.skip_layers;
+
+    j["sample_params"] = {
+        {"guidance", {{"txt_cfg", p.lastRequest.sample_params.guidance.txt_cfg}, {"img_cfg", p.lastRequest.sample_params.guidance.img_cfg}, {"distilled_guidance", p.lastRequest.sample_params.guidance.distilled_guidance}, {"slg", {
+                                                                                                                                                                                                                                      {"layer_count", p.lastRequest.sample_params.guidance.slg.layer_count},
+                                                                                                                                                                                                                                      {"layer_start", p.lastRequest.sample_params.guidance.slg.layer_start},
+                                                                                                                                                                                                                                      {"layer_end", p.lastRequest.sample_params.guidance.slg.layer_end},
+                                                                                                                                                                                                                                      {"scale", p.lastRequest.sample_params.guidance.slg.scale}}}}},
+        {"scheduler", sd_scheduler_name(p.lastRequest.sample_params.scheduler)},
+        {"sample_method", sd_sample_method_name(p.lastRequest.sample_params.sample_method)},
+        {"sample_steps", p.lastRequest.sample_params.sample_steps},
+        {"eta", p.lastRequest.sample_params.eta},
+        {"shifted_timestep", p.lastRequest.sample_params.shifted_timestep}};
+
+    j["strength"]    = p.lastRequest.strength;
+    j["seed"]        = p.lastRequest.seed;
+    j["batch_count"] = p.lastRequest.batch_count;
+
+    j["control_image"] = {
+        {"width", p.lastRequest.control_image.width},
+        {"height", p.lastRequest.control_image.height},
+        {"channel", p.lastRequest.control_image.channel}};
+    j["control_strength"] = p.lastRequest.control_strength;
+
+
+    j["pm_id_embed_path"] = p.lastRequest.pm_id_embed_path;
+    j["pm_params"]        = {
+        {"id_images_count", p.lastRequest.pm_params.id_images_count},
+        {"style_strength", p.lastRequest.pm_params.style_strength}};
+
+    j["tiling_params"] = {
+        {"enabled", p.lastRequest.tiling_params.enabled},
+        {"tile_size_x", p.lastRequest.tiling_params.tile_size_x},
+        {"tile_size_y", p.lastRequest.tiling_params.tile_size_y},
+        {"target_overlap", p.lastRequest.tiling_params.target_overlap},
+        {"rel_size_x", p.lastRequest.tiling_params.rel_size_x},
+        {"rel_size_y", p.lastRequest.tiling_params.rel_size_y}};
+
+    j["upscale"]          = p.lastRequest.upscale;
+    j["preview_method"]   = sd_preview_name(p.lastRequest.preview_method);
+    j["preview_interval"] = p.lastRequest.preview_interval;
+    j["preview_noisy"]    = p.lastRequest.preview_noisy;
+
+    // --- Context Params (Models & Hardware) ---
+
+    j["model"]                      = p.ctxParams.model_path;
+    j["clip_l"]                     = p.ctxParams.clip_l_path;
+    j["clip_g"]                     = p.ctxParams.clip_g_path;
+    j["clip_vision"]                = p.ctxParams.clip_vision_path;
+    j["t5xxl"]                      = p.ctxParams.t5xxl_path;
+    j["llm"]                        = p.ctxParams.llm_path;
+    j["llm_vision"]                 = p.ctxParams.llm_vision_path;
+    j["diffusion_model"]            = p.ctxParams.diffusion_model_path;
+    j["high_noise_diffusion_model"] = p.ctxParams.high_noise_diffusion_model_path;
+    j["vae"]                        = p.ctxParams.vae_path;
+    j["tae"]                        = p.ctxParams.taesd_path;
+
+    j["control_net"]   = p.ctxParams.control_net_path;
+    j["photo_maker"]   = p.ctxParams.photo_maker_path;
+    j["upscale_model"] = p.ctxParams.upscale_model_path;
+
+    j["vae_decode_only"]         = p.ctxParams.vae_decode_only;
+    j["free_params_immediately"] = p.ctxParams.free_params_immediately;
+    j["n_threads"]               = p.ctxParams.n_threads;
+    if (p.ctxParams.wtype < SD_TYPE_COUNT) {
+        j["wtype"] = sd_type_name(p.ctxParams.wtype);
+    }
+
+    j["rng_type"]         = sd_rng_type_name(p.ctxParams.rng_type);
+    j["sampler_rng_type"] = sd_rng_type_name(p.ctxParams.sampler_rng_type);
+    j["prediction"]       = sd_prediction_name(p.ctxParams.prediction);
+    j["lora_apply_mode"]  = sd_lora_apply_mode_name(p.ctxParams.lora_apply_mode);
+
+    j["offload_params_to_cpu"]   = p.ctxParams.offload_params_to_cpu;
+    j["keep_clip_on_cpu"]        = p.ctxParams.keep_clip_on_cpu;
+    j["keep_control_net_on_cpu"] = p.ctxParams.keep_control_net_on_cpu;
+    j["keep_vae_on_cpu"]         = p.ctxParams.keep_vae_on_cpu;
+
+    j["diffusion_flash_attn"]      = p.ctxParams.diffusion_flash_attn;
+    j["taesd_preview"]             = p.ctxParams.taesd_preview;
+    j["diffusion_conv_direct"]     = p.ctxParams.diffusion_conv_direct;
+    j["force_sdxl_vae_conv_scale"] = p.ctxParams.force_sdxl_vae_conv_scale;
+    j["vae_conv_direct"]           = p.ctxParams.vae_conv_direct;
+    j["chroma_use_dit_mask"]       = p.ctxParams.chroma_use_dit_mask;
+    j["chroma_use_t5_mask"]        = p.ctxParams.chroma_use_t5_mask;
+    j["chroma_t5_mask_pad"]        = p.ctxParams.chroma_t5_mask_pad;
+    j["flow_shift"]                = p.ctxParams.flow_shift;
+    return j;
+}
+
+void deserialize_server_state(SDParams& p, const nlohmann::json& j) {
+    // --- Request Params ---
+    p.lastRequest.prompt          = j_get_str(j, "prompt", p.lastRequest.prompt);
+    p.lastRequest.negative_prompt = j_get_str(j, "negative_prompt", p.lastRequest.negative_prompt);
+    p.lastRequest.clip_skip       = j_get(j, "clip_skip", p.lastRequest.clip_skip);
+
+    if (j.contains("init_image")) {
+        p.lastRequest.init_image.width   = j_get(j["init_image"], "width", p.lastRequest.init_image.width);
+        p.lastRequest.init_image.height  = j_get(j["init_image"], "height", p.lastRequest.init_image.height);
+        p.lastRequest.init_image.channel = j_get(j["init_image"], "channel", p.lastRequest.init_image.channel);
+        p.lastRequest.init_image.data    = NULL;
+    }
+
+    p.lastRequest.auto_resize_ref_image = j_get(j, "auto_resize_ref_image", p.lastRequest.auto_resize_ref_image);
+    p.lastRequest.increase_ref_index    = j_get(j, "increase_ref_index", p.lastRequest.increase_ref_index);
+
+    if (j.contains("mask_image")) {
+        p.lastRequest.mask_image.width   = j_get(j["mask_image"], "width", p.lastRequest.mask_image.width);
+        p.lastRequest.mask_image.height  = j_get(j["mask_image"], "height", p.lastRequest.mask_image.height);
+        p.lastRequest.mask_image.channel = j_get(j["mask_image"], "channel", p.lastRequest.mask_image.channel);
+        p.lastRequest.mask_image.data    = NULL;
+    }
+
+    p.lastRequest.width       = j_get(j, "width", p.lastRequest.width);
+    p.lastRequest.height      = j_get(j, "height", p.lastRequest.height);
+    p.lastRequest.skip_layers = j_get<std::vector<int>>(j, "skip_layers", p.lastRequest.skip_layers);
+
+    if (j.contains("sample_params")) {
+        if (j["sample_params"].contains("guidance")) {
+            p.lastRequest.sample_params.guidance.txt_cfg            = j_get(j["sample_params"]["guidance"], "txt_cfg", p.lastRequest.sample_params.guidance.txt_cfg);
+            p.lastRequest.sample_params.guidance.img_cfg            = j_get(j["sample_params"]["guidance"], "img_cfg", p.lastRequest.sample_params.guidance.img_cfg);
+            p.lastRequest.sample_params.guidance.distilled_guidance = j_get(j["sample_params"]["guidance"], "distilled_guidance", p.lastRequest.sample_params.guidance.distilled_guidance);
+            if (j["sample_params"]["guidance"].contains("slg")) {
+                p.lastRequest.sample_params.guidance.slg.layers      = NULL;
+                p.lastRequest.sample_params.guidance.slg.layer_count = j_get(j["sample_params"]["guidance"]["slg"], "layer_count", p.lastRequest.sample_params.guidance.slg.layer_count);
+                p.lastRequest.sample_params.guidance.slg.layer_start = j_get(j["sample_params"]["guidance"]["slg"], "layer_start", p.lastRequest.sample_params.guidance.slg.layer_start);
+                p.lastRequest.sample_params.guidance.slg.layer_end   = j_get(j["sample_params"]["guidance"]["slg"], "layer_end", p.lastRequest.sample_params.guidance.slg.layer_end);
+                p.lastRequest.sample_params.guidance.slg.scale       = j_get(j["sample_params"]["guidance"]["slg"], "scale", p.lastRequest.sample_params.guidance.slg.scale);
+            }
+        }
+        if (j["sample_params"].contains("scheduler")) {
+            p.lastRequest.sample_params.scheduler = str_to_scheduler(j_get_str(j["sample_params"], "scheduler", sd_scheduler_name(p.lastRequest.sample_params.scheduler)).c_str());
+        }
+        if (j["sample_params"].contains("sample_method")) {
+            p.lastRequest.sample_params.sample_method = str_to_sample_method(j_get_str(j["sample_params"], "sample_method", sd_sample_method_name(p.lastRequest.sample_params.sample_method)).c_str());
+        }
+        p.lastRequest.sample_params.sample_steps     = j_get(j["sample_params"], "sample_steps", p.lastRequest.sample_params.sample_steps);
+        p.lastRequest.sample_params.eta              = j_get(j["sample_params"], "eta", p.lastRequest.sample_params.eta);
+        p.lastRequest.sample_params.shifted_timestep = j_get(j["sample_params"], "shifted_timestep", p.lastRequest.sample_params.shifted_timestep);
+    }
+
+    p.lastRequest.strength    = j_get(j, "strength", p.lastRequest.strength);
+    p.lastRequest.seed        = j_get(j, "seed", p.lastRequest.seed);
+    p.lastRequest.batch_count = j_get(j, "batch_count", p.lastRequest.batch_count);
+
+    if (j.contains("control_image")) {
+        p.lastRequest.control_image.width   = j_get(j["control_image"], "width", p.lastRequest.control_image.width);
+        p.lastRequest.control_image.height  = j_get(j["control_image"], "height", p.lastRequest.control_image.height);
+        p.lastRequest.control_image.channel = j_get(j["control_image"], "channel", p.lastRequest.control_image.channel);
+        p.lastRequest.control_image.data    = NULL;
+    }
+
+    p.lastRequest.control_strength = j_get(j, "control_strength", p.lastRequest.control_strength);
+    p.lastRequest.pm_id_embed_path = j_get_str(j, "pm_id_embed_path", p.lastRequest.pm_id_embed_path);
+
+    if (j.contains("pm_params")) {
+        p.lastRequest.pm_params.id_images_count = j_get(j["pm_params"], "id_images_count", p.lastRequest.pm_params.id_images_count);
+        p.lastRequest.pm_params.style_strength  = j_get(j["pm_params"], "style_strength", p.lastRequest.pm_params.style_strength);
+    }
+
+    if (j.contains("tiling_params")) {
+        p.lastRequest.tiling_params.enabled        = j_get(j["tiling_params"], "enabled", p.lastRequest.tiling_params.enabled);
+        p.lastRequest.tiling_params.tile_size_x    = j_get(j["tiling_params"], "tile_size_x", p.lastRequest.tiling_params.tile_size_x);
+        p.lastRequest.tiling_params.tile_size_y    = j_get(j["tiling_params"], "tile_size_y", p.lastRequest.tiling_params.tile_size_y);
+        p.lastRequest.tiling_params.target_overlap = j_get(j["tiling_params"], "overlap", p.lastRequest.tiling_params.target_overlap);
+        p.lastRequest.tiling_params.rel_size_x     = j_get(j["tiling_params"], "rel_size_x", p.lastRequest.tiling_params.rel_size_x);
+        p.lastRequest.tiling_params.rel_size_y     = j_get(j["tiling_params"], "rel_size_y", p.lastRequest.tiling_params.rel_size_y);
+    }
+
+    p.lastRequest.upscale          = j_get(j, "upscale", p.lastRequest.upscale);
+    p.lastRequest.preview_method   = str_to_preview(j_get_str(j, "preview_method", sd_preview_name(p.lastRequest.preview_method)).c_str());
+    p.lastRequest.preview_interval = j_get(j, "preview_interval", p.lastRequest.preview_interval);
+    p.lastRequest.preview_noisy    = j_get(j, "preview_noisy", p.lastRequest.preview_noisy);
+
+    // --- Context Params (Models & Hardware) ---
+    p.ctxParams.model_path                      = j_get_str(j, "model", p.ctxParams.model_path);
+    p.ctxParams.clip_l_path                     = j_get_str(j, "clip_l", p.ctxParams.clip_l_path);
+    p.ctxParams.clip_g_path                     = j_get_str(j, "clip_g", p.ctxParams.clip_g_path);
+    p.ctxParams.clip_vision_path                = j_get_str(j, "clip_vision", p.ctxParams.clip_vision_path);
+    p.ctxParams.t5xxl_path                      = j_get_str(j, "t5xxl", p.ctxParams.t5xxl_path);
+    p.ctxParams.llm_path                        = j_get_str(j, "llm", p.ctxParams.llm_path);
+    p.ctxParams.llm_vision_path                 = j_get_str(j, "llm_vision", p.ctxParams.llm_vision_path);
+    p.ctxParams.diffusion_model_path            = j_get_str(j, "diffusion_model", p.ctxParams.diffusion_model_path);
+    p.ctxParams.high_noise_diffusion_model_path = j_get_str(j, "high_noise_diffusion_model", p.ctxParams.high_noise_diffusion_model_path);
+    p.ctxParams.vae_path                        = j_get_str(j, "vae", p.ctxParams.vae_path);
+    p.ctxParams.taesd_path                      = j_get_str(j, "tae", p.ctxParams.taesd_path);
+    p.ctxParams.control_net_path                = j_get_str(j, "control_net", p.ctxParams.control_net_path);
+    p.ctxParams.photo_maker_path                = j_get_str(j, "photo_maker", p.ctxParams.photo_maker_path);
+    p.ctxParams.upscale_model_path              = j_get_str(j, "upscale_model", p.ctxParams.upscale_model_path);
+
+    p.ctxParams.vae_decode_only         = j_get(j, "vae_decode_only", p.ctxParams.vae_decode_only);
+    p.ctxParams.free_params_immediately = j_get(j, "free_params_immediately", p.ctxParams.free_params_immediately);
+    p.ctxParams.n_threads               = j_get(j, "n_threads", p.ctxParams.n_threads);
+
+    if (j.contains("wtype")) {
+        p.ctxParams.wtype = str_to_sd_type(j_get_str(j, "wtype", sd_type_name(p.ctxParams.wtype)).c_str());
+    }
+
+    if (j.contains("rng_type")) {
+        p.ctxParams.rng_type = str_to_rng_type(j_get_str(j, "rng_type", sd_rng_type_name(p.ctxParams.rng_type)).c_str());
+    }
+
+    if (j.contains("sampler_rng_type")) {
+        p.ctxParams.sampler_rng_type = str_to_rng_type(j_get_str(j, "sampler_rng_type", sd_rng_type_name(p.ctxParams.sampler_rng_type)).c_str());
+    }
+
+    if (j.contains("prediction")) {
+        p.ctxParams.prediction = str_to_prediction(j_get_str(j, "prediction", sd_prediction_name(p.ctxParams.prediction)).c_str());
+    }
+
+    if (j.contains("lora_apply_mode")) {
+        p.ctxParams.lora_apply_mode = str_to_lora_apply_mode(j_get_str(j, "lora_apply_mode", sd_lora_apply_mode_name(p.ctxParams.lora_apply_mode)).c_str());
+    }
+
+    p.ctxParams.offload_params_to_cpu     = j_get(j, "offload_params_to_cpu", p.ctxParams.offload_params_to_cpu);
+    p.ctxParams.keep_clip_on_cpu          = j_get(j, "keep_clip_on_cpu", p.ctxParams.keep_clip_on_cpu);
+    p.ctxParams.keep_control_net_on_cpu   = j_get(j, "keep_control_net_on_cpu", p.ctxParams.keep_control_net_on_cpu);
+    p.ctxParams.keep_vae_on_cpu           = j_get(j, "keep_vae_on_cpu", p.ctxParams.keep_vae_on_cpu);
+    p.ctxParams.diffusion_flash_attn      = j_get(j, "diffusion_flash_attn", p.ctxParams.diffusion_flash_attn);
+    p.ctxParams.taesd_preview             = j_get(j, "taesd_preview", p.ctxParams.taesd_preview);
+    p.ctxParams.diffusion_conv_direct     = j_get(j, "diffusion_conv_direct", p.ctxParams.diffusion_conv_direct);
+    p.ctxParams.force_sdxl_vae_conv_scale = j_get(j, "force_sdxl_vae_conv_scale", p.ctxParams.force_sdxl_vae_conv_scale);
+    p.ctxParams.vae_conv_direct           = j_get(j, "vae_conv_direct", p.ctxParams.vae_conv_direct);
+    p.ctxParams.chroma_use_dit_mask       = j_get(j, "chroma_use_dit_mask", p.ctxParams.chroma_use_dit_mask);
+    p.ctxParams.chroma_use_t5_mask        = j_get(j, "chroma_use_t5_mask", p.ctxParams.chroma_use_t5_mask);
+    p.ctxParams.chroma_t5_mask_pad        = j_get(j, "chroma_t5_mask_pad", p.ctxParams.chroma_t5_mask_pad);
+    p.ctxParams.flow_shift                = j_get(j, "flow_shift", p.ctxParams.flow_shift);
+}
+
+void save_state_to_disk() {
+    using json    = nlohmann::json;
+    json root_obj = json::object();
+
+    json queue_arr = json::array();
+    std::lock_guard<std::mutex> lock(g_queue_mutex);
+    std::queue<TaskData> temp_q = g_task_queue;
+    while (!temp_q.empty()) {
+        TaskData t = temp_q.front();
+        temp_q.pop();
+        queue_arr.push_back({{"task_id", t.task_id}, {"req_body", t.req_body}});
+    }
+    root_obj["queue"] = queue_arr;
+
+    root_obj["system_state"] = serialize_server_state(g_params);
+
+    std::ofstream o("server_state_dump.json");
+    o << root_obj.dump(4) << std::endl;  // Pretty print
+    o.flush();
+    o.close();
+    printf("Saved queue and system state to disk\n");
+}
+
+void load_state_from_disk() {
+    using json = nlohmann::json;
+    if (!std::filesystem::exists("server_state_dump.json"))
+        return;
+
+    std::ifstream i("server_state_dump.json");
+    if (!i.good())
+        return;
+
+    try {
+        json root_obj;
+        i >> root_obj;
+
+        if (root_obj.contains("system_state")) {
+            deserialize_server_state(g_params, root_obj["system_state"]);
+            sd_log(SD_LOG_INFO, "Restored system parameters (model: %s)\n",
+                   sd_basename(g_params.ctxParams.model_path.empty() ? g_params.ctxParams.diffusion_model_path : g_params.ctxParams.model_path).c_str());
+        }
+
+        if (root_obj.contains("queue") && root_obj["queue"].is_array()) {
+            std::lock_guard<std::mutex> lock(g_queue_mutex);
+            for (auto& element : root_obj["queue"]) {
+                if (element.contains("task_id") && element.contains("req_body")) {
+                    TaskData t;
+                    t.task_id  = element["task_id"].get<std::string>();
+                    t.req_body = element["req_body"].get<std::string>();
+                    g_task_queue.push(t);
+                    g_task_results[t.task_id] = {{"status", "Pending (Restored)"}};
+                }
+            }
+            sd_log(SD_LOG_INFO, "Restored %d tasks from disk.\n", (int)root_obj["queue"].size());
+        }
+
+    } catch (const std::exception& e) {
+        sd_log(SD_LOG_WARN, "Failed to load queue dump: %s\n", e.what());
+    } catch (...) {
+        sd_log(SD_LOG_WARN, "Failed to load queue dump (unknown error).\n");
+    }
+
+    i.close();
+    std::filesystem::remove("server_state_dump.json");
+}
+
+void trigger_hard_restart() {
+    sd_log(SD_LOG_WARN, "Triggering HARD RESTART...\n");
+    save_state_to_disk();
+    // Force exit with code 111 to indicate a hard restart
+#ifdef _WIN32
+    TerminateProcess(GetCurrentProcess(), 111);
+#else
+    _exit(111);
+    kill(getpid(), SIGKILL);
+#endif
+}
+
+void start_server(SDParams& params) {
+    g_preview_path = params.preview_path.c_str();
     sd_set_log_callback(sd_log_cb, (void*)&params);
     sd_set_progress_callback(update_progress_cb, NULL);
 
@@ -2167,17 +2545,17 @@ void start_server(SDParams params) {
     //     svr->set_logger(log_server_request);
     // }
 
-    svr->Post("/txt2img", [&sd_ctx, &params, &n_prompts](const httplib::Request& req, httplib::Response& res) {
+    svr->Post("/txt2img", [](const httplib::Request& req, httplib::Response& res) {
         // Deprecated
         sd_log(SD_LOG_WARN, "/txt2img endpoint is soon to be deprecated, use /generate_image instead");
         using json    = nlohmann::json;
-        json response = serv_generate_image(sd_ctx, params, n_prompts, req);
+        json response = serv_generate_image(req);
         res.set_content(response.dump(), "application/json");
     });
 
-    svr->Post("/generate_image", [&sd_ctx, &params, &n_prompts](const httplib::Request& req, httplib::Response& res) {
+    svr->Post("/generate_image", [](const httplib::Request& req, httplib::Response& res) {
         using json    = nlohmann::json;
-        json response = serv_generate_image(sd_ctx, params, n_prompts, req);
+        json response = serv_generate_image(req);
         res.set_content(response.dump(), "application/json");
     });
 
@@ -2235,13 +2613,13 @@ void start_server(SDParams params) {
         // Parse task ID from query parameters
         try {
             std::string task_id = req.get_param_value("task_id");
-            std::lock_guard<std::mutex> lock(results_mutex);
-            if (task_results.find(task_id) != task_results.end()) {
-                json result = task_results[task_id];
+            std::lock_guard<std::mutex> lock(g_results_mutex);
+            if (g_task_results.find(task_id) != g_task_results.end()) {
+                json result = g_task_results[task_id];
                 res.set_content(result.dump(), "application/json");
                 // Erase data after sending
-                result["data"]        = json::array();
-                task_results[task_id] = result;
+                result["data"]          = json::array();
+                g_task_results[task_id] = result;
             } else {
                 res.set_content("Cannot find task " + task_id + " in queue", "text/plain");
                 res.status = 404;
@@ -2256,12 +2634,10 @@ void start_server(SDParams params) {
         sd_log(SD_LOG_WARN, "/types endpoint is soon to be deprecated, use /wtypes instead");
         using json = nlohmann::json;
         json response;
+
         for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
-            auto trait = ggml_get_type_traits((ggml_type)i);
-            std::string name(trait->type_name);
-            if (name == "f32" || trait->to_float && trait->type_size) {
-                response.push_back(name);
-            }
+            std::string name = sd_type_name((sd_type_t)i);
+            response.push_back(name);
         }
         res.set_content(response.dump(), "application/json");
     });
@@ -2271,11 +2647,8 @@ void start_server(SDParams params) {
         json response;
 
         for (size_t i = 0; i < SD_TYPE_COUNT; i++) {
-            auto trait = ggml_get_type_traits((ggml_type)i);
-            std::string name(trait->type_name);
-            if (name == "f32" || trait->to_float && trait->type_size) {
-                response.push_back(name);
-            }
+            std::string name = sd_type_name((sd_type_t)i);
+            response.push_back(name);
         }
         res.set_content(response.dump(), "application/json");
     });
@@ -2531,6 +2904,63 @@ void start_server(SDParams params) {
         }
     });
 
+    svr->Post("/cancel_task", [](const httplib::Request& req, httplib::Response& res) {
+        try {
+            std::string target_id = nlohmann::json::parse(req.body)["task_id"];
+            bool is_running_task  = (g_running_task_id == target_id);
+
+            if (is_running_task) {
+                if (g_is_busy) {
+                    printf("-------------\n Cancelling running task %s\n-------------\n", target_id.c_str());
+                    g_abort_flag = true;  // Try nice stop
+                    // Spawn Watchdog
+                    std::thread watchdog([target_id]() {
+                        std::this_thread::sleep_for(std::chrono::seconds(10));
+                        if (g_running_task_id == target_id && g_is_busy) {
+                            printf("-------------\n Task %s did not stop gracefully, hard restarting\n-------------\n", target_id.c_str());
+                            trigger_hard_restart();
+                        }
+                    });
+                    watchdog.detach();
+                    res.set_content("{\"status\":\"cancelling\"}", "application/json");
+                } else {
+                    printf("-------------\n Task %s already completed\n-------------\n", target_id.c_str());
+                    res.set_content("{\"status\":\"completed\"}", "application/json");
+                }
+            } else {
+                // Check if task is queued
+                bool is_queued_task = false;
+
+                // find task in queue
+                {
+                    std::lock_guard<std::mutex> lock(g_queue_mutex);
+                    // iterate through queue (should not affect queue order)
+                    for (auto it = 0; it < g_task_queue.size(); it++) {
+                        auto task = g_task_queue.front();
+                        if (task.task_id == target_id) {
+                            is_queued_task = true;
+                        }
+                        g_task_queue.pop();       // Remove task from queue
+                        g_task_queue.push(task);  // Put task back in front of queue
+                    }
+                }
+                if (is_queued_task) {
+                    printf("-------------\n Cancelling queued task %s\n-------------\n", target_id.c_str());
+                    std::lock_guard<std::mutex> lock(g_cancel_mutex);
+                    g_cancelled_tasks.insert(target_id);
+                    res.set_content("{\"status\":\"cancelled\"}", "application/json");
+                } else {
+                    res.set_content("{\"error\":\"Task not found\"}", "application/json");
+                    res.status = 404;
+                }
+            }
+            return;
+        } catch (const std::exception& e) {
+            printf("Error cancelling task: %s\nbody: %s\n", e.what(), req.body.c_str());
+            res.set_content("{\"error\":\"Invalid request\"}", "application/json");
+            res.status = 400;
+        }
+    });
     // bind HTTP listen port, run the HTTP server in a thread
     if (!svr->bind_to_port(params.host, params.port)) {
         // TODO: Error message
@@ -2546,19 +2976,144 @@ void start_server(SDParams params) {
     free_sd_ctx(sd_ctx);
 }
 
-int main(int argc, const char* argv[]) {
-    SDParams params;
-    // Setup default args
-    parse_args(argc, argv, params);
+void run_worker_mode(int argc, const char* argv[]) {
+    parse_args(argc, argv, g_params);
+    server_log_params = (void*)&g_params;
 
+    if (g_params.restore_state) {
+        sd_log(SD_LOG_INFO, "Restoring server state from disk...\n");
+        load_state_from_disk();
+    }
     std::thread worker(worker_thread);
-    // Start the HTTP server
-    start_server(params);
+    start_server(g_params); // This will block until the server is stopped
+    g_stop_worker = true;
+    g_queue_cond.notify_all();
+    if (worker.joinable())
+        worker.join();
+}
 
-    // Cleanup
-    stop_worker = true;
-    queue_cond.notify_one();
-    worker.join();
+// --- Supervisor Logic (Cross-Platform Wrapper) ---
 
+std::string win_escape_arg(const std::string& arg) {
+    if (arg.empty())
+        return "\"\"";
+
+    if (arg.find_first_of(" \t\"") == std::string::npos)
+        return arg;
+
+    // Needs escaping
+    std::string escaped = "\"";
+    for (size_t i = 0; i < arg.length(); ++i) {
+        if (arg[i] == '\"') {
+            escaped += "\\\"";
+        } else if (arg[i] == '\\') {
+            // Handle backslashes at the end of the string or before a quote
+            size_t backslash_count = 1;
+            while (i + 1 < arg.length() && arg[i + 1] == '\\') {
+                backslash_count++;
+                i++;
+            }
+            // If followed by a quote, double the slashes
+            if (i + 1 < arg.length() && arg[i + 1] == '\"') {
+                escaped.append(backslash_count * 2, '\\');
+            } else if (i + 1 == arg.length()) {
+                // If at end of string, double them so the closing quote isn't escaped
+                escaped.append(backslash_count * 2, '\\');
+            } else {
+                // Otherwise just literal backslashes
+                escaped.append(backslash_count, '\\');
+            }
+        } else {
+            escaped += arg[i];
+        }
+    }
+    escaped += "\"";
+    return escaped;
+}
+
+int run_child_process(const std::vector<std::string>& args) {
+#ifdef _WIN32
+    std::vector<std::string> escaped_args_storage;
+    std::vector<char*> c_args;
+
+    for (const auto& arg : args) {
+        escaped_args_storage.push_back(win_escape_arg(arg));
+    }
+
+    for (const auto& s : escaped_args_storage) {
+        c_args.push_back(const_cast<char*>(s.c_str()));
+    }
+    c_args.push_back(nullptr);
+
+
+    intptr_t result = _spawnvp(_P_WAIT, args[0].c_str(), c_args.data());
+    return (int)result;
+
+#else
+    std::vector<char*> c_args;
+    for (const auto& arg : args)
+        c_args.push_back(const_cast<char*>(arg.c_str()));
+    c_args.push_back(nullptr);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execvp(c_args[0], c_args.data());
+        _exit(1);
+    } else if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+        return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    }
+    return -1;
+#endif
+}
+
+int main(int argc, const char* argv[]) {
+    printf("--- Starting ---\n");
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--worker-process-mode") == 0) {
+            run_worker_mode(argc, argv);
+            return 0;
+        }
+    }
+
+    std::vector<std::string> args;
+    for (int i = 0; i < argc; i++)
+        args.push_back(argv[i]);
+    args.push_back("--worker-process-mode");
+
+    printf("--- Supervisor Started ---\n");
+    bool first_run = true;
+    while (true) {
+        int exit_code = run_child_process(args);
+        printf("Worker exited with code %d\n", exit_code);
+        if (exit_code == 111) {
+            if (first_run) {
+                args.push_back("--restore-state");
+                first_run = false;
+            }
+            printf(">>> Hard Restarting...\n");
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
+            // restart if worker crashed (not killed)
+#ifdef WIN32
+        } else if (exit_code == 0xC000013A) {  // Ctrl+C
+#else
+        } else if (exit_code == 130 || exit_code == 143) {  // SIGINT/SIGTERM
+#endif
+            // exit if worker was killed by user, do nothing
+            return exit_code;
+        } else if (exit_code == 0) {
+            // exit if worker exited normally
+            return 0;
+        } else {
+            // probably a crash, restart
+            printf(">>> Restarting worker after crash...\n");
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
+        }
+
+        break;
+    }
     return 0;
 }

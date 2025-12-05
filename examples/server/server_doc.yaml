@@ -65,6 +65,45 @@ paths:
               schema:
                 $ref: "#/components/schemas/GenerationResponse"
 
+  /cancel_task:
+    post:
+      tags:
+        - Generation
+      summary: Cancel a task
+      description: Cancel a task using its ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                task_id:
+                  type: string
+                  description: The ID of the task to cancel.
+      responses:
+        "200":
+          description: Task cancelled successfully
+          content:
+            application/json:
+             schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "cancelled"
+                    description: Status of the task. Can be "cancelled" (removed from queue), "canceling" (task is currently running and will be cancelled asap), "completed" (task is already completed)
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid request"
+
   /result:
     get:
       tags:
@@ -448,7 +487,7 @@ components:
               format: float
             scheduler:
               type: string
-              description: Scheduler name. Call /schedulers endpoint for available options. 
+              description: Scheduler name. Call /schedulers endpoint for available options.
             sample_method:
               type: string
               description: Sampling method name. Call /sample_methods endpoint for available options.
@@ -461,7 +500,7 @@ components:
                 img_cfg:
                   type: number
                   format: float
-                  description: Advanced option, used for editing and inpaint models 
+                  description: Advanced option, used for editing and inpaint models
                 distilled_guidance:
                   type: number
                   format: float
