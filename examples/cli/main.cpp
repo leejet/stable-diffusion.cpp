@@ -504,6 +504,7 @@ struct SDContextParams {
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
+    bool use_mmap               = false;
     bool control_net_cpu        = false;
     bool clip_on_cpu            = false;
     bool vae_on_cpu             = false;
@@ -639,6 +640,10 @@ struct SDContextParams {
              "--offload-to-cpu",
              "place the weights in RAM to save VRAM, and automatically load them into VRAM when needed",
              true, &offload_params_to_cpu},
+            {"",
+             "--use-mmap",
+             "use mmap to load weights",
+             true, &use_mmap},
             {"",
              "--control-net-cpu",
              "keep controlnet in cpu (for low vram)",
@@ -874,6 +879,7 @@ struct SDContextParams {
             << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
             << "  flow_shift: " << (std::isinf(flow_shift) ? "INF" : std::to_string(flow_shift)) << "\n"
             << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
+            << "  use_mmap: " << (use_mmap ? "true" : "false") << ",\n"
             << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
             << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
             << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
@@ -924,6 +930,7 @@ struct SDContextParams {
             prediction,
             lora_apply_mode,
             offload_params_to_cpu,
+            use_mmap,
             clip_on_cpu,
             control_net_cpu,
             vae_on_cpu,
