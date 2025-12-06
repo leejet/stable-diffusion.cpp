@@ -2238,15 +2238,15 @@ public:
             forward_params.linear.scale          = scale;
             return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
         }
-        auto x0 = ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
+        auto out = ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
         for (int i = 1; i < out_features_vec.size(); i++) {
-            auto wi = params["weight." + std::to_string(i)];
-            auto bi = bias ? params["bias." + std::to_string(i)] : nullptr;
-            auto xi = ggml_ext_linear(ctx->ggml_ctx, x, wi, bi, force_prec_f32, scale);
-            x0 = ggml_concat(ctx->ggml_ctx, x0, xi, 0);
+            auto wi       = params["weight." + std::to_string(i)];
+            auto bi       = bias ? params["bias." + std::to_string(i)] : nullptr;
+            auto curr_out = ggml_ext_linear(ctx->ggml_ctx, x, wi, bi, force_prec_f32, scale);
+            out           = ggml_concat(ctx->ggml_ctx, out, curr_out, 0);
         }
 
-        return x0;
+        return out;
     }
 };
 
