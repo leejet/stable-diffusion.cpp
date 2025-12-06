@@ -487,6 +487,9 @@ public:
                                                                 sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_longcat(version)) {
                 bool enable_vision = false;
+                if (!vae_decode_only) {
+                    enable_vision = true;
+                }
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
@@ -918,7 +921,7 @@ public:
                                 flow_shift = 1.15f;
                             }
                         }
-                        if(sd_version_is_longcat(version)) {
+                        if (sd_version_is_longcat(version)) {
                             flow_shift = 3.0f;
                         }
                     }
@@ -2614,6 +2617,7 @@ public:
             sd_version_is_qwen_image(version) ||
             sd_version_is_wan(version) ||
             sd_version_is_flux2(version) ||
+            sd_version_is_longcat(version) ||
             version == VERSION_CHROMA_RADIANCE) {
             latent = vae_output;
         } else if (version == VERSION_SD1_PIX2PIX) {

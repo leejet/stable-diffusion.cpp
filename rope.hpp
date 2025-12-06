@@ -218,10 +218,11 @@ namespace Rope {
                                                                    const std::vector<ggml_tensor*>& ref_latents,
                                                                    bool increase_ref_index,
                                                                    float ref_index_scale,
-                                                                   bool scale_rope) {
+                                                                   bool scale_rope,
+                                                                    int base_offset = 0) {
         std::vector<std::vector<float>> ids;
-        int curr_h_offset = 0;
-        int curr_w_offset = 0;
+        int curr_h_offset = base_offset;
+        int curr_w_offset = base_offset;
         int index         = start_index;
         for (ggml_tensor* ref : ref_latents) {
             int h_offset = 0;
@@ -267,15 +268,15 @@ namespace Rope {
                                                                    bool increase_ref_index,
                                                                    float ref_index_scale,
                                                                    bool is_longcat) {
-        int start_index = is_longcat ? 1 : 0;
+        int x_index = is_longcat ? 1 : 0;
 
         auto txt_ids = is_longcat ? gen_longcat_txt_ids(bs, context_len, axes_dim_num) : gen_flux_txt_ids(bs, context_len, axes_dim_num, txt_arange_dims);
         int offset   = is_longcat ? context_len : 0;
-        auto img_ids = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, start_index, offset, offset);
+        auto img_ids = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, x_index, offset, offset);
 
         auto ids = concat_ids(txt_ids, img_ids, bs);
         if (ref_latents.size() > 0) {
-            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, start_index + 1, ref_latents, increase_ref_index, ref_index_scale, false);
+            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, x_index + 1, ref_latents, increase_ref_index, ref_index_scale, false, offset);
             ids           = concat_ids(ids, refs_ids, bs);
         }
         return ids;
