@@ -307,13 +307,6 @@ public:
         }
 
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
-        for (auto& [name, tensor_storage] : tensor_storage_map) {
-            if (contains(name, "llm") &&
-                ends_with(name, "weight") &&
-                (tensor_storage.type == GGML_TYPE_F32 || tensor_storage.type == GGML_TYPE_BF16)) {
-                tensor_storage.expected_type = GGML_TYPE_F16;
-            }
-        }
 
         LOG_INFO("Version: %s ", model_version_to_str[version]);
         ggml_type wtype               = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
