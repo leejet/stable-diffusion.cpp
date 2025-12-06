@@ -88,19 +88,19 @@ namespace Flux {
 
     public:
         SelfAttention(int64_t dim,
-                      int64_t num_heads = 8,
-                      bool qkv_bias     = false,
-                      bool proj_bias    = true,
-                    bool diffusers_style = false)
+                      int64_t num_heads    = 8,
+                      bool qkv_bias        = false,
+                      bool proj_bias       = true,
+                      bool diffusers_style = false)
             : num_heads(num_heads) {
             int64_t head_dim = dim / num_heads;
-            if(diffusers_style) {
-                blocks["qkv"]    = std::shared_ptr<GGMLBlock>(new SplitLinear(dim, {dim, dim, dim}, qkv_bias));
+            if (diffusers_style) {
+                blocks["qkv"] = std::shared_ptr<GGMLBlock>(new SplitLinear(dim, {dim, dim, dim}, qkv_bias));
             } else {
-                blocks["qkv"]    = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
+                blocks["qkv"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim * 3, qkv_bias));
             }
-            blocks["norm"]   = std::shared_ptr<GGMLBlock>(new QKNorm(head_dim));
-            blocks["proj"]   = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, proj_bias));
+            blocks["norm"] = std::shared_ptr<GGMLBlock>(new QKNorm(head_dim));
+            blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(dim, dim, proj_bias));
         }
 
         std::vector<struct ggml_tensor*> pre_attention(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
@@ -787,8 +787,8 @@ namespace Flux {
         bool use_yak_mlp          = false;
         bool use_mlp_silu_act     = false;
         float ref_index_scale     = 1.f;
+        bool diffusers_style        = false;
         ChromaRadianceParams chroma_radiance_params;
-        bool diffusers_style = false;
     };
 
     struct Flux : public GGMLBlock {
@@ -1329,7 +1329,7 @@ namespace Flux {
                 if (tensor_name.find("guidance_in.in_layer.weight") != std::string::npos) {
                     flux_params.guidance_embed = true;
                 }
-                if (tensor_name.find("model.diffusion_model.single_blocks.0.linear1.weight.1") == std::string::npos) {
+                if (tensor_name.find("model.diffusion_model.single_blocks.0.linear1.weight.1") != std::string::npos) {
                     flux_params.diffusers_style = true;
                 }
                 if (tensor_name.find("__x0__") != std::string::npos) {
@@ -1515,9 +1515,9 @@ namespace Flux {
                                             circular_y_enabled,
                                             circular_x_enabled,
                                             flux_params.axes_dim,
-                                        sd_version_is_longcat(version));
+                                            sd_version_is_longcat(version));
             int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
+            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
             // pe->data = nullptr;
