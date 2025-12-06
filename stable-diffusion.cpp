@@ -46,6 +46,7 @@ const char* model_version_to_str[] = {
     "Qwen Image",
     "Flux.2",
     "Z-Image",
+    "Ovis Image",
 };
 
 const char* sampling_methods_str[] = {
@@ -424,6 +425,13 @@ public:
                                                                         tensor_storage_map,
                                                                         sd_ctx_params->chroma_use_t5_mask,
                                                                         sd_ctx_params->chroma_t5_mask_pad);
+                } else if (version == VERSION_OVIS_IMAGE) {
+                    cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                                                                     offload_params_to_cpu,
+                                                                     tensor_storage_map,
+                                                                     version,
+                                                                     "",
+                                                                     false);
                 } else {
                     cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend,
                                                                           offload_params_to_cpu,
@@ -689,6 +697,11 @@ public:
             ignore_tensors.insert("first_stage_model.conv1");
             ignore_tensors.insert("first_stage_model.quant");
             ignore_tensors.insert("text_encoders.llm.visual.");
+        }
+        if (version == VERSION_OVIS_IMAGE) {
+            ignore_tensors.insert("text_encoders.llm.vision_model.");
+            ignore_tensors.insert("text_encoders.llm.visual_tokenizer.");
+            ignore_tensors.insert("text_encoders.llm.vte.");
         }
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
