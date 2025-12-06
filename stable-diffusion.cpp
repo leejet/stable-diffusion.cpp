@@ -481,10 +481,10 @@ public:
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<FluxModel>(backend,
-                                                               offload_params_to_cpu,
-                                                               tensor_storage_map,
-                                                               version,
-                                                               sd_ctx_params->chroma_use_dit_mask);
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map,
+                                                                version,
+                                                                sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_longcat(version)) {
                 bool enable_vision = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
@@ -917,6 +917,9 @@ public:
                             if (starts_with(name, "model.diffusion_model.guidance_in.in_layer.weight")) {
                                 flow_shift = 1.15f;
                             }
+                        }
+                        if(sd_version_is_longcat(version)) {
+                            flow_shift = 3.0f;
                         }
                     }
                 } else if (sd_version_is_flux2(version)) {
@@ -1481,6 +1484,12 @@ public:
                 if (sd_version_is_flux2(version)) {
                     latent_rgb_proj = flux2_latent_rgb_proj;
                     latent_rgb_bias = flux2_latent_rgb_bias;
+                    patch_sz               = 2;
+                }
+            } else if (dim == 64) {
+                if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_longcat(version)) {
+                    latent_rgb_proj = flux_latent_rgb_proj;
+                    latent_rgb_bias = flux_latent_rgb_bias;
                     patch_sz        = 2;
                 }
             } else if (dim == 48) {
@@ -2269,7 +2278,7 @@ public:
         int vae_scale_factor = 8;
         if (version == VERSION_WAN2_2_TI2V) {
             vae_scale_factor = 16;
-        } else if (sd_version_is_flux2(version)) {
+        } else if (sd_version_is_flux2(version) || sd_version_is_longcat(version)) {
             vae_scale_factor = 16;
         } else if (version == VERSION_CHROMA_RADIANCE) {
             vae_scale_factor = 1;
@@ -2298,6 +2307,8 @@ public:
                 latent_channel = 3;
             } else if (sd_version_is_flux2(version)) {
                 latent_channel = 128;
+            } else if (sd_version_is_longcat(version)) {
+                latent_channel = 64;
             } else {
                 latent_channel = 16;
             }
