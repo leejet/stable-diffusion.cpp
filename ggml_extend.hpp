@@ -760,17 +760,23 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_ext_chunk(struct ggml_co
     return chunks;
 }
 
-__STATIC_INLINE__ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x) {
+__STATIC_INLINE__ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x, bool gate_first = true) {
     // x: [ne3, ne2, ne1, ne0]
     // return: [ne3, ne2, ne1, ne0/2]
 
     auto x_vec = ggml_ext_chunk(ctx, x, 2, 0);
-    auto x1    = x_vec[0];  // [ne3, ne2, ne1, ne0/2]
-    auto x2    = x_vec[1];  // [ne3, ne2, ne1, ne0/2]
+    ggml_tensor* gate;
+    if (gate_first) {
+        gate = x_vec[0];
+        x    = x_vec[1];
+    } else {
+        x    = x_vec[0];
+        gate = x_vec[1];
+    }
 
-    x1 = ggml_silu_inplace(ctx, x1);
+    gate = ggml_silu_inplace(ctx, gate);
 
-    x = ggml_mul(ctx, x1, x2);  // [ne3, ne2, ne1, ne0/2]
+    x = ggml_mul(ctx, x, gate);  // [ne3, ne2, ne1, ne0/2]
 
     return x;
 }

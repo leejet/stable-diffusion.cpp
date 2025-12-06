@@ -1638,7 +1638,7 @@ struct LLMEmbedder : public Conditioner {
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (sd_version_is_flux2(version)) {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
-        } else if (sd_version_is_z_image(version)) {
+        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE) {
             arch = LLM::LLMArch::QWEN3;
         }
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2) {
@@ -1825,6 +1825,16 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = prompt.size();
 
             prompt += "[/INST]";
+        } else if (version == VERSION_OVIS_IMAGE) {
+            prompt_template_encode_start_idx = 28;
+
+            prompt = "<|im_start|>system\nDescribe the image by detailing the color, quantity, text, shape, size, texture, spatial relationships of the objects and background: <|im_end|>\n<|im_start|>user\n";
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
         } else {
             prompt_template_encode_start_idx = 34;
 
@@ -1870,9 +1880,15 @@ struct LLMEmbedder : public Conditioner {
 
         GGML_ASSERT(hidden_states->ne[1] > prompt_template_encode_start_idx);
 
-        int64_t zero_pad_len = 0;
+        int64_t min_length = 0;
         if (sd_version_is_flux2(version)) {
-            int64_t min_length = 512;
+            min_length = 512;
+        } else if (version == VERSION_OVIS_IMAGE) {
+            min_length = 256;
+        }
+
+        int64_t zero_pad_len = 0;
+        if (min_length > 0) {
             if (hidden_states->ne[1] - prompt_template_encode_start_idx < min_length) {
                 zero_pad_len = min_length - hidden_states->ne[1] + prompt_template_encode_start_idx;
             }
