@@ -356,6 +356,10 @@ namespace LLM {
                 "<|fim_pad|>",
                 "<|repo_name|>",
                 "<|file_sep|>",
+                "<tool_response>",
+                "</tool_response>",
+                "<think>",
+                "</think>",
             };
 
             if (merges_utf8_str.size() > 0) {
