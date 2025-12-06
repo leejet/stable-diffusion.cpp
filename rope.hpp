@@ -84,7 +84,16 @@ namespace Rope {
         return txt_ids;
     }
 
-    __STATIC_INLINE__ std::vector<std::vector<float>> gen_flux_img_ids(int h,
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_longcat_txt_ids(int bs, int context_len, int axes_dim_num) {
+        auto txt_ids = std::vector<std::vector<float>>(bs * context_len, std::vector<float>(axes_dim_num, 0.0f));
+        for (int i = 0; i < bs * context_len; i++) {
+            txt_ids[i][1] = (i % context_len);
+            txt_ids[i][2] = (i % context_len);
+        }
+        return txt_ids;
+    }
+
+    __STATIC_INLINE__ std::vector<std::vector<float>>  gen_flux_img_ids(int h,
                                                                        int w,
                                                                        int patch_size,
                                                                        int bs,
@@ -94,7 +103,6 @@ namespace Rope {
                                                                        int w_offset = 0) {
         int h_len = (h + (patch_size / 2)) / patch_size;
         int w_len = (w + (patch_size / 2)) / patch_size;
-
         std::vector<std::vector<float>> img_ids(h_len * w_len, std::vector<float>(axes_dim_num, 0.0));
 
         std::vector<float> row_ids = linspace<float>(h_offset, h_len - 1 + h_offset, h_len);
@@ -169,13 +177,14 @@ namespace Rope {
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_refs_ids(int patch_size,
                                                                    int bs,
                                                                    int axes_dim_num,
+                                                                   int start_index,
                                                                    const std::vector<ggml_tensor*>& ref_latents,
                                                                    bool increase_ref_index,
                                                                    float ref_index_scale) {
         std::vector<std::vector<float>> ids;
         uint64_t curr_h_offset = 0;
         uint64_t curr_w_offset = 0;
-        int index              = 1;
+        int index              = start_index;
         for (ggml_tensor* ref : ref_latents) {
             uint64_t h_offset = 0;
             uint64_t w_offset = 0;
@@ -216,13 +225,17 @@ namespace Rope {
                                                                    std::set<int> txt_arange_dims,
                                                                    const std::vector<ggml_tensor*>& ref_latents,
                                                                    bool increase_ref_index,
-                                                                   float ref_index_scale) {
-        auto txt_ids = gen_flux_txt_ids(bs, context_len, axes_dim_num, txt_arange_dims);
-        auto img_ids = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num);
+                                                                   float ref_index_scale,
+                                                                   bool is_longcat) {
+        int start_index = is_longcat ? 1 : 0;
+
+        auto txt_ids = is_longcat ? gen_longcat_txt_ids(bs, context_len, axes_dim_num) : gen_flux_txt_ids(bs, context_len, axes_dim_num, txt_arange_dims);
+        int offset   = is_longcat ? context_len : 0;
+        auto img_ids = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, start_index, offset, offset);
 
         auto ids = concat_ids(txt_ids, img_ids, bs);
         if (ref_latents.size() > 0) {
-            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, ref_latents, increase_ref_index, ref_index_scale);
+            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, start_index + 1, ref_latents, increase_ref_index, ref_index_scale);
             ids           = concat_ids(ids, refs_ids, bs);
         }
         return ids;
@@ -239,7 +252,8 @@ namespace Rope {
                                                      bool increase_ref_index,
                                                      float ref_index_scale,
                                                      int theta,
-                                                     const std::vector<int>& axes_dim) {
+                                                     const std::vector<int>& axes_dim,
+                                                     bool is_longcat) {
         std::vector<std::vector<float>> ids = gen_flux_ids(h,
                                                            w,
                                                            patch_size,
@@ -249,7 +263,8 @@ namespace Rope {
                                                            txt_arange_dims,
                                                            ref_latents,
                                                            increase_ref_index,
-                                                           ref_index_scale);
+                                                           ref_index_scale,
+                                                           is_longcat);
         return embed_nd(ids, bs, theta, axes_dim);
     }
 
@@ -274,7 +289,7 @@ namespace Rope {
         auto img_ids     = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num);
         auto ids         = concat_ids(txt_ids_repeated, img_ids, bs);
         if (ref_latents.size() > 0) {
-            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, ref_latents, increase_ref_index, 1.f);
+            auto refs_ids = gen_refs_ids(patch_size, bs, axes_dim_num, 1, ref_latents, increase_ref_index, 1.f);
             ids           = concat_ids(ids, refs_ids, bs);
         }
         return ids;

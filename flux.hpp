@@ -1341,7 +1341,7 @@ namespace Flux {
             }
 
             if (flux_params.diffusers_style) {
-                LOG_INFO("Using diffusers-style naming");
+                LOG_INFO("Using diffusers-style attention blocks");
             }
 
             flux = Flux(flux_params);
@@ -1455,7 +1455,6 @@ namespace Flux {
             } else if (version == VERSION_OVIS_IMAGE) {
                 txt_arange_dims = {1, 2};
             }
-
             pe_vec      = Rope::gen_flux_pe(x->ne[1],
                                             x->ne[0],
                                             flux_params.patch_size,
@@ -1466,9 +1465,9 @@ namespace Flux {
                                             increase_ref_index,
                                             flux_params.ref_index_scale,
                                             flux_params.theta,
-                                            flux_params.axes_dim);
+                                            flux_params.axes_dim,
+                                        sd_version_is_longcat(version));
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
-            // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
             // print_ggml_tensor(pe);
