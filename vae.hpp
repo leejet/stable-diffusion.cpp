@@ -553,7 +553,7 @@ public:
 
     struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
         // z: [N, z_channels, h, w]
-        if (sd_version_is_flux2(version)) {
+        if (sd_version_is_flux2(version) || sd_version_is_longcat(version)) {
             // [N, C*p*p, h, w] -> [N, C, h*p, w*p]
             int64_t p = 2;
 
@@ -592,7 +592,7 @@ public:
             auto quant_conv = std::dynamic_pointer_cast<Conv2d>(blocks["quant_conv"]);
             z               = quant_conv->forward(ctx, z);  // [N, 2*embed_dim, h/8, w/8]
         }
-        if (sd_version_is_flux2(version)) {
+        if (sd_version_is_flux2(version) || sd_version_is_longcat(version)) {
             z = ggml_ext_chunk(ctx->ggml_ctx, z, 2, 2)[0];
 
             // [N, C, H, W] -> [N, C*p*p, H/p, W/p]
