@@ -114,15 +114,15 @@ public:
     MmapWrapperImpl(void* data, size_t size, HANDLE hfile, HANDLE hmapping)
         : MmapWrapper(data, size), hfile_(hfile), hmapping_(hmapping) {}
 
-    ~WindowsMmapWrapper() override {
+    ~MmapWrapperImpl() override {
         if (data_) {
             UnmapViewOfFile(data_);
         }
         if (hmapping_ != NULL) {
-            CloseHandle(mapping_handle_);
+            CloseHandle(hmapping_);
         }
         if (hfile_ != INVALID_HANDLE_VALUE) {
-            CloseHandle(file_handle_);
+            CloseHandle(hfile_);
         }
     }
 
