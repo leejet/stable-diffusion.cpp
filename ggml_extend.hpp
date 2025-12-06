@@ -768,7 +768,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor*
     auto x1    = x_vec[0];  // [ne3, ne2, ne1, ne0/2]
     auto x2    = x_vec[1];  // [ne3, ne2, ne1, ne0/2]
 
-    x1 = ggml_gelu_inplace(ctx, x1);
+    x1 = ggml_silu_inplace(ctx, x1);
 
     x = ggml_mul(ctx, x1, x2);  // [ne3, ne2, ne1, ne0/2]
 
