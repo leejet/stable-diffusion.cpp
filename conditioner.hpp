@@ -1638,7 +1638,7 @@ struct LLMEmbedder : public Conditioner {
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (sd_version_is_flux2(version)) {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
-        } else if (sd_version_is_z_image(version)) {
+        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE) {
             arch = LLM::LLMArch::QWEN3;
         }
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2) {
@@ -1728,6 +1728,7 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::pair<int, ggml_tensor*>> image_embeds;
         std::pair<int, int> prompt_attn_range;
         int prompt_template_encode_start_idx = 34;
+        int max_length = 0;
         std::set<int> out_layers;
         if (llm->enable_vision && conditioner_params.ref_images.size() > 0) {
             LOG_INFO("QwenImageEditPlusPipeline");
@@ -1825,6 +1826,17 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = prompt.size();
 
             prompt += "[/INST]";
+        } else if (version == VERSION_OVIS_IMAGE) {
+            prompt_template_encode_start_idx = 28;
+            max_length = prompt_template_encode_start_idx + 256;
+
+            prompt = "<|im_start|>user\nDescribe the image by detailing the color, quantity, text, shape, size, texture, spatial relationships of the objects and background:";
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += " " + conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
         } else {
             prompt_template_encode_start_idx = 34;
 
@@ -1837,7 +1849,7 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         }
 
-        auto tokens_and_weights = tokenize(prompt, prompt_attn_range, 0, false);
+        auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0);
         auto& tokens            = std::get<0>(tokens_and_weights);
         auto& weights           = std::get<1>(tokens_and_weights);
 
@@ -1870,9 +1882,13 @@ struct LLMEmbedder : public Conditioner {
 
         GGML_ASSERT(hidden_states->ne[1] > prompt_template_encode_start_idx);
 
-        int64_t zero_pad_len = 0;
+        int64_t min_length = 0;
         if (sd_version_is_flux2(version)) {
-            int64_t min_length = 512;
+            min_length = 512;
+        }
+
+        int64_t zero_pad_len = 0;
+        if (min_length > 0) {
             if (hidden_states->ne[1] - prompt_template_encode_start_idx < min_length) {
                 zero_pad_len = min_length - hidden_states->ne[1] + prompt_template_encode_start_idx;
             }
@@ -1891,6 +1907,8 @@ struct LLMEmbedder : public Conditioner {
             }
             ggml_ext_tensor_set_f32(new_hidden_states, value, i0, i1, i2, i3);
         });
+
+        // print_ggml_tensor(new_hidden_states);
 
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
