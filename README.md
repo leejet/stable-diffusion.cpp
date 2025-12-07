@@ -49,6 +49,7 @@ API and command-line option may change frequently.***
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
     - [Qwen Image](./docs/qwen_image.md)
     - [Z-Image](./docs/z_image.md)
+    - [Ovis-Image](./docs/ovis_image.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit/Qwen Image Edit 2509](./docs/qwen_image_edit.md)
@@ -134,6 +135,7 @@ If you want to improve performance or reduce VRAM/RAM usage, please refer to [pe
 - [🔥Qwen Image Edit/Qwen Image Edit 2509](./docs/qwen_image_edit.md)
 - [🔥Wan2.1/Wan2.2](./docs/wan.md)
 - [🔥Z-Image](./docs/z_image.md)
+- [Ovis-Image](./docs/ovis_image.md)
 - [LoRA](./docs/lora.md)
 - [LCM/LCM-LoRA](./docs/lcm.md)
 - [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)
