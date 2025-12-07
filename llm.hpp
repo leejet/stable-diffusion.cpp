@@ -1124,7 +1124,7 @@ namespace LLM {
                     params.intermediate_size = pair.second.ne[1];
                 }
             }
-            if (params.num_layers == 28) {  // Qwen3 2B
+            if (arch == LLMArch::QWEN3 && params.num_layers == 28) {  // Qwen3 2B
                 params.num_heads = 16;
             }
             LOG_DEBUG("llm: num_layers = %" PRId64 ", vocab_size = %" PRId64 ", hidden_size = %" PRId64 ", intermediate_size = %" PRId64,
