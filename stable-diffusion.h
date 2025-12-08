@@ -151,6 +151,11 @@ typedef struct {
 } sd_tiling_params_t;
 
 typedef struct {
+    const char* name;
+    const char* path;
+} sd_embedding_t;
+
+typedef struct {
     const char* model_path;
     const char* clip_l_path;
     const char* clip_g_path;
@@ -164,7 +169,8 @@ typedef struct {
     const char* taesd_path;
     const char* control_net_path;
     const char* lora_model_dir;
-    const char* embedding_dir;
+    const sd_embedding_t* embeddings;
+    uint32_t embedding_count;
     const char* photo_maker_path;
     const char* tensor_type_rules;
     bool vae_decode_only;
