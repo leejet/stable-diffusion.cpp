@@ -423,7 +423,9 @@ public:
         auto splited_texts = split_with_special_tokens(text, special_tokens);
 
         for (auto& splited_text : splited_texts) {
+            LOG_DEBUG("token %s", splited_text.c_str());
             if (is_special_token(splited_text)) {
+                LOG_DEBUG("special %s", splited_text.c_str());
                 bool skip = on_new_token_cb(splited_text, bpe_tokens);
                 if (skip) {
                     token_strs.push_back(splited_text);

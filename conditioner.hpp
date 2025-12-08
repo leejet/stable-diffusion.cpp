@@ -65,10 +65,16 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
                                       bool offload_params_to_cpu,
                                       const String2TensorStorage& tensor_storage_map,
-                                      const std::map<std::string, std::string> embedding_map,
+                                      const std::map<std::string, std::string>& orig_embedding_map,
                                       SDVersion version = VERSION_SD1,
                                       PMVersion pv      = PM_VERSION_1)
-        : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407), embedding_map(embedding_map) {
+        : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407) {
+        for (const auto& kv : orig_embedding_map) {
+            std::string name = kv.first;
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+            embedding_map[name] = kv.second;
+            tokenizer.add_special_token(name);
+        }
         bool force_clip_f32 = !embedding_map.empty();
         if (sd_version_is_sd1(version)) {
             text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32);
@@ -77,9 +83,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         } else if (sd_version_is_sdxl(version)) {
             text_model  = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false, force_clip_f32);
             text_model2 = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false, force_clip_f32);
-        }
-        for (const auto& kv : embedding_map) {
-            tokenizer.add_special_token(kv.first);
         }
     }
 
