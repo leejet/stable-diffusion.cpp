@@ -1064,6 +1064,9 @@ struct SDGenerationParams {
     std::string easycache_option;
     sd_easycache_params_t easycache_params;
 
+    std::string ucache_option;
+    sd_ucache_params_t ucache_params;
+
     float moe_boundary  = 0.875f;
     int video_frames    = 1;
     int fps             = 16;
@@ -1414,6 +1417,38 @@ struct SDGenerationParams {
             return consumed;
         };
 
+        auto on_ucache_arg = [&](int argc, const char** argv, int index) {
+            const std::string default_values = "1.0,0.15,0.95";
+            auto looks_like_value            = [](const std::string& token) {
+                if (token.empty()) {
+                    return false;
+                }
+                if (token[0] != '-') {
+                    return true;
+                }
+                if (token.size() == 1) {
+                    return false;
+                }
+                unsigned char next = static_cast<unsigned char>(token[1]);
+                return std::isdigit(next) || token[1] == '.';
+            };
+
+            std::string option_value;
+            int consumed = 0;
+            if (index + 1 < argc) {
+                std::string next_arg = argv[index + 1];
+                if (looks_like_value(next_arg)) {
+                    option_value = argv_to_utf8(index + 1, argv);
+                    consumed     = 1;
+                }
+            }
+            if (option_value.empty()) {
+                option_value = default_values;
+            }
+            ucache_option = option_value;
+            return consumed;
+        };
+
         options.manual_options = {
             {"-s",
              "--seed",
@@ -1449,6 +1484,10 @@ struct SDGenerationParams {
              "--easycache",
              "enable EasyCache for DiT models with optional \"threshold,start_percent,end_percent\" (default: 0.2,0.15,0.95)",
              on_easycache_arg},
+            {"",
+             "--ucache",
+             "enable UCache for UNET models (SD1.x/SD2.x/SDXL) with optional \"threshold,start_percent,end_percent\" (default: 1.0,0.15,0.95)",
+             on_ucache_arg},
 
         };
 
@@ -1612,6 +1651,59 @@ struct SDGenerationParams {
             easycache_params.end_percent     = values[2];
         } else {
             easycache_params.enabled = false;
+        }
+
+        if (!ucache_option.empty()) {
+            float values[3] = {0.0f, 0.0f, 0.0f};
+            std::stringstream ss(ucache_option);
+            std::string token;
+            int idx = 0;
+            while (std::getline(ss, token, ',')) {
+                auto trim = [](std::string& s) {
+                    const char* whitespace = " \t\r\n";
+                    auto start             = s.find_first_not_of(whitespace);
+                    if (start == std::string::npos) {
+                        s.clear();
+                        return;
+                    }
+                    auto end = s.find_last_not_of(whitespace);
+                    s        = s.substr(start, end - start + 1);
+                };
+                trim(token);
+                if (token.empty()) {
+                    fprintf(stderr, "error: invalid ucache option '%s'\n", ucache_option.c_str());
+                    return false;
+                }
+                if (idx >= 3) {
+                    fprintf(stderr, "error: ucache expects exactly 3 comma-separated values (threshold,start,end)\n");
+                    return false;
+                }
+                try {
+                    values[idx] = std::stof(token);
+                } catch (const std::exception&) {
+                    fprintf(stderr, "error: invalid ucache value '%s'\n", token.c_str());
+                    return false;
+                }
+                idx++;
+            }
+            if (idx != 3) {
+                fprintf(stderr, "error: ucache expects exactly 3 comma-separated values (threshold,start,end)\n");
+                return false;
+            }
+            if (values[0] < 0.0f) {
+                fprintf(stderr, "error: ucache threshold must be non-negative\n");
+                return false;
+            }
+            if (values[1] < 0.0f || values[1] >= 1.0f || values[2] <= 0.0f || values[2] > 1.0f || values[1] >= values[2]) {
+                fprintf(stderr, "error: ucache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
+                return false;
+            }
+            ucache_params.enabled         = true;
+            ucache_params.reuse_threshold = values[0];
+            ucache_params.start_percent   = values[1];
+            ucache_params.end_percent     = values[2];
+        } else {
+            ucache_params.enabled = false;
         }
 
         sample_params.guidance.slg.layers                 = skip_layers.data();
@@ -2292,6 +2384,7 @@ int main(int argc, const char* argv[]) {
                 },  // pm_params
                 ctx_params.vae_tiling_params,
                 gen_params.easycache_params,
+                gen_params.ucache_params,
             };
 
             results     = generate_image(sd_ctx, &img_gen_params);
@@ -2317,6 +2410,7 @@ int main(int argc, const char* argv[]) {
                 gen_params.video_frames,
                 gen_params.vace_strength,
                 gen_params.easycache_params,
+                gen_params.ucache_params,
             };
 
             results = generate_video(sd_ctx, &vid_gen_params, &num_results);
