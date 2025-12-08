@@ -283,6 +283,23 @@ int main(int argc, const char** argv) {
     std::mutex sd_ctx_mutex;
 
     httplib::Server svr;
+    
+    svr.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
+        std::string origin = req.get_header_value("Origin");
+        if (origin.empty()) {
+            origin = "*";
+        }
+        res.set_header("Access-Control-Allow-Origin", origin);
+        res.set_header("Access-Control-Allow-Credentials", "true");
+        res.set_header("Access-Control-Allow-Methods", "*");
+        res.set_header("Access-Control-Allow-Headers", "*");
+        
+        if (req.method == "OPTIONS") {
+            res.status = 204;
+            return httplib::Server::HandlerResponse::Handled;
+        }
+        return httplib::Server::HandlerResponse::Unhandled;
+    });
 
     // health
     svr.Get("/", [&](const httplib::Request&, httplib::Response& res) {
