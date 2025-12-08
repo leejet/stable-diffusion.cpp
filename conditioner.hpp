@@ -1706,7 +1706,7 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::pair<int, ggml_tensor*>> image_embeds;
         std::pair<int, int> prompt_attn_range;
         int prompt_template_encode_start_idx = 34;
-        int max_length                       = 0;
+        int max_length = 0;
         std::set<int> out_layers;
         std::vector<int> tokens;
         std::vector<float> weights;
@@ -1832,6 +1832,7 @@ struct LLMEmbedder : public Conditioner {
         } else if (sd_version_is_longcat(version)) {
             prompt_template_encode_start_idx = 36;
             // prompt_template_encode_end_idx = 5;
+            max_length = 512;
 
             prompt = "<|im_start|>system\nAs an image captioning expert, generate a descriptive text prompt based on an image content, suitable for input to a text-to-image model.<|im_end|>\n<|im_start|>user\n";
 
