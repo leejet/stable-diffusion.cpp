@@ -501,6 +501,9 @@ struct SDContextParams {
     std::string tensor_type_rules;
     std::string lora_model_dir;
 
+    std::map<std::string, std::string> embedding_map;
+    std::vector<sd_embedding_t> embedding_array;
+
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
@@ -828,6 +831,37 @@ struct SDContextParams {
         return options;
     }
 
+    void build_embedding_map() {
+        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+
+        if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
+            return;
+        }
+
+        for (auto& p : fs::directory_iterator(embedding_dir)) {
+            if (!p.is_regular_file())
+                continue;
+
+            auto path       = p.path();
+            std::string ext = path.extension().string();
+
+            bool valid = false;
+            for (auto& e : valid_ext) {
+                if (ext == e) {
+                    valid = true;
+                    break;
+                }
+            }
+            if (!valid)
+                continue;
+
+            std::string key   = path.stem().string();
+            std::string value = path.string();
+
+            embedding_map[key] = value;
+        }
+    }
+
     bool process_and_check(SDMode mode) {
         if (mode != UPSCALE && model_path.length() == 0 && diffusion_model_path.length() == 0) {
             fprintf(stderr, "error: the following arguments are required: model_path/diffusion_model\n");
@@ -845,10 +879,24 @@ struct SDContextParams {
             n_threads = sd_get_num_physical_cores();
         }
 
+        build_embedding_map();
+
         return true;
     }
 
     std::string to_string() const {
+        std::ostringstream emb_ss;
+        emb_ss << "{\n";
+        for (auto it = embedding_map.begin(); it != embedding_map.end(); ++it) {
+            emb_ss << "    \"" << it->first << "\": \"" << it->second << "\"";
+            if (std::next(it) != embedding_map.end()) {
+                emb_ss << ",";
+            }
+            emb_ss << "\n";
+        }
+        emb_ss << "  }";
+
+        std::string embeddings_str = emb_ss.str();
         std::ostringstream oss;
         oss << "SDContextParams {\n"
             << "  n_threads: " << n_threads << ",\n"
@@ -866,6 +914,7 @@ struct SDContextParams {
             << "  esrgan_path: \"" << esrgan_path << "\",\n"
             << "  control_net_path: \"" << control_net_path << "\",\n"
             << "  embedding_dir: \"" << embedding_dir << "\",\n"
+            << "  embeddings: " << embeddings_str << "\n"
             << "  wtype: " << sd_type_name(wtype) << ",\n"
             << "  tensor_type_rules: \"" << tensor_type_rules << "\",\n"
             << "  lora_model_dir: \"" << lora_model_dir << "\",\n"
@@ -898,6 +947,15 @@ struct SDContextParams {
     }
 
     sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview) {
+        embedding_array.clear();
+        embedding_array.reserve(embedding_map.size());
+        for (const auto& kv : embedding_map) {
+            sd_embedding_t item;
+            item.name = kv.first.c_str();
+            item.path = kv.second.c_str();
+            embedding_array.emplace_back(item);
+        }
+
         sd_ctx_params_t sd_ctx_params = {
             model_path.c_str(),
             clip_l_path.c_str(),
@@ -912,7 +970,8 @@ struct SDContextParams {
             taesd_path.c_str(),
             control_net_path.c_str(),
             lora_model_dir.c_str(),
-            embedding_dir.c_str(),
+            embedding_array.data(),
+            static_cast<uint32_t>(embedding_array.size()),
             photo_maker_path.c_str(),
             tensor_type_rules.c_str(),
             vae_decode_only,

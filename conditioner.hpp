@@ -56,7 +56,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     std::shared_ptr<CLIPTextModelRunner> text_model2;
 
     std::string trigger_word = "img";  // should be user settable
-    std::string embd_dir;
+    std::map<std::string, std::string> embedding_map;
     int32_t num_custom_embeddings   = 0;
     int32_t num_custom_embeddings_2 = 0;
     std::vector<uint8_t> token_embed_custom;
@@ -65,11 +65,17 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
                                       bool offload_params_to_cpu,
                                       const String2TensorStorage& tensor_storage_map,
-                                      const std::string& embd_dir,
+                                      const std::map<std::string, std::string>& orig_embedding_map,
                                       SDVersion version = VERSION_SD1,
                                       PMVersion pv      = PM_VERSION_1)
-        : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407), embd_dir(embd_dir) {
-        bool force_clip_f32 = embd_dir.size() > 0;
+        : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407) {
+        for (const auto& kv : orig_embedding_map) {
+            std::string name = kv.first;
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+            embedding_map[name] = kv.second;
+            tokenizer.add_special_token(name);
+        }
+        bool force_clip_f32 = !embedding_map.empty();
         if (sd_version_is_sd1(version)) {
             text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32);
         } else if (sd_version_is_sd2(version)) {
@@ -196,25 +202,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
     std::vector<int> convert_token_to_id(std::string text) {
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-            size_t word_end       = str.find(",");
-            std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
-            embd_name             = trim(embd_name);
-            std::string embd_path = get_full_path(embd_dir, embd_name + ".pt");
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".ckpt");
+            auto iter = embedding_map.find(str);
+            if (iter == embedding_map.end()) {
+                return false;
             }
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".safetensors");
-            }
-            if (embd_path.size() > 0) {
-                if (load_embedding(embd_name, embd_path, bpe_tokens)) {
-                    if (word_end != std::string::npos) {
-                        str = str.substr(word_end);
-                    } else {
-                        str = "";
-                    }
-                    return true;
-                }
+            std::string embedding_path = iter->second;
+            if (load_embedding(str, embedding_path, bpe_tokens)) {
+                return true;
             }
             return false;
         };
@@ -245,25 +239,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-            size_t word_end       = str.find(",");
-            std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
-            embd_name             = trim(embd_name);
-            std::string embd_path = get_full_path(embd_dir, embd_name + ".pt");
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".ckpt");
+            auto iter = embedding_map.find(str);
+            if (iter == embedding_map.end()) {
+                return false;
             }
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".safetensors");
-            }
-            if (embd_path.size() > 0) {
-                if (load_embedding(embd_name, embd_path, bpe_tokens)) {
-                    if (word_end != std::string::npos) {
-                        str = str.substr(word_end);
-                    } else {
-                        str = "";
-                    }
-                    return true;
-                }
+            std::string embedding_path = iter->second;
+            if (load_embedding(str, embedding_path, bpe_tokens)) {
+                return true;
             }
             return false;
         };
@@ -376,25 +358,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-            size_t word_end       = str.find(",");
-            std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
-            embd_name             = trim(embd_name);
-            std::string embd_path = get_full_path(embd_dir, embd_name + ".pt");
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".ckpt");
+            auto iter = embedding_map.find(str);
+            if (iter == embedding_map.end()) {
+                return false;
             }
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".safetensors");
-            }
-            if (embd_path.size() > 0) {
-                if (load_embedding(embd_name, embd_path, bpe_tokens)) {
-                    if (word_end != std::string::npos) {
-                        str = str.substr(word_end);
-                    } else {
-                        str = "";
-                    }
-                    return true;
-                }
+            std::string embedding_path = iter->second;
+            if (load_embedding(str, embedding_path, bpe_tokens)) {
+                return true;
             }
             return false;
         };
@@ -1728,7 +1698,7 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::pair<int, ggml_tensor*>> image_embeds;
         std::pair<int, int> prompt_attn_range;
         int prompt_template_encode_start_idx = 34;
-        int max_length = 0;
+        int max_length                       = 0;
         std::set<int> out_layers;
         if (llm->enable_vision && conditioner_params.ref_images.size() > 0) {
             LOG_INFO("QwenImageEditPlusPipeline");
@@ -1828,7 +1798,7 @@ struct LLMEmbedder : public Conditioner {
             prompt += "[/INST]";
         } else if (version == VERSION_OVIS_IMAGE) {
             prompt_template_encode_start_idx = 28;
-            max_length = prompt_template_encode_start_idx + 256;
+            max_length                       = prompt_template_encode_start_idx + 256;
 
             prompt = "<|im_start|>user\nDescribe the image by detailing the color, quantity, text, shape, size, texture, spatial relationships of the objects and background:";
 

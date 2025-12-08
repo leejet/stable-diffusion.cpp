@@ -508,18 +508,22 @@ public:
                                                                 "model.diffusion_model",
                                                                 version);
             } else {  // SD1.x SD2.x SDXL
+                std::map<std::string, std::string> embbeding_map;
+                for (int i = 0; i < sd_ctx_params->embedding_count; i++) {
+                    embbeding_map.emplace(SAFE_STR(sd_ctx_params->embeddings[i].name), SAFE_STR(sd_ctx_params->embeddings[i].path));
+                }
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
                                                                                            offload_params_to_cpu,
                                                                                            tensor_storage_map,
-                                                                                           SAFE_STR(sd_ctx_params->embedding_dir),
+                                                                                           embbeding_map,
                                                                                            version,
                                                                                            PM_VERSION_2);
                 } else {
                     cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
                                                                                            offload_params_to_cpu,
                                                                                            tensor_storage_map,
-                                                                                           SAFE_STR(sd_ctx_params->embedding_dir),
+                                                                                           embbeding_map,
                                                                                            version);
                 }
                 diffusion_model = std::make_shared<UNetModel>(backend,
@@ -2521,7 +2525,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "taesd_path: %s\n"
              "control_net_path: %s\n"
              "lora_model_dir: %s\n"
-             "embedding_dir: %s\n"
              "photo_maker_path: %s\n"
              "tensor_type_rules: %s\n"
              "vae_decode_only: %s\n"
@@ -2552,7 +2555,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->taesd_path),
              SAFE_STR(sd_ctx_params->control_net_path),
              SAFE_STR(sd_ctx_params->lora_model_dir),
-             SAFE_STR(sd_ctx_params->embedding_dir),
              SAFE_STR(sd_ctx_params->photo_maker_path),
              SAFE_STR(sd_ctx_params->tensor_type_rules),
              BOOL_STR(sd_ctx_params->vae_decode_only),

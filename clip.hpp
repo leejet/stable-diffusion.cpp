@@ -3,6 +3,7 @@
 
 #include "ggml_extend.hpp"
 #include "model.h"
+#include "tokenize_util.h"
 
 /*================================================== CLIPTokenizer ===================================================*/
 
@@ -72,6 +73,8 @@ private:
     int encoder_len;
     int bpe_len;
 
+    std::vector<std::string> special_tokens;
+
 public:
     const std::string UNK_TOKEN = "<|endoftext|>";
     const std::string BOS_TOKEN = "<|startoftext|>";
@@ -117,6 +120,15 @@ private:
         return pairs;
     }
 
+    bool is_special_token(const std::string& token) {
+        for (auto& special_token : special_tokens) {
+            if (special_token == token) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 public:
     CLIPTokenizer(int pad_token_id = 49407, const std::string& merges_utf8_str = "")
         : PAD_TOKEN_ID(pad_token_id) {
@@ -125,6 +137,8 @@ public:
         } else {
             load_from_merges(ModelLoader::load_merges());
         }
+        add_special_token("<|startoftext|>");
+        add_special_token("<|endoftext|>");
     }
 
     void load_from_merges(const std::string& merges_utf8_str) {
@@ -199,6 +213,10 @@ public:
             decoder[encoder_len] = token;
             encoder_len++;
         }
+    }
+
+    void add_special_token(const std::string& token) {
+        special_tokens.push_back(token);
     }
 
     std::u32string bpe(const std::u32string& token) {
@@ -379,25 +397,54 @@ public:
         return trim(text);
     }
 
+    std::vector<std::string> token_split(const std::string& text) {
+        std::regex pat(R"('s|'t|'re|'ve|'m|'ll|'d|[[:alpha:]]+|[[:digit:]]|[^[:space:][:alpha:][:digit:]]+)",
+                       std::regex::icase);
+        std::sregex_iterator iter(text.begin(), text.end(), pat);
+        std::sregex_iterator end;
+
+        std::vector<std::string> result;
+        for (; iter != end; ++iter) {
+            result.emplace_back(iter->str());
+        }
+
+        return result;
+    }
+
     std::vector<int> encode(std::string text, on_new_token_cb_t on_new_token_cb) {
         std::string original_text = text;
         std::vector<int32_t> bpe_tokens;
         text = whitespace_clean(text);
         std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
 
-        std::regex pat(R"(<\|startoftext\|>|<\|endoftext\|>|'s|'t|'re|'ve|'m|'ll|'d|[[:alpha:]]+|[[:digit:]]|[^[:space:][:alpha:][:digit:]]+)",
-                       std::regex::icase);
-
-        std::smatch matches;
         std::string str = text;
         std::vector<std::string> token_strs;
-        while (std::regex_search(str, matches, pat)) {
-            bool skip = on_new_token_cb(str, bpe_tokens);
-            if (skip) {
+
+        auto splited_texts = split_with_special_tokens(text, special_tokens);
+
+        for (auto& splited_text : splited_texts) {
+            LOG_DEBUG("token %s", splited_text.c_str());
+            if (is_special_token(splited_text)) {
+                LOG_DEBUG("special %s", splited_text.c_str());
+                bool skip = on_new_token_cb(splited_text, bpe_tokens);
+                if (skip) {
+                    token_strs.push_back(splited_text);
+                    continue;
+                }
                 continue;
             }
-            for (auto& token : matches) {
-                std::string token_str = token.str();
+
+            auto tokens = token_split(splited_text);
+            for (auto& token : tokens) {
+                if (on_new_token_cb != nullptr) {
+                    bool skip = on_new_token_cb(token, bpe_tokens);
+                    if (skip) {
+                        token_strs.push_back(token);
+                        continue;
+                    }
+                }
+
+                std::string token_str = token;
                 std::u32string utf32_token;
                 for (int i = 0; i < token_str.length(); i++) {
                     unsigned char b = token_str[i];
@@ -417,14 +464,13 @@ public:
                 bpe_tokens.push_back(encoder[bpe_str]);
                 token_strs.push_back(utf32_to_utf8(bpe_str));
             }
-            str = matches.suffix();
         }
-        std::stringstream ss;
-        ss << "[";
-        for (auto token : token_strs) {
-            ss << "\"" << token << "\", ";
-        }
-        ss << "]";
+        // std::stringstream ss;
+        // ss << "[";
+        // for (auto token : token_strs) {
+        //     ss << "\"" << token << "\", ";
+        // }
+        // ss << "]";
         // LOG_DEBUG("split prompt \"%s\" to tokens %s", original_text.c_str(), ss.str().c_str());
         // printf("split prompt \"%s\" to tokens %s \n", original_text.c_str(), ss.str().c_str());
         return bpe_tokens;
