@@ -1698,7 +1698,7 @@ struct LLMEmbedder : public Conditioner {
                 std::string current_part;
 
                 for (char c : curr_text) {
-                    if (c == '\'') {
+                    if (c == '"') {
                         if (!current_part.empty()) {
                             parts.push_back(current_part);
                             current_part.clear();
@@ -1719,7 +1719,7 @@ struct LLMEmbedder : public Conditioner {
                 for (const auto& part : parts) {
                     if (part.empty())
                         continue;
-                    if (part[0] == '\'' && part.back() == '\'') {
+                    if (part[0] == '"' && part.back() == '"') {
                         std::string quoted_content = part.substr(1, part.size() - 2);
                         for (char ch : quoted_content) {
                             std::string char_str(1, ch);
@@ -1758,68 +1758,139 @@ struct LLMEmbedder : public Conditioner {
         std::vector<float> weights;
         std::vector<float> mask;
         if (llm->enable_vision && conditioner_params.ref_images.size() > 0) {
-            LOG_INFO("QwenImageEditPlusPipeline");
-            prompt_template_encode_start_idx = 64;
-            int image_embed_idx              = 64 + 6;
+            if (sd_version_is_longcat(version)) {
+                LOG_INFO("LongCatEditPipeline");
+                prompt_template_encode_start_idx = 67;
+                // prompt_template_encode_end_idx = 5;
+                int image_embed_idx              = 36 + 6;
 
-            int min_pixels          = 384 * 384;
-            int max_pixels          = 560 * 560;
-            std::string placeholder = "<|image_pad|>";
-            std::string img_prompt;
+                int min_pixels          = 384 * 384;
+                int max_pixels          = 560 * 560;
+                std::string placeholder = "<|image_pad|>";
+                std::string img_prompt;
 
-            for (int i = 0; i < conditioner_params.ref_images.size(); i++) {
-                sd_image_f32_t image = sd_image_t_to_sd_image_f32_t(*conditioner_params.ref_images[i]);
-                double factor        = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
-                int height           = image.height;
-                int width            = image.width;
-                int h_bar            = static_cast<int>(std::round(height / factor) * factor);
-                int w_bar            = static_cast<int>(std::round(width / factor) * factor);
 
-                if (static_cast<double>(h_bar) * w_bar > max_pixels) {
-                    double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
-                    h_bar       = std::max(static_cast<int>(factor),
-                                           static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
-                    w_bar       = std::max(static_cast<int>(factor),
-                                           static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
-                } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
-                    double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
-                    h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
-                    w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                // Only one image is officicially supported by the model, not sure how it handles multiple images
+                for (int i = 0; i < conditioner_params.ref_images.size(); i++) {
+                    sd_image_f32_t image = sd_image_t_to_sd_image_f32_t(*conditioner_params.ref_images[i]);
+                    double factor        = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
+                    int height           = image.height;
+                    int width            = image.width;
+                    int h_bar            = static_cast<int>(std::round(height / factor)) * factor;
+                    int w_bar            = static_cast<int>(std::round(width / factor)) * factor;
+
+                    if (static_cast<double>(h_bar) * w_bar > max_pixels) {
+                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
+                        h_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                        w_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+                    } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
+                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
+                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                    }
+
+                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, image.height, image.width, h_bar, w_bar);
+
+                    sd_image_f32_t resized_image = clip_preprocess(image, w_bar, h_bar);
+                    free(image.data);
+                    image.data = nullptr;
+
+                    ggml_tensor* image_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
+                    sd_image_f32_to_ggml_tensor(resized_image, image_tensor, false);
+                    free(resized_image.data);
+                    resized_image.data = nullptr;
+
+                    ggml_tensor* image_embed = nullptr;
+                    llm->encode_image(n_threads, image_tensor, &image_embed, work_ctx);
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+                    image_embed_idx += 1 + image_embed->ne[1] + 6;
+
+                    img_prompt += "<|vision_start|>";
+                    int64_t num_image_tokens = image_embed->ne[1];
+                    img_prompt.reserve(num_image_tokens * placeholder.size());
+                    for (int j = 0; j < num_image_tokens; j++) {
+                        img_prompt += placeholder;
+                    }
+                    img_prompt += "<|vision_end|>";
                 }
 
-                LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, image.height, image.width, h_bar, w_bar);
+                max_length   = 512;
+                spell_quotes = true;
+                prompt       = "<|im_start|>system\nAs an image editing expert, first analyze the content and attributes of the input image(s). Then, based on the user's editing instructions, clearly and precisely determine how to modify the given image(s), ensuring that only the specified parts are altered and all other aspects remain consistent with the original(s).<|im_end|>\n<|im_start|>user\n";
+                prompt += img_prompt;
 
-                sd_image_f32_t resized_image = clip_preprocess(image, w_bar, h_bar);
-                free(image.data);
-                image.data = nullptr;
+                prompt_attn_range.first = static_cast<int>(prompt.size());
+                prompt += conditioner_params.text;
+                prompt_attn_range.second = static_cast<int>(prompt.size());
 
-                ggml_tensor* image_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
-                sd_image_f32_to_ggml_tensor(resized_image, image_tensor, false);
-                free(resized_image.data);
-                resized_image.data = nullptr;
+                prompt += "<|im_end|>\n<|im_start|>assistant\n";
 
-                ggml_tensor* image_embed = nullptr;
-                llm->encode_image(n_threads, image_tensor, &image_embed, work_ctx);
-                image_embeds.emplace_back(image_embed_idx, image_embed);
-                image_embed_idx += 1 + static_cast<int>(image_embed->ne[1]) + 6;
+            } else {
+                LOG_INFO("QwenImageEditPlusPipeline");
+                prompt_template_encode_start_idx = 64;
+                int image_embed_idx              = 64 + 6;
 
-                img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";  // [24669, 220, index, 25, 220, 151652]
-                int64_t num_image_tokens = image_embed->ne[1];
-                img_prompt.reserve(num_image_tokens * placeholder.size());
-                for (int j = 0; j < num_image_tokens; j++) {
-                    img_prompt += placeholder;
+                int min_pixels          = 384 * 384;
+                int max_pixels          = 560 * 560;
+                std::string placeholder = "<|image_pad|>";
+                std::string img_prompt;
+
+                for (int i = 0; i < conditioner_params.ref_images.size(); i++) {
+                    sd_image_f32_t image = sd_image_t_to_sd_image_f32_t(*conditioner_params.ref_images[i]);
+                    double factor        = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
+                    int height           = image.height;
+                    int width            = image.width;
+                    int h_bar            = static_cast<int>(std::round(height / factor) * factor);
+                    int w_bar            = static_cast<int>(std::round(width / factor) * factor);
+
+                    if (static_cast<double>(h_bar) * w_bar > max_pixels) {
+                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
+                        h_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                        w_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+                    } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
+                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
+                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                    }
+
+                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, image.height, image.width, h_bar, w_bar);
+
+                    sd_image_f32_t resized_image = clip_preprocess(image, w_bar, h_bar);
+                    free(image.data);
+                    image.data = nullptr;
+
+                    ggml_tensor* image_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
+                    sd_image_f32_to_ggml_tensor(resized_image, image_tensor, false);
+                    free(resized_image.data);
+                    resized_image.data = nullptr;
+
+                    ggml_tensor* image_embed = nullptr;
+                    llm->encode_image(n_threads, image_tensor, &image_embed, work_ctx);
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+                    image_embed_idx += 1 + static_cast<int>(image_embed->ne[1]) + 6;
+
+                    img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";  // [24669, 220, index, 25, 220, 151652]
+                    int64_t num_image_tokens = image_embed->ne[1];
+                    img_prompt.reserve(num_image_tokens * placeholder.size());
+                    for (int j = 0; j < num_image_tokens; j++) {
+                        img_prompt += placeholder;
+                    }
+                    img_prompt += "<|vision_end|>";
                 }
-                img_prompt += "<|vision_end|>";
+
+                prompt = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n";
+                prompt += img_prompt;
+
+                prompt_attn_range.first = static_cast<int>(prompt.size());
+                prompt += conditioner_params.text;
+                prompt_attn_range.second = static_cast<int>(prompt.size());
+
+                prompt += "<|im_end|>\n<|im_start|>assistant\n";
             }
-
-            prompt = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n";
-            prompt += img_prompt;
-
-            prompt_attn_range.first = static_cast<int>(prompt.size());
-            prompt += conditioner_params.text;
-            prompt_attn_range.second = static_cast<int>(prompt.size());
-
-            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (version == VERSION_FLUX2) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {10, 20, 30};

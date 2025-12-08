@@ -115,7 +115,7 @@ namespace Rope {
         return txt_ids;
     }
 
-    __STATIC_INLINE__ std::vector<std::vector<float>>  gen_flux_img_ids(int h,
+    __STATIC_INLINE__ std::vector<std::vector<float>> gen_flux_img_ids(int h,
                                                                        int w,
                                                                        int patch_size,
                                                                        int bs,
@@ -138,7 +138,6 @@ namespace Rope {
 
         std::vector<float> row_ids = linspace<float>(1.f * h_start, 1.f * h_start + h_len - 1, h_len);
         std::vector<float> col_ids = linspace<float>(1.f * w_start, 1.f * w_start + w_len - 1, w_len);
-
         for (int i = 0; i < h_len; ++i) {
             for (int j = 0; j < w_len; ++j) {
                 img_ids[i * w_len + j][0] = 1.f * index;
@@ -219,10 +218,10 @@ namespace Rope {
                                                                    bool increase_ref_index,
                                                                    float ref_index_scale,
                                                                    bool scale_rope,
-                                                                    int base_offset = 0) {
+                                                                   int base_offset = 0) {
         std::vector<std::vector<float>> ids;
-        int curr_h_offset = base_offset;
-        int curr_w_offset = base_offset;
+        int curr_h_offset = 0;
+        int curr_w_offset = 0;
         int index         = start_index;
         for (ggml_tensor* ref : ref_latents) {
             int h_offset = 0;
@@ -242,8 +241,8 @@ namespace Rope {
                                             bs,
                                             axes_dim_num,
                                             static_cast<int>(index * ref_index_scale),
-                                            h_offset,
-                                            w_offset,
+                                            h_offset + base_offset,
+                                            w_offset + base_offset,
                                             scale_rope);
             ids          = concat_ids(ids, ref_ids, bs);
 
