@@ -1648,46 +1648,91 @@ struct LLMEmbedder : public Conditioner {
         }
     }
 
-    std::tuple<std::vector<int>, std::vector<float>> tokenize(std::string text,
-                                                              std::pair<int, int> attn_range,
-                                                              size_t max_length = 0,
-                                                              bool padding      = false) {
+    std::tuple<std::vector<int>, std::vector<float>> tokenize(
+        std::string text,
+        std::pair<int, int> attn_range,
+        size_t max_length = 0,
+        bool padding      = false,
+        bool spell_quotes = false) {
         std::vector<std::pair<std::string, float>> parsed_attention;
         parsed_attention.emplace_back(text.substr(0, attn_range.first), 1.f);
+
         if (attn_range.second - attn_range.first > 0) {
-            auto new_parsed_attention = parse_prompt_attention(text.substr(attn_range.first, attn_range.second - attn_range.first));
-            parsed_attention.insert(parsed_attention.end(),
-                                    new_parsed_attention.begin(),
-                                    new_parsed_attention.end());
+            auto new_parsed_attention = parse_prompt_attention(
+                text.substr(attn_range.first, attn_range.second - attn_range.first));
+            parsed_attention.insert(
+                parsed_attention.end(),
+                new_parsed_attention.begin(),
+                new_parsed_attention.end());
         }
         parsed_attention.emplace_back(text.substr(attn_range.second), 1.f);
-        {
-            std::stringstream ss;
-            ss << "[";
-            for (const auto& item : parsed_attention) {
-                ss << "['" << item.first << "', " << item.second << "], ";
-            }
-            ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
-        }
+
+        // {
+        //     std::stringstream ss;
+        //     ss << '[';
+        //     for (const auto& item : parsed_attention) {
+        //         ss << "['" << item.first << "', " << item.second << "], ";
+        //     }
+        //     ss << ']';
+        //     LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
+        // }
 
         std::vector<int> tokens;
         std::vector<float> weights;
+
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
-            std::vector<int> curr_tokens = tokenizer->tokenize(curr_text, nullptr);
-            tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
-            weights.insert(weights.end(), curr_tokens.size(), curr_weight);
+
+            if (spell_quotes) {
+                std::vector<std::string> parts;
+                bool in_quote = false;
+                std::string current_part;
+
+                for (char c : curr_text) {
+                    if (c == '\'') {
+                        if (!current_part.empty()) {
+                            parts.push_back(current_part);
+                            current_part.clear();
+                        }
+                        in_quote = !in_quote;
+                    } else {
+                        current_part += c;
+                        if (in_quote && current_part.size() == 1) {
+                            parts.push_back(current_part);
+                            current_part.clear();
+                        }
+                    }
+                }
+                if (!current_part.empty()) {
+                    parts.push_back(current_part);
+                }
+
+                for (const auto& part : parts) {
+                    if (part.empty())
+                        continue;
+                    if (part[0] == '\'' && part.back() == '\'') {
+                        std::string quoted_content = part.substr(1, part.size() - 2);
+                        for (char ch : quoted_content) {
+                            std::string char_str(1, ch);
+                            std::vector<int> char_tokens = tokenizer->tokenize(char_str, nullptr);
+                            tokens.insert(tokens.end(), char_tokens.begin(), char_tokens.end());
+                            weights.insert(weights.end(), char_tokens.size(), curr_weight);
+                        }
+                    } else {
+                        std::vector<int> part_tokens = tokenizer->tokenize(part, nullptr);
+                        tokens.insert(tokens.end(), part_tokens.begin(), part_tokens.end());
+                        weights.insert(weights.end(), part_tokens.size(), curr_weight);
+                    }
+                }
+            } else {
+                std::vector<int> curr_tokens = tokenizer->tokenize(curr_text, nullptr);
+                tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
+                weights.insert(weights.end(), curr_tokens.size(), curr_weight);
+            }
         }
 
         tokenizer->pad_tokens(tokens, weights, max_length, padding);
-
-        // for (int i = 0; i < tokens.size(); i++) {
-        //     std::cout << tokens[i] << ":" << weights[i] << ", " << i << std::endl;
-        // }
-        // std::cout << std::endl;
-
         return {tokens, weights};
     }
 
@@ -1698,7 +1743,8 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::pair<int, ggml_tensor*>> image_embeds;
         std::pair<int, int> prompt_attn_range;
         int prompt_template_encode_start_idx = 34;
-        int max_length = 0;
+        int max_length                       = 0;
+        bool spell_quotes                    = false;
         std::set<int> out_layers;
         if (llm->enable_vision && conditioner_params.ref_images.size() > 0) {
             LOG_INFO("QwenImageEditPlusPipeline");
@@ -1810,7 +1856,8 @@ struct LLMEmbedder : public Conditioner {
         } else if (sd_version_is_longcat(version)) {
             prompt_template_encode_start_idx = 36;
             // prompt_template_encode_end_idx = 5;
-            max_length = 512;
+            max_length   = 512;
+            spell_quotes = true;
 
             prompt = "<|im_start|>system\nAs an image captioning expert, generate a descriptive text prompt based on an image content, suitable for input to a text-to-image model.<|im_end|>\n<|im_start|>user\n";
 
@@ -1831,7 +1878,7 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         }
 
-        auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0);
+        auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0, spell_quotes);
         auto& tokens            = std::get<0>(tokens_and_weights);
         auto& weights           = std::get<1>(tokens_and_weights);
 
