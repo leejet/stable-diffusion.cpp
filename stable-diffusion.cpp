@@ -1326,10 +1326,17 @@ public:
         uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
 
         if (preview_mode == PREVIEW_PROJ) {
+            int64_t patch_sz                       = 1;
             const float(*latent_rgb_proj)[channel] = nullptr;
             float* latent_rgb_bias                 = nullptr;
 
-            if (dim == 48) {
+            if (dim == 128) {
+                if (sd_version_is_flux2(version)) {
+                    latent_rgb_proj = flux2_latent_rgb_proj;
+                    latent_rgb_bias = flux2_latent_rgb_bias;
+                    patch_sz        = 2;
+                }
+            } else if (dim == 48) {
                 if (sd_version_is_wan(version)) {
                     latent_rgb_proj = wan_22_latent_rgb_proj;
                     latent_rgb_bias = wan_22_latent_rgb_bias;
@@ -1382,12 +1389,15 @@ public:
                 frames = latents->ne[2];
             }
 
-            uint8_t* data = (uint8_t*)malloc(frames * width * height * channel * sizeof(uint8_t));
+            uint32_t img_width  = width * patch_sz;
+            uint32_t img_height = height * patch_sz;
 
-            preview_latent_video(data, latents, latent_rgb_proj, latent_rgb_bias, width, height, frames, dim);
+            uint8_t* data = (uint8_t*)malloc(frames * img_width * img_height * channel * sizeof(uint8_t));
+
+            preview_latent_video(data, latents, latent_rgb_proj, latent_rgb_bias, patch_sz);
             sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
             for (int i = 0; i < frames; i++) {
-                images[i] = {width, height, channel, data + i * width * height * channel};
+                images[i] = {img_width, img_height, channel, data + i * img_width * img_height * channel};
             }
             step_callback(step, frames, images, is_noisy, step_callback_data);
             free(data);
