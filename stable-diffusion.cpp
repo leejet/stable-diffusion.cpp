@@ -937,28 +937,17 @@ public:
                                                          float multiplier,
                                                          ggml_backend_t backend,
                                                          LoraModel::filter_t lora_tensor_filter = nullptr) {
-        std::string lora_name      = lora_id;
-        std::string high_noise_tag = "|high_noise|";
-        bool is_high_noise         = false;
-        if (starts_with(lora_name, high_noise_tag)) {
-            lora_name     = lora_name.substr(high_noise_tag.size());
+        std::string lora_path             = lora_id;
+        static std::string high_noise_tag = "|high_noise|";
+        bool is_high_noise                = false;
+        if (starts_with(lora_path, high_noise_tag)) {
+            lora_path     = lora_path.substr(high_noise_tag.size());
             is_high_noise = true;
-            LOG_DEBUG("high noise lora: %s", lora_name.c_str());
+            LOG_DEBUG("high noise lora: %s", lora_path.c_str());
         }
-        std::string st_file_path   = path_join(lora_model_dir, lora_name + ".safetensors");
-        std::string ckpt_file_path = path_join(lora_model_dir, lora_name + ".ckpt");
-        std::string file_path;
-        if (file_exists(st_file_path)) {
-            file_path = st_file_path;
-        } else if (file_exists(ckpt_file_path)) {
-            file_path = ckpt_file_path;
-        } else {
-            LOG_WARN("can not find %s or %s for lora %s", st_file_path.c_str(), ckpt_file_path.c_str(), lora_name.c_str());
-            return nullptr;
-        }
-        auto lora = std::make_shared<LoraModel>(lora_id, backend, file_path, is_high_noise ? "model.high_noise_" : "", version);
+        auto lora = std::make_shared<LoraModel>(lora_id, backend, lora_path, is_high_noise ? "model.high_noise_" : "", version);
         if (!lora->load_from_file(n_threads, lora_tensor_filter)) {
-            LOG_WARN("load lora tensors from %s failed", file_path.c_str());
+            LOG_WARN("load lora tensors from %s failed", lora_path.c_str());
             return nullptr;
         }
 
@@ -1143,12 +1132,15 @@ public:
         }
     }
 
-    std::string apply_loras_from_prompt(const std::string& prompt) {
-        auto result_pair                                = extract_and_remove_lora(prompt);
-        std::unordered_map<std::string, float> lora_f2m = result_pair.first;  // lora_name -> multiplier
-
-        for (auto& kv : lora_f2m) {
-            LOG_DEBUG("lora %s:%.2f", kv.first.c_str(), kv.second);
+    void apply_loras(const sd_lora_t* loras, uint32_t lora_count) {
+        std::unordered_map<std::string, float> lora_f2m;
+        for (int i = 0; i < lora_count; i++) {
+            std::string lora_id = SAFE_STR(loras[i].path);
+            if (loras[i].is_high_noise) {
+                lora_id = "|high_noise|" + lora_id;
+            }
+            lora_f2m[lora_id] = loras[i].multiplier;
+            LOG_DEBUG("lora %s:%.2f", lora_id.c_str(), loras[i].multiplier);
         }
         int64_t t0 = ggml_time_ms();
         if (apply_lora_immediately) {
@@ -1159,9 +1151,7 @@ public:
         int64_t t1 = ggml_time_ms();
         if (!lora_f2m.empty()) {
             LOG_INFO("apply_loras completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
-            LOG_DEBUG("prompt after extract and remove lora: \"%s\"", result_pair.second.c_str());
         }
-        return result_pair.second;
     }
 
     ggml_tensor* id_encoder(ggml_context* work_ctx,
@@ -2815,8 +2805,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     int sample_steps = sigmas.size() - 1;
 
     int64_t t0 = ggml_time_ms();
-    // Apply lora
-    prompt = sd_ctx->sd->apply_loras_from_prompt(prompt);
 
     // Photo Maker
     std::string prompt_text_only;
@@ -3188,6 +3176,9 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
 
     size_t t0 = ggml_time_ms();
 
+    // Apply lora
+    sd_ctx->sd->apply_loras(sd_img_gen_params->loras, sd_img_gen_params->lora_count);
+
     enum sample_method_t sample_method = sd_img_gen_params->sample_params.sample_method;
     if (sample_method == SAMPLE_METHOD_COUNT) {
         sample_method = sd_get_default_sample_method(sd_ctx);
@@ -3487,7 +3478,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     int64_t t0 = ggml_time_ms();
 
     // Apply lora
-    prompt = sd_ctx->sd->apply_loras_from_prompt(prompt);
+    sd_ctx->sd->apply_loras(sd_vid_gen_params->loras, sd_vid_gen_params->lora_count);
 
     ggml_tensor* init_latent        = nullptr;
     ggml_tensor* clip_vision_output = nullptr;

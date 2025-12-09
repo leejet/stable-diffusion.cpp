@@ -242,6 +242,14 @@ typedef struct {
 } sd_easycache_params_t;
 
 typedef struct {
+    bool is_high_noise;
+    float multiplier;
+    const char* path;
+} sd_lora_t;
+
+typedef struct {
+    const sd_lora_t* loras;
+    uint32_t lora_count;
     const char* prompt;
     const char* negative_prompt;
     int clip_skip;
@@ -265,6 +273,8 @@ typedef struct {
 } sd_img_gen_params_t;
 
 typedef struct {
+    const sd_lora_t* loras;
+    uint32_t lora_count;
     const char* prompt;
     const char* negative_prompt;
     int clip_skip;
