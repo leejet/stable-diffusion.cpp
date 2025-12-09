@@ -1054,10 +1054,9 @@ struct SDGenerationParams {
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
     sd_sample_params_t high_noise_sample_params;
 
-    std::string easycache_option;
+    std::string cache_mode;
+    std::string cache_option;
     sd_easycache_params_t easycache_params;
-
-    std::string ucache_option;
     sd_ucache_params_t ucache_params;
 
     float moe_boundary  = 0.875f;
@@ -1378,68 +1377,24 @@ struct SDGenerationParams {
             return 1;
         };
 
-        auto on_easycache_arg = [&](int argc, const char** argv, int index) {
-            const std::string default_values = "0.2,0.15,0.95";
-            auto looks_like_value            = [](const std::string& token) {
-                if (token.empty()) {
-                    return false;
-                }
-                if (token[0] != '-') {
-                    return true;
-                }
-                if (token.size() == 1) {
-                    return false;
-                }
-                unsigned char next = static_cast<unsigned char>(token[1]);
-                return std::isdigit(next) || token[1] == '.';
-            };
-
-            std::string option_value;
-            int consumed = 0;
-            if (index + 1 < argc) {
-                std::string next_arg = argv[index + 1];
-                if (looks_like_value(next_arg)) {
-                    option_value = argv_to_utf8(index + 1, argv);
-                    consumed     = 1;
-                }
+        auto on_cache_mode_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
             }
-            if (option_value.empty()) {
-                option_value = default_values;
+            cache_mode = argv_to_utf8(index, argv);
+            if (cache_mode != "easycache" && cache_mode != "ucache") {
+                fprintf(stderr, "error: invalid cache mode '%s', must be 'easycache' or 'ucache'\n", cache_mode.c_str());
+                return -1;
             }
-            easycache_option = option_value;
-            return consumed;
+            return 1;
         };
 
-        auto on_ucache_arg = [&](int argc, const char** argv, int index) {
-            const std::string default_values = "1.0,0.15,0.95";
-            auto looks_like_value            = [](const std::string& token) {
-                if (token.empty()) {
-                    return false;
-                }
-                if (token[0] != '-') {
-                    return true;
-                }
-                if (token.size() == 1) {
-                    return false;
-                }
-                unsigned char next = static_cast<unsigned char>(token[1]);
-                return std::isdigit(next) || token[1] == '.';
-            };
-
-            std::string option_value;
-            int consumed = 0;
-            if (index + 1 < argc) {
-                std::string next_arg = argv[index + 1];
-                if (looks_like_value(next_arg)) {
-                    option_value = argv_to_utf8(index + 1, argv);
-                    consumed     = 1;
-                }
+        auto on_cache_option_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
             }
-            if (option_value.empty()) {
-                option_value = default_values;
-            }
-            ucache_option = option_value;
-            return consumed;
+            cache_option = argv_to_utf8(index, argv);
+            return 1;
         };
 
         options.manual_options = {
@@ -1474,13 +1429,13 @@ struct SDGenerationParams {
              "reference image for Flux Kontext models (can be used multiple times)",
              on_ref_image_arg},
             {"",
-             "--easycache",
-             "enable EasyCache for DiT models with optional \"threshold,start_percent,end_percent\" (default: 0.2,0.15,0.95)",
-             on_easycache_arg},
+             "--cache-mode",
+             "caching method: 'easycache' for DiT models, 'ucache' for UNET models (SD1.x/SD2.x/SDXL)",
+             on_cache_mode_arg},
             {"",
-             "--ucache",
-             "enable UCache for UNET models (SD1.x/SD2.x/SDXL) with optional \"threshold,start_percent,end_percent\" (default: 1.0,0.15,0.95)",
-             on_ucache_arg},
+             "--cache-option",
+             "cache parameters \"threshold,start_percent,end_percent\" (default: 0.2,0.15,0.95 for easycache, 1.0,0.15,0.95 for ucache)",
+             on_cache_option_arg},
 
         };
 
@@ -1593,62 +1548,21 @@ struct SDGenerationParams {
             return false;
         }
 
-        if (!easycache_option.empty()) {
-            float values[3] = {0.0f, 0.0f, 0.0f};
-            std::stringstream ss(easycache_option);
-            std::string token;
-            int idx = 0;
-            while (std::getline(ss, token, ',')) {
-                auto trim = [](std::string& s) {
-                    const char* whitespace = " \t\r\n";
-                    auto start             = s.find_first_not_of(whitespace);
-                    if (start == std::string::npos) {
-                        s.clear();
-                        return;
-                    }
-                    auto end = s.find_last_not_of(whitespace);
-                    s        = s.substr(start, end - start + 1);
-                };
-                trim(token);
-                if (token.empty()) {
-                    fprintf(stderr, "error: invalid easycache option '%s'\n", easycache_option.c_str());
-                    return false;
-                }
-                if (idx >= 3) {
-                    fprintf(stderr, "error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
-                    return false;
-                }
-                try {
-                    values[idx] = std::stof(token);
-                } catch (const std::exception&) {
-                    fprintf(stderr, "error: invalid easycache value '%s'\n", token.c_str());
-                    return false;
-                }
-                idx++;
-            }
-            if (idx != 3) {
-                fprintf(stderr, "error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
-                return false;
-            }
-            if (values[0] < 0.0f) {
-                fprintf(stderr, "error: easycache threshold must be non-negative\n");
-                return false;
-            }
-            if (values[1] < 0.0f || values[1] >= 1.0f || values[2] <= 0.0f || values[2] > 1.0f || values[1] >= values[2]) {
-                fprintf(stderr, "error: easycache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
-                return false;
-            }
-            easycache_params.enabled         = true;
-            easycache_params.reuse_threshold = values[0];
-            easycache_params.start_percent   = values[1];
-            easycache_params.end_percent     = values[2];
-        } else {
-            easycache_params.enabled = false;
-        }
+        easycache_params.enabled = false;
+        ucache_params.enabled    = false;
 
-        if (!ucache_option.empty()) {
+        if (!cache_mode.empty()) {
+            std::string option_str = cache_option;
+            if (option_str.empty()) {
+                if (cache_mode == "easycache") {
+                    option_str = "0.2,0.15,0.95";
+                } else {
+                    option_str = "1.0,0.15,0.95";
+                }
+            }
+
             float values[3] = {0.0f, 0.0f, 0.0f};
-            std::stringstream ss(ucache_option);
+            std::stringstream ss(option_str);
             std::string token;
             int idx = 0;
             while (std::getline(ss, token, ',')) {
@@ -1664,39 +1578,45 @@ struct SDGenerationParams {
                 };
                 trim(token);
                 if (token.empty()) {
-                    fprintf(stderr, "error: invalid ucache option '%s'\n", ucache_option.c_str());
+                    fprintf(stderr, "error: invalid cache option '%s'\n", option_str.c_str());
                     return false;
                 }
                 if (idx >= 3) {
-                    fprintf(stderr, "error: ucache expects exactly 3 comma-separated values (threshold,start,end)\n");
+                    fprintf(stderr, "error: cache option expects exactly 3 comma-separated values (threshold,start,end)\n");
                     return false;
                 }
                 try {
                     values[idx] = std::stof(token);
                 } catch (const std::exception&) {
-                    fprintf(stderr, "error: invalid ucache value '%s'\n", token.c_str());
+                    fprintf(stderr, "error: invalid cache option value '%s'\n", token.c_str());
                     return false;
                 }
                 idx++;
             }
             if (idx != 3) {
-                fprintf(stderr, "error: ucache expects exactly 3 comma-separated values (threshold,start,end)\n");
+                fprintf(stderr, "error: cache option expects exactly 3 comma-separated values (threshold,start,end)\n");
                 return false;
             }
             if (values[0] < 0.0f) {
-                fprintf(stderr, "error: ucache threshold must be non-negative\n");
+                fprintf(stderr, "error: cache threshold must be non-negative\n");
                 return false;
             }
             if (values[1] < 0.0f || values[1] >= 1.0f || values[2] <= 0.0f || values[2] > 1.0f || values[1] >= values[2]) {
-                fprintf(stderr, "error: ucache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
+                fprintf(stderr, "error: cache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
                 return false;
             }
-            ucache_params.enabled         = true;
-            ucache_params.reuse_threshold = values[0];
-            ucache_params.start_percent   = values[1];
-            ucache_params.end_percent     = values[2];
-        } else {
-            ucache_params.enabled = false;
+
+            if (cache_mode == "easycache") {
+                easycache_params.enabled         = true;
+                easycache_params.reuse_threshold = values[0];
+                easycache_params.start_percent   = values[1];
+                easycache_params.end_percent     = values[2];
+            } else {
+                ucache_params.enabled         = true;
+                ucache_params.reuse_threshold = values[0];
+                ucache_params.start_percent   = values[1];
+                ucache_params.end_percent     = values[2];
+            }
         }
 
         sample_params.guidance.slg.layers                 = skip_layers.data();
@@ -1791,12 +1711,18 @@ struct SDGenerationParams {
             << "  sample_params: " << sample_params_str << ",\n"
             << "  high_noise_skip_layers: " << vec_to_string(high_noise_skip_layers) << ",\n"
             << "  high_noise_sample_params: " << high_noise_sample_params_str << ",\n"
-            << "  easycache_option: \"" << easycache_option << "\",\n"
+            << "  cache_mode: \"" << cache_mode << "\",\n"
+            << "  cache_option: \"" << cache_option << "\",\n"
             << "  easycache: "
             << (easycache_params.enabled ? "enabled" : "disabled")
             << " (threshold=" << easycache_params.reuse_threshold
             << ", start=" << easycache_params.start_percent
             << ", end=" << easycache_params.end_percent << "),\n"
+            << "  ucache: "
+            << (ucache_params.enabled ? "enabled" : "disabled")
+            << " (threshold=" << ucache_params.reuse_threshold
+            << ", start=" << ucache_params.start_percent
+            << ", end=" << ucache_params.end_percent << "),\n"
             << "  moe_boundary: " << moe_boundary << ",\n"
             << "  video_frames: " << video_frames << ",\n"
             << "  fps: " << fps << ",\n"
