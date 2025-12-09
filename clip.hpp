@@ -7,31 +7,6 @@
 
 /*================================================== CLIPTokenizer ===================================================*/
 
-__STATIC_INLINE__ std::pair<std::unordered_map<std::string, float>, std::string> extract_and_remove_lora(std::string text) {
-    std::regex re("<lora:([^:]+):([^>]+)>");
-    std::smatch matches;
-    std::unordered_map<std::string, float> filename2multiplier;
-
-    while (std::regex_search(text, matches, re)) {
-        std::string filename = matches[1].str();
-        float multiplier     = std::stof(matches[2].str());
-
-        text = std::regex_replace(text, re, "", std::regex_constants::format_first_only);
-
-        if (multiplier == 0.f) {
-            continue;
-        }
-
-        if (filename2multiplier.find(filename) == filename2multiplier.end()) {
-            filename2multiplier[filename] = multiplier;
-        } else {
-            filename2multiplier[filename] += multiplier;
-        }
-    }
-
-    return std::make_pair(filename2multiplier, text);
-}
-
 __STATIC_INLINE__ std::vector<std::pair<int, std::u32string>> bytes_to_unicode() {
     std::vector<std::pair<int, std::u32string>> byte_unicode_pairs;
     std::set<int> byte_set;
