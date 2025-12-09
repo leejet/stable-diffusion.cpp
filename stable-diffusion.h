@@ -359,9 +359,8 @@ SD_API bool preprocess_canny(sd_image_t image,
                              float strong,
                              bool inverse);
 
-SD_API const char * sd_commit(void);
-SD_API const char * sd_version(void);
-
+SD_API const char* sd_commit(void);
+SD_API const char* sd_version(void);
 
 #ifdef __cplusplus
 }

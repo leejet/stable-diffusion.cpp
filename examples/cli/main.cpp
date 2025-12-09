@@ -1891,7 +1891,6 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
 }
 
 int main(int argc, const char* argv[]) {
-
     if (argc > 1 && std::string(argv[1]) == "--version") {
         std::cout << version_string() << "\n";
         return EXIT_SUCCESS;
