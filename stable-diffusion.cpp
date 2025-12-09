@@ -1356,11 +1356,6 @@ public:
                     // unknown model
                     return;
                 }
-            } else if (dim == 32) {
-                if (sd_version_is_flux2(version)) {
-                    latent_rgb_proj = flux2_latent_rgb_proj;
-                    latent_rgb_bias = flux2_latent_rgb_bias;
-                }
             } else if (dim == 16) {
                 // 16 channels VAE -> Flux or SD3
 
