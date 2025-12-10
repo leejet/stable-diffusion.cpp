@@ -246,6 +246,8 @@ typedef struct {
     float reuse_threshold;
     float start_percent;
     float end_percent;
+    float error_decay_rate;
+    bool use_relative_threshold;
 } sd_ucache_params_t;
 
 typedef struct {
