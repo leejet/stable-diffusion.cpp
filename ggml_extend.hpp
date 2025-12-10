@@ -60,6 +60,14 @@
 #define SD_UNUSED(x) (void)(x)
 #endif
 
+__STATIC_INLINE__ int align_up_offset(int n, int multiple) {
+    return (multiple - n % multiple) % multiple;
+}
+
+__STATIC_INLINE__ int align_up(int n, int multiple) {
+    return n + align_up_offset(n, multiple);
+}
+
 __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const char* text, void*) {
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG:
