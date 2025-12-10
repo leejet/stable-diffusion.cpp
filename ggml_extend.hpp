@@ -609,7 +609,7 @@ __STATIC_INLINE__ struct ggml_tensor* sd_pad(struct ggml_context* ctx,
                                              int p2,
                                              int p3) {
     if (sd_is_circular_padding_enabled()) {
-        return ggml_pad_circular(ctx, a, 0, p0, 0, p1, 0, p2, 0, p3);
+        return ggml_pad_ext_circular(ctx, a, 0, p0, 0, p1, 0, p2, 0, p3);
     }
     else {
         return ggml_pad(ctx, a, p0, p1, p2, p3);
@@ -627,7 +627,7 @@ __STATIC_INLINE__ struct ggml_tensor* sd_pad_ext(struct ggml_context* ctx,
                                                  int lp3,
                                                  int rp3) {
     if (sd_is_circular_padding_enabled()) {
-        return ggml_pad_circular(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+        return ggml_pad_ext_circular(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
     }
     return ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
 }
@@ -1035,22 +1035,21 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_nn_conv_2d(struct ggml_context* ctx,
     const bool use_circular = sd_is_circular_padding_enabled();
     LOG_DEBUG("use circular conv %d", use_circular ? 1 : 0);
     const bool is_depthwise = (w->ne[2] == 1 && x->ne[2] == w->ne[3]);
+
+    if (use_circular && (p0 != 0 || p1 != 0)) {
+        x  = ggml_pad_ext_circular(ctx, x, p0, p0, p1, p1, 0, 0, 0, 0);
+        p0 = 0;
+        p1 = 0;
+    }
+
     if (direct) {
-        if (use_circular) {
-            if (is_depthwise) {
-                x = ggml_conv_2d_dw_direct_circular(ctx, w, x, s0, s1, p0, p1, d0, d1);
-            } else {
-                x = ggml_conv_2d_direct_circular(ctx, w, x, s0, s1, p0, p1, d0, d1);
-            }
+        if (is_depthwise) {
+            x = ggml_conv_2d_dw_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
         } else {
             x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
         }
     } else {
-        if (use_circular) {
-            x = ggml_conv_2d_circular(ctx, w, x, s0, s1, p0, p1, d0, d1);
-        } else {
-            x = ggml_conv_2d(ctx, w, x, s0, s1, p0, p1, d0, d1);
-        }
+        x = ggml_conv_2d(ctx, w, x, s0, s1, p0, p1, d0, d1);
     }
     if (scale != 1.f) {
         x = ggml_scale(ctx, x, 1.f / scale);
