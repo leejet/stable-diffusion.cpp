@@ -6,6 +6,7 @@
 #include "qwen_image.hpp"
 #include "unet.hpp"
 #include "wan.hpp"
+#include "z_image.hpp"
 
 struct DiffusionParams {
     struct ggml_tensor* x                     = nullptr;
@@ -26,7 +27,7 @@ struct DiffusionParams {
 
 struct DiffusionModel {
     virtual std::string get_desc()                                                      = 0;
-    virtual void compute(int n_threads,
+    virtual bool compute(int n_threads,
                          DiffusionParams diffusion_params,
                          struct ggml_tensor** output     = nullptr,
                          struct ggml_context* output_ctx = nullptr)                     = 0;
@@ -35,7 +36,9 @@ struct DiffusionModel {
     virtual void free_compute_buffer()                                                  = 0;
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) = 0;
     virtual size_t get_params_buffer_size()                                             = 0;
-    virtual int64_t get_adm_in_channels()                                               = 0;
+    virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter){};
+    virtual int64_t get_adm_in_channels()             = 0;
+    virtual void set_flash_attn_enabled(bool enabled) = 0;
 };
 
 struct UNetModel : public DiffusionModel {
@@ -43,10 +46,9 @@ struct UNetModel : public DiffusionModel {
 
     UNetModel(ggml_backend_t backend,
               bool offload_params_to_cpu,
-              const String2GGMLType& tensor_types = {},
-              SDVersion version                   = VERSION_SD1,
-              bool flash_attn                     = false)
-        : unet(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, flash_attn) {
+              const String2TensorStorage& tensor_storage_map = {},
+              SDVersion version                              = VERSION_SD1)
+        : unet(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model", version) {
     }
 
     std::string get_desc() override {
@@ -73,11 +75,19 @@ struct UNetModel : public DiffusionModel {
         return unet.get_params_buffer_size();
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        unet.set_weight_adapter(adapter);
+    }
+
     int64_t get_adm_in_channels() override {
         return unet.unet.adm_in_channels;
     }
 
-    void compute(int n_threads,
+    void set_flash_attn_enabled(bool enabled) {
+        unet.set_flash_attention_enabled(enabled);
+    }
+
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
@@ -98,9 +108,8 @@ struct MMDiTModel : public DiffusionModel {
 
     MMDiTModel(ggml_backend_t backend,
                bool offload_params_to_cpu,
-               bool flash_attn                     = false,
-               const String2GGMLType& tensor_types = {})
-        : mmdit(backend, offload_params_to_cpu, flash_attn, tensor_types, "model.diffusion_model") {
+               const String2TensorStorage& tensor_storage_map = {})
+        : mmdit(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model") {
     }
 
     std::string get_desc() override {
@@ -127,11 +136,19 @@ struct MMDiTModel : public DiffusionModel {
         return mmdit.get_params_buffer_size();
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        mmdit.set_weight_adapter(adapter);
+    }
+
     int64_t get_adm_in_channels() override {
         return 768 + 1280;
     }
 
-    void compute(int n_threads,
+    void set_flash_attn_enabled(bool enabled) {
+        mmdit.set_flash_attention_enabled(enabled);
+    }
+
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
@@ -151,11 +168,10 @@ struct FluxModel : public DiffusionModel {
 
     FluxModel(ggml_backend_t backend,
               bool offload_params_to_cpu,
-              const String2GGMLType& tensor_types = {},
-              SDVersion version                   = VERSION_FLUX,
-              bool flash_attn                     = false,
-              bool use_mask                       = false)
-        : flux(backend, offload_params_to_cpu, tensor_types, "model.diffusion_model", version, flash_attn, use_mask) {
+              const String2TensorStorage& tensor_storage_map = {},
+              SDVersion version                              = VERSION_FLUX,
+              bool use_mask                                  = false)
+        : flux(backend, offload_params_to_cpu, tensor_storage_map, "model.diffusion_model", version, use_mask) {
     }
 
     std::string get_desc() override {
@@ -182,11 +198,19 @@ struct FluxModel : public DiffusionModel {
         return flux.get_params_buffer_size();
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        flux.set_weight_adapter(adapter);
+    }
+
     int64_t get_adm_in_channels() override {
         return 768;
     }
 
-    void compute(int n_threads,
+    void set_flash_attn_enabled(bool enabled) {
+        flux.set_flash_attention_enabled(enabled);
+    }
+
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
@@ -211,11 +235,10 @@ struct WanModel : public DiffusionModel {
 
     WanModel(ggml_backend_t backend,
              bool offload_params_to_cpu,
-             const String2GGMLType& tensor_types = {},
-             const std::string prefix            = "model.diffusion_model",
-             SDVersion version                   = VERSION_WAN2,
-             bool flash_attn                     = false)
-        : prefix(prefix), wan(backend, offload_params_to_cpu, tensor_types, prefix, version, flash_attn) {
+             const String2TensorStorage& tensor_storage_map = {},
+             const std::string prefix                       = "model.diffusion_model",
+             SDVersion version                              = VERSION_WAN2)
+        : prefix(prefix), wan(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
     }
 
     std::string get_desc() override {
@@ -242,11 +265,19 @@ struct WanModel : public DiffusionModel {
         return wan.get_params_buffer_size();
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        wan.set_weight_adapter(adapter);
+    }
+
     int64_t get_adm_in_channels() override {
         return 768;
     }
 
-    void compute(int n_threads,
+    void set_flash_attn_enabled(bool enabled) {
+        wan.set_flash_attention_enabled(enabled);
+    }
+
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
@@ -270,11 +301,10 @@ struct QwenImageModel : public DiffusionModel {
 
     QwenImageModel(ggml_backend_t backend,
                    bool offload_params_to_cpu,
-                   const String2GGMLType& tensor_types = {},
-                   const std::string prefix            = "model.diffusion_model",
-                   SDVersion version                   = VERSION_QWEN_IMAGE,
-                   bool flash_attn                     = false)
-        : prefix(prefix), qwen_image(backend, offload_params_to_cpu, tensor_types, prefix, version, flash_attn) {
+                   const String2TensorStorage& tensor_storage_map = {},
+                   const std::string prefix                       = "model.diffusion_model",
+                   SDVersion version                              = VERSION_QWEN_IMAGE)
+        : prefix(prefix), qwen_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
     }
 
     std::string get_desc() override {
@@ -301,11 +331,19 @@ struct QwenImageModel : public DiffusionModel {
         return qwen_image.get_params_buffer_size();
     }
 
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        qwen_image.set_weight_adapter(adapter);
+    }
+
     int64_t get_adm_in_channels() override {
         return 768;
     }
 
-    void compute(int n_threads,
+    void set_flash_attn_enabled(bool enabled) {
+        qwen_image.set_flash_attention_enabled(enabled);
+    }
+
+    bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
@@ -317,6 +355,69 @@ struct QwenImageModel : public DiffusionModel {
                                   true,  // increase_ref_index
                                   output,
                                   output_ctx);
+    }
+};
+
+struct ZImageModel : public DiffusionModel {
+    std::string prefix;
+    ZImage::ZImageRunner z_image;
+
+    ZImageModel(ggml_backend_t backend,
+                bool offload_params_to_cpu,
+                const String2TensorStorage& tensor_storage_map = {},
+                const std::string prefix                       = "model.diffusion_model",
+                SDVersion version                              = VERSION_Z_IMAGE)
+        : prefix(prefix), z_image(backend, offload_params_to_cpu, tensor_storage_map, prefix, version) {
+    }
+
+    std::string get_desc() override {
+        return z_image.get_desc();
+    }
+
+    void alloc_params_buffer() override {
+        z_image.alloc_params_buffer();
+    }
+
+    void free_params_buffer() override {
+        z_image.free_params_buffer();
+    }
+
+    void free_compute_buffer() override {
+        z_image.free_compute_buffer();
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+        z_image.get_param_tensors(tensors, prefix);
+    }
+
+    size_t get_params_buffer_size() override {
+        return z_image.get_params_buffer_size();
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        z_image.set_weight_adapter(adapter);
+    }
+
+    int64_t get_adm_in_channels() override {
+        return 768;
+    }
+
+    void set_flash_attn_enabled(bool enabled) {
+        z_image.set_flash_attention_enabled(enabled);
+    }
+
+    bool compute(int n_threads,
+                 DiffusionParams diffusion_params,
+                 struct ggml_tensor** output     = nullptr,
+                 struct ggml_context* output_ctx = nullptr) override {
+        return z_image.compute(n_threads,
+                               diffusion_params.x,
+                               diffusion_params.timesteps,
+                               diffusion_params.context,
+                               diffusion_params.ref_latents,
+                               true,  // increase_ref_index
+                               output,
+                               output_ctx);
     }
 };
 
