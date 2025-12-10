@@ -1434,7 +1434,7 @@ struct SDGenerationParams {
              on_cache_mode_arg},
             {"",
              "--cache-option",
-             "cache parameters \"threshold,start_percent,end_percent\" (default: 0.2,0.15,0.95 for easycache, 1.0,0.15,0.95 for ucache)",
+             "cache parameters \"threshold,start,end[,warmup,decay,relative]\" (ucache extended: warmup=0, decay=1.0, relative=1)",
              on_cache_option_arg},
 
         };
@@ -1561,28 +1561,32 @@ struct SDGenerationParams {
                 }
             }
 
-            float values[3] = {0.0f, 0.0f, 0.0f};
+            // Format: threshold,start,end[,decay,relative]
+            // - values[0-2]: threshold, start_percent, end_percent (required)
+            // - values[3]: error_decay_rate (optional, default: 1.0)
+            // - values[4]: use_relative_threshold (optional, 0 or 1, default: 1)
+            float values[5] = {0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
             std::stringstream ss(option_str);
             std::string token;
             int idx = 0;
+            auto trim = [](std::string& s) {
+                const char* whitespace = " \t\r\n";
+                auto start             = s.find_first_not_of(whitespace);
+                if (start == std::string::npos) {
+                    s.clear();
+                    return;
+                }
+                auto end = s.find_last_not_of(whitespace);
+                s        = s.substr(start, end - start + 1);
+            };
             while (std::getline(ss, token, ',')) {
-                auto trim = [](std::string& s) {
-                    const char* whitespace = " \t\r\n";
-                    auto start             = s.find_first_not_of(whitespace);
-                    if (start == std::string::npos) {
-                        s.clear();
-                        return;
-                    }
-                    auto end = s.find_last_not_of(whitespace);
-                    s        = s.substr(start, end - start + 1);
-                };
                 trim(token);
                 if (token.empty()) {
                     fprintf(stderr, "error: invalid cache option '%s'\n", option_str.c_str());
                     return false;
                 }
-                if (idx >= 3) {
-                    fprintf(stderr, "error: cache option expects exactly 3 comma-separated values (threshold,start,end)\n");
+                if (idx >= 5) {
+                    fprintf(stderr, "error: cache option expects 3-5 comma-separated values (threshold,start,end[,decay,relative])\n");
                     return false;
                 }
                 try {
@@ -1593,8 +1597,8 @@ struct SDGenerationParams {
                 }
                 idx++;
             }
-            if (idx != 3) {
-                fprintf(stderr, "error: cache option expects exactly 3 comma-separated values (threshold,start,end)\n");
+            if (idx < 3) {
+                fprintf(stderr, "error: cache option expects at least 3 comma-separated values (threshold,start,end)\n");
                 return false;
             }
             if (values[0] < 0.0f) {
@@ -1612,10 +1616,12 @@ struct SDGenerationParams {
                 easycache_params.start_percent   = values[1];
                 easycache_params.end_percent     = values[2];
             } else {
-                ucache_params.enabled         = true;
-                ucache_params.reuse_threshold = values[0];
-                ucache_params.start_percent   = values[1];
-                ucache_params.end_percent     = values[2];
+                ucache_params.enabled                = true;
+                ucache_params.reuse_threshold        = values[0];
+                ucache_params.start_percent          = values[1];
+                ucache_params.end_percent            = values[2];
+                ucache_params.error_decay_rate       = values[3];
+                ucache_params.use_relative_threshold = (values[4] != 0.0f);
             }
         }
 

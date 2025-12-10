@@ -10,10 +10,15 @@
 #include "ggml_extend.hpp"
 
 struct UCacheConfig {
-    bool enabled          = false;
-    float reuse_threshold = 1.0f;
-    float start_percent   = 0.15f;
-    float end_percent     = 0.95f;
+    bool enabled                 = false;
+    float reuse_threshold        = 1.0f;
+    float start_percent          = 0.15f;
+    float end_percent            = 0.95f;
+    float error_decay_rate       = 1.0f;
+    bool use_relative_threshold  = true;
+    bool adaptive_threshold      = true;
+    float early_step_multiplier  = 0.5f;
+    float late_step_multiplier   = 1.5f;
 };
 
 struct UCacheCacheEntry {
@@ -44,6 +49,45 @@ struct UCacheState {
     bool has_last_input_change            = false;
     int total_steps_skipped               = 0;
     int current_step_index                = -1;
+    int steps_computed_since_active       = 0;
+    float accumulated_error               = 0.0f;
+    float reference_output_norm           = 0.0f;
+
+    struct BlockMetrics {
+        float sum_transformation_rate = 0.0f;
+        float sum_output_norm         = 0.0f;
+        int sample_count              = 0;
+        float min_change_rate         = std::numeric_limits<float>::max();
+        float max_change_rate         = 0.0f;
+
+        void reset() {
+            sum_transformation_rate = 0.0f;
+            sum_output_norm         = 0.0f;
+            sample_count            = 0;
+            min_change_rate         = std::numeric_limits<float>::max();
+            max_change_rate         = 0.0f;
+        }
+
+        void record(float change_rate, float output_norm) {
+            if (std::isfinite(change_rate) && change_rate > 0.0f) {
+                sum_transformation_rate += change_rate;
+                sum_output_norm += output_norm;
+                sample_count++;
+                if (change_rate < min_change_rate) min_change_rate = change_rate;
+                if (change_rate > max_change_rate) max_change_rate = change_rate;
+            }
+        }
+
+        float avg_transformation_rate() const {
+            return (sample_count > 0) ? (sum_transformation_rate / sample_count) : 0.0f;
+        }
+
+        float avg_output_norm() const {
+            return (sample_count > 0) ? (sum_output_norm / sample_count) : 0.0f;
+        }
+    };
+    BlockMetrics block_metrics;
+    int total_active_steps = 0;
 
     void reset_runtime() {
         initial_step      = true;
@@ -64,6 +108,11 @@ struct UCacheState {
         has_last_input_change            = false;
         total_steps_skipped              = 0;
         current_step_index               = -1;
+        steps_computed_since_active      = 0;
+        accumulated_error                = 0.0f;
+        reference_output_norm            = 0.0f;
+        block_metrics.reset();
+        total_active_steps = 0;
     }
 
     void init(const UCacheConfig& cfg, Denoiser* d) {
@@ -114,6 +163,7 @@ struct UCacheState {
             return;
         }
         step_active = true;
+        total_active_steps++;
     }
 
     bool step_is_active() const {
@@ -122,6 +172,31 @@ struct UCacheState {
 
     bool is_step_skipped() const {
         return enabled() && step_active && skip_current_step;
+    }
+
+    float get_adaptive_threshold(int estimated_total_steps = 0) const {
+        float base_threshold = config.reuse_threshold;
+
+        if (!config.adaptive_threshold) {
+            return base_threshold;
+        }
+
+        int effective_total = estimated_total_steps;
+        if (effective_total <= 0) {
+            effective_total = std::max(20, steps_computed_since_active * 2);
+        }
+
+        float progress = (effective_total > 0) ?
+            (static_cast<float>(steps_computed_since_active) / effective_total) : 0.0f;
+
+        float multiplier = 1.0f;
+        if (progress < 0.2f) {
+            multiplier = config.early_step_multiplier;
+        } else if (progress > 0.8f) {
+            multiplier = config.late_step_multiplier;
+        }
+
+        return base_threshold * multiplier;
     }
 
     bool has_cache(const SDCondition* cond) const {
@@ -212,15 +287,18 @@ struct UCacheState {
             last_input_change > 0.0f && output_prev_norm > 0.0f) {
 
             float approx_output_change_rate = (relative_transformation_rate * last_input_change) / output_prev_norm;
-            cumulative_change_rate += approx_output_change_rate;
+            accumulated_error = accumulated_error * config.error_decay_rate + approx_output_change_rate;
 
-            if (cumulative_change_rate < config.reuse_threshold) {
+            float effective_threshold = get_adaptive_threshold();
+            if (config.use_relative_threshold && reference_output_norm > 0.0f) {
+                effective_threshold = effective_threshold * reference_output_norm;
+            }
+
+            if (accumulated_error < effective_threshold) {
                 skip_current_step = true;
                 total_steps_skipped++;
                 apply_cache(cond, input, output);
                 return true;
-            } else {
-                cumulative_change_rate = 0.0f;
             }
         }
 
@@ -270,16 +348,31 @@ struct UCacheState {
         output_prev_norm     = (ne > 0) ? (mean_abs / static_cast<float>(ne)) : 0.0f;
         has_output_prev_norm = output_prev_norm > 0.0f;
 
+        if (reference_output_norm == 0.0f) {
+            reference_output_norm = output_prev_norm;
+        }
+
         if (has_last_input_change && last_input_change > 0.0f && output_change > 0.0f) {
             float rate = output_change / last_input_change;
             if (std::isfinite(rate)) {
                 relative_transformation_rate     = rate;
                 has_relative_transformation_rate = true;
+                block_metrics.record(rate, output_prev_norm);
             }
         }
 
-        cumulative_change_rate = 0.0f;
-        has_last_input_change  = false;
+        has_last_input_change = false;
+    }
+
+    void log_block_metrics() const {
+        if (block_metrics.sample_count > 0) {
+            LOG_INFO("UCacheBlockMetrics: samples=%d, avg_rate=%.4f, min=%.4f, max=%.4f, avg_norm=%.4f",
+                     block_metrics.sample_count,
+                     block_metrics.avg_transformation_rate(),
+                     block_metrics.min_change_rate,
+                     block_metrics.max_change_rate,
+                     block_metrics.avg_output_norm());
+        }
     }
 };
 

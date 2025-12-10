@@ -127,5 +127,7 @@ Generation Options:
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)
   --cache-mode                             caching method: 'easycache' for DiT models, 'ucache' for UNET models (SD1.x/SD2.x/SDXL)
-  --cache-option                           cache parameters "threshold,start_percent,end_percent" (default: 0.2,0.15,0.95 for easycache, 1.0,0.15,0.95 for ucache)
+  --cache-option                           cache parameters: easycache uses "threshold,start,end" (default: 0.2,0.15,0.95).
+                                           ucache uses "threshold,start,end[,decay,relative]" (default: 1.0,0.15,0.95,1.0,1).
+                                           decay: error decay rate (0.0-1.0), relative: use relative threshold (0 or 1)
 ```

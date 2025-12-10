@@ -1548,10 +1548,12 @@ public:
                 LOG_WARN("UCache requested but not supported for this model type (only UNET models)");
             } else {
                 UCacheConfig ucache_config;
-                ucache_config.enabled         = true;
-                ucache_config.reuse_threshold = std::max(0.0f, ucache_params->reuse_threshold);
-                ucache_config.start_percent   = ucache_params->start_percent;
-                ucache_config.end_percent     = ucache_params->end_percent;
+                ucache_config.enabled                = true;
+                ucache_config.reuse_threshold        = std::max(0.0f, ucache_params->reuse_threshold);
+                ucache_config.start_percent          = ucache_params->start_percent;
+                ucache_config.end_percent            = ucache_params->end_percent;
+                ucache_config.error_decay_rate       = std::max(0.0f, std::min(1.0f, ucache_params->error_decay_rate));
+                ucache_config.use_relative_threshold = ucache_params->use_relative_threshold;
                 bool percent_valid            = ucache_config.start_percent >= 0.0f &&
                                      ucache_config.start_percent < 1.0f &&
                                      ucache_config.end_percent > 0.0f &&
@@ -1565,10 +1567,12 @@ public:
                     ucache_state.init(ucache_config, denoiser.get());
                     if (ucache_state.enabled()) {
                         ucache_enabled = true;
-                        LOG_INFO("UCache enabled - threshold: %.3f, start_percent: %.2f, end_percent: %.2f",
+                        LOG_INFO("UCache enabled - threshold: %.3f, start: %.2f, end: %.2f, decay: %.2f, relative: %s",
                                  ucache_config.reuse_threshold,
                                  ucache_config.start_percent,
-                                 ucache_config.end_percent);
+                                 ucache_config.end_percent,
+                                 ucache_config.error_decay_rate,
+                                 ucache_config.use_relative_threshold ? "true" : "false");
                     } else {
                         LOG_WARN("UCache requested but could not be initialized for this run");
                     }
@@ -2616,11 +2620,13 @@ void sd_easycache_params_init(sd_easycache_params_t* easycache_params) {
 }
 
 void sd_ucache_params_init(sd_ucache_params_t* ucache_params) {
-    *ucache_params                 = {};
-    ucache_params->enabled         = false;
-    ucache_params->reuse_threshold = 1.0f;
-    ucache_params->start_percent   = 0.15f;
-    ucache_params->end_percent     = 0.95f;
+    *ucache_params                        = {};
+    ucache_params->enabled                = false;
+    ucache_params->reuse_threshold        = 1.0f;
+    ucache_params->start_percent          = 0.15f;
+    ucache_params->end_percent            = 0.95f;
+    ucache_params->error_decay_rate       = 1.0f;
+    ucache_params->use_relative_threshold = true;
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
