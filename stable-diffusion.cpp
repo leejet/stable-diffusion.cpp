@@ -1558,6 +1558,10 @@ public:
             }
         }
 
+        if (ucache_enabled) {
+            ucache_state.set_sigmas(sigmas);
+        }
+
         size_t steps          = sigmas.size() - 1;
         struct ggml_tensor* x = ggml_dup_tensor(work_ctx, init_latent);
         copy_ggml_tensor(x, init_latent);
