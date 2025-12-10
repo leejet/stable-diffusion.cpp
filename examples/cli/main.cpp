@@ -31,8 +31,6 @@
 
 #include "common/common.hpp"
 
-namespace fs = std::filesystem;
-
 const char* previews_str[] = {
     "none",
     "proj",
@@ -45,6 +43,7 @@ struct SDCliParams {
     std::string output_path = "output.png";
 
     bool verbose          = false;
+    bool version          = false;
     bool canny_preprocess = false;
 
     preview_t preview_method = PREVIEW_NONE;
@@ -88,6 +87,10 @@ struct SDCliParams {
              "print extra info",
              true, &verbose},
             {"",
+             "--version",
+             "print stable-diffusion.cpp version",
+             true, &version},
+            {"",
              "--color",
              "colors the logging tags according to level",
              true, &color},
@@ -130,18 +133,18 @@ struct SDCliParams {
                 return -1;
             }
             const char* preview = argv[index];
-            int preview_method  = -1;
+            int preview_found   = -1;
             for (int m = 0; m < PREVIEW_COUNT; m++) {
                 if (!strcmp(preview, previews_str[m])) {
-                    preview_method = m;
+                    preview_found = m;
                 }
             }
-            if (preview_method == -1) {
+            if (preview_found == -1) {
                 fprintf(stderr, "error: preview method %s\n",
                         preview);
                 return -1;
             }
-            preview_method = (preview_t)preview_method;
+            preview_method = (preview_t)preview_found;
             return 1;
         };
 
@@ -202,6 +205,7 @@ struct SDCliParams {
 };
 
 void print_usage(int argc, const char* argv[], const std::vector<ArgOptions>& options_list) {
+    std::cout << version_string() << "\n";
     std::cout << "Usage: " << argv[0] << " [options]\n\n";
     std::cout << "CLI Options:\n";
     options_list[0].print();
@@ -219,7 +223,9 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
         exit(cli_params.normal_exit ? 0 : 1);
     }
 
-    if (!cli_params.process_and_check() || !ctx_params.process_and_check(cli_params.mode) || !gen_params.process_and_check(cli_params.mode)) {
+    if (!cli_params.process_and_check() ||
+        !ctx_params.process_and_check(cli_params.mode) ||
+        !gen_params.process_and_check(cli_params.mode, ctx_params.lora_model_dir)) {
         print_usage(argc, argv, options_vec);
         exit(1);
     }
@@ -484,11 +490,19 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
 }
 
 int main(int argc, const char* argv[]) {
+    if (argc > 1 && std::string(argv[1]) == "--version") {
+        std::cout << version_string() << "\n";
+        return EXIT_SUCCESS;
+    }
+
     SDCliParams cli_params;
     SDContextParams ctx_params;
     SDGenerationParams gen_params;
 
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
+    if (cli_params.verbose || cli_params.version) {
+        std::cout << version_string() << "\n";
+    }
     if (gen_params.video_frames > 4) {
         size_t last_dot_pos   = cli_params.preview_path.find_last_of(".");
         std::string base_path = cli_params.preview_path;
@@ -724,6 +738,8 @@ int main(int argc, const char* argv[]) {
 
         if (cli_params.mode == IMG_GEN) {
             sd_img_gen_params_t img_gen_params = {
+                gen_params.lora_vec.data(),
+                static_cast<uint32_t>(gen_params.lora_vec.size()),
                 gen_params.prompt.c_str(),
                 gen_params.negative_prompt.c_str(),
                 gen_params.clip_skip,
@@ -755,6 +771,8 @@ int main(int argc, const char* argv[]) {
             num_results = gen_params.batch_count;
         } else if (cli_params.mode == VID_GEN) {
             sd_vid_gen_params_t vid_gen_params = {
+                gen_params.lora_vec.data(),
+                static_cast<uint32_t>(gen_params.lora_vec.size()),
                 gen_params.prompt.c_str(),
                 gen_params.negative_prompt.c_str(),
                 gen_params.clip_skip,
@@ -791,7 +809,8 @@ int main(int argc, const char* argv[]) {
         upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(ctx_params.esrgan_path.c_str(),
                                                         ctx_params.offload_params_to_cpu,
                                                         ctx_params.diffusion_conv_direct,
-                                                        ctx_params.n_threads);
+                                                        ctx_params.n_threads,
+                                                        gen_params.upscale_tile_size);
 
         if (upscaler_ctx == nullptr) {
             printf("new_upscaler_ctx failed\n");

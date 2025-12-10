@@ -56,7 +56,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     std::shared_ptr<CLIPTextModelRunner> text_model2;
 
     std::string trigger_word = "img";  // should be user settable
-    std::string embd_dir;
+    std::map<std::string, std::string> embedding_map;
     int32_t num_custom_embeddings   = 0;
     int32_t num_custom_embeddings_2 = 0;
     std::vector<uint8_t> token_embed_custom;
@@ -65,11 +65,17 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
                                       bool offload_params_to_cpu,
                                       const String2TensorStorage& tensor_storage_map,
-                                      const std::string& embd_dir,
+                                      const std::map<std::string, std::string>& orig_embedding_map,
                                       SDVersion version = VERSION_SD1,
                                       PMVersion pv      = PM_VERSION_1)
-        : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407), embd_dir(embd_dir) {
-        bool force_clip_f32 = embd_dir.size() > 0;
+        : version(version), pm_version(pv), tokenizer(sd_version_is_sd2(version) ? 0 : 49407) {
+        for (const auto& kv : orig_embedding_map) {
+            std::string name = kv.first;
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+            embedding_map[name] = kv.second;
+            tokenizer.add_special_token(name);
+        }
+        bool force_clip_f32 = !embedding_map.empty();
         if (sd_version_is_sd1(version)) {
             text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32);
         } else if (sd_version_is_sd2(version)) {
@@ -196,25 +202,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
     std::vector<int> convert_token_to_id(std::string text) {
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-            size_t word_end       = str.find(",");
-            std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
-            embd_name             = trim(embd_name);
-            std::string embd_path = get_full_path(embd_dir, embd_name + ".pt");
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".ckpt");
+            auto iter = embedding_map.find(str);
+            if (iter == embedding_map.end()) {
+                return false;
             }
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".safetensors");
-            }
-            if (embd_path.size() > 0) {
-                if (load_embedding(embd_name, embd_path, bpe_tokens)) {
-                    if (word_end != std::string::npos) {
-                        str = str.substr(word_end);
-                    } else {
-                        str = "";
-                    }
-                    return true;
-                }
+            std::string embedding_path = iter->second;
+            if (load_embedding(str, embedding_path, bpe_tokens)) {
+                return true;
             }
             return false;
         };
@@ -245,25 +239,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-            size_t word_end       = str.find(",");
-            std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
-            embd_name             = trim(embd_name);
-            std::string embd_path = get_full_path(embd_dir, embd_name + ".pt");
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".ckpt");
+            auto iter = embedding_map.find(str);
+            if (iter == embedding_map.end()) {
+                return false;
             }
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".safetensors");
-            }
-            if (embd_path.size() > 0) {
-                if (load_embedding(embd_name, embd_path, bpe_tokens)) {
-                    if (word_end != std::string::npos) {
-                        str = str.substr(word_end);
-                    } else {
-                        str = "";
-                    }
-                    return true;
-                }
+            std::string embedding_path = iter->second;
+            if (load_embedding(str, embedding_path, bpe_tokens)) {
+                return true;
             }
             return false;
         };
@@ -376,25 +358,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
 
         auto on_new_token_cb = [&](std::string& str, std::vector<int32_t>& bpe_tokens) -> bool {
-            size_t word_end       = str.find(",");
-            std::string embd_name = word_end == std::string::npos ? str : str.substr(0, word_end);
-            embd_name             = trim(embd_name);
-            std::string embd_path = get_full_path(embd_dir, embd_name + ".pt");
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".ckpt");
+            auto iter = embedding_map.find(str);
+            if (iter == embedding_map.end()) {
+                return false;
             }
-            if (embd_path.size() == 0) {
-                embd_path = get_full_path(embd_dir, embd_name + ".safetensors");
-            }
-            if (embd_path.size() > 0) {
-                if (load_embedding(embd_name, embd_path, bpe_tokens)) {
-                    if (word_end != std::string::npos) {
-                        str = str.substr(word_end);
-                    } else {
-                        str = "";
-                    }
-                    return true;
-                }
+            std::string embedding_path = iter->second;
+            if (load_embedding(str, embedding_path, bpe_tokens)) {
+                return true;
             }
             return false;
         };
@@ -703,7 +673,7 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
         return gf;
     }
 
-    void compute(const int n_threads,
+    bool compute(const int n_threads,
                  ggml_tensor* pixel_values,
                  bool return_pooled,
                  int clip_skip,
@@ -712,7 +682,7 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(pixel_values, return_pooled, clip_skip);
         };
-        GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+        return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
     }
 };
 
@@ -1638,7 +1608,7 @@ struct LLMEmbedder : public Conditioner {
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
         if (sd_version_is_flux2(version)) {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
-        } else if (sd_version_is_z_image(version)) {
+        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE) {
             arch = LLM::LLMArch::QWEN3;
         }
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2) {
@@ -1728,6 +1698,7 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::pair<int, ggml_tensor*>> image_embeds;
         std::pair<int, int> prompt_attn_range;
         int prompt_template_encode_start_idx = 34;
+        int max_length                       = 0;
         std::set<int> out_layers;
         if (llm->enable_vision && conditioner_params.ref_images.size() > 0) {
             LOG_INFO("QwenImageEditPlusPipeline");
@@ -1825,6 +1796,17 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = prompt.size();
 
             prompt += "[/INST]";
+        } else if (version == VERSION_OVIS_IMAGE) {
+            prompt_template_encode_start_idx = 28;
+            max_length                       = prompt_template_encode_start_idx + 256;
+
+            prompt = "<|im_start|>user\nDescribe the image by detailing the color, quantity, text, shape, size, texture, spatial relationships of the objects and background:";
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += " " + conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
         } else {
             prompt_template_encode_start_idx = 34;
 
@@ -1837,7 +1819,7 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         }
 
-        auto tokens_and_weights = tokenize(prompt, prompt_attn_range, 0, false);
+        auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0);
         auto& tokens            = std::get<0>(tokens_and_weights);
         auto& weights           = std::get<1>(tokens_and_weights);
 
@@ -1870,9 +1852,13 @@ struct LLMEmbedder : public Conditioner {
 
         GGML_ASSERT(hidden_states->ne[1] > prompt_template_encode_start_idx);
 
-        int64_t zero_pad_len = 0;
+        int64_t min_length = 0;
         if (sd_version_is_flux2(version)) {
-            int64_t min_length = 512;
+            min_length = 512;
+        }
+
+        int64_t zero_pad_len = 0;
+        if (min_length > 0) {
             if (hidden_states->ne[1] - prompt_template_encode_start_idx < min_length) {
                 zero_pad_len = min_length - hidden_states->ne[1] + prompt_template_encode_start_idx;
             }
@@ -1891,6 +1877,8 @@ struct LLMEmbedder : public Conditioner {
             }
             ggml_ext_tensor_set_f32(new_hidden_states, value, i0, i1, i2, i3);
         });
+
+        // print_ggml_tensor(new_hidden_states);
 
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);

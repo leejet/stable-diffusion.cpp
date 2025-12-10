@@ -134,6 +134,7 @@ struct SDSvrParams {
 };
 
 void print_usage(int argc, const char* argv[], const std::vector<ArgOptions>& options_list) {
+    std::cout << version_string() << "\n";
     std::cout << "Usage: " << argv[0] << " [options]\n\n";
     std::cout << "Svr Options:\n";
     options_list[0].print();
@@ -362,7 +363,7 @@ int main(int argc, const char** argv) {
                 return;
             }
 
-            if (!gen_params.process_and_check(IMG_GEN)) {
+            if (!gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
                 return;
@@ -378,6 +379,8 @@ int main(int argc, const char** argv) {
             std::vector<sd_image_t> pmid_images;
 
             sd_img_gen_params_t img_gen_params = {
+                gen_params.lora_vec.data(),
+                static_cast<uint32_t>(gen_params.lora_vec.size()),
                 gen_params.prompt.c_str(),
                 gen_params.negative_prompt.c_str(),
                 gen_params.clip_skip,
