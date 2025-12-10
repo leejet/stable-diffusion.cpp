@@ -1079,7 +1079,8 @@ struct SDGenerationParams {
     std::string pm_id_embed_path;
     float pm_style_strength = 20.f;
 
-    int upscale_repeats = 1;
+    int upscale_repeats   = 1;
+    int upscale_tile_size = 128;
 
     std::map<std::string, float> lora_map;
     std::map<std::string, float> high_noise_lora_map;
@@ -1176,6 +1177,10 @@ struct SDGenerationParams {
              "--upscale-repeats",
              "Run the ESRGAN upscaler this many times (default: 1)",
              &upscale_repeats},
+            {"",
+             "--upscale-tile-size",
+             "tile size for ESRGAN upscaling (default: 128)",
+             &upscale_tile_size},
         };
 
         options.float_options = {
@@ -1635,6 +1640,10 @@ struct SDGenerationParams {
             return false;
         }
 
+        if (upscale_tile_size < 1) {
+            return false;
+        }
+
         if (mode == UPSCALE) {
             if (init_image_path.length() == 0) {
                 fprintf(stderr, "error: upscale mode needs an init image (--init-img)\n");
@@ -1720,6 +1729,7 @@ struct SDGenerationParams {
             << "  control_strength: " << control_strength << ",\n"
             << "  seed: " << seed << ",\n"
             << "  upscale_repeats: " << upscale_repeats << ",\n"
+            << "  upscale_tile_size: " << upscale_tile_size << ",\n"
             << "}";
         free(sample_params_str);
         free(high_noise_sample_params_str);
@@ -2336,7 +2346,8 @@ int main(int argc, const char* argv[]) {
         upscaler_ctx_t* upscaler_ctx = new_upscaler_ctx(ctx_params.esrgan_path.c_str(),
                                                         ctx_params.offload_params_to_cpu,
                                                         ctx_params.diffusion_conv_direct,
-                                                        ctx_params.n_threads);
+                                                        ctx_params.n_threads,
+                                                        gen_params.upscale_tile_size);
 
         if (upscaler_ctx == nullptr) {
             printf("new_upscaler_ctx failed\n");
