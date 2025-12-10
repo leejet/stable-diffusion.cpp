@@ -1056,8 +1056,7 @@ struct SDGenerationParams {
 
     std::string cache_mode;
     std::string cache_option;
-    sd_easycache_params_t easycache_params;
-    sd_ucache_params_t ucache_params;
+    sd_cache_params_t cache_params;
 
     float moe_boundary  = 0.875f;
     int video_frames    = 1;
@@ -1548,8 +1547,7 @@ struct SDGenerationParams {
             return false;
         }
 
-        easycache_params.enabled = false;
-        ucache_params.enabled    = false;
+        cache_params.mode = SD_CACHE_DISABLED;
 
         if (!cache_mode.empty()) {
             std::string option_str = cache_option;
@@ -1610,18 +1608,15 @@ struct SDGenerationParams {
                 return false;
             }
 
+            cache_params.reuse_threshold        = values[0];
+            cache_params.start_percent          = values[1];
+            cache_params.end_percent            = values[2];
+            cache_params.error_decay_rate       = values[3];
+            cache_params.use_relative_threshold = (values[4] != 0.0f);
             if (cache_mode == "easycache") {
-                easycache_params.enabled         = true;
-                easycache_params.reuse_threshold = values[0];
-                easycache_params.start_percent   = values[1];
-                easycache_params.end_percent     = values[2];
+                cache_params.mode = SD_CACHE_EASYCACHE;
             } else {
-                ucache_params.enabled                = true;
-                ucache_params.reuse_threshold        = values[0];
-                ucache_params.start_percent          = values[1];
-                ucache_params.end_percent            = values[2];
-                ucache_params.error_decay_rate       = values[3];
-                ucache_params.use_relative_threshold = (values[4] != 0.0f);
+                cache_params.mode = SD_CACHE_UCACHE;
             }
         }
 
@@ -1719,16 +1714,12 @@ struct SDGenerationParams {
             << "  high_noise_sample_params: " << high_noise_sample_params_str << ",\n"
             << "  cache_mode: \"" << cache_mode << "\",\n"
             << "  cache_option: \"" << cache_option << "\",\n"
-            << "  easycache: "
-            << (easycache_params.enabled ? "enabled" : "disabled")
-            << " (threshold=" << easycache_params.reuse_threshold
-            << ", start=" << easycache_params.start_percent
-            << ", end=" << easycache_params.end_percent << "),\n"
-            << "  ucache: "
-            << (ucache_params.enabled ? "enabled" : "disabled")
-            << " (threshold=" << ucache_params.reuse_threshold
-            << ", start=" << ucache_params.start_percent
-            << ", end=" << ucache_params.end_percent << "),\n"
+            << "  cache: "
+            << (cache_params.mode == SD_CACHE_DISABLED ? "disabled" :
+                (cache_params.mode == SD_CACHE_EASYCACHE ? "easycache" : "ucache"))
+            << " (threshold=" << cache_params.reuse_threshold
+            << ", start=" << cache_params.start_percent
+            << ", end=" << cache_params.end_percent << "),\n"
             << "  moe_boundary: " << moe_boundary << ",\n"
             << "  video_frames: " << video_frames << ",\n"
             << "  fps: " << fps << ",\n"
@@ -2253,8 +2244,7 @@ int main(int argc, const char* argv[]) {
                     gen_params.pm_style_strength,
                 },  // pm_params
                 ctx_params.vae_tiling_params,
-                gen_params.easycache_params,
-                gen_params.ucache_params,
+                gen_params.cache_params,
             };
 
             results     = generate_image(sd_ctx, &img_gen_params);
@@ -2279,8 +2269,7 @@ int main(int argc, const char* argv[]) {
                 gen_params.seed,
                 gen_params.video_frames,
                 gen_params.vace_strength,
-                gen_params.easycache_params,
-                gen_params.ucache_params,
+                gen_params.cache_params,
             };
 
             results = generate_video(sd_ctx, &vid_gen_params, &num_results);

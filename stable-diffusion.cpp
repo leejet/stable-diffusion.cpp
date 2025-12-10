@@ -1487,8 +1487,7 @@ public:
                         ggml_tensor* denoise_mask                     = nullptr,
                         ggml_tensor* vace_context                     = nullptr,
                         float vace_strength                           = 1.f,
-                        const sd_easycache_params_t* easycache_params = nullptr,
-                        const sd_ucache_params_t* ucache_params       = nullptr) {
+                        const sd_cache_params_t* cache_params         = nullptr) {
         if (shifted_timestep > 0 && !sd_version_is_sdxl(version)) {
             LOG_WARN("timestep shifting is only supported for SDXL models!");
             shifted_timestep = 0;
@@ -1505,31 +1504,35 @@ public:
         }
 
         EasyCacheState easycache_state;
+        UCacheState ucache_state;
         bool easycache_enabled = false;
-        if (easycache_params != nullptr && easycache_params->enabled) {
-            bool easycache_supported = sd_version_is_dit(version);
-            if (!easycache_supported) {
-                LOG_WARN("EasyCache requested but not supported for this model type");
-            } else {
-                EasyCacheConfig easycache_config;
-                easycache_config.enabled         = true;
-                easycache_config.reuse_threshold = std::max(0.0f, easycache_params->reuse_threshold);
-                easycache_config.start_percent   = easycache_params->start_percent;
-                easycache_config.end_percent     = easycache_params->end_percent;
-                bool percent_valid               = easycache_config.start_percent >= 0.0f &&
-                                     easycache_config.start_percent < 1.0f &&
-                                     easycache_config.end_percent > 0.0f &&
-                                     easycache_config.end_percent <= 1.0f &&
-                                     easycache_config.start_percent < easycache_config.end_percent;
-                if (!percent_valid) {
-                    LOG_WARN("EasyCache disabled due to invalid percent range (start=%.3f, end=%.3f)",
-                             easycache_config.start_percent,
-                             easycache_config.end_percent);
+        bool ucache_enabled    = false;
+
+        if (cache_params != nullptr && cache_params->mode != SD_CACHE_DISABLED) {
+            bool percent_valid = cache_params->start_percent >= 0.0f &&
+                                 cache_params->start_percent < 1.0f &&
+                                 cache_params->end_percent > 0.0f &&
+                                 cache_params->end_percent <= 1.0f &&
+                                 cache_params->start_percent < cache_params->end_percent;
+
+            if (!percent_valid) {
+                LOG_WARN("Cache disabled due to invalid percent range (start=%.3f, end=%.3f)",
+                         cache_params->start_percent,
+                         cache_params->end_percent);
+            } else if (cache_params->mode == SD_CACHE_EASYCACHE) {
+                bool easycache_supported = sd_version_is_dit(version);
+                if (!easycache_supported) {
+                    LOG_WARN("EasyCache requested but not supported for this model type");
                 } else {
+                    EasyCacheConfig easycache_config;
+                    easycache_config.enabled         = true;
+                    easycache_config.reuse_threshold = std::max(0.0f, cache_params->reuse_threshold);
+                    easycache_config.start_percent   = cache_params->start_percent;
+                    easycache_config.end_percent     = cache_params->end_percent;
                     easycache_state.init(easycache_config, denoiser.get());
                     if (easycache_state.enabled()) {
                         easycache_enabled = true;
-                        LOG_INFO("EasyCache enabled - threshold: %.3f, start_percent: %.2f, end_percent: %.2f",
+                        LOG_INFO("EasyCache enabled - threshold: %.3f, start: %.2f, end: %.2f",
                                  easycache_config.reuse_threshold,
                                  easycache_config.start_percent,
                                  easycache_config.end_percent);
@@ -1537,33 +1540,18 @@ public:
                         LOG_WARN("EasyCache requested but could not be initialized for this run");
                     }
                 }
-            }
-        }
-
-        UCacheState ucache_state;
-        bool ucache_enabled = false;
-        if (ucache_params != nullptr && ucache_params->enabled) {
-            bool ucache_supported = sd_version_is_unet(version);
-            if (!ucache_supported) {
-                LOG_WARN("UCache requested but not supported for this model type (only UNET models)");
-            } else {
-                UCacheConfig ucache_config;
-                ucache_config.enabled                = true;
-                ucache_config.reuse_threshold        = std::max(0.0f, ucache_params->reuse_threshold);
-                ucache_config.start_percent          = ucache_params->start_percent;
-                ucache_config.end_percent            = ucache_params->end_percent;
-                ucache_config.error_decay_rate       = std::max(0.0f, std::min(1.0f, ucache_params->error_decay_rate));
-                ucache_config.use_relative_threshold = ucache_params->use_relative_threshold;
-                bool percent_valid            = ucache_config.start_percent >= 0.0f &&
-                                     ucache_config.start_percent < 1.0f &&
-                                     ucache_config.end_percent > 0.0f &&
-                                     ucache_config.end_percent <= 1.0f &&
-                                     ucache_config.start_percent < ucache_config.end_percent;
-                if (!percent_valid) {
-                    LOG_WARN("UCache disabled due to invalid percent range (start=%.3f, end=%.3f)",
-                             ucache_config.start_percent,
-                             ucache_config.end_percent);
+            } else if (cache_params->mode == SD_CACHE_UCACHE) {
+                bool ucache_supported = sd_version_is_unet(version);
+                if (!ucache_supported) {
+                    LOG_WARN("UCache requested but not supported for this model type (only UNET models)");
                 } else {
+                    UCacheConfig ucache_config;
+                    ucache_config.enabled                = true;
+                    ucache_config.reuse_threshold        = std::max(0.0f, cache_params->reuse_threshold);
+                    ucache_config.start_percent          = cache_params->start_percent;
+                    ucache_config.end_percent            = cache_params->end_percent;
+                    ucache_config.error_decay_rate       = std::max(0.0f, std::min(1.0f, cache_params->error_decay_rate));
+                    ucache_config.use_relative_threshold = cache_params->use_relative_threshold;
                     ucache_state.init(ucache_config, denoiser.get());
                     if (ucache_state.enabled()) {
                         ucache_enabled = true;
@@ -2611,22 +2599,14 @@ enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
     return LORA_APPLY_MODE_COUNT;
 }
 
-void sd_easycache_params_init(sd_easycache_params_t* easycache_params) {
-    *easycache_params                 = {};
-    easycache_params->enabled         = false;
-    easycache_params->reuse_threshold = 0.2f;
-    easycache_params->start_percent   = 0.15f;
-    easycache_params->end_percent     = 0.95f;
-}
-
-void sd_ucache_params_init(sd_ucache_params_t* ucache_params) {
-    *ucache_params                        = {};
-    ucache_params->enabled                = false;
-    ucache_params->reuse_threshold        = 1.0f;
-    ucache_params->start_percent          = 0.15f;
-    ucache_params->end_percent            = 0.95f;
-    ucache_params->error_decay_rate       = 1.0f;
-    ucache_params->use_relative_threshold = true;
+void sd_cache_params_init(sd_cache_params_t* cache_params) {
+    *cache_params                        = {};
+    cache_params->mode                   = SD_CACHE_DISABLED;
+    cache_params->reuse_threshold        = 1.0f;
+    cache_params->start_percent          = 0.15f;
+    cache_params->end_percent            = 0.95f;
+    cache_params->error_decay_rate       = 1.0f;
+    cache_params->use_relative_threshold = true;
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
@@ -2785,8 +2765,7 @@ void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params) {
     sd_img_gen_params->control_strength  = 0.9f;
     sd_img_gen_params->pm_params         = {nullptr, 0, nullptr, 20.f};
     sd_img_gen_params->vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
-    sd_easycache_params_init(&sd_img_gen_params->easycache);
-    sd_ucache_params_init(&sd_img_gen_params->ucache);
+    sd_cache_params_init(&sd_img_gen_params->cache);
 }
 
 char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
@@ -2830,12 +2809,18 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->pm_params.id_images_count,
              SAFE_STR(sd_img_gen_params->pm_params.id_embed_path),
              BOOL_STR(sd_img_gen_params->vae_tiling_params.enabled));
+    const char* cache_mode_str = "disabled";
+    if (sd_img_gen_params->cache.mode == SD_CACHE_EASYCACHE) {
+        cache_mode_str = "easycache";
+    } else if (sd_img_gen_params->cache.mode == SD_CACHE_UCACHE) {
+        cache_mode_str = "ucache";
+    }
     snprintf(buf + strlen(buf), 4096 - strlen(buf),
-             "easycache: %s (threshold=%.3f, start=%.2f, end=%.2f)\n",
-             sd_img_gen_params->easycache.enabled ? "enabled" : "disabled",
-             sd_img_gen_params->easycache.reuse_threshold,
-             sd_img_gen_params->easycache.start_percent,
-             sd_img_gen_params->easycache.end_percent);
+             "cache: %s (threshold=%.3f, start=%.2f, end=%.2f)\n",
+             cache_mode_str,
+             sd_img_gen_params->cache.reuse_threshold,
+             sd_img_gen_params->cache.start_percent,
+             sd_img_gen_params->cache.end_percent);
     free(sample_params_str);
     return buf;
 }
@@ -2852,8 +2837,7 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->video_frames                          = 6;
     sd_vid_gen_params->moe_boundary                          = 0.875f;
     sd_vid_gen_params->vace_strength                         = 1.f;
-    sd_easycache_params_init(&sd_vid_gen_params->easycache);
-    sd_ucache_params_init(&sd_vid_gen_params->ucache);
+    sd_cache_params_init(&sd_vid_gen_params->cache);
 }
 
 struct sd_ctx_t {
@@ -2931,8 +2915,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     bool increase_ref_index,
                                     ggml_tensor* concat_latent                    = nullptr,
                                     ggml_tensor* denoise_mask                     = nullptr,
-                                    const sd_easycache_params_t* easycache_params = nullptr,
-                                    const sd_ucache_params_t* ucache_params       = nullptr) {
+                                    const sd_cache_params_t* cache_params         = nullptr) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -3221,8 +3204,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      denoise_mask,
                                                      nullptr,
                                                      1.0f,
-                                                     easycache_params,
-                                                     ucache_params);
+                                                     cache_params);
         int64_t sampling_end    = ggml_time_ms();
         if (x_0 != nullptr) {
             // print_ggml_tensor(x_0);
@@ -3556,8 +3538,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->increase_ref_index,
                                                         concat_latent,
                                                         denoise_mask,
-                                                        &sd_img_gen_params->easycache,
-                                                        &sd_img_gen_params->ucache);
+                                                        &sd_img_gen_params->cache);
 
     size_t t2 = ggml_time_ms();
 
@@ -3924,8 +3905,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                  denoise_mask,
                                  vace_context,
                                  sd_vid_gen_params->vace_strength,
-                                 &sd_vid_gen_params->easycache,
-                                 &sd_vid_gen_params->ucache);
+                                 &sd_vid_gen_params->cache);
 
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling(high noise) completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);
@@ -3962,8 +3942,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           denoise_mask,
                                           vace_context,
                                           sd_vid_gen_params->vace_strength,
-                                          &sd_vid_gen_params->easycache,
-                                          &sd_vid_gen_params->ucache);
+                                          &sd_vid_gen_params->cache);
 
         int64_t sampling_end = ggml_time_ms();
         LOG_INFO("sampling completed, taking %.2fs", (sampling_end - sampling_start) * 1.0f / 1000);

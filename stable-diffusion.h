@@ -235,21 +235,20 @@ typedef struct {
     float style_strength;
 } sd_pm_params_t;  // photo maker
 
-typedef struct {
-    bool enabled;
-    float reuse_threshold;
-    float start_percent;
-    float end_percent;
-} sd_easycache_params_t;
+enum sd_cache_mode_t {
+    SD_CACHE_DISABLED = 0,
+    SD_CACHE_EASYCACHE,
+    SD_CACHE_UCACHE,
+};
 
 typedef struct {
-    bool enabled;
+    enum sd_cache_mode_t mode;
     float reuse_threshold;
     float start_percent;
     float end_percent;
     float error_decay_rate;
     bool use_relative_threshold;
-} sd_ucache_params_t;
+} sd_cache_params_t;
 
 typedef struct {
     bool is_high_noise;
@@ -279,8 +278,7 @@ typedef struct {
     float control_strength;
     sd_pm_params_t pm_params;
     sd_tiling_params_t vae_tiling_params;
-    sd_easycache_params_t easycache;
-    sd_ucache_params_t ucache;
+    sd_cache_params_t cache;
 } sd_img_gen_params_t;
 
 typedef struct {
@@ -302,8 +300,7 @@ typedef struct {
     int64_t seed;
     int video_frames;
     float vace_strength;
-    sd_easycache_params_t easycache;
-    sd_ucache_params_t ucache;
+    sd_cache_params_t cache;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
@@ -333,8 +330,7 @@ SD_API enum preview_t str_to_preview(const char* str);
 SD_API const char* sd_lora_apply_mode_name(enum lora_apply_mode_t mode);
 SD_API enum lora_apply_mode_t str_to_lora_apply_mode(const char* str);
 
-SD_API void sd_easycache_params_init(sd_easycache_params_t* easycache_params);
-SD_API void sd_ucache_params_init(sd_ucache_params_t* ucache_params);
+SD_API void sd_cache_params_init(sd_cache_params_t* cache_params);
 
 SD_API void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params);
 SD_API char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params);
