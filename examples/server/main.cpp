@@ -8,14 +8,6 @@
 #include <sstream>
 #include <vector>
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_STATIC
-#include "stb_image.h"
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_STATIC
-#include "stb_image_write.h"
-
 #include "httplib.h"
 #include "stable-diffusion.h"
 
@@ -44,6 +36,53 @@ std::string base64_encode(const std::vector<uint8_t>& bytes) {
         ret.push_back(base64_chars[((val << 8) >> (valb + 8)) & 0x3F]);
     while (ret.size() % 4)
         ret.push_back('=');
+    return ret;
+}
+
+inline bool is_base64(unsigned char c) {
+    return (isalnum(c) || (c == '+') || (c == '/'));
+}
+
+std::vector<uint8_t> base64_decode(const std::string& encoded_string) {
+    int in_len = encoded_string.size();
+    int i      = 0;
+    int j      = 0;
+    int in_    = 0;
+    uint8_t char_array_4[4], char_array_3[3];
+    std::vector<uint8_t> ret;
+
+    while (in_len-- && (encoded_string[in_] != '=') && is_base64(encoded_string[in_])) {
+        char_array_4[i++] = encoded_string[in_];
+        in_++;
+        if (i == 4) {
+            for (i = 0; i < 4; i++)
+                char_array_4[i] = static_cast<uint8_t>(base64_chars.find(char_array_4[i]));
+
+            char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
+            char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+            char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
+
+            for (i = 0; i < 3; i++)
+                ret.push_back(char_array_3[i]);
+            i = 0;
+        }
+    }
+
+    if (i) {
+        for (j = i; j < 4; j++)
+            char_array_4[j] = 0;
+
+        for (j = 0; j < 4; j++)
+            char_array_4[j] = static_cast<uint8_t>(base64_chars.find(char_array_4[j]));
+
+        char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
+        char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+        char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
+
+        for (j = 0; j < i - 1; j++)
+            ret.push_back(char_array_3[j]);
+    }
+
     return ret;
 }
 
@@ -442,6 +481,187 @@ int main(int argc, const char** argv) {
             res.set_content(out.dump(), "application/json");
             res.status = 200;
 
+        } catch (const std::exception& e) {
+            res.status = 500;
+            json err;
+            err["error"]   = "server_error";
+            err["message"] = e.what();
+            res.set_content(err.dump(), "application/json");
+        }
+    });
+
+    svr.Post("/v1/images/edits", [&](const httplib::Request& req, httplib::Response& res) {
+        try {
+            if (req.body.empty()) {
+                res.status = 400;
+                res.set_content(R"({"error":"empty body"})", "application/json");
+                return;
+            }
+
+            json j = json::parse(req.body);
+
+            std::string prompt        = j.value("prompt", "");
+            int n                     = std::max(1, j.value("n", 1));
+            std::string size          = j.value("size", "");
+            std::string output_format = j.value("output_format", "png");
+            int output_compression    = j.value("output_compression", 100);
+
+            std::string ref_image_b64  = j.value("image", "");
+            std::string mask_image_b64 = j.value("mask", "");
+
+            if (prompt.empty()) {
+                res.status = 400;
+                res.set_content(R"({"error":"prompt required"})", "application/json");
+                return;
+            }
+
+            if (ref_image_b64.empty()) {
+                res.status = 400;
+                res.set_content(R"({"error":"image required"})", "application/json");
+                return;
+            }
+
+            int width  = 512;
+            int height = 512;
+            if (!size.empty()) {
+                auto pos = size.find('x');
+                if (pos != std::string::npos) {
+                    try {
+                        width  = std::stoi(size.substr(0, pos));
+                        height = std::stoi(size.substr(pos + 1));
+                    } catch (...) {
+                    }
+                }
+            }
+
+            if (output_format != "png" && output_format != "jpeg") {
+                res.status = 400;
+                res.set_content(R"({"error":"invalid output_format, must be one of [png, jpeg]"})", "application/json");
+                return;
+            }
+
+            if (n <= 0)
+                n = 1;
+            if (n > 8)
+                n = 8;
+            if (output_compression > 100)
+                output_compression = 100;
+            if (output_compression < 0)
+                output_compression = 0;
+
+            // base64 -> raw image
+            std::vector<uint8_t> ref_image_bytes = base64_decode(ref_image_b64);
+            int img_w                            = width;
+            int img_h                            = height;
+            uint8_t* raw_pixels                  = load_image_from_memory(
+                                 reinterpret_cast<const char*>(ref_image_bytes.data()),
+                                 img_w, img_h,
+                                 width, height, 3);
+
+            sd_image_t ref_image;
+            ref_image.width   = img_w;
+            ref_image.height  = img_h;
+            ref_image.channel = 3;
+            ref_image.data    = raw_pixels;
+
+            sd_image_t mask_image = {0};
+            if (!mask_image_b64.empty()) {
+                std::vector<uint8_t> mask_bytes = base64_decode(mask_image_b64);
+                int mask_w = width, mask_h = height;
+                uint8_t* mask_raw = load_image_from_memory(
+                    reinterpret_cast<const char*>(mask_bytes.data()),
+                    mask_w, mask_h,
+                    width, height, 1);
+                mask_image.width   = mask_w;
+                mask_image.height  = mask_h;
+                mask_image.channel = 1;
+                mask_image.data    = mask_raw;
+            } else {
+                mask_image.width   = width;
+                mask_image.height  = height;
+                mask_image.channel = 1;
+                mask_image.data    = nullptr;
+            }
+
+            SDGenerationParams gen_params;
+            gen_params.prompt      = prompt;
+            gen_params.width       = width;
+            gen_params.height      = height;
+            gen_params.batch_count = n;
+
+            sd_image_t init_image              = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
+            sd_image_t control_image           = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
+            std::vector<sd_image_t> ref_images = {ref_image};
+            std::vector<sd_image_t> pmid_images;
+
+            sd_img_gen_params_t img_gen_params = {
+                gen_params.lora_vec.data(),
+                static_cast<uint32_t>(gen_params.lora_vec.size()),
+                gen_params.prompt.c_str(),
+                gen_params.negative_prompt.c_str(),
+                gen_params.clip_skip,
+                init_image,
+                ref_images.data(),
+                (int)ref_images.size(),
+                gen_params.auto_resize_ref_image,
+                gen_params.increase_ref_index,
+                mask_image,
+                gen_params.width,
+                gen_params.height,
+                gen_params.sample_params,
+                gen_params.strength,
+                gen_params.seed,
+                gen_params.batch_count,
+                control_image,
+                gen_params.control_strength,
+                {
+                    pmid_images.data(),
+                    (int)pmid_images.size(),
+                    gen_params.pm_id_embed_path.c_str(),
+                    gen_params.pm_style_strength,
+                },  // pm_params
+                ctx_params.vae_tiling_params,
+                gen_params.easycache_params,
+            };
+
+            sd_image_t* results = nullptr;
+            int num_results     = 0;
+
+            {
+                std::lock_guard<std::mutex> lock(sd_ctx_mutex);
+                results     = generate_image(sd_ctx, &img_gen_params);
+                num_results = gen_params.batch_count;
+            }
+
+            json out;
+            out["created"]       = iso_timestamp_now();
+            out["data"]          = json::array();
+            out["output_format"] = output_format;
+
+            for (int i = 0; i < num_results; i++) {
+                if (results[i].data == nullptr)
+                    continue;
+                auto image_bytes = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
+                                                         results[i].data,
+                                                         results[i].width,
+                                                         results[i].height,
+                                                         results[i].channel,
+                                                         output_compression);
+                std::string b64 = base64_encode(image_bytes);
+                json item;
+                item["b64_json"] = b64;
+                out["data"].push_back(item);
+            }
+
+            res.set_content(out.dump(), "application/json");
+            res.status = 200;
+
+            if (init_image.data) {
+                stbi_image_free(init_image.data);
+            }
+            if (mask_image.data) {
+                stbi_image_free(mask_image.data);
+            }
         } catch (const std::exception& e) {
             res.status = 500;
             json err;

@@ -15,21 +15,9 @@
 // #include "preprocessing.hpp"
 #include "stable-diffusion.h"
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_STATIC
-#include "stb_image.h"
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_STATIC
-#include "stb_image_write.h"
-
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#define STB_IMAGE_RESIZE_STATIC
-#include "stb_image_resize.h"
+#include "common/common.hpp"
 
 #include "avi_writer.h"
-
-#include "common/common.hpp"
 
 const char* previews_str[] = {
     "none",
@@ -335,94 +323,6 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     fflush(out_stream);
 }
 
-uint8_t* load_image(const char* image_path, int& width, int& height, int expected_width = 0, int expected_height = 0, int expected_channel = 3) {
-    int c                 = 0;
-    uint8_t* image_buffer = (uint8_t*)stbi_load(image_path, &width, &height, &c, expected_channel);
-    if (image_buffer == nullptr) {
-        fprintf(stderr, "load image from '%s' failed\n", image_path);
-        return nullptr;
-    }
-    if (c < expected_channel) {
-        fprintf(stderr,
-                "the number of channels for the input image must be >= %d,"
-                "but got %d channels, image_path = %s\n",
-                expected_channel,
-                c,
-                image_path);
-        free(image_buffer);
-        return nullptr;
-    }
-    if (width <= 0) {
-        fprintf(stderr, "error: the width of image must be greater than 0, image_path = %s\n", image_path);
-        free(image_buffer);
-        return nullptr;
-    }
-    if (height <= 0) {
-        fprintf(stderr, "error: the height of image must be greater than 0, image_path = %s\n", image_path);
-        free(image_buffer);
-        return nullptr;
-    }
-
-    // Resize input image ...
-    if ((expected_width > 0 && expected_height > 0) && (height != expected_height || width != expected_width)) {
-        float dst_aspect = (float)expected_width / (float)expected_height;
-        float src_aspect = (float)width / (float)height;
-
-        int crop_x = 0, crop_y = 0;
-        int crop_w = width, crop_h = height;
-
-        if (src_aspect > dst_aspect) {
-            crop_w = (int)(height * dst_aspect);
-            crop_x = (width - crop_w) / 2;
-        } else if (src_aspect < dst_aspect) {
-            crop_h = (int)(width / dst_aspect);
-            crop_y = (height - crop_h) / 2;
-        }
-
-        if (crop_x != 0 || crop_y != 0) {
-            printf("crop input image from %dx%d to %dx%d, image_path = %s\n", width, height, crop_w, crop_h, image_path);
-            uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
-            if (cropped_image_buffer == nullptr) {
-                fprintf(stderr, "error: allocate memory for crop\n");
-                free(image_buffer);
-                return nullptr;
-            }
-            for (int row = 0; row < crop_h; row++) {
-                uint8_t* src = image_buffer + ((crop_y + row) * width + crop_x) * expected_channel;
-                uint8_t* dst = cropped_image_buffer + (row * crop_w) * expected_channel;
-                memcpy(dst, src, crop_w * expected_channel);
-            }
-
-            width  = crop_w;
-            height = crop_h;
-            free(image_buffer);
-            image_buffer = cropped_image_buffer;
-        }
-
-        printf("resize input image from %dx%d to %dx%d\n", width, height, expected_width, expected_height);
-        int resized_height = expected_height;
-        int resized_width  = expected_width;
-
-        uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * expected_channel);
-        if (resized_image_buffer == nullptr) {
-            fprintf(stderr, "error: allocate memory for resize input image\n");
-            free(image_buffer);
-            return nullptr;
-        }
-        stbir_resize(image_buffer, width, height, 0,
-                     resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
-                     expected_channel, STBIR_ALPHA_CHANNEL_NONE, 0,
-                     STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
-                     STBIR_FILTER_BOX, STBIR_FILTER_BOX,
-                     STBIR_COLORSPACE_SRGB, nullptr);
-        width  = resized_width;
-        height = resized_height;
-        free(image_buffer);
-        image_buffer = resized_image_buffer;
-    }
-    return image_buffer;
-}
-
 bool load_images_from_dir(const std::string dir,
                           std::vector<sd_image_t>& images,
                           int expected_width  = 0,
@@ -457,7 +357,7 @@ bool load_images_from_dir(const std::string dir,
             }
             int width             = 0;
             int height            = 0;
-            uint8_t* image_buffer = load_image(path.c_str(), width, height, expected_width, expected_height);
+            uint8_t* image_buffer = load_image_from_file(path.c_str(), width, height, expected_width, expected_height);
             if (image_buffer == nullptr) {
                 fprintf(stderr, "load image from '%s' failed\n", path.c_str());
                 return false;
@@ -593,7 +493,7 @@ int main(int argc, const char* argv[]) {
 
         int width       = 0;
         int height      = 0;
-        init_image.data = load_image(gen_params.init_image_path.c_str(), width, height, gen_params.width, gen_params.height);
+        init_image.data = load_image_from_file(gen_params.init_image_path.c_str(), width, height, gen_params.width, gen_params.height);
         if (init_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", gen_params.init_image_path.c_str());
             release_all_resources();
@@ -606,7 +506,7 @@ int main(int argc, const char* argv[]) {
 
         int width      = 0;
         int height     = 0;
-        end_image.data = load_image(gen_params.end_image_path.c_str(), width, height, gen_params.width, gen_params.height);
+        end_image.data = load_image_from_file(gen_params.end_image_path.c_str(), width, height, gen_params.width, gen_params.height);
         if (end_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", gen_params.end_image_path.c_str());
             release_all_resources();
@@ -618,7 +518,7 @@ int main(int argc, const char* argv[]) {
         int c           = 0;
         int width       = 0;
         int height      = 0;
-        mask_image.data = load_image(gen_params.mask_image_path.c_str(), width, height, gen_params.width, gen_params.height, 1);
+        mask_image.data = load_image_from_file(gen_params.mask_image_path.c_str(), width, height, gen_params.width, gen_params.height, 1);
         if (mask_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", gen_params.mask_image_path.c_str());
             release_all_resources();
@@ -637,7 +537,7 @@ int main(int argc, const char* argv[]) {
     if (gen_params.control_image_path.size() > 0) {
         int width          = 0;
         int height         = 0;
-        control_image.data = load_image(gen_params.control_image_path.c_str(), width, height, gen_params.width, gen_params.height);
+        control_image.data = load_image_from_file(gen_params.control_image_path.c_str(), width, height, gen_params.width, gen_params.height);
         if (control_image.data == nullptr) {
             fprintf(stderr, "load image from '%s' failed\n", gen_params.control_image_path.c_str());
             release_all_resources();
@@ -658,7 +558,7 @@ int main(int argc, const char* argv[]) {
         for (auto& path : gen_params.ref_image_paths) {
             int width             = 0;
             int height            = 0;
-            uint8_t* image_buffer = load_image(path.c_str(), width, height);
+            uint8_t* image_buffer = load_image_from_file(path.c_str(), width, height);
             if (image_buffer == nullptr) {
                 fprintf(stderr, "load image from '%s' failed\n", path.c_str());
                 release_all_resources();
