@@ -126,6 +126,26 @@ struct UCacheState {
         }
     }
 
+    void set_sigmas(const std::vector<float>& sigmas) {
+        if (!initialized || sigmas.size() < 2) {
+            return;
+        }
+        size_t n_steps = sigmas.size() - 1;
+
+        size_t start_step = static_cast<size_t>(config.start_percent * n_steps);
+        size_t end_step   = static_cast<size_t>(config.end_percent * n_steps);
+
+        if (start_step >= n_steps) start_step = n_steps - 1;
+        if (end_step >= n_steps) end_step = n_steps - 1;
+
+        start_sigma = sigmas[start_step];
+        end_sigma   = sigmas[end_step];
+
+        if (start_sigma < end_sigma) {
+            std::swap(start_sigma, end_sigma);
+        }
+    }
+
     bool enabled() const {
         return initialized && config.enabled;
     }
