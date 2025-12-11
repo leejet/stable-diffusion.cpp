@@ -237,19 +237,9 @@ public:
     }
 };
 
-class Clamp : public UnaryBlock {
-public:
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
-        return ggml_scale_inplace(ctx->ggml_ctx,
-                                  ggml_tanh_inplace(ctx->ggml_ctx,
-                                                    ggml_scale(ctx->ggml_ctx, x, 1.0f / 3.0f)),
-                                  3.0f);
-    }
-};
-
 class TinyVideoEncoder : public UnaryBlock {
     int in_channels = 3;
-    int channels    = 64;
+    int hidden      = 64;
     int z_channels  = 4;
     int num_blocks  = 3;
     int num_layers  = 3;
@@ -259,17 +249,17 @@ public:
     TinyVideoEncoder(int z_channels = 4, int patch_size = 1)
         : z_channels(z_channels), patch_size(patch_size) {
         int index                       = 0;
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels * patch_size * patch_size, channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels * patch_size * patch_size, hidden, {3, 3}, {1, 1}, {1, 1}));
         index++;  // nn.ReLU()
         for (int i = 0; i < num_layers; i++) {
             int stride                      = i == num_layers - 1 ? 1 : 2;
-            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TPool(channels, stride));
-            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
+            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TPool(hidden, stride));
+            blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(hidden, hidden, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
             for (int j = 0; j < num_blocks; j++) {
-                blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new MemBlock(channels, channels));
+                blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new MemBlock(hidden, hidden));
             }
         }
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, z_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(hidden, z_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* z) override {
@@ -301,9 +291,7 @@ class TinyVideoDecoder : public UnaryBlock {
 
 public:
     TinyVideoDecoder(int z_channels = 4, int patch_size = 1) : z_channels(z_channels) {
-        int index = 0;
-        //  n_f = [256, 128, 64, 64]
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Clamp());
+        int index                       = 1;  // Clamp()
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, channels[0], {3, 3}, {1, 1}, {1, 1}));
         index++;  // nn.ReLU()
         for (int i = 0; i < num_layers; i++) {
@@ -322,11 +310,17 @@ public:
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* z) override {
         LOG_DEBUG("Here");
-        auto clamp      = std::dynamic_pointer_cast<Clamp>(blocks["0"]);
         auto first_conv = std::dynamic_pointer_cast<Conv2d>(blocks["1"]);
-        auto h          = first_conv->forward(ctx, clamp->forward(ctx, z));
-        h               = ggml_relu_inplace(ctx->ggml_ctx, h);
-        int index       = 3;
+
+        // Clamp()
+        auto h = ggml_scale_inplace(ctx->ggml_ctx,
+                                    ggml_tanh_inplace(ctx->ggml_ctx,
+                                                      ggml_scale(ctx->ggml_ctx, z, 1.0f / 3.0f)),
+                                    3.0f);
+
+        h         = first_conv->forward(ctx, h);
+        h         = ggml_relu_inplace(ctx->ggml_ctx, h);
+        int index = 3;
         for (int i = 0; i < num_layers; i++) {
             for (int j = 0; j < num_blocks; j++) {
                 auto block = std::dynamic_pointer_cast<MemBlock>(blocks[std::to_string(index++)]);
@@ -350,6 +344,7 @@ public:
         // shape(W, H, 3, T+3) => shape(W, H, 3, T)
         h = ggml_view_4d(ctx->ggml_ctx, h, h->ne[0], h->ne[1], h->ne[2], h->ne[3] - 3, h->nb[1], h->nb[2], h->nb[3], 0);
         LOG_DEBUG("Here");
+        print_ggml_tensor(h, true);
         return h;
     }
 };
@@ -357,10 +352,11 @@ public:
 class TAEHV : public GGMLBlock {
 protected:
     bool decode_only;
+    SDVersion version;
 
 public:
     TAEHV(bool decode_only = true, SDVersion version = VERSION_WAN2)
-        : decode_only(decode_only) {
+        : decode_only(decode_only), version(version) {
         int z_channels = 16;
         int patch      = 1;
         if (version == VERSION_WAN2_2_TI2V) {
@@ -376,7 +372,12 @@ public:
     struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
         LOG_DEBUG("Decode");
         auto decoder = std::dynamic_pointer_cast<TinyVideoDecoder>(blocks["decoder"]);
-        return decoder->forward(ctx, z);
+        auto result  = decoder->forward(ctx, z);
+        LOG_DEBUG("Decoded");
+        if (sd_version_is_wan(version)) {
+            result = ggml_permute(ctx->ggml_ctx, result, 0, 1, 3, 2);
+        }
+        return result;
     }
 
     struct ggml_tensor* encode(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
