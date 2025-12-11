@@ -1341,6 +1341,10 @@ struct SDGenerationParams {
         load_if_exists("skip_layers", skip_layers);
         load_if_exists("high_noise_skip_layers", high_noise_skip_layers);
 
+        load_if_exists("cfg_scale", sample_params.guidance.txt_cfg);
+        load_if_exists("img_cfg_scale", sample_params.guidance.img_cfg);
+        load_if_exists("guidance", sample_params.guidance.distilled_guidance);
+
         return true;
     }
 
@@ -1627,6 +1631,7 @@ static std::string version_string() {
 
 uint8_t* load_image_common(bool from_memory,
                            const char* image_path_or_bytes,
+                           int len,
                            int& width,
                            int& height,
                            int expected_width   = 0,
@@ -1637,7 +1642,7 @@ uint8_t* load_image_common(bool from_memory,
     uint8_t* image_buffer = nullptr;
     if (from_memory) {
         image_path   = "memory";
-        image_buffer = (uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel);
+        image_buffer = (uint8_t*)stbi_load_from_memory((const stbi_uc*)image_path_or_bytes, len, &width, &height, &c, expected_channel);
     } else {
         image_path   = image_path_or_bytes;
         image_buffer = (uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel);
@@ -1733,14 +1738,15 @@ uint8_t* load_image_from_file(const char* image_path,
                               int expected_width   = 0,
                               int expected_height  = 0,
                               int expected_channel = 3) {
-    return load_image_common(false, image_path, width, height, expected_width, expected_height, expected_channel);
+    return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
 }
 
 uint8_t* load_image_from_memory(const char* image_bytes,
+                                int len,
                                 int& width,
                                 int& height,
                                 int expected_width   = 0,
                                 int expected_height  = 0,
                                 int expected_channel = 3) {
-    return load_image_common(true, image_bytes, width, height, expected_width, expected_height, expected_channel);
+    return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
 }
