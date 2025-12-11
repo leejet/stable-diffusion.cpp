@@ -400,8 +400,8 @@ public:
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                               offload_params_to_cpu,
-                                                               tensor_storage_map);
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -461,10 +461,10 @@ public:
                                                                     1,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
-                                                             offload_params_to_cpu,
-                                                             tensor_storage_map,
-                                                             "model.diffusion_model",
-                                                             version);
+                                                              offload_params_to_cpu,
+                                                              tensor_storage_map,
+                                                              "model.diffusion_model",
+                                                              version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
                                                                             offload_params_to_cpu,
@@ -564,14 +564,27 @@ public:
             }
 
             if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
-                first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
-                                                                        offload_params_to_cpu,
-                                                                        tensor_storage_map,
-                                                                        "first_stage_model",
-                                                                        vae_decode_only,
-                                                                        version);
-                first_stage_model->alloc_params_buffer();
-                first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                if (!use_tiny_autoencoder) {
+                    first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
+                                                                            offload_params_to_cpu,
+                                                                            tensor_storage_map,
+                                                                            "first_stage_model",
+                                                                            vae_decode_only,
+                                                                            version);
+                    first_stage_model->alloc_params_buffer();
+                    first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                } else {
+                    tae_first_stage = std::make_shared<TinyVideoAutoEncoder>(vae_backend,
+                                                                             offload_params_to_cpu,
+                                                                             tensor_storage_map,
+                                                                             "decoder",
+                                                                             vae_decode_only,
+                                                                             version);
+                    if (sd_ctx_params->vae_conv_direct) {
+                        LOG_INFO("Using Conv2d direct in the tae model");
+                        tae_first_stage->set_conv2d_direct_enabled(true);
+                    }
+                }
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 first_stage_model = std::make_shared<FakeVAE>(vae_backend,
                                                               offload_params_to_cpu);
@@ -598,14 +611,13 @@ public:
                 }
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
-            }
-            if (use_tiny_autoencoder) {
-                tae_first_stage = std::make_shared<TinyAutoEncoder>(vae_backend,
-                                                                    offload_params_to_cpu,
-                                                                    tensor_storage_map,
-                                                                    "decoder.layers",
-                                                                    vae_decode_only,
-                                                                    version);
+            } else if (use_tiny_autoencoder) {
+                tae_first_stage = std::make_shared<TinyImageAutoEncoder>(vae_backend,
+                                                                         offload_params_to_cpu,
+                                                                         tensor_storage_map,
+                                                                         "decoder.layers",
+                                                                         vae_decode_only,
+                                                                         version);
                 if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the tae model");
                     tae_first_stage->set_conv2d_direct_enabled(true);
@@ -726,13 +738,16 @@ public:
                 unet_params_mem_size += high_noise_diffusion_model->get_params_buffer_size();
             }
             size_t vae_params_mem_size = 0;
+            LOG_DEBUG("Here");
             if (!use_tiny_autoencoder || sd_ctx_params->tae_preview_only) {
                 vae_params_mem_size = first_stage_model->get_params_buffer_size();
             }
             if (use_tiny_autoencoder) {
+                LOG_DEBUG("Here");
                 if (!tae_first_stage->load_from_file(taesd_path, n_threads)) {
                     return false;
                 }
+                LOG_DEBUG("Here");
                 vae_params_mem_size = tae_first_stage->get_params_buffer_size();
             }
             size_t control_net_params_mem_size = 0;
