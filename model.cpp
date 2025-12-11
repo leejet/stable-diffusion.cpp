@@ -1340,7 +1340,7 @@ std::string ModelLoader::load_umt5_tokenizer_json() {
     return json_str;
 }
 
-bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool use_mmap) {
+bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool use_mmap, alloc_cb_t alloc_cb) {
     int64_t process_time_ms = 0;
     std::atomic<int64_t> read_time_ms(0);
     std::atomic<int64_t> memcpy_time_ms(0);
@@ -1367,6 +1367,10 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     const size_t total_tensors_to_process = processed_tensor_storages.size();
     const int64_t t_start                 = ggml_time_ms();
     int last_n_threads                    = 1;
+
+    if (alloc_cb) {
+        alloc_cb();
+    }
 
     for (size_t file_index = 0; file_index < file_paths_.size(); file_index++) {
         std::string file_path = file_paths_[file_index];
@@ -1598,7 +1602,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                                std::set<std::string> ignore_tensors,
                                int n_threads,
-                               bool use_mmap) {
+                               bool use_mmap,
+                               alloc_cb_t alloc_cb) {
     std::set<std::string> tensor_names_in_file;
     std::mutex tensor_names_mutex;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
@@ -1641,7 +1646,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb, n_threads, use_mmap);
+    bool success = load_tensors(on_new_tensor_cb, n_threads, use_mmap, alloc_cb);
     if (!success) {
         LOG_ERROR("load tensors from file failed");
         return false;

@@ -478,7 +478,6 @@ public:
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map);
-                    clip_vision->alloc_params_buffer();
                     clip_vision->get_param_tensors(tensors);
                 }
             } else if (sd_version_is_qwen_image(version)) {
@@ -541,10 +540,8 @@ public:
                 diffusion_model->set_flash_attn_enabled(true);
             }
 
-            cond_stage_model->alloc_params_buffer();
             cond_stage_model->get_param_tensors(tensors);
 
-            diffusion_model->alloc_params_buffer();
             diffusion_model->get_param_tensors(tensors);
 
             if (sd_version_is_unet_edit(version)) {
@@ -552,7 +549,6 @@ public:
             }
 
             if (high_noise_diffusion_model) {
-                high_noise_diffusion_model->alloc_params_buffer();
                 high_noise_diffusion_model->get_param_tensors(tensors);
             }
 
@@ -570,7 +566,6 @@ public:
                                                                         "first_stage_model",
                                                                         vae_decode_only,
                                                                         version);
-                first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else if (version == VERSION_CHROMA_RADIANCE) {
                 first_stage_model = std::make_shared<FakeVAE>(vae_backend,
@@ -596,7 +591,6 @@ public:
                         vae_conv_2d_scale);
                     first_stage_model->set_conv2d_scale(vae_conv_2d_scale);
                 }
-                first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             }
             if (use_tiny_autoencoder) {
@@ -666,10 +660,6 @@ public:
                 }
             }
             if (stacked_id) {
-                if (!pmid_model->alloc_params_buffer()) {
-                    LOG_ERROR(" pmid model params buffer allocation failed");
-                    return false;
-                }
                 pmid_model->get_param_tensors(tensors, "pmid");
             }
         }
@@ -710,7 +700,17 @@ public:
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
         }
-        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->use_mmap);
+
+        auto alloc_cb = [&]() -> void {
+            if (clip_vision) clip_vision->alloc_params_buffer();
+            if (cond_stage_model) cond_stage_model->alloc_params_buffer();
+            if (diffusion_model) diffusion_model->alloc_params_buffer();
+            if (high_noise_diffusion_model) high_noise_diffusion_model->alloc_params_buffer();
+            if (first_stage_model) first_stage_model->alloc_params_buffer();
+            if (pmid_model) pmid_model->alloc_params_buffer();
+        };
+
+        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->use_mmap, alloc_cb);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
