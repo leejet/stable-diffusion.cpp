@@ -414,7 +414,7 @@ public:
 struct TinyAutoEncoder : public GGMLRunner {
     TinyAutoEncoder(ggml_backend_t backend, bool offload_params_to_cpu)
         : GGMLRunner(backend, offload_params_to_cpu) {}
-    virtual void compute(const int n_threads,
+    virtual bool compute(const int n_threads,
                          struct ggml_tensor* z,
                          bool decode_graph,
                          struct ggml_tensor** output,
@@ -548,7 +548,7 @@ struct TinyVideoAutoEncoder : public TinyAutoEncoder {
         return gf;
     }
 
-    void compute(const int n_threads,
+    bool compute(const int n_threads,
                  struct ggml_tensor* z,
                  bool decode_graph,
                  struct ggml_tensor** output,
@@ -557,7 +557,7 @@ struct TinyVideoAutoEncoder : public TinyAutoEncoder {
             return build_graph(z, decode_graph);
         };
 
-        GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
     }
 };
 
