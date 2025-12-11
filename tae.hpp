@@ -224,7 +224,6 @@ public:
         h      = conv1->forward(ctx, h);
         h      = ggml_relu_inplace(ctx->ggml_ctx, h);
         h      = conv2->forward(ctx, h);
-        h      = ggml_relu_inplace(ctx->ggml_ctx, h);
 
         auto skip = x;
         if (has_skip_conv) {
@@ -323,7 +322,7 @@ public:
         for (int i = 0; i < num_layers; i++) {
             for (int j = 0; j < num_blocks; j++) {
                 auto block = std::dynamic_pointer_cast<MemBlock>(blocks[std::to_string(index++)]);
-                auto mem   = ggml_pad(ctx->ggml_ctx, h, 0, 0, 0, 1);
+                auto mem   = ggml_pad_ext(ctx->ggml_ctx, h, 0, 0, 0, 0, 0, 0, 1,0);
                 mem        = ggml_view_4d(ctx->ggml_ctx, mem, h->ne[0], h->ne[1], h->ne[2], h->ne[3], h->nb[1], h->nb[2], h->nb[3], 0);
                 h          = block->forward(ctx, h, mem);
             }
@@ -341,7 +340,7 @@ public:
         h              = last_conv->forward(ctx, h);
 
         // shape(W, H, 3, T+3) => shape(W, H, 3, T)
-        h = ggml_view_4d(ctx->ggml_ctx, h, h->ne[0], h->ne[1], h->ne[2], h->ne[3] - 3, h->nb[1], h->nb[2], h->nb[3], 0);
+        h = ggml_view_4d(ctx->ggml_ctx, h, h->ne[0], h->ne[1], h->ne[2], h->ne[3] - 3, h->nb[1], h->nb[2], h->nb[3], 3 * h->nb[3]);
         return h;
     }
 };
