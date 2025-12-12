@@ -732,7 +732,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_slice(struct ggml_context* ctx,
 __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_ext_chunk(struct ggml_context* ctx,
                                                                   struct ggml_tensor* x,
                                                                   int num,
-                                                                  int64_t dim) {
+                                                                  int64_t dim,
+                                                                  bool cont = true) {
     GGML_ASSERT(dim >= 0 && dim < 4);
     GGML_ASSERT(x->ne[dim] % num == 0);
 
@@ -747,7 +748,9 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_ext_chunk(struct ggml_co
 
     if (dim != 3) {
         x = ggml_ext_torch_permute(ctx, x, perm[0], perm[1], perm[2], perm[3]);
-        x = ggml_cont(ctx, x);
+        if (cont) {
+            x = ggml_cont(ctx, x);
+        }
     }
 
     std::vector<struct ggml_tensor*> chunks;
@@ -760,7 +763,9 @@ __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_ext_chunk(struct ggml_co
 
         if (dim != 3) {
             chunk = ggml_ext_torch_permute(ctx, chunk, inv_perm[0], inv_perm[1], inv_perm[2], inv_perm[3]);
-            chunk = ggml_cont(ctx, chunk);
+            if (cont) {
+                chunk = ggml_cont(ctx, chunk);
+            }
         }
         chunks.push_back(chunk);
     }
