@@ -120,7 +120,7 @@ struct SDSvrParams {
         options.int_options = {
             {"",
              "--listen-port",
-             "server listen ip (default: 1234)",
+             "server listen port (default: 1234)",
              &listen_port},
         };
 

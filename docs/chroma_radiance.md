@@ -12,7 +12,7 @@
 ## Examples
 
 ```
-.\bin\Release\sd.exe --diffusion-model  ..\..\ComfyUI\models\diffusion_models\Chroma1-Radiance-v0.4-Q8_0.gguf --t5xxl ..\..\ComfyUI\models\clip\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'chroma  radiance cpp'" --cfg-scale 4.0 --sampling-method euler -v
+.\bin\Release\sd-cli.exe --diffusion-model  ..\..\ComfyUI\models\diffusion_models\Chroma1-Radiance-v0.4-Q8_0.gguf --t5xxl ..\..\ComfyUI\models\clip\t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'chroma  radiance cpp'" --cfg-scale 4.0 --sampling-method euler -v
 ```
 
 <img alt="Chroma1-Radiance" src="../assets/flux/chroma1-radiance.png" />

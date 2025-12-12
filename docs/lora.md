@@ -7,7 +7,7 @@
 Here's a simple example:
 
 ```
-./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat<lora:marblesh:1>" --lora-model-dir ../models
+./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat<lora:marblesh:1>" --lora-model-dir ../models
 ```
 
 `../models/marblesh.safetensors` or `../models/marblesh.ckpt` will be applied to the model
