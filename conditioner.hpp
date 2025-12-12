@@ -1648,6 +1648,19 @@ struct LLMEmbedder : public Conditioner {
         }
     }
 
+    size_t get_utf8_char_len(char c) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if ((uc & 0x80) == 0)
+            return 1;  // ASCII (1 byte)
+        if ((uc & 0xE0) == 0xC0)
+            return 2;  // 2-byte char
+        if ((uc & 0xF0) == 0xE0)
+            return 3;  // 3-byte char (Common for Chinese/Japanese)
+        if ((uc & 0xF8) == 0xF0)
+            return 4;  // 4-byte char (Emojis, etc.)
+        return 1;      // Fallback (should not happen in valid UTF-8)
+    }
+
     std::tuple<std::vector<int>, std::vector<float>> tokenize(
         std::string text,
         std::pair<int, int> attn_range,
@@ -1667,16 +1680,6 @@ struct LLMEmbedder : public Conditioner {
         }
         parsed_attention.emplace_back(text.substr(attn_range.second), 1.f);
 
-        // {
-        //     std::stringstream ss;
-        //     ss << '[';
-        //     for (const auto& item : parsed_attention) {
-        //         ss << "['" << item.first << "', " << item.second << "], ";
-        //     }
-        //     ss << ']';
-        //     LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
-        // }
-
         std::vector<int> tokens;
         std::vector<float> weights;
 
@@ -1685,45 +1688,46 @@ struct LLMEmbedder : public Conditioner {
             float curr_weight            = item.second;
 
             if (spell_quotes) {
-                std::vector<std::string> parts;
+                std::string buffer;
                 bool in_quote = false;
-                std::string current_part;
 
-                for (char c : curr_text) {
-                    if (c == '"') {
-                        if (!current_part.empty()) {
-                            parts.push_back(current_part);
-                            current_part.clear();
+                size_t i = 0;
+                while (i < curr_text.size()) {
+                    // utf8 character can be 1-4 char
+                    size_t char_len = get_utf8_char_len(curr_text[i]);
+
+                    // Safety check to prevent reading past end of string
+                    if (i + char_len > curr_text.size()) {
+                        char_len = curr_text.size() - i;
+                    }
+                    std::string uchar = curr_text.substr(i, char_len);
+                    i += char_len;
+
+                    if (uchar == "\"") {
+                        buffer += uchar;
+                        // If we were accumulating normal text, flush it now
+                        if (!in_quote) {
+                            std::vector<int> part_tokens = tokenizer->tokenize(buffer, nullptr);
+                            tokens.insert(tokens.end(), part_tokens.begin(), part_tokens.end());
+                            weights.insert(weights.end(), part_tokens.size(), curr_weight);
+                            buffer.clear();
                         }
                         in_quote = !in_quote;
                     } else {
-                        current_part += c;
-                        if (in_quote && current_part.size() == 1) {
-                            parts.push_back(current_part);
-                            current_part.clear();
-                        }
-                    }
-                }
-                if (!current_part.empty()) {
-                    parts.push_back(current_part);
-                }
-
-                for (const auto& part : parts) {
-                    if (part.empty())
-                        continue;
-                    if (part[0] == '"' && part.back() == '"') {
-                        std::string quoted_content = part.substr(1, part.size() - 2);
-                        for (char ch : quoted_content) {
-                            std::string char_str(1, ch);
-                            std::vector<int> char_tokens = tokenizer->tokenize(char_str, nullptr);
+                        if (in_quote) {
+                            std::vector<int> char_tokens = tokenizer->tokenize(uchar, nullptr);
                             tokens.insert(tokens.end(), char_tokens.begin(), char_tokens.end());
                             weights.insert(weights.end(), char_tokens.size(), curr_weight);
+                        } else {
+                            buffer += uchar;
                         }
-                    } else {
-                        std::vector<int> part_tokens = tokenizer->tokenize(part, nullptr);
-                        tokens.insert(tokens.end(), part_tokens.begin(), part_tokens.end());
-                        weights.insert(weights.end(), part_tokens.size(), curr_weight);
                     }
+                }
+
+                if (!buffer.empty()) {
+                    std::vector<int> part_tokens = tokenizer->tokenize(buffer, nullptr);
+                    tokens.insert(tokens.end(), part_tokens.begin(), part_tokens.end());
+                    weights.insert(weights.end(), part_tokens.size(), curr_weight);
                 }
             } else {
                 std::vector<int> curr_tokens = tokenizer->tokenize(curr_text, nullptr);
@@ -1751,13 +1755,12 @@ struct LLMEmbedder : public Conditioner {
                 LOG_INFO("LongCatEditPipeline");
                 prompt_template_encode_start_idx = 67;
                 // prompt_template_encode_end_idx = 5;
-                int image_embed_idx              = 36 + 6;
+                int image_embed_idx = 36 + 6;
 
                 int min_pixels          = 384 * 384;
                 int max_pixels          = 560 * 560;
                 std::string placeholder = "<|image_pad|>";
                 std::string img_prompt;
-
 
                 // Only one image is officicially supported by the model, not sure how it handles multiple images
                 for (int i = 0; i < conditioner_params.ref_images.size(); i++) {
