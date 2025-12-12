@@ -527,8 +527,7 @@ struct CacheDitState {
     std::string get_summary() const {
         char buf[256];
         snprintf(buf, sizeof(buf),
-                 "CacheDIT[Fn=%d,Bn=%d,thresh=%.2f]: cached %zu/%d steps, %d/%d blocks",
-                 get_double_Fn_blocks(), get_double_Bn_blocks(),
+                 "CacheDIT[thresh=%.2f]: cached %zu/%d steps, %d/%d blocks",
                  config.dbcache.residual_diff_threshold,
                  cached_steps.size(), total_steps,
                  total_blocks_cached, total_blocks_computed + total_blocks_cached);
@@ -634,6 +633,19 @@ inline int get_preset_warmup(const std::string& preset) {
     if (preset == "fast" || preset == "f" || preset == "F") return 6;
     if (preset == "ultra" || preset == "u" || preset == "U") return 4;
     return 8;
+}
+
+inline int get_preset_Fn(const std::string& preset) {
+    if (preset == "slow" || preset == "s" || preset == "S") return 8;
+    if (preset == "medium" || preset == "m" || preset == "M") return 8;
+    if (preset == "fast" || preset == "f" || preset == "F") return 6;
+    if (preset == "ultra" || preset == "u" || preset == "U") return 4;
+    return 8;
+}
+
+inline int get_preset_Bn(const std::string& preset) {
+    (void)preset;
+    return 0;
 }
 
 inline void parse_dbcache_options(const std::string& opts, DBCacheConfig& cfg) {
@@ -858,7 +870,19 @@ struct CacheDitConditionState {
         float diff = CacheDitState::calculate_residual_diff(
             it->second.prev_input.data(), input_data, ne);
 
-        if (diff < config.residual_diff_threshold) {
+        float effective_threshold = config.residual_diff_threshold;
+        if (config.Fn_compute_blocks > 0) {
+            float fn_confidence = 1.0f + 0.02f * (config.Fn_compute_blocks - 8);
+            fn_confidence = std::max(0.5f, std::min(2.0f, fn_confidence));
+            effective_threshold *= fn_confidence;
+        }
+        if (config.Bn_compute_blocks > 0) {
+            float bn_quality = 1.0f - 0.03f * config.Bn_compute_blocks;
+            bn_quality = std::max(0.5f, std::min(1.0f, bn_quality));
+            effective_threshold *= bn_quality;
+        }
+
+        if (diff < effective_threshold) {
             skip_current_step = true;
             total_steps_skipped++;
             cached_steps.push_back(current_step_index);
