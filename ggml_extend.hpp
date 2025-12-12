@@ -1016,20 +1016,30 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_conv_2d(struct ggml_context* ctx,
                                                        struct ggml_tensor* x,
                                                        struct ggml_tensor* w,
                                                        struct ggml_tensor* b,
-                                                       int s0      = 1,
-                                                       int s1      = 1,
-                                                       int p0      = 0,
-                                                       int p1      = 0,
-                                                       int d0      = 1,
-                                                       int d1      = 1,
-                                                       bool direct = false,
-                                                       float scale = 1.f) {
+                                                       int s0        = 1,
+                                                       int s1        = 1,
+                                                       int p0        = 0,
+                                                       int p1        = 0,
+                                                       int d0        = 1,
+                                                       int d1        = 1,
+                                                       bool direct   = false,
+                                                       bool circular = false,
+                                                       float scale   = 1.f) {
     if (scale != 1.f) {
         x = ggml_scale(ctx, x, scale);
     }
     if (w->ne[2] != x->ne[2] && ggml_n_dims(w) == 2) {
         w = ggml_reshape_4d(ctx, w, 1, 1, w->ne[0], w->ne[1]);
     }
+
+    // use circular padding (on a torus, x and y wrap around) for seamless textures
+    // see https://github.com/leejet/stable-diffusion.cpp/pull/914
+    if (circular && (p0 != 0 || p1 != 0)) {
+        x  = ggml_pad_ext_circular(ctx, x, p0, p0, p1, p1, 0, 0, 0, 0);
+        p0 = 0;
+        p1 = 0;
+    }
+
     if (direct) {
         if (is_depthwise) {
             x = ggml_conv_2d_dw_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
@@ -1543,7 +1553,8 @@ struct WeightAdapter {
             int d0      = 1;
             int d1      = 1;
             bool direct = false;
-            float scale = 1.f;
+            bool circular = false;
+            float scale   = 1.f;
         } conv2d;
     };
     virtual ggml_tensor* patch_weight(ggml_context* ctx, ggml_tensor* weight, const std::string& weight_name) = 0;
@@ -1561,6 +1572,7 @@ struct GGMLRunnerContext {
     ggml_context* ggml_ctx                        = nullptr;
     bool flash_attn_enabled                       = false;
     bool conv2d_direct_enabled                    = false;
+    bool circular_pad_enabled                     = false;
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 };
 
@@ -1597,6 +1609,7 @@ protected:
 
     bool flash_attn_enabled    = false;
     bool conv2d_direct_enabled = false;
+    bool circular_pad_enabled  = false;
 
     void alloc_params_ctx() {
         struct ggml_init_params params;
@@ -1874,6 +1887,7 @@ public:
         runner_ctx.backend               = runtime_backend;
         runner_ctx.flash_attn_enabled    = flash_attn_enabled;
         runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
+        runner_ctx.circular_pad_enabled  = circular_pad_enabled;
         runner_ctx.weight_adapter        = weight_adapter;
         return runner_ctx;
     }
@@ -2016,6 +2030,10 @@ public:
 
     void set_conv2d_direct_enabled(bool enabled) {
         conv2d_direct_enabled = enabled;
+    }
+
+    void set_circular_pad_enabled(bool enabled) {
+        circular_pad_enabled = enabled;
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {
@@ -2289,7 +2307,8 @@ public:
             forward_params.conv2d.d0     = dilation.second;
             forward_params.conv2d.d1     = dilation.first;
             forward_params.conv2d.direct = ctx->conv2d_direct_enabled;
-            forward_params.conv2d.scale  = scale;
+            forward_params.conv2d.circular = ctx->circular_pad_enabled;
+            forward_params.conv2d.scale    = scale;
             return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
         }
         return ggml_ext_conv_2d(ctx->ggml_ctx,
@@ -2303,6 +2322,7 @@ public:
                                 dilation.second,
                                 dilation.first,
                                 ctx->conv2d_direct_enabled,
+                                ctx->circular_pad_enabled,
                                 scale);
     }
 };

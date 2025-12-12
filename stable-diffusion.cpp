@@ -212,10 +212,6 @@ public:
         use_tiny_autoencoder    = taesd_path.size() > 0;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
         circular_pad            = sd_ctx_params->circular_pad;
-        sd_set_circular_padding_enabled(circular_pad);
-        if (circular_pad) {
-            LOG_INFO("Using circular padding for convolutions");
-        }
 
         rng = get_rng(sd_ctx_params->rng_type);
         if (sd_ctx_params->sampler_rng_type != RNG_TYPE_COUNT && sd_ctx_params->sampler_rng_type != sd_ctx_params->rng_type) {
@@ -393,6 +389,10 @@ public:
             vae_decode_only = false;
         }
 
+        if (circular_pad) {
+            LOG_INFO("Using circular padding for convolutions");
+        }
+
         bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
 
         {
@@ -540,6 +540,7 @@ public:
                     LOG_INFO("Using Conv2d direct in the diffusion model");
                     std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_conv2d_direct_enabled(true);
                 }
+                std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_circular_pad_enabled(circular_pad);
             }
 
             if (sd_ctx_params->diffusion_flash_attn) {
@@ -602,6 +603,7 @@ public:
                         vae_conv_2d_scale);
                     first_stage_model->set_conv2d_scale(vae_conv_2d_scale);
                 }
+                first_stage_model->set_circular_pad_enabled(circular_pad);
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             }
@@ -616,6 +618,7 @@ public:
                     LOG_INFO("Using Conv2d direct in the tae model");
                     tae_first_stage->set_conv2d_direct_enabled(true);
                 }
+                tae_first_stage->set_circular_pad_enabled(circular_pad);
             }
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
 
@@ -635,6 +638,7 @@ public:
                     LOG_INFO("Using Conv2d direct in the control net");
                     control_net->set_conv2d_direct_enabled(true);
                 }
+                control_net->set_circular_pad_enabled(circular_pad);
             }
 
             if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
