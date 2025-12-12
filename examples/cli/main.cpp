@@ -518,6 +518,7 @@ struct SDContextParams {
     bool diffusion_flash_attn   = false;
     bool diffusion_conv_direct  = false;
     bool vae_conv_direct        = false;
+    bool circular_pad           = false;
 
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
@@ -671,6 +672,10 @@ struct SDContextParams {
              "--vae-conv-direct",
              "use ggml_conv2d_direct in the vae model",
              true, &vae_conv_direct},
+            {"",
+             "--circular",
+             "enable circular padding for convolutions",
+             true, &circular_pad},
             {"",
              "--chroma-disable-dit-mask",
              "disable dit mask for chroma",
@@ -934,6 +939,7 @@ struct SDContextParams {
             << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
             << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
             << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
+            << "  circular_pad: " << (circular_pad ? "true" : "false") << ",\n"
             << "  chroma_use_dit_mask: " << (chroma_use_dit_mask ? "true" : "false") << ",\n"
             << "  chroma_use_t5_mask: " << (chroma_use_t5_mask ? "true" : "false") << ",\n"
             << "  chroma_t5_mask_pad: " << chroma_t5_mask_pad << ",\n"
@@ -995,6 +1001,7 @@ struct SDContextParams {
             taesd_preview,
             diffusion_conv_direct,
             vae_conv_direct,
+            circular_pad,
             force_sdxl_vae_conv_scale,
             chroma_use_dit_mask,
             chroma_use_t5_mask,
