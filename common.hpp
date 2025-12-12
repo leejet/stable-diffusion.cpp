@@ -28,7 +28,13 @@ public:
         if (vae_downsample) {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-            x = ggml_pad(ctx->ggml_ctx, x, 1, 1, 0, 0);
+            // For VAE downsampling we manually pad by 1 before the stride-2 conv.
+            // Honor the global circular padding flag here to avoid seams in seamless mode.
+            if (ctx->circular_pad_enabled) {
+                x = ggml_pad_circular(ctx->ggml_ctx, x, 1, 1, 0, 0);
+            } else {
+                x = ggml_pad(ctx->ggml_ctx, x, 1, 1, 0, 0);
+            }
             x = conv->forward(ctx, x);
         } else {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["op"]);
