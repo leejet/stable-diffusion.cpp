@@ -1695,6 +1695,8 @@ struct SDGenerationParams {
             cache_params.mode == SD_CACHE_CACHE_DIT) {
 
             if (!cache_preset.empty()) {
+                cache_params.Fn_compute_blocks = get_preset_Fn(cache_preset);
+                cache_params.Bn_compute_blocks = get_preset_Bn(cache_preset);
                 cache_params.residual_diff_threshold = get_preset_threshold(cache_preset);
                 cache_params.max_warmup_steps = get_preset_warmup(cache_preset);
 
