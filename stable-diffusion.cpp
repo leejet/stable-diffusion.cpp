@@ -408,6 +408,7 @@ public:
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map);
+                diffusion_model->set_circular_pad_enabled(circular_pad);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -448,6 +449,7 @@ public:
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
+                diffusion_model->set_circular_pad_enabled(circular_pad);
             } else if (sd_version_is_flux2(version)) {
                 bool is_chroma   = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
@@ -455,10 +457,11 @@ public:
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
-                                                              tensor_storage_map,
-                                                              version,
-                                                              sd_ctx_params->chroma_use_dit_mask);
+                                                               offload_params_to_cpu,
+                                                               tensor_storage_map,
+                                                               version,
+                                                               sd_ctx_params->chroma_use_dit_mask);
+                diffusion_model->set_circular_pad_enabled(circular_pad);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
@@ -471,12 +474,14 @@ public:
                                                              tensor_storage_map,
                                                              "model.diffusion_model",
                                                              version);
+                diffusion_model->set_circular_pad_enabled(circular_pad);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
                                                                             offload_params_to_cpu,
                                                                             tensor_storage_map,
                                                                             "model.high_noise_diffusion_model",
                                                                             version);
+                    high_noise_diffusion_model->set_circular_pad_enabled(circular_pad);
                 }
                 if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
@@ -503,6 +508,7 @@ public:
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
                                                                    version);
+                diffusion_model->set_circular_pad_enabled(circular_pad);
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
@@ -513,6 +519,7 @@ public:
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
                                                                 version);
+                diffusion_model->set_circular_pad_enabled(circular_pad);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (int i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -538,8 +545,9 @@ public:
                                                               version);
                 if (sd_ctx_params->diffusion_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the diffusion model");
-                    std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_conv2d_direct_enabled(true);
-                }
+                std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_conv2d_direct_enabled(true);
+            }
+            diffusion_model->set_circular_pad_enabled(circular_pad);
                 std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_circular_pad_enabled(circular_pad);
             }
 
@@ -577,6 +585,7 @@ public:
                                                                         "first_stage_model",
                                                                         vae_decode_only,
                                                                         version);
+                first_stage_model->set_circular_pad_enabled(circular_pad);
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else if (version == VERSION_CHROMA_RADIANCE) {
