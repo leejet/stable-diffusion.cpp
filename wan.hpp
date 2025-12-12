@@ -76,9 +76,9 @@ namespace WAN {
             }
 
             if (ctx->circular_pad_enabled) {
-                x = ggml_pad_ext_circular(ctx->ggml_ctx, x, lp0, rp0, lp1, rp1, 0, 0, 0, 0);
+                x = ggml_pad_ext_circular(ctx->ggml_ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0);
             } else {
-                x = ggml_pad_ext(ctx->ggml_ctx, x, lp0, rp0, lp1, rp1, 0, 0, 0, 0);
+                x = ggml_pad_ext(ctx->ggml_ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0);
             }
             return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
                                     std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
