@@ -12,38 +12,15 @@ Here's a simple example:
 
 `../models/marblesh.safetensors` or `../models/marblesh.ckpt` will be applied to the model
 
-# Support matrix
+# Lora Apply Mode
 
-> ℹ️ CUDA `get_rows` support is defined here:  
-> [ggml-org/ggml/src/ggml-cuda/getrows.cu#L156](https://github.com/ggml-org/ggml/blob/7dee1d6a1e7611f238d09be96738388da97c88ed/src/ggml-cuda/getrows.cu#L156)  
-> Currently only the basic types + Q4/Q5/Q8 are implemented. K-quants are **not** supported.
+There are two ways to apply LoRA: **immediately** and **at_runtime**. You can specify it using the `--lora-apply-mode` parameter.
 
-NOTE: The other backends may have different support.
+By default, the mode is selected automatically:
 
-| Quant / Type | CUDA | Vulkan |
-|--------------|------|--------|
-| F32          | ✔️   | ✔️   |
-| F16          | ✔️   | ✔️   |
-| BF16         | ✔️   | ✔️   |
-| I32          | ✔️   | ❌   |
-| Q4_0         | ✔️   | ✔️   |
-| Q4_1         | ✔️   | ✔️   |
-| Q5_0         | ✔️   | ✔️   |
-| Q5_1         | ✔️   | ✔️   |
-| Q8_0         | ✔️   | ✔️   |
-| Q2_K         | ❌   | ❌   |
-| Q3_K         | ❌   | ❌   |
-| Q4_K         | ❌   | ❌   |
-| Q5_K         | ❌   | ❌   |
-| Q6_K         | ❌   | ❌   |
-| Q8_K         | ❌   | ❌   |
-| IQ1_S        | ❌   | ✔️   |
-| IQ1_M        | ❌   | ✔️   |
-| IQ2_XXS      | ❌   | ✔️   |
-| IQ2_XS       | ❌   | ✔️   |
-| IQ2_S        | ❌   | ✔️   |
-| IQ3_XXS      | ❌   | ✔️   |
-| IQ3_S        | ❌   | ✔️   |
-| IQ4_XS       | ❌   | ✔️   |
-| IQ4_NL       | ❌   | ✔️   |
-| MXFP4        | ❌   | ✔️   |
+* If the model weights contain any quantized parameters, the **at_runtime** mode is used;
+* Otherwise, the **immediately** mode is used.
+
+The **immediately** mode may have precision and compatibility issues with quantized parameters, but it usually offers faster inference speed and, in some cases, lower memory usage.
+In contrast, the **at_runtime** mode provides better compatibility and higher precision, but inference may be slower and memory usage may be higher in some cases.
+
