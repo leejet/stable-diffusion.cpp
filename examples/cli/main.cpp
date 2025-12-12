@@ -14,6 +14,7 @@
 
 // #include "preprocessing.hpp"
 #include "stable-diffusion.h"
+#include "cache_dit.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
@@ -1056,7 +1057,10 @@ struct SDGenerationParams {
 
     std::string cache_mode;
     std::string cache_option;
-    sd_cache_params_t cache_params;
+    std::string cache_preset;
+    std::string scm_mask;
+    bool scm_policy_dynamic = true;
+    sd_cache_params_t cache_params{};
 
     float moe_boundary  = 0.875f;
     int video_frames    = 1;
@@ -1381,8 +1385,9 @@ struct SDGenerationParams {
                 return -1;
             }
             cache_mode = argv_to_utf8(index, argv);
-            if (cache_mode != "easycache" && cache_mode != "ucache") {
-                fprintf(stderr, "error: invalid cache mode '%s', must be 'easycache' or 'ucache'\n", cache_mode.c_str());
+            if (cache_mode != "easycache" && cache_mode != "ucache" &&
+                cache_mode != "dbcache" && cache_mode != "taylorseer" && cache_mode != "cache-dit") {
+                fprintf(stderr, "error: invalid cache mode '%s', must be 'easycache', 'ucache', 'dbcache', 'taylorseer', or 'cache-dit'\n", cache_mode.c_str());
                 return -1;
             }
             return 1;
@@ -1393,6 +1398,45 @@ struct SDGenerationParams {
                 return -1;
             }
             cache_option = argv_to_utf8(index, argv);
+            return 1;
+        };
+
+        auto on_scm_mask_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            scm_mask = argv_to_utf8(index, argv);
+            return 1;
+        };
+
+        auto on_scm_policy_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            std::string policy = argv_to_utf8(index, argv);
+            if (policy == "dynamic") {
+                scm_policy_dynamic = true;
+            } else if (policy == "static") {
+                scm_policy_dynamic = false;
+            } else {
+                fprintf(stderr, "error: invalid SCM policy '%s', must be 'dynamic' or 'static'\n", policy.c_str());
+                return -1;
+            }
+            return 1;
+        };
+
+        auto on_cache_preset_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            cache_preset = argv_to_utf8(index, argv);
+            if (cache_preset != "slow" && cache_preset != "s" && cache_preset != "S" &&
+                cache_preset != "medium" && cache_preset != "m" && cache_preset != "M" &&
+                cache_preset != "fast" && cache_preset != "f" && cache_preset != "F" &&
+                cache_preset != "ultra" && cache_preset != "u" && cache_preset != "U") {
+                fprintf(stderr, "error: invalid cache preset '%s', must be 'slow'/'s', 'medium'/'m', 'fast'/'f', or 'ultra'/'u'\n", cache_preset.c_str());
+                return -1;
+            }
             return 1;
         };
 
@@ -1429,12 +1473,24 @@ struct SDGenerationParams {
              on_ref_image_arg},
             {"",
              "--cache-mode",
-             "caching method: 'easycache' for DiT models, 'ucache' for UNET models (SD1.x/SD2.x/SDXL)",
+             "caching method: 'easycache'/'ucache' (legacy), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)",
              on_cache_mode_arg},
             {"",
              "--cache-option",
-             "cache parameters \"threshold,start,end[,warmup,decay,relative]\" (ucache extended: warmup=0, decay=1.0, relative=1)",
+             "cache params - legacy: \"threshold,start,end[,decay,relative]\", cache-dit: \"Fn,Bn,threshold,warmup\" (default: 8,0,0.08,8)",
              on_cache_option_arg},
+            {"",
+             "--scm-mask",
+             "SCM steps mask for cache-dit: comma-separated 0/1 (e.g., \"1,1,1,0,0,1,0,0,1,0\") - 1=compute, 0=can cache",
+             on_scm_mask_arg},
+            {"",
+             "--scm-policy",
+             "SCM policy: 'dynamic' (check threshold, default) or 'static' (use cache without checking)",
+             on_scm_policy_arg},
+            {"",
+             "--cache-preset",
+             "Cache-DIT preset: 'slow'/'s' (~2.7x), 'medium'/'m' (~3.2x), 'fast'/'f' (~5.7x), 'ultra'/'u' (~7.4x). Sets SCM mask + threshold + warmup automatically",
+             on_cache_preset_arg},
 
         };
 
@@ -1554,15 +1610,13 @@ struct SDGenerationParams {
             if (option_str.empty()) {
                 if (cache_mode == "easycache") {
                     option_str = "0.2,0.15,0.95";
-                } else {
+                } else if (cache_mode == "ucache") {
                     option_str = "1.0,0.15,0.95";
+                } else if (cache_mode == "dbcache" || cache_mode == "taylorseer" || cache_mode == "cache-dit") {
+                    option_str = "8,0,0.08,8";
                 }
             }
 
-            // Format: threshold,start,end[,decay,relative]
-            // - values[0-2]: threshold, start_percent, end_percent (required)
-            // - values[3]: error_decay_rate (optional, default: 1.0)
-            // - values[4]: use_relative_threshold (optional, 0 or 1, default: 1)
             float values[5] = {0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
             std::stringstream ss(option_str);
             std::string token;
@@ -1595,29 +1649,71 @@ struct SDGenerationParams {
                 }
                 idx++;
             }
-            if (idx < 3) {
-                fprintf(stderr, "error: cache option expects at least 3 comma-separated values (threshold,start,end)\n");
-                return false;
-            }
-            if (values[0] < 0.0f) {
-                fprintf(stderr, "error: cache threshold must be non-negative\n");
-                return false;
-            }
-            if (values[1] < 0.0f || values[1] >= 1.0f || values[2] <= 0.0f || values[2] > 1.0f || values[1] >= values[2]) {
-                fprintf(stderr, "error: cache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
-                return false;
+            if (cache_mode == "easycache" || cache_mode == "ucache") {
+                if (idx < 3) {
+                    fprintf(stderr, "error: cache option expects at least 3 comma-separated values (threshold,start,end)\n");
+                    return false;
+                }
+                if (values[0] < 0.0f) {
+                    fprintf(stderr, "error: cache threshold must be non-negative\n");
+                    return false;
+                }
+                if (values[1] < 0.0f || values[1] >= 1.0f || values[2] <= 0.0f || values[2] > 1.0f || values[1] >= values[2]) {
+                    fprintf(stderr, "error: cache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
+                    return false;
+                }
             }
 
-            cache_params.reuse_threshold        = values[0];
-            cache_params.start_percent          = values[1];
-            cache_params.end_percent            = values[2];
-            cache_params.error_decay_rate       = values[3];
-            cache_params.use_relative_threshold = (values[4] != 0.0f);
-            if (cache_mode == "easycache") {
-                cache_params.mode = SD_CACHE_EASYCACHE;
+            if (cache_mode == "easycache" || cache_mode == "ucache") {
+                cache_params.reuse_threshold        = values[0];
+                cache_params.start_percent          = values[1];
+                cache_params.end_percent            = values[2];
+                cache_params.error_decay_rate       = values[3];
+                cache_params.use_relative_threshold = (values[4] != 0.0f);
+                if (cache_mode == "easycache") {
+                    cache_params.mode = SD_CACHE_EASYCACHE;
+                } else {
+                    cache_params.mode = SD_CACHE_UCACHE;
+                }
             } else {
-                cache_params.mode = SD_CACHE_UCACHE;
+                cache_params.Fn_compute_blocks = (idx >= 1) ? static_cast<int>(values[0]) : 8;
+                cache_params.Bn_compute_blocks = (idx >= 2) ? static_cast<int>(values[1]) : 0;
+                cache_params.residual_diff_threshold = (idx >= 3) ? values[2] : 0.08f;
+                cache_params.max_warmup_steps = (idx >= 4) ? static_cast<int>(values[3]) : 8;
+                if (cache_mode == "dbcache") {
+                    cache_params.mode = SD_CACHE_DBCACHE;
+                } else if (cache_mode == "taylorseer") {
+                    cache_params.mode = SD_CACHE_TAYLORSEER;
+                } else {
+                    cache_params.mode = SD_CACHE_CACHE_DIT;
+                }
             }
+        }
+
+        if (cache_params.mode == SD_CACHE_DBCACHE ||
+            cache_params.mode == SD_CACHE_TAYLORSEER ||
+            cache_params.mode == SD_CACHE_CACHE_DIT) {
+
+            if (!cache_preset.empty()) {
+                cache_params.residual_diff_threshold = get_preset_threshold(cache_preset);
+                cache_params.max_warmup_steps = get_preset_warmup(cache_preset);
+
+                if (scm_mask.empty()) {
+                    int total_steps = sample_params.sample_steps;
+                    std::vector<int> mask = get_scm_preset(cache_preset, total_steps);
+                    std::ostringstream oss;
+                    for (size_t i = 0; i < mask.size(); i++) {
+                        if (i > 0) oss << ",";
+                        oss << mask[i];
+                    }
+                    scm_mask = oss.str();
+                }
+            }
+
+            if (!scm_mask.empty()) {
+                cache_params.scm_mask = scm_mask.c_str();
+            }
+            cache_params.scm_policy_dynamic = scm_policy_dynamic;
         }
 
         sample_params.guidance.slg.layers                 = skip_layers.data();

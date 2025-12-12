@@ -239,6 +239,9 @@ enum sd_cache_mode_t {
     SD_CACHE_DISABLED = 0,
     SD_CACHE_EASYCACHE,
     SD_CACHE_UCACHE,
+    SD_CACHE_DBCACHE,
+    SD_CACHE_TAYLORSEER,
+    SD_CACHE_CACHE_DIT,
 };
 
 typedef struct {
@@ -248,6 +251,16 @@ typedef struct {
     float end_percent;
     float error_decay_rate;
     bool use_relative_threshold;
+    int Fn_compute_blocks;
+    int Bn_compute_blocks;
+    float residual_diff_threshold;
+    int max_warmup_steps;
+    int max_cached_steps;
+    int max_continuous_cached_steps;
+    int taylorseer_n_derivatives;
+    int taylorseer_skip_interval;
+    const char* scm_mask;
+    bool scm_policy_dynamic;
 } sd_cache_params_t;
 
 typedef struct {
