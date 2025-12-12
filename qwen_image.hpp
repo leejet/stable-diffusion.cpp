@@ -361,7 +361,7 @@ namespace Qwen {
 
             int pad_h = (params.patch_size - H % params.patch_size) % params.patch_size;
             int pad_w = (params.patch_size - W % params.patch_size) % params.patch_size;
-            x         = sd_pad(ctx, x, pad_w, pad_h, 0, 0);  // [N, C, H + pad_h, W + pad_w]
+            x         = ggml_pad(ctx, x, pad_w, pad_h, 0, 0);  // [N, C, H + pad_h, W + pad_w]
             return x;
         }
 
@@ -565,6 +565,7 @@ namespace Qwen {
                                                   ref_latents,
                                                   increase_ref_index,
                                                   qwen_image_params.theta,
+                                                  circular_pad_enabled,
                                                   qwen_image_params.axes_dim);
             int pos_len = pe_vec.size() / qwen_image_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);

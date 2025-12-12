@@ -1835,7 +1835,7 @@ namespace WAN {
             int pad_t = (std::get<0>(params.patch_size) - T % std::get<0>(params.patch_size)) % std::get<0>(params.patch_size);
             int pad_h = (std::get<1>(params.patch_size) - H % std::get<1>(params.patch_size)) % std::get<1>(params.patch_size);
             int pad_w = (std::get<2>(params.patch_size) - W % std::get<2>(params.patch_size)) % std::get<2>(params.patch_size);
-            x         = sd_pad(ctx, x, pad_w, pad_h, pad_t, 0);  // [N*C, T + pad_t, H + pad_h, W + pad_w]
+            x         = ggml_pad(ctx, x, pad_w, pad_h, pad_t, 0);  // [N*C, T + pad_t, H + pad_h, W + pad_w]
 
             return x;
         }

@@ -21,6 +21,10 @@
 #include <vector>
 #include <atomic>
 
+#ifndef GGML_KQ_MASK_PAD
+#define GGML_KQ_MASK_PAD 1
+#endif
+
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
@@ -1041,11 +1045,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_conv_2d(struct ggml_context* ctx,
     }
 
     if (direct) {
-        if (is_depthwise) {
-            x = ggml_conv_2d_dw_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
-        } else {
-            x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
-        }
+        x = ggml_conv_2d_direct(ctx, w, x, s0, s1, p0, p1, d0, d1);
     } else {
         x = ggml_conv_2d(ctx, w, x, s0, s1, p0, p1, d0, d1);
     }
@@ -1269,7 +1269,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
 
     auto build_kqv = [&](ggml_tensor* q_in, ggml_tensor* k_in, ggml_tensor* v_in, ggml_tensor* mask_in) -> ggml_tensor* {
         if (kv_pad != 0) {
-            k_in = sd_pad(ctx, k_in, 0, kv_pad, 0, 0);
+            k_in = ggml_pad(ctx, k_in, 0, kv_pad, 0, 0);
         }
         if (kv_scale != 1.0f) {
             k_in = ggml_scale(ctx, k_in, kv_scale);
@@ -1279,7 +1279,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
         v_in = ggml_ext_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
         v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
         if (kv_pad != 0) {
-            v_in = sd_pad(ctx, v_in, 0, kv_pad, 0, 0);
+            v_in = ggml_pad(ctx, v_in, 0, kv_pad, 0, 0);
         }
         if (kv_scale != 1.0f) {
             v_in = ggml_scale(ctx, v_in, kv_scale);
@@ -1302,7 +1302,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
                 mask_pad = GGML_PAD(L_q, GGML_KQ_MASK_PAD) - mask_in->ne[1];
             }
             if (mask_pad > 0) {
-                mask_in = sd_pad(ctx, mask_in, 0, mask_pad, 0, 0);
+                mask_in = ggml_pad(ctx, mask_in, 0, mask_pad, 0, 0);
             }
             mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
         }

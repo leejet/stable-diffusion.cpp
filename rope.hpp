@@ -316,11 +316,12 @@ namespace Rope {
                                                            const std::vector<ggml_tensor*>& ref_latents,
                                                            bool increase_ref_index,
                                                            int theta,
+                                                           bool circular,
                                                            const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_qwen_image_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
         std::vector<std::vector<int>> wrap_dims;
         // This logic simply stores the (pad and patch_adjusted) sizes of images so we can make sure rope correctly tiles
-        if (sd_is_circular_padding_enabled() && bs > 0 && axes_dim.size() >= 3) {
+        if (circular && bs > 0 && axes_dim.size() >= 3) {
             int pad_h = (patch_size - (h % patch_size)) % patch_size;
             int pad_w = (patch_size - (w % patch_size)) % patch_size;
             int h_len = (h + pad_h) / patch_size;
