@@ -782,6 +782,7 @@ public:
                                    forward_params.conv2d.d0,
                                    forward_params.conv2d.d1,
                                    forward_params.conv2d.direct,
+                                   forward_params.conv2d.circular,
                                    forward_params.conv2d.scale);
         }
         for (auto& lora_model : lora_models) {
