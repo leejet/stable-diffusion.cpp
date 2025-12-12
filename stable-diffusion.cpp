@@ -1489,12 +1489,6 @@ public:
                     latent_rgb_bias = flux2_latent_rgb_bias;
                     patch_sz               = 2;
                 }
-            } else if (dim == 64) {
-                if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_longcat(version)) {
-                    latent_rgb_proj = flux_latent_rgb_proj;
-                    latent_rgb_bias = flux_latent_rgb_bias;
-                    patch_sz        = 2;
-                }
             } else if (dim == 48) {
                 if (sd_version_is_wan(version)) {
                     latent_rgb_proj = wan_22_latent_rgb_proj;
@@ -2281,7 +2275,7 @@ public:
         int vae_scale_factor = 8;
         if (version == VERSION_WAN2_2_TI2V) {
             vae_scale_factor = 16;
-        } else if (sd_version_is_flux2(version) || sd_version_is_longcat(version)) {
+        } else if (sd_version_is_flux2(version)) {
             vae_scale_factor = 16;
         } else if (version == VERSION_CHROMA_RADIANCE) {
             vae_scale_factor = 1;
@@ -2310,8 +2304,6 @@ public:
                 latent_channel = 3;
             } else if (sd_version_is_flux2(version)) {
                 latent_channel = 128;
-            } else if (sd_version_is_longcat(version)) {
-                latent_channel = 64;
             } else {
                 latent_channel = 16;
             }
@@ -2617,7 +2609,6 @@ public:
             sd_version_is_qwen_image(version) ||
             sd_version_is_wan(version) ||
             sd_version_is_flux2(version) ||
-            sd_version_is_longcat(version) ||
             version == VERSION_CHROMA_RADIANCE) {
             latent = vae_output;
         } else if (version == VERSION_SD1_PIX2PIX) {

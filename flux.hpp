@@ -1330,7 +1330,6 @@ namespace Flux {
             } else if (sd_version_is_longcat(version)) {
                 flux_params.context_in_dim = 3584;
                 flux_params.vec_in_dim     = 0;
-                flux_params.patch_size     = 1;
             }
             int64_t head_dim = 0;
             for (auto pair : tensor_storage_map) {
