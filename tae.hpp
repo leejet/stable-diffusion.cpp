@@ -258,24 +258,29 @@ public:
                 blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new MemBlock(hidden, hidden));
             }
         }
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(hidden, z_channels, {3, 3}, {1, 1}, {1, 1}));
+        blocks[std::to_string(index)] = std::shared_ptr<GGMLBlock>(new Conv2d(hidden, z_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* z) override {
-        // return z;
         auto first_conv = std::dynamic_pointer_cast<Conv2d>(blocks["0"]);
-        auto last_conv  = std::dynamic_pointer_cast<Conv2d>(blocks[std::to_string(num_layers * (num_blocks + 2) + 1)]);
         auto h          = first_conv->forward(ctx, z);
-
         h = ggml_relu_inplace(ctx->ggml_ctx, h);
-
-        for (int i = 2; i < num_layers * (num_blocks + 2) + 2; i++) {
-            if (blocks.find(std::to_string(i)) == blocks.end()) {
-                continue;
+        
+        int index = 2;
+        for (int i = 0; i < num_layers; i++) {
+            auto pool = std::dynamic_pointer_cast<UnaryBlock>(blocks[std::to_string(index++)]);
+            auto conv = std::dynamic_pointer_cast<UnaryBlock>(blocks[std::to_string(index++)]);
+            
+            h = pool->forward(ctx, h);
+            h = conv->forward(ctx, h);
+            for (int j = 0; j < num_blocks; j++) {
+                auto block = std::dynamic_pointer_cast<MemBlock>(blocks[std::to_string(index++)]);
+                auto mem   = ggml_pad_ext(ctx->ggml_ctx, h, 0, 0, 0, 0, 0, 0, 1, 0);
+                mem        = ggml_view_4d(ctx->ggml_ctx, mem, h->ne[0], h->ne[1], h->ne[2], h->ne[3], h->nb[1], h->nb[2], h->nb[3], 0);
+                h          = block->forward(ctx, h, mem);
             }
-            auto block = std::dynamic_pointer_cast<UnaryBlock>(blocks[std::to_string(i)]);
-            h          = block->forward(ctx, h);
         }
+        auto last_conv  = std::dynamic_pointer_cast<Conv2d>(blocks[std::to_string(index)]);
         h = last_conv->forward(ctx, h);
         return h;
     }
@@ -322,7 +327,7 @@ public:
         for (int i = 0; i < num_layers; i++) {
             for (int j = 0; j < num_blocks; j++) {
                 auto block = std::dynamic_pointer_cast<MemBlock>(blocks[std::to_string(index++)]);
-                auto mem   = ggml_pad_ext(ctx->ggml_ctx, h, 0, 0, 0, 0, 0, 0, 1,0);
+                auto mem   = ggml_pad_ext(ctx->ggml_ctx, h, 0, 0, 0, 0, 0, 0, 1, 0);
                 mem        = ggml_view_4d(ctx->ggml_ctx, mem, h->ne[0], h->ne[1], h->ne[2], h->ne[3], h->nb[1], h->nb[2], h->nb[3], 0);
                 h          = block->forward(ctx, h, mem);
             }
@@ -339,7 +344,7 @@ public:
         auto last_conv = std::dynamic_pointer_cast<Conv2d>(blocks[std::to_string(++index)]);
         h              = last_conv->forward(ctx, h);
 
-        // shape(W, H, 3, T+3) => shape(W, H, 3, T)
+        // shape(W, H, 3, 3 + T) => shape(W, H, 3, T)
         h = ggml_view_4d(ctx->ggml_ctx, h, h->ne[0], h->ne[1], h->ne[2], h->ne[3] - 3, h->nb[1], h->nb[2], h->nb[3], 3 * h->nb[3]);
         return h;
     }
@@ -376,9 +381,20 @@ public:
     }
 
     struct ggml_tensor* encode(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
-        return nullptr;
-        // auto encoder = std::dynamic_pointer_cast<TinyVideoEncoder>(blocks["encoder"]);
-        // return encoder->forward(ctx, x);
+        auto encoder = std::dynamic_pointer_cast<TinyVideoEncoder>(blocks["encoder"]);
+        // (W, H, T, C) -> (W, H, C, T)
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
+        int64_t num_frames = x->ne[3];
+        if (num_frames % 4) {
+            // pad to multiple of 4 at the end
+            auto last_frame = ggml_view_4d(ctx->ggml_ctx, x, x->ne[0], x->ne[1], x->ne[2], 1, x->nb[1], x->nb[2], x->nb[3], (num_frames - 1) * x->nb[3]);
+            for (int i = 0; i < 4 - num_frames % 4; i++) {
+                x = ggml_concat(ctx->ggml_ctx, x, last_frame, 3);
+            }
+        }
+        x = encoder->forward(ctx, x);
+        x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
+        return x;
     }
 };
 
