@@ -1477,7 +1477,7 @@ struct SDGenerationParams {
              on_cache_mode_arg},
             {"",
              "--cache-option",
-             "cache params - legacy: \"threshold,start,end[,decay,relative]\", cache-dit: \"Fn,Bn,threshold,warmup\" (default: 8,0,0.08,8)",
+             "named cache params: easycache/ucache: threshold=,start=,end=,decay=,relative= | cache-dit: Fn=,Bn=,threshold=,warmup=",
              on_cache_option_arg},
             {"",
              "--scm-mask",
@@ -1606,86 +1606,123 @@ struct SDGenerationParams {
         cache_params.mode = SD_CACHE_DISABLED;
 
         if (!cache_mode.empty()) {
-            std::string option_str = cache_option;
-            if (option_str.empty()) {
-                if (cache_mode == "easycache") {
-                    option_str = "0.2,0.15,0.95";
-                } else if (cache_mode == "ucache") {
-                    option_str = "1.0,0.15,0.95";
-                } else if (cache_mode == "dbcache" || cache_mode == "taylorseer" || cache_mode == "cache-dit") {
-                    option_str = "8,0,0.08,8";
+            auto trim = [](std::string& s) {
+                const char* whitespace = " \t\r\n";
+                auto start = s.find_first_not_of(whitespace);
+                if (start == std::string::npos) { s.clear(); return; }
+                auto end = s.find_last_not_of(whitespace);
+                s = s.substr(start, end - start + 1);
+            };
+
+            auto parse_named_params = [&](const std::string& opt_str) -> bool {
+                std::stringstream ss(opt_str);
+                std::string token;
+                while (std::getline(ss, token, ',')) {
+                    trim(token);
+                    if (token.empty()) continue;
+
+                    size_t eq_pos = token.find('=');
+                    if (eq_pos == std::string::npos) {
+                        fprintf(stderr, "error: invalid named parameter '%s', expected key=value\n", token.c_str());
+                        return false;
+                    }
+
+                    std::string key = token.substr(0, eq_pos);
+                    std::string val = token.substr(eq_pos + 1);
+                    trim(key);
+                    trim(val);
+
+                    if (key.empty() || val.empty()) {
+                        fprintf(stderr, "error: invalid named parameter '%s'\n", token.c_str());
+                        return false;
+                    }
+
+                    try {
+                        if (key == "threshold") {
+                            if (cache_mode == "easycache" || cache_mode == "ucache") {
+                                cache_params.reuse_threshold = std::stof(val);
+                            } else {
+                                cache_params.residual_diff_threshold = std::stof(val);
+                            }
+                        } else if (key == "start") {
+                            cache_params.start_percent = std::stof(val);
+                        } else if (key == "end") {
+                            cache_params.end_percent = std::stof(val);
+                        } else if (key == "decay") {
+                            cache_params.error_decay_rate = std::stof(val);
+                        } else if (key == "relative") {
+                            cache_params.use_relative_threshold = (std::stof(val) != 0.0f);
+                        } else if (key == "Fn" || key == "fn") {
+                            cache_params.Fn_compute_blocks = std::stoi(val);
+                        } else if (key == "Bn" || key == "bn") {
+                            cache_params.Bn_compute_blocks = std::stoi(val);
+                        } else if (key == "warmup") {
+                            cache_params.max_warmup_steps = std::stoi(val);
+                        } else {
+                            fprintf(stderr, "error: unknown cache parameter '%s'\n", key.c_str());
+                            return false;
+                        }
+                    } catch (const std::exception&) {
+                        fprintf(stderr, "error: invalid value '%s' for parameter '%s'\n", val.c_str(), key.c_str());
+                        return false;
+                    }
+                }
+                return true;
+            };
+
+            if (cache_mode == "easycache") {
+                cache_params.mode = SD_CACHE_EASYCACHE;
+                cache_params.reuse_threshold = 0.2f;
+                cache_params.start_percent = 0.15f;
+                cache_params.end_percent = 0.95f;
+                cache_params.error_decay_rate = 1.0f;
+                cache_params.use_relative_threshold = true;
+            } else if (cache_mode == "ucache") {
+                cache_params.mode = SD_CACHE_UCACHE;
+                cache_params.reuse_threshold = 1.0f;
+                cache_params.start_percent = 0.15f;
+                cache_params.end_percent = 0.95f;
+                cache_params.error_decay_rate = 1.0f;
+                cache_params.use_relative_threshold = true;
+            } else if (cache_mode == "dbcache") {
+                cache_params.mode = SD_CACHE_DBCACHE;
+                cache_params.Fn_compute_blocks = 8;
+                cache_params.Bn_compute_blocks = 0;
+                cache_params.residual_diff_threshold = 0.08f;
+                cache_params.max_warmup_steps = 8;
+            } else if (cache_mode == "taylorseer") {
+                cache_params.mode = SD_CACHE_TAYLORSEER;
+                cache_params.Fn_compute_blocks = 8;
+                cache_params.Bn_compute_blocks = 0;
+                cache_params.residual_diff_threshold = 0.08f;
+                cache_params.max_warmup_steps = 8;
+            } else if (cache_mode == "cache-dit") {
+                cache_params.mode = SD_CACHE_CACHE_DIT;
+                cache_params.Fn_compute_blocks = 8;
+                cache_params.Bn_compute_blocks = 0;
+                cache_params.residual_diff_threshold = 0.08f;
+                cache_params.max_warmup_steps = 8;
+            } else {
+                fprintf(stderr, "error: unknown cache mode '%s'\n", cache_mode.c_str());
+                return false;
+            }
+
+            if (!cache_option.empty()) {
+                if (!parse_named_params(cache_option)) {
+                    return false;
                 }
             }
 
-            float values[5] = {0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
-            std::stringstream ss(option_str);
-            std::string token;
-            int idx = 0;
-            auto trim = [](std::string& s) {
-                const char* whitespace = " \t\r\n";
-                auto start             = s.find_first_not_of(whitespace);
-                if (start == std::string::npos) {
-                    s.clear();
-                    return;
-                }
-                auto end = s.find_last_not_of(whitespace);
-                s        = s.substr(start, end - start + 1);
-            };
-            while (std::getline(ss, token, ',')) {
-                trim(token);
-                if (token.empty()) {
-                    fprintf(stderr, "error: invalid cache option '%s'\n", option_str.c_str());
-                    return false;
-                }
-                if (idx >= 5) {
-                    fprintf(stderr, "error: cache option expects 3-5 comma-separated values (threshold,start,end[,decay,relative])\n");
-                    return false;
-                }
-                try {
-                    values[idx] = std::stof(token);
-                } catch (const std::exception&) {
-                    fprintf(stderr, "error: invalid cache option value '%s'\n", token.c_str());
-                    return false;
-                }
-                idx++;
-            }
             if (cache_mode == "easycache" || cache_mode == "ucache") {
-                if (idx < 3) {
-                    fprintf(stderr, "error: cache option expects at least 3 comma-separated values (threshold,start,end)\n");
-                    return false;
-                }
-                if (values[0] < 0.0f) {
+                if (cache_params.reuse_threshold < 0.0f) {
                     fprintf(stderr, "error: cache threshold must be non-negative\n");
                     return false;
                 }
-                if (values[1] < 0.0f || values[1] >= 1.0f || values[2] <= 0.0f || values[2] > 1.0f || values[1] >= values[2]) {
+                if (cache_params.start_percent < 0.0f || cache_params.start_percent >= 1.0f ||
+                    cache_params.end_percent <= 0.0f || cache_params.end_percent > 1.0f ||
+                    cache_params.start_percent >= cache_params.end_percent) {
                     fprintf(stderr, "error: cache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
                     return false;
-                }
-            }
-
-            if (cache_mode == "easycache" || cache_mode == "ucache") {
-                cache_params.reuse_threshold        = values[0];
-                cache_params.start_percent          = values[1];
-                cache_params.end_percent            = values[2];
-                cache_params.error_decay_rate       = values[3];
-                cache_params.use_relative_threshold = (values[4] != 0.0f);
-                if (cache_mode == "easycache") {
-                    cache_params.mode = SD_CACHE_EASYCACHE;
-                } else {
-                    cache_params.mode = SD_CACHE_UCACHE;
-                }
-            } else {
-                cache_params.Fn_compute_blocks = (idx >= 1) ? static_cast<int>(values[0]) : 8;
-                cache_params.Bn_compute_blocks = (idx >= 2) ? static_cast<int>(values[1]) : 0;
-                cache_params.residual_diff_threshold = (idx >= 3) ? values[2] : 0.08f;
-                cache_params.max_warmup_steps = (idx >= 4) ? static_cast<int>(values[3]) : 8;
-                if (cache_mode == "dbcache") {
-                    cache_params.mode = SD_CACHE_DBCACHE;
-                } else if (cache_mode == "taylorseer") {
-                    cache_params.mode = SD_CACHE_TAYLORSEER;
-                } else {
-                    cache_params.mode = SD_CACHE_CACHE_DIT;
                 }
             }
         }
