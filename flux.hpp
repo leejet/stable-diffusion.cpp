@@ -457,7 +457,7 @@ namespace Flux {
 
         ModulationOut get_distil_mod(GGMLRunnerContext* ctx, struct ggml_tensor* vec) {
             int64_t offset = 3 * idx;
-            return {ctx, vec, offset};
+            return ModulationOut(ctx, vec, offset);
         }
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
