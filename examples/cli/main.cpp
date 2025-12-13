@@ -232,14 +232,7 @@ static std::string sd_basename(const std::string& path) {
 }
 
 std::string get_image_params(const SDCliParams& cli_params, const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed) {
-    std::string parameter_string = gen_params.prompt;
-    for (const auto& item : gen_params.lora_map) {
-        parameter_string += "<lora:" + item.first + ":" + std::to_string(item.second) + ">";
-    }
-    for (const auto& item : gen_params.high_noise_lora_map) {
-        parameter_string += "<lora:|high_noise|" + item.first + ":" + std::to_string(item.second) + ">";
-    }
-    parameter_string += "\n";
+    std::string parameter_string = gen_params.prompt_with_lora + "\n";
     if (gen_params.negative_prompt.size() != 0) {
         parameter_string += "Negative prompt: " + gen_params.negative_prompt + "\n";
     }
