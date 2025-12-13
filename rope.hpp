@@ -495,9 +495,29 @@ namespace Rope {
                                                         const std::vector<ggml_tensor*>& ref_latents,
                                                         bool increase_ref_index,
                                                         int theta,
+                                                        bool circular,
                                                         const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_z_image_ids(h, w, patch_size, bs, context_len, seq_multi_of, ref_latents, increase_ref_index);
-        return embed_nd(ids, bs, theta, axes_dim);
+        std::vector<std::vector<int>> wrap_dims;
+        if (circular && bs > 0 && axes_dim.size() >= 3) {
+            int pad_h = (patch_size - (h % patch_size)) % patch_size;
+            int pad_w = (patch_size - (w % patch_size)) % patch_size;
+            int h_len = (h + pad_h) / patch_size;
+            int w_len = (w + pad_w) / patch_size;
+            if (h_len > 0 && w_len > 0) {
+                size_t pos_len = ids.size() / bs;
+                wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
+                size_t cursor = context_len + bound_mod(context_len, seq_multi_of);  // skip text (and its padding)
+                size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
+                for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
+                    wrap_dims[1][cursor + token_i] = h_len;
+                    wrap_dims[2][cursor + token_i] = w_len;
+                }
+            }
+        }
+
+        const std::vector<std::vector<int>>* wraps_ptr = wrap_dims.empty() ? nullptr : &wrap_dims;
+        return embed_nd(ids, bs, theta, axes_dim, wraps_ptr);
     }
 
     __STATIC_INLINE__ struct ggml_tensor* apply_rope(struct ggml_context* ctx,
