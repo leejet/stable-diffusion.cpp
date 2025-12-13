@@ -508,6 +508,12 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
     static std::unordered_map<std::string, std::string> flux_name_map;
 
     if (flux_name_map.empty()) {
+        // --- time_embed (longcat) ---
+        flux_name_map["time_embed.timestep_embedder.linear_1.weight"] = "time_in.in_layer.weight";
+        flux_name_map["time_embed.timestep_embedder.linear_1.bias"]   = "time_in.in_layer.bias";
+        flux_name_map["time_embed.timestep_embedder.linear_2.weight"] = "time_in.out_layer.weight";
+        flux_name_map["time_embed.timestep_embedder.linear_2.bias"]   = "time_in.out_layer.bias";
+
         // --- time_text_embed ---
         flux_name_map["time_text_embed.timestep_embedder.linear_1.weight"] = "time_in.in_layer.weight";
         flux_name_map["time_text_embed.timestep_embedder.linear_1.bias"]   = "time_in.in_layer.bias";
@@ -660,7 +666,7 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_unet_to_original_sdxl(name);
     } else if (sd_version_is_sd3(version)) {
         name = convert_diffusers_dit_to_original_sd3(name);
-    } else if (sd_version_is_flux(version) || sd_version_is_flux2(version)) {
+    } else if (sd_version_is_flux(version) || sd_version_is_flux2(version) || sd_version_is_longcat(version)) {
         name = convert_diffusers_dit_to_original_flux(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);

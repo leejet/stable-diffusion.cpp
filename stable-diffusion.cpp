@@ -47,6 +47,7 @@ const char* model_version_to_str[] = {
     "Flux.2",
     "Z-Image",
     "Ovis Image",
+    "Longcat-Image",
 };
 
 const char* sampling_methods_str[] = {
@@ -372,7 +373,7 @@ public:
         } else if (sd_version_is_sd3(version)) {
             scale_factor = 1.5305f;
             shift_factor = 0.0609f;
-        } else if (sd_version_is_flux(version) || sd_version_is_z_image(version)) {
+        } else if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_longcat(version)) {
             scale_factor = 0.3611f;
             shift_factor = 0.1159f;
         } else if (sd_version_is_wan(version) ||
@@ -400,8 +401,8 @@ public:
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                               offload_params_to_cpu,
-                                                               tensor_storage_map);
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -449,10 +450,26 @@ public:
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
-                                                              tensor_storage_map,
-                                                              version,
-                                                              sd_ctx_params->chroma_use_dit_mask);
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map,
+                                                                version,
+                                                                sd_ctx_params->chroma_use_dit_mask);
+            } else if (sd_version_is_longcat(version)) {
+                bool enable_vision = false;
+                if (!vae_decode_only) {
+                    enable_vision = true;
+                }
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 version,
+                                                                 "",
+                                                                 enable_vision);
+                diffusion_model  = std::make_shared<FluxModel>(backend,
+                                                               offload_params_to_cpu,
+                                                               tensor_storage_map,
+                                                               version,
+                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
@@ -461,10 +478,10 @@ public:
                                                                     1,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
-                                                             offload_params_to_cpu,
-                                                             tensor_storage_map,
-                                                             "model.diffusion_model",
-                                                             version);
+                                                              offload_params_to_cpu,
+                                                              tensor_storage_map,
+                                                              "model.diffusion_model",
+                                                              version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
                                                                             offload_params_to_cpu,
@@ -493,20 +510,20 @@ public:
                                                                  "",
                                                                  enable_vision);
                 diffusion_model  = std::make_shared<QwenImageModel>(backend,
-                                                                   offload_params_to_cpu,
-                                                                   tensor_storage_map,
-                                                                   "model.diffusion_model",
-                                                                   version);
+                                                                    offload_params_to_cpu,
+                                                                    tensor_storage_map,
+                                                                    "model.diffusion_model",
+                                                                    version);
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<ZImageModel>(backend,
-                                                                offload_params_to_cpu,
-                                                                tensor_storage_map,
-                                                                "model.diffusion_model",
-                                                                version);
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 "model.diffusion_model",
+                                                                 version);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (int i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -827,7 +844,7 @@ public:
                             flow_shift = 3.f;
                         }
                     }
-                } else if (sd_version_is_flux(version)) {
+                } else if (sd_version_is_flux(version) || sd_version_is_longcat(version)) {
                     pred_type = FLUX_FLOW_PRED;
                     if (flow_shift == INFINITY) {
                         flow_shift = 1.0f;  // TODO: validate
@@ -835,6 +852,9 @@ public:
                             if (starts_with(name, "model.diffusion_model.guidance_in.in_layer.weight")) {
                                 flow_shift = 1.15f;
                             }
+                        }
+                        if (sd_version_is_longcat(version)) {
+                            flow_shift = 3.0f;
                         }
                     }
                 } else if (sd_version_is_flux2(version)) {
@@ -1324,7 +1344,7 @@ public:
                 if (sd_version_is_flux2(version)) {
                     latent_rgb_proj = flux2_latent_rgb_proj;
                     latent_rgb_bias = flux2_latent_rgb_bias;
-                    patch_sz        = 2;
+                    patch_sz               = 2;
                 }
             } else if (dim == 48) {
                 if (sd_version_is_wan(version)) {
@@ -1341,7 +1361,7 @@ public:
                 if (sd_version_is_sd3(version)) {
                     latent_rgb_proj = sd3_latent_rgb_proj;
                     latent_rgb_bias = sd3_latent_rgb_bias;
-                } else if (sd_version_is_flux(version) || sd_version_is_z_image(version)) {
+                } else if (sd_version_is_flux(version) || sd_version_is_z_image(version) || sd_version_is_longcat(version)) {
                     latent_rgb_proj = flux_latent_rgb_proj;
                     latent_rgb_bias = flux_latent_rgb_bias;
                 } else if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
