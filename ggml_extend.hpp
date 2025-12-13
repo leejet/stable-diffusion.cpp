@@ -1270,6 +1270,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
         }
 
         if (mask_in != nullptr) {
+            // the need for padding got removed in ggml 4767bda
+            // ensure we can still use the old version for now
+#ifdef GGML_KQ_MASK_PAD
             int mask_pad = 0;
             if (mask_in->ne[1] % GGML_KQ_MASK_PAD != 0) {
                 mask_pad = GGML_PAD(L_q, GGML_KQ_MASK_PAD) - mask_in->ne[1];
@@ -1277,6 +1280,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
             if (mask_pad > 0) {
                 mask_in = ggml_pad(ctx, mask_in, 0, mask_pad, 0, 0);
             }
+#endif
             mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
         }
 
