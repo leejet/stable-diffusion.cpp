@@ -1,7 +1,7 @@
 # Run
 
 ```
-usage: ./bin/sd  [options]
+usage: ./bin/sd-cli  [options]
 
 CLI Options:
   -o, --output <string>       path to write result image to (default: ./output.png)
