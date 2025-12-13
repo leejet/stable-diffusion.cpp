@@ -863,6 +863,7 @@ static bool is_absolute_path(const std::string& p) {
 
 struct SDGenerationParams {
     std::string prompt;
+    std::string prompt_with_lora; // for metadata record only
     std::string negative_prompt;
     int clip_skip   = -1;  // <= 0 represents unspecified
     int width       = 512;
@@ -1476,6 +1477,7 @@ struct SDGenerationParams {
     }
 
     bool process_and_check(SDMode mode, const std::string& lora_model_dir) {
+        prompt_with_lora = prompt;
         if (width <= 0) {
             fprintf(stderr, "error: the width must be greater than 0\n");
             return false;
