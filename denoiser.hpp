@@ -681,8 +681,7 @@ static bool sample_k_diffusion(sample_method_t method,
             struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
-                float sigma      = sigmas[i];
-                float sigma_next = sigmas[i + 1];
+                float sigma = sigmas[i];
 
                 // denoise
                 ggml_tensor* denoised = model(x, sigma, i + 1);
