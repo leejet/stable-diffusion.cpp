@@ -266,6 +266,8 @@ namespace Rope {
                                                      bool increase_ref_index,
                                                      float ref_index_scale,
                                                      int theta,
+                                                     bool circular_h,
+                                                     bool circular_w,
                                                      const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_flux_ids(h,
                                                            w,
@@ -277,7 +279,48 @@ namespace Rope {
                                                            ref_latents,
                                                            increase_ref_index,
                                                            ref_index_scale);
-        return embed_nd(ids, bs, theta, axes_dim);
+        std::vector<std::vector<int>> wrap_dims;
+        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
+            int h_len = (h + (patch_size / 2)) / patch_size;
+            int w_len = (w + (patch_size / 2)) / patch_size;
+            if (h_len > 0 && w_len > 0) {
+                size_t pos_len = ids.size() / bs;
+                wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
+                size_t cursor = context_len;  // text first
+                const size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
+                for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
+                    if (circular_h) {
+                        wrap_dims[1][cursor + token_i] = h_len;
+                    }
+                    if (circular_w) {
+                        wrap_dims[2][cursor + token_i] = w_len;
+                    }
+                }
+                cursor += img_tokens;
+                // reference latents
+                for (ggml_tensor* ref : ref_latents) {
+                    if (ref == nullptr) {
+                        continue;
+                    }
+                    int ref_h   = static_cast<int>(ref->ne[1]);
+                    int ref_w   = static_cast<int>(ref->ne[0]);
+                    int ref_h_l = (ref_h + (patch_size / 2)) / patch_size;
+                    int ref_w_l = (ref_w + (patch_size / 2)) / patch_size;
+                    size_t ref_tokens = static_cast<size_t>(ref_h_l) * static_cast<size_t>(ref_w_l);
+                    for (size_t token_i = 0; token_i < ref_tokens; ++token_i) {
+                        if (circular_h) {
+                            wrap_dims[1][cursor + token_i] = ref_h_l;
+                        }
+                        if (circular_w) {
+                            wrap_dims[2][cursor + token_i] = ref_w_l;
+                        }
+                    }
+                    cursor += ref_tokens;
+                }
+            }
+        }
+        const std::vector<std::vector<int>>* wraps_ptr = wrap_dims.empty() ? nullptr : &wrap_dims;
+        return embed_nd(ids, bs, theta, axes_dim, wraps_ptr);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int h,

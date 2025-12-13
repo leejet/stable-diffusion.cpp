@@ -224,6 +224,10 @@ struct FluxModel : public DiffusionModel {
         flux.set_circular_pad_enabled(enabled);
     }
 
+    void set_rope_circular_axes(bool circular_x, bool circular_y) override {
+        flux.set_circular_rope_enabled(circular_x, circular_y);
+    }
+
     bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,

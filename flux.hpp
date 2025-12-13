@@ -1445,6 +1445,8 @@ namespace Flux {
                                             increase_ref_index,
                                             flux_params.ref_index_scale,
                                             flux_params.theta,
+                                            rope_circular_y_enabled,
+                                            rope_circular_x_enabled,
                                             flux_params.axes_dim);
             int pos_len = pe_vec.size() / flux_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);

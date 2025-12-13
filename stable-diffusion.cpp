@@ -454,6 +454,7 @@ public:
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
                 diffusion_model->set_circular_pad_enabled(circular_pad);
+                diffusion_model->set_rope_circular_axes(circular_pad_x, circular_pad_y);
             } else if (sd_version_is_flux2(version)) {
                 bool is_chroma   = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
@@ -466,6 +467,7 @@ public:
                                                                version,
                                                                sd_ctx_params->chroma_use_dit_mask);
                 diffusion_model->set_circular_pad_enabled(circular_pad);
+                diffusion_model->set_rope_circular_axes(circular_pad_x, circular_pad_y);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
