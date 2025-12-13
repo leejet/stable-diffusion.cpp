@@ -299,19 +299,20 @@ struct ggml_tensor* patchify(struct ggml_context* ctx,
     int64_t r = patch_size;
     int64_t q = patch_size;
     
-    int64_t w_in = x->ne[0];
-    int64_t h_in = x->ne[1];
-    int64_t cb   = x->ne[2]; // b*c
-    int64_t f    = x->ne[3];
+    int64_t W = x->ne[0];
+    int64_t H = x->ne[1];
+    int64_t C = x->ne[2];
+    int64_t f = x->ne[3];
     
-    int64_t w = w_in / r;
-    int64_t h = h_in / q;
+    int64_t w = W / r;
+    int64_t h = H / q;
 
-    x = ggml_reshape_4d(ctx, x, w, r, h_in, cb * f);                     // [f*b*c, h*q, r, w]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [f*b*c, r, h*q, w]
-    x = ggml_reshape_4d(ctx, x, w, q, h, r * cb * f);                    // [f*b*c*r, h, q, w]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [f*b*c*r, q, h, w]
-    x = ggml_reshape_4d(ctx, x, w, h, q * r * cb, f);                    // [f, b*c*r*q, h, w]
+    x = ggml_reshape_4d(ctx, x, W, q, h, C * f);                        // [W, q, h, C*f]
+    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3)); // [W, h, q, C*f]
+    x = ggml_reshape_4d(ctx, x, r, w, h, q * C * f);                    // [r, w, h, q*C*f]
+    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3)); // [w, h, r, q*C*f]
+    x = ggml_reshape_4d(ctx, x, w, h, r * q * C, f);                    // [f, b*c*r*q, h, w]
+    
     return x;
 }
 
@@ -332,12 +333,12 @@ struct ggml_tensor* unpatchify(struct ggml_context* ctx,
     int64_t w = x->ne[0];
 
 
-    x = ggml_reshape_4d(ctx, x, w * h, q * r, c * b, f);                 // [f, b*c, r*q, h*w]
-    x = ggml_reshape_4d(ctx, x, w, h * q, r, f * c * b);                 // [f*b*c, r, q*h, w]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));  // [f*b*c, q*h, w, r]
-    x = ggml_reshape_4d(ctx, x, r * w, h, q, f * c * b);                 // [f*b*c, q, h, w*r]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [f*b*c, h, q, w*r]
-    x = ggml_reshape_4d(ctx, x, r * w, q * h, c * b, f);                 // [f, b*c, h*q, w*r]
+    x = ggml_reshape_4d(ctx, x, w, h, r, q * c * b * f);                // [q*c*b*f, r, h, w]
+    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3)); // [r, w, h, q*c*b*f]
+    x = ggml_reshape_4d(ctx, x, r * w, h, q, c * b * f);                // [c*b*f, q, h, r*w]
+    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3)); // [r*w, q, h, c*b*f]
+    x = ggml_reshape_4d(ctx, x, r * w, q * h, c * b, f);
+
     return x;
 }
 
