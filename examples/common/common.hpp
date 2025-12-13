@@ -402,7 +402,7 @@ struct SDContextParams {
              "--vae",
              "path to standalone vae model",
              &vae_path},
-            {"",
+            {"--tae",
              "--taesd",
              "path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)",
              &taesd_path},
