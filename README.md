@@ -1,39 +1,86 @@
 <p align="center">
-  <img src="./assets/cat_with_sd_cpp_42.png" width="360x">
+  <img src="./assets/logo.png" width="360x">
 </p>
 
 # stable-diffusion.cpp
 
-Inference of Stable Diffusion and Flux in pure C/C++
+<div align="center">
+<a href="https://trendshift.io/repositories/9714" target="_blank"><img src="https://trendshift.io/api/badge/repositories/9714" alt="leejet%2Fstable-diffusion.cpp | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+</div>
+
+Diffusion model(SD,Flux,Wan,...) inference in pure C/C++
+
+***Note that this project is under active development. \
+API and command-line option may change frequently.***
+
+## 🔥Important News
+
+* **2025/12/01** 🚀 stable-diffusion.cpp now supports **Z-Image**  
+  👉 Details: [PR #1020](https://github.com/leejet/stable-diffusion.cpp/pull/1020)
+
+* **2025/11/30** 🚀 stable-diffusion.cpp now supports **FLUX.2-dev**  
+  👉 Details: [PR #1016](https://github.com/leejet/stable-diffusion.cpp/pull/1016)
+
+* **2025/10/13** 🚀 stable-diffusion.cpp now supports **Qwen-Image-Edit / Qwen-Image-Edit 2509**  
+  👉 Details: [PR #877](https://github.com/leejet/stable-diffusion.cpp/pull/877)
+
+* **2025/10/12** 🚀 stable-diffusion.cpp now supports **Qwen-Image**  
+  👉 Details: [PR #851](https://github.com/leejet/stable-diffusion.cpp/pull/851)
+
+* **2025/09/14** 🚀 stable-diffusion.cpp now supports **Wan2.1 Vace**  
+  👉 Details: [PR #819](https://github.com/leejet/stable-diffusion.cpp/pull/819)
+
+* **2025/09/06** 🚀 stable-diffusion.cpp now supports **Wan2.1 / Wan2.2**  
+  👉 Details: [PR #778](https://github.com/leejet/stable-diffusion.cpp/pull/778)
 
 ## Features
 
-- Plain C/C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp)
+- Plain C/C++ implementation based on [ggml](https://github.com/ggml-org/ggml), working in the same way as [llama.cpp](https://github.com/ggml-org/llama.cpp)
 - Super lightweight and without external dependencies
-- SD1.x, SD2.x, SDXL and [SD3/SD3.5](./docs/sd3.md) support
-    - !!!The VAE in SDXL encounters NaN issues under FP16, but unfortunately, the ggml_conv_2d only operates under FP16. Hence, a parameter is needed to specify the VAE that has fixed the FP16 NaN issue. You can find it here: [SDXL VAE FP16 Fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix/blob/main/sdxl_vae.safetensors).
-- [Flux-dev/Flux-schnell Support](./docs/flux.md)
-
-- [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) and [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo) support
-- [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
-- 16-bit, 32-bit float support
-- 2-bit, 3-bit, 4-bit, 5-bit and 8-bit integer quantization support
-- Accelerated memory-efficient CPU inference
-    - Only requires ~2.3GB when using txt2img with fp16 precision to generate a 512x512 image, enabling Flash Attention just requires ~1.8GB.
-- AVX, AVX2 and AVX512 support for x86 architectures
-- Full CUDA, Metal, Vulkan and SYCL backend for GPU acceleration.
-- Can load ckpt, safetensors and diffusers models/checkpoints. Standalone VAEs models
-    - No need to convert to `.ggml` or `.gguf` anymore!
+- Supported models
+  - Image Models
+    - SD1.x, SD2.x, [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)
+    - SDXL, [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo)
+    - [Some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
+    - [SD3/SD3.5](./docs/sd3.md)
+    - [FlUX.1-dev/FlUX.1-schnell](./docs/flux.md)
+    - [FLUX.2-dev](./docs/flux2.md)
+    - [Chroma](./docs/chroma.md)
+    - [Chroma1-Radiance](./docs/chroma_radiance.md)
+    - [Qwen Image](./docs/qwen_image.md)
+    - [Z-Image](./docs/z_image.md)
+    - [Ovis-Image](./docs/ovis_image.md)
+  - Image Edit Models
+    - [FLUX.1-Kontext-dev](./docs/kontext.md)
+    - [Qwen Image Edit/Qwen Image Edit 2509](./docs/qwen_image_edit.md)
+  - Video Models
+    - [Wan2.1/Wan2.2](./docs/wan.md)
+  - [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
+  - Control Net support with SD 1.5
+  - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
+  - Latent Consistency Models support (LCM/LCM-LoRA)
+  - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
+  - Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
+- Supported backends
+  - CPU (AVX, AVX2 and AVX512 support for x86 architectures)
+  - CUDA
+  - Vulkan
+  - Metal
+  - OpenCL
+  - SYCL
+- Supported weight formats
+  - Pytorch checkpoint (`.ckpt` or `.pth`)
+  - Safetensors (`./safetensors`)
+  - GGUF (`.gguf`)
+- Supported platforms
+    - Linux
+    - Mac OS
+    - Windows
+    - Android (via Termux, [Local Diffusion](https://github.com/rmatif/Local-Diffusion))
 - Flash Attention for memory usage optimization
-- Original `txt2img` and `img2img` mode
 - Negative prompt
 - [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
-- LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
-- Latent Consistency Models support (LCM/LCM-LoRA)
-- Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
-- Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
 - VAE tiling processing for reduce memory usage
-- Control Net support with SD 1.5
 - Sampling method
     - `Euler A`
     - `Euler`
@@ -43,267 +90,52 @@ Inference of Stable Diffusion and Flux in pure C/C++
     - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
     - `DPM++ 2S a`
     - [`LCM`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13952)
-- Cross-platform reproducibility (`--rng cuda`, consistent with the `stable-diffusion-webui GPU RNG`)
+- Cross-platform reproducibility
+    - `--rng cuda`, default, consistent with the `stable-diffusion-webui GPU RNG`
+    - `--rng cpu`, consistent with the `comfyui RNG`
 - Embedds generation parameters into png output as webui-compatible text string
-- Supported platforms
-    - Linux
-    - Mac OS
-    - Windows
-    - Android (via Termux)
 
-### TODO
+## Quick Start
 
-- [ ] More sampling methods
-- [ ] Make inference faster
-    - The current implementation of ggml_conv_2d is slow and has high memory usage
-- [ ] Continuing to reduce memory usage (quantizing the weights of ggml_conv_2d)
-- [ ] Implement Inpainting support
+### Get the sd executable
 
-## Usage
+- Download pre-built binaries from the [releases page](https://github.com/leejet/stable-diffusion.cpp/releases)
+- Or build from source by following the [build guide](./docs/build.md)
 
-For most users, you can download the built executable program from the latest [release](https://github.com/leejet/stable-diffusion.cpp/releases/latest).
-If the built product does not meet your requirements, you can choose to build it manually.
+### Download model weights
 
-### Get the Code
+- download weights(.ckpt or .safetensors or .gguf). For example
+    - Stable Diffusion v1.5 from https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5 
 
-```
-git clone --recursive https://github.com/leejet/stable-diffusion.cpp
-cd stable-diffusion.cpp
-```
-
-- If you have already cloned the repository, you can use the following command to update the repository to the latest code.
-
-```
-cd stable-diffusion.cpp
-git pull origin master
-git submodule init
-git submodule update
-```
-
-### Download weights
-
-- download original weights(.ckpt or .safetensors). For example
-    - Stable Diffusion v1.4 from https://huggingface.co/CompVis/stable-diffusion-v-1-4-original
-    - Stable Diffusion v1.5 from https://huggingface.co/runwayml/stable-diffusion-v1-5
-    - Stable Diffuison v2.1 from https://huggingface.co/stabilityai/stable-diffusion-2-1
-    - Stable Diffusion 3 2B from https://huggingface.co/stabilityai/stable-diffusion-3-medium
-
-    ```shell
-    curl -L -O https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4.ckpt
-    # curl -L -O https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
-    # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-2-1/resolve/main/v2-1_768-nonema-pruned.safetensors
-    # curl -L -O https://huggingface.co/stabilityai/stable-diffusion-3-medium/resolve/main/sd3_medium_incl_clips_t5xxlfp16.safetensors
+    ```sh
+    curl -L -O https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
     ```
 
-### Build
-
-#### Build from scratch
-
-```shell
-mkdir build
-cd build
-cmake ..
-cmake --build . --config Release
-```
-
-##### Using OpenBLAS
-
-```
-cmake .. -DGGML_OPENBLAS=ON
-cmake --build . --config Release
-```
-
-##### Using CUDA
-
-This provides BLAS acceleration using the CUDA cores of your Nvidia GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from here: [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads). Recommended to have at least 4 GB of VRAM.
-
-```
-cmake .. -DSD_CUDA=ON
-cmake --build . --config Release
-```
-
-##### Using HipBLAS
-This provides BLAS acceleration using the ROCm cores of your AMD GPU. Make sure to have the ROCm toolkit installed.
-
-Windows User Refer to [docs/hipBLAS_on_Windows.md](docs%2FhipBLAS_on_Windows.md) for a comprehensive guide.
-
-```
-cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS=gfx1100
-cmake --build . --config Release
-```
-
-##### Using MUSA
-
-This provides BLAS acceleration using the MUSA cores of your Moore Threads GPU. Make sure to have the MUSA toolkit installed.
-
-```bash
-cmake .. -DCMAKE_C_COMPILER=/usr/local/musa/bin/clang -DCMAKE_CXX_COMPILER=/usr/local/musa/bin/clang++ -DSD_MUSA=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build . --config Release
-```
-
-##### Using Metal
-
-Using Metal makes the computation run on the GPU. Currently, there are some issues with Metal when performing operations on very large matrices, making it highly inefficient at the moment. Performance improvements are expected in the near future.
-
-```
-cmake .. -DSD_METAL=ON
-cmake --build . --config Release
-```
-
-##### Using Vulkan
-
-Install Vulkan SDK from https://www.lunarg.com/vulkan-sdk/.
-
-```
-cmake .. -DSD_VULKAN=ON
-cmake --build . --config Release
-```
-
-##### Using SYCL
-
-Using SYCL makes the computation run on the Intel GPU. Please make sure you have installed the related driver and [Intel® oneAPI Base toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) before start. More details and steps can refer to [llama.cpp SYCL backend](https://github.com/ggerganov/llama.cpp/blob/master/docs/backend/SYCL.md#linux).
-
-```
-# Export relevant ENV variables
-source /opt/intel/oneapi/setvars.sh
-
-# Option 1: Use FP32 (recommended for better performance in most cases)
-cmake .. -DSD_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
-
-# Option 2: Use FP16
-cmake .. -DSD_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON
-
-cmake --build . --config Release
-```
-
-Example of text2img by using SYCL backend:
-
-- download `stable-diffusion` model weight, refer to [download-weight](#download-weights).
-
-- run `./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors --cfg-scale 5 --steps 30 --sampling-method euler  -H 1024 -W 1024 --seed 42 -p "fantasy medieval village world inside a glass sphere , high detail, fantasy, realistic, light effect, hyper detail, volumetric lighting, cinematic, macro, depth of field, blur, red light and clouds from the back, highly detailed epic cinematic concept art cg render made in maya, blender and photoshop, octane render, excellent composition, dynamic dramatic cinematic lighting, aesthetic, very inspirational, world inside a glass sphere by james gurney by artgerm with james jean, joe fenton and tristan eaton by ross tran, fine details, 4k resolution"`
-
-<p align="center">
-  <img src="./assets/sycl_sd3_output.png" width="360x">
-</p>
-
-
-
-##### Using Flash Attention
-
-Enabling flash attention for the diffusion model reduces memory usage by varying amounts of MB.
-eg.:
- - flux 768x768 ~600mb
- - SD2 768x768 ~1400mb
-
-For most backends, it slows things down, but for cuda it generally speeds it up too.
-At the moment, it is only supported for some models and some backends (like cpu, cuda/rocm, metal).
-
-Run by adding `--diffusion-fa` to the arguments and watch for:
-```
-[INFO ] stable-diffusion.cpp:312  - Using flash attention in the diffusion model
-```
-and the compute buffer shrink in the debug log:
-```
-[DEBUG] ggml_extend.hpp:1004 - flux compute buffer size: 650.00 MB(VRAM)
-```
-
-### Run
-
-```
-usage: ./bin/sd [arguments]
-
-arguments:
-  -h, --help                         show this help message and exit
-  -M, --mode [MODEL]                 run mode (txt2img or img2img or convert, default: txt2img)
-  -t, --threads N                    number of threads to use during computation (default: -1)
-                                     If threads <= 0, then threads will be set to the number of CPU physical cores
-  -m, --model [MODEL]                path to full model
-  --diffusion-model                  path to the standalone diffusion model
-  --clip_l                           path to the clip-l text encoder
-  --clip_g                           path to the clip-l text encoder
-  --t5xxl                            path to the the t5xxl text encoder
-  --vae [VAE]                        path to vae
-  --taesd [TAESD_PATH]               path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
-  --control-net [CONTROL_PATH]       path to control net model
-  --embd-dir [EMBEDDING_PATH]        path to embeddings
-  --stacked-id-embd-dir [DIR]        path to PHOTOMAKER stacked id embeddings
-  --input-id-images-dir [DIR]        path to PHOTOMAKER input id images dir
-  --normalize-input                  normalize PHOTOMAKER input id images
-  --upscale-model [ESRGAN_PATH]      path to esrgan model. Upscale images after generate, just RealESRGAN_x4plus_anime_6B supported by now
-  --upscale-repeats                  Run the ESRGAN upscaler this many times (default 1)
-  --type [TYPE]                      weight type (f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k)
-                                     If not specified, the default is the type of the weight file
-  --lora-model-dir [DIR]             lora model directory
-  -i, --init-img [IMAGE]             path to the input image, required by img2img
-  --control-image [IMAGE]            path to image condition, control net
-  -o, --output OUTPUT                path to write result image to (default: ./output.png)
-  -p, --prompt [PROMPT]              the prompt to render
-  -n, --negative-prompt PROMPT       the negative prompt (default: "")
-  --cfg-scale SCALE                  unconditional guidance scale: (default: 7.0)
-  --skip-layers LAYERS               Layers to skip for SLG steps: (default: [7,8,9])
-  --skip-layer-start START           SLG enabling point: (default: 0.01)
-  --skip-layer-end END               SLG disabling point: (default: 0.2)
-									 SLG will be enabled at step int([STEPS]*[START]) and disabled at int([STEPS]*[END])
-  --strength STRENGTH                strength for noising/unnoising (default: 0.75)
-  --style-ratio STYLE-RATIO          strength for keeping input identity (default: 20%)
-  --control-strength STRENGTH        strength to apply Control Net (default: 0.9)
-                                     1.0 corresponds to full destruction of information in init image
-  -H, --height H                     image height, in pixel space (default: 512)
-  -W, --width W                      image width, in pixel space (default: 512)
-  --sampling-method {euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm}
-                                     sampling method (default: "euler_a")
-  --steps  STEPS                     number of sample steps (default: 20)
-  --sigmas SIGMAS                    Custom sigma values for the sampler, comma-separated list (e.g., "14.61,7.8,3.5,0.0")
-  --rng {std_default, cuda}          RNG (default: cuda)
-  -s SEED, --seed SEED               RNG seed (default: 42, use random seed for < 0)
-  -b, --batch-count COUNT            number of images to generate
-  --schedule {discrete, karras, exponential, ays, gits} Denoiser sigma schedule (default: discrete)
-  --clip-skip N                      ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1)
-                                     <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x
-  --vae-tiling                       process vae in tiles to reduce memory usage
-  --vae-on-cpu                       keep vae in cpu (for low vram)
-  --clip-on-cpu                      keep clip in cpu (for low vram)
-  --diffusion-fa                     use flash attention in the diffusion model (for low vram)
-                                     Might lower quality, since it implies converting k and v to f16.
-                                     This might crash if it is not supported by the backend.
-  --control-net-cpu                  keep controlnet in cpu (for low vram)
-  --canny                            apply canny preprocessor (edge detection)
-  --color                            Colors the logging tags according to level
-  -v, --verbose                      print extra info
-```
-
-#### txt2img example
+### Generate an image with just one command
 
 ```sh
-./bin/sd -m ../models/sd-v1-4.ckpt -p "a lovely cat"
-# ./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
-# ./bin/sd -m ../models/sd_xl_base_1.0.safetensors --vae ../models/sdxl_vae-fp16-fix.safetensors -H 1024 -W 1024 -p "a lovely cat" -v
-# ./bin/sd -m ../models/sd3_medium_incl_clips_t5xxlfp16.safetensors -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable Diffusion CPP\"' --cfg-scale 4.5 --sampling-method euler -v
-# ./bin/sd --diffusion-model  ../models/flux1-dev-q3_k.gguf --vae ../models/ae.sft --clip_l ../models/clip_l.safetensors --t5xxl ../models/t5xxl_fp16.safetensors  -p "a lovely cat holding a sign says 'flux.cpp'" --cfg-scale 1.0 --sampling-method euler -v
-# ./bin/sd -m  ..\models\sd3.5_large.safetensors --clip_l ..\models\clip_l.safetensors --clip_g ..\models\clip_g.safetensors --t5xxl ..\models\t5xxl_fp16.safetensors  -H 1024 -W 1024 -p 'a lovely cat holding a sign says \"Stable diffusion 3.5 Large\"' --cfg-scale 4.5 --sampling-method euler -v
+./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 ```
 
-Using formats of different precisions will yield results of varying quality.
+***For detailed command-line arguments, check out [cli doc](./examples/cli/README.md).***
 
-| f32  | f16  |q8_0  |q5_0  |q5_1  |q4_0  |q4_1  |
-| ----  |----  |----  |----  |----  |----  |----  |
-| ![](./assets/f32.png) |![](./assets/f16.png) |![](./assets/q8_0.png) |![](./assets/q5_0.png) |![](./assets/q5_1.png) |![](./assets/q4_0.png) |![](./assets/q4_1.png) |
+## Performance
 
-#### img2img example
-
-- `./output.png` is the image generated from the above txt2img pipeline
-
-
-```
-./bin/sd --mode img2img -m ../models/sd-v1-4.ckpt -p "cat with blue eyes" -i ./output.png -o ./img2img_output.png --strength 0.4
-```
-
-<p align="center">
-  <img src="./assets/img2img_output.png" width="256x">
-</p>
+If you want to improve performance or reduce VRAM/RAM usage, please refer to [performance guide](./docs/performance.md).
 
 ## More Guides
 
+- [SD1.x/SD2.x/SDXL](./docs/sd.md)
+- [SD3/SD3.5](./docs/sd3.md)
+- [FlUX.1-dev/FlUX.1-schnell](./docs/flux.md)
+- [FLUX.2-dev](./docs/flux2.md)
+- [FLUX.1-Kontext-dev](./docs/kontext.md)
+- [Chroma](./docs/chroma.md)
+- [🔥Qwen Image](./docs/qwen_image.md)
+- [🔥Qwen Image Edit/Qwen Image Edit 2509](./docs/qwen_image_edit.md)
+- [🔥Wan2.1/Wan2.2](./docs/wan.md)
+- [🔥Z-Image](./docs/z_image.md)
+- [Ovis-Image](./docs/ovis_image.md)
 - [LoRA](./docs/lora.md)
 - [LCM/LCM-LoRA](./docs/lcm.md)
 - [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)
@@ -316,10 +148,12 @@ Using formats of different precisions will yield results of varying quality.
 
 These projects wrap `stable-diffusion.cpp` for easier use in other languages/frameworks.
 
-* Golang: [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
+* Golang (non-cgo): [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
+* Golang (cgo): [Binozo/GoStableDiffusion](https://github.com/Binozo/GoStableDiffusion)
 * C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
 * Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
 * Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)
+* Flutter/Dart: [rmatif/Local-Diffusion](https://github.com/rmatif/Local-Diffusion)
 
 ## UIs
 
@@ -328,6 +162,11 @@ These projects use `stable-diffusion.cpp` as a backend for their image generatio
 - [Jellybox](https://jellybox.com)
 - [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
 - [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
+- [Local Diffusion](https://github.com/rmatif/Local-Diffusion)
+- [sd.cpp-webui](https://github.com/daniandtheweb/sd.cpp-webui)
+- [LocalAI](https://github.com/mudler/LocalAI)
+- [Neural-Pixel](https://github.com/Luiz-Alcantara/Neural-Pixel)
+- [KoboldCpp](https://github.com/LostRuins/koboldcpp)
 
 ## Contributors
 
@@ -341,7 +180,8 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 
 ## References
 
-- [ggml](https://github.com/ggerganov/ggml)
+- [ggml](https://github.com/ggml-org/ggml)
+- [diffusers](https://github.com/huggingface/diffusers)
 - [stable-diffusion](https://github.com/CompVis/stable-diffusion)
 - [sd3-ref](https://github.com/Stability-AI/sd3-ref)
 - [stable-diffusion-stability-ai](https://github.com/Stability-AI/stablediffusion)
@@ -351,3 +191,5 @@ Thank you to all the people who have already contributed to stable-diffusion.cpp
 - [latent-consistency-model](https://github.com/luosiallen/latent-consistency-model)
 - [generative-models](https://github.com/Stability-AI/generative-models/)
 - [PhotoMaker](https://github.com/TencentARC/PhotoMaker)
+- [Wan2.1](https://github.com/Wan-Video/Wan2.1)
+- [Wan2.2](https://github.com/Wan-Video/Wan2.2)

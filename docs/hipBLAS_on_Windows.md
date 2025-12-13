@@ -82,4 +82,4 @@ cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_H
 cmake --build . --config Release
 ```
 
-If everything went OK, `build\bin\sd.exe` file should appear.
+If everything went OK, `build\bin\sd-cli.exe` file should appear.
