@@ -1012,37 +1012,6 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_linear(struct ggml_context* ctx,
     return x;
 }
 
-__STATIC_INLINE__ struct ggml_tensor* sd_pad(struct ggml_context* ctx,
-                                             struct ggml_tensor* x,
-                                             int pad_w,
-                                             int pad_h,
-                                             int pad_t       = 0,
-                                             int pad_d       = 0,
-                                             bool circular_x = false,
-                                             bool circular_y = false) {
-    if ((circular_x && circular_y) || (!circular_x && !circular_y)) {
-        return circular_x && circular_y ? ggml_pad_circular(ctx, x, pad_w, pad_h, pad_t, pad_d)
-                                        : ggml_pad(ctx, x, pad_w, pad_h, pad_t, pad_d);
-    }
-
-    int rem_w = pad_w;
-    int rem_h = pad_h;
-
-    if (circular_x && pad_w != 0) {
-        x     = ggml_pad_circular(ctx, x, pad_w, 0, 0, 0);
-        rem_w = 0;
-    }
-    if (circular_y && pad_h != 0) {
-        x     = ggml_pad_circular(ctx, x, 0, pad_h, 0, 0);
-        rem_h = 0;
-    }
-
-    if (rem_w != 0 || rem_h != 0 || pad_t != 0 || pad_d != 0) {
-        x = ggml_pad(ctx, x, rem_w, rem_h, pad_t, pad_d);
-    }
-    return x;
-}
-
 __STATIC_INLINE__ struct ggml_tensor* sd_pad_ext(struct ggml_context* ctx,
                                                  struct ggml_tensor* x,
                                                  int lp0,
@@ -1073,6 +1042,18 @@ __STATIC_INLINE__ struct ggml_tensor* sd_pad_ext(struct ggml_context* ctx,
         x = ggml_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
     }
     return x;
+}
+
+__STATIC_INLINE__ struct ggml_tensor* sd_pad(struct ggml_context* ctx,
+                                             struct ggml_tensor* x,
+                                             int pad_w,
+                                             int pad_h,
+                                             int pad_t       = 0,
+                                             int pad_d       = 0,
+                                             bool circular_x = false,
+                                             bool circular_y = false) {
+
+    return sd_pad_ext(ctx, x, pad_w, pad_w, pad_h, pad_h, pad_t, pad_t, pad_d, pad_d, circular_x, circular_y);
 }
 
 // w: [OC，IC, KH, KW]
