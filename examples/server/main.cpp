@@ -425,7 +425,7 @@ int main(int argc, const char** argv) {
                 return;
             }
 
-            if (!gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
+            if (!gen_params.process_and_check(IMG_GEN, "")) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
                 return;
@@ -605,7 +605,7 @@ int main(int argc, const char** argv) {
                 return;
             }
 
-            if (!gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
+            if (!gen_params.process_and_check(IMG_GEN, "")) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
                 return;
