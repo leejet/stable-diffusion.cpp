@@ -40,6 +40,7 @@ struct DiffusionModel {
     virtual int64_t get_adm_in_channels()             = 0;
     virtual void set_flash_attn_enabled(bool enabled) = 0;
     virtual void set_circular_pad_enabled(bool enabled) = 0;
+    virtual void set_rope_circular_axes(bool circular_x, bool circular_y) {};
 };
 
 struct UNetModel : public DiffusionModel {
@@ -364,6 +365,10 @@ struct QwenImageModel : public DiffusionModel {
         qwen_image.set_circular_pad_enabled(enabled);
     }
 
+    void set_rope_circular_axes(bool circular_x, bool circular_y) override {
+        qwen_image.set_circular_rope_enabled(circular_x, circular_y);
+    }
+
     bool compute(int n_threads,
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
@@ -429,6 +434,10 @@ struct ZImageModel : public DiffusionModel {
 
     void set_circular_pad_enabled(bool enabled) override {
         z_image.set_circular_pad_enabled(enabled);
+    }
+
+    void set_rope_circular_axes(bool circular_x, bool circular_y) override {
+        z_image.set_circular_rope_enabled(circular_x, circular_y);
     }
 
     bool compute(int n_threads,

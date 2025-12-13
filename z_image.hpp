@@ -556,7 +556,8 @@ namespace ZImage {
                                                ref_latents,
                                                increase_ref_index,
                                                z_image_params.theta,
-                                               circular_pad_enabled,
+                                               rope_circular_y_enabled,
+                                               rope_circular_x_enabled,
                                                z_image_params.axes_dim);
             int pos_len = pe_vec.size() / z_image_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);

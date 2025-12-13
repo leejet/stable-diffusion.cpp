@@ -316,12 +316,13 @@ namespace Rope {
                                                            const std::vector<ggml_tensor*>& ref_latents,
                                                            bool increase_ref_index,
                                                            int theta,
-                                                           bool circular,
+                                                           bool circular_h,
+                                                           bool circular_w,
                                                            const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_qwen_image_ids(h, w, patch_size, bs, context_len, ref_latents, increase_ref_index);
         std::vector<std::vector<int>> wrap_dims;
         // This logic simply stores the (pad and patch_adjusted) sizes of images so we can make sure rope correctly tiles
-        if (circular && bs > 0 && axes_dim.size() >= 3) {
+        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
             int pad_h = (patch_size - (h % patch_size)) % patch_size;
             int pad_w = (patch_size - (w % patch_size)) % patch_size;
             int h_len = (h + pad_h) / patch_size;
@@ -333,8 +334,12 @@ namespace Rope {
                 size_t cursor = context_len; // ignore text tokens
                 const size_t img_tokens       = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
                 for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
-                    wrap_dims[1][cursor + token_i] = h_len;
-                    wrap_dims[2][cursor + token_i] = w_len;
+                    if (circular_h) {
+                        wrap_dims[1][cursor + token_i] = h_len;
+                    }
+                    if (circular_w) {
+                        wrap_dims[2][cursor + token_i] = w_len;
+                    }
                 }
                 cursor += img_tokens;
                 // For each reference image, store wrap sizes as well
@@ -350,8 +355,12 @@ namespace Rope {
                     int ref_w_len  = (ref_w + ref_pad_w) / patch_size;
                     size_t ref_n_tokens  = static_cast<size_t>(ref_h_len) * static_cast<size_t>(ref_w_len);
                     for (size_t token_i = 0; token_i < ref_n_tokens; ++token_i) {
-                        wrap_dims[1][cursor + token_i] = ref_h_len;
-                        wrap_dims[2][cursor + token_i] = ref_w_len;
+                        if (circular_h) {
+                            wrap_dims[1][cursor + token_i] = ref_h_len;
+                        }
+                        if (circular_w) {
+                            wrap_dims[2][cursor + token_i] = ref_w_len;
+                        }
                     }
                     cursor += ref_n_tokens;
                 }
@@ -495,11 +504,12 @@ namespace Rope {
                                                         const std::vector<ggml_tensor*>& ref_latents,
                                                         bool increase_ref_index,
                                                         int theta,
-                                                        bool circular,
+                                                        bool circular_h,
+                                                        bool circular_w,
                                                         const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_z_image_ids(h, w, patch_size, bs, context_len, seq_multi_of, ref_latents, increase_ref_index);
         std::vector<std::vector<int>> wrap_dims;
-        if (circular && bs > 0 && axes_dim.size() >= 3) {
+        if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
             int pad_h = (patch_size - (h % patch_size)) % patch_size;
             int pad_w = (patch_size - (w % patch_size)) % patch_size;
             int h_len = (h + pad_h) / patch_size;
@@ -510,8 +520,12 @@ namespace Rope {
                 size_t cursor = context_len + bound_mod(context_len, seq_multi_of);  // skip text (and its padding)
                 size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
                 for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
-                    wrap_dims[1][cursor + token_i] = h_len;
-                    wrap_dims[2][cursor + token_i] = w_len;
+                    if (circular_h) {
+                        wrap_dims[1][cursor + token_i] = h_len;
+                    }
+                    if (circular_w) {
+                        wrap_dims[2][cursor + token_i] = w_len;
+                    }
                 }
             }
         }

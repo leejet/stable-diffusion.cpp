@@ -128,6 +128,8 @@ public:
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
     bool circular_pad                    = false;
+    bool circular_pad_x                  = false;
+    bool circular_pad_y                  = false;
     bool stacked_id                      = false;
 
     bool is_using_v_parameterization     = false;
@@ -212,6 +214,8 @@ public:
         use_tiny_autoencoder    = taesd_path.size() > 0;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
         circular_pad            = sd_ctx_params->circular_pad;
+        circular_pad_x          = sd_ctx_params->circular_pad_x || circular_pad;
+        circular_pad_y          = sd_ctx_params->circular_pad_y || circular_pad;
 
         rng = get_rng(sd_ctx_params->rng_type);
         if (sd_ctx_params->sampler_rng_type != RNG_TYPE_COUNT && sd_ctx_params->sampler_rng_type != sd_ctx_params->rng_type) {
@@ -509,6 +513,7 @@ public:
                                                                    "model.diffusion_model",
                                                                    version);
                 diffusion_model->set_circular_pad_enabled(circular_pad);
+                diffusion_model->set_rope_circular_axes(circular_pad_x, circular_pad_y);
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
@@ -520,6 +525,7 @@ public:
                                                                 "model.diffusion_model",
                                                                 version);
                 diffusion_model->set_circular_pad_enabled(circular_pad);
+                diffusion_model->set_rope_circular_axes(circular_pad_x, circular_pad_y);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (int i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -2531,6 +2537,8 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->keep_vae_on_cpu         = false;
     sd_ctx_params->diffusion_flash_attn    = false;
     sd_ctx_params->circular_pad            = false;
+    sd_ctx_params->circular_pad_x          = false;
+    sd_ctx_params->circular_pad_y          = false;
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
@@ -2572,6 +2580,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "keep_vae_on_cpu: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_pad: %s\n"
+             "circular_pad_x: %s\n"
+             "circular_pad_y: %s\n"
              "chroma_use_dit_mask: %s\n"
              "chroma_use_t5_mask: %s\n"
              "chroma_t5_mask_pad: %d\n",
@@ -2603,6 +2613,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_pad),
+             BOOL_STR(sd_ctx_params->circular_pad_x),
+             BOOL_STR(sd_ctx_params->circular_pad_y),
              BOOL_STR(sd_ctx_params->chroma_use_dit_mask),
              BOOL_STR(sd_ctx_params->chroma_use_t5_mask),
              sd_ctx_params->chroma_t5_mask_pad);

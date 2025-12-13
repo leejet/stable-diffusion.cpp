@@ -1573,6 +1573,8 @@ struct GGMLRunnerContext {
     bool flash_attn_enabled                       = false;
     bool conv2d_direct_enabled                    = false;
     bool circular_pad_enabled                     = false;
+    bool rope_circular_x_enabled                  = false;
+    bool rope_circular_y_enabled                  = false;
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
 };
 
@@ -1610,6 +1612,8 @@ protected:
     bool flash_attn_enabled    = false;
     bool conv2d_direct_enabled = false;
     bool circular_pad_enabled  = false;
+    bool rope_circular_x_enabled = false;
+    bool rope_circular_y_enabled = false;
 
     void alloc_params_ctx() {
         struct ggml_init_params params;
@@ -1888,6 +1892,8 @@ public:
         runner_ctx.flash_attn_enabled    = flash_attn_enabled;
         runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
         runner_ctx.circular_pad_enabled  = circular_pad_enabled;
+        runner_ctx.rope_circular_x_enabled = rope_circular_x_enabled;
+        runner_ctx.rope_circular_y_enabled = rope_circular_y_enabled;
         runner_ctx.weight_adapter        = weight_adapter;
         return runner_ctx;
     }
@@ -2034,6 +2040,11 @@ public:
 
     void set_circular_pad_enabled(bool enabled) {
         circular_pad_enabled = enabled;
+    }
+
+    void set_circular_rope_enabled(bool circular_x, bool circular_y) {
+        rope_circular_x_enabled = circular_x;
+        rope_circular_y_enabled = circular_y;
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {
