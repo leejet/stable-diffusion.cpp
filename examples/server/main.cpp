@@ -192,8 +192,8 @@ void parse_args(int argc, const char** argv, SDSvrParams& svr_params, SDContextP
     }
 
     if (!svr_params.process_and_check() ||
-     !ctx_params.process_and_check(IMG_GEN) ||
-      !default_gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
+        !ctx_params.process_and_check(IMG_GEN) ||
+        !default_gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
         print_usage(argc, argv, options_vec);
         exit(1);
     }
@@ -325,7 +325,7 @@ int main(int argc, const char** argv) {
     std::mutex sd_ctx_mutex;
 
     httplib::Server svr;
-    
+
     svr.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
         std::string origin = req.get_header_value("Origin");
         if (origin.empty()) {
@@ -335,7 +335,7 @@ int main(int argc, const char** argv) {
         res.set_header("Access-Control-Allow-Credentials", "true");
         res.set_header("Access-Control-Allow-Methods", "*");
         res.set_header("Access-Control-Allow-Headers", "*");
-        
+
         if (req.method == "OPTIONS") {
             res.status = 204;
             return httplib::Server::HandlerResponse::Handled;
@@ -414,10 +414,10 @@ int main(int argc, const char** argv) {
             out["output_format"] = output_format;
 
             SDGenerationParams gen_params = default_gen_params;
-            gen_params.prompt                    = prompt;
-            gen_params.width                     = width;
-            gen_params.height                    = height;
-            gen_params.batch_count               = n;
+            gen_params.prompt             = prompt;
+            gen_params.width              = width;
+            gen_params.height             = height;
+            gen_params.batch_count        = n;
 
             if (!sd_cpp_extra_args_str.empty() && !gen_params.from_json_str(sd_cpp_extra_args_str)) {
                 res.status = 400;
@@ -594,10 +594,10 @@ int main(int argc, const char** argv) {
             }
 
             SDGenerationParams gen_params = default_gen_params;
-            gen_params.prompt      = prompt;
-            gen_params.width       = width;
-            gen_params.height      = height;
-            gen_params.batch_count = n;
+            gen_params.prompt             = prompt;
+            gen_params.width              = width;
+            gen_params.height             = height;
+            gen_params.batch_count        = n;
 
             if (!sd_cpp_extra_args_str.empty() && !gen_params.from_json_str(sd_cpp_extra_args_str)) {
                 res.status = 400;
