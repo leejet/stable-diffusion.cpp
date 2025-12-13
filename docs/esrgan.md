@@ -5,5 +5,5 @@ You can use ESRGAN to upscale the generated images. At the moment, only the [Rea
 - Specify the model path using the `--upscale-model PATH` parameter. example:
 
 ```bash
-sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --upscale-model ../models/RealESRGAN_x4plus_anime_6B.pth
+sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat" --upscale-model ../models/RealESRGAN_x4plus_anime_6B.pth
 ```

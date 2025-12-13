@@ -574,7 +574,7 @@ namespace ZImage {
             return gf;
         }
 
-        void compute(int n_threads,
+        bool compute(int n_threads,
                      struct ggml_tensor* x,
                      struct ggml_tensor* timesteps,
                      struct ggml_tensor* context,
@@ -589,7 +589,7 @@ namespace ZImage {
                 return build_graph(x, timesteps, context, ref_latents, increase_ref_index);
             };
 
-            GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
         }
 
         void test() {

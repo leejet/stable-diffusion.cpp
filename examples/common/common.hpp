@@ -1,4 +1,5 @@
 
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <random>
@@ -8,12 +9,27 @@
 #include <vector>
 
 #include <json.hpp>
-using json = nlohmann::json;
+using json   = nlohmann::json;
+namespace fs = std::filesystem;
 
 #if defined(_WIN32)
 #define NOMINMAX
 #include <windows.h>
 #endif  // _WIN32
+
+#include "stable-diffusion.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
+#include "stb_image.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_STATIC
+#include "stb_image_write.h"
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#define STB_IMAGE_RESIZE_STATIC
+#include "stb_image_resize.h"
 
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
@@ -312,6 +328,9 @@ struct SDContextParams {
     std::string tensor_type_rules;
     std::string lora_model_dir;
 
+    std::map<std::string, std::string> embedding_map;
+    std::vector<sd_embedding_t> embedding_vec;
+
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
@@ -326,7 +345,7 @@ struct SDContextParams {
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
 
-    prediction_t prediction           = DEFAULT_PRED;
+    prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
@@ -639,6 +658,37 @@ struct SDContextParams {
         return options;
     }
 
+    void build_embedding_map() {
+        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+
+        if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
+            return;
+        }
+
+        for (auto& p : fs::directory_iterator(embedding_dir)) {
+            if (!p.is_regular_file())
+                continue;
+
+            auto path       = p.path();
+            std::string ext = path.extension().string();
+
+            bool valid = false;
+            for (auto& e : valid_ext) {
+                if (ext == e) {
+                    valid = true;
+                    break;
+                }
+            }
+            if (!valid)
+                continue;
+
+            std::string key   = path.stem().string();
+            std::string value = path.string();
+
+            embedding_map[key] = value;
+        }
+    }
+
     bool process_and_check(SDMode mode) {
         if (mode != UPSCALE && model_path.length() == 0 && diffusion_model_path.length() == 0) {
             fprintf(stderr, "error: the following arguments are required: model_path/diffusion_model\n");
@@ -656,10 +706,24 @@ struct SDContextParams {
             n_threads = sd_get_num_physical_cores();
         }
 
+        build_embedding_map();
+
         return true;
     }
 
     std::string to_string() const {
+        std::ostringstream emb_ss;
+        emb_ss << "{\n";
+        for (auto it = embedding_map.begin(); it != embedding_map.end(); ++it) {
+            emb_ss << "    \"" << it->first << "\": \"" << it->second << "\"";
+            if (std::next(it) != embedding_map.end()) {
+                emb_ss << ",";
+            }
+            emb_ss << "\n";
+        }
+        emb_ss << "  }";
+
+        std::string embeddings_str = emb_ss.str();
         std::ostringstream oss;
         oss << "SDContextParams {\n"
             << "  n_threads: " << n_threads << ",\n"
@@ -677,6 +741,7 @@ struct SDContextParams {
             << "  esrgan_path: \"" << esrgan_path << "\",\n"
             << "  control_net_path: \"" << control_net_path << "\",\n"
             << "  embedding_dir: \"" << embedding_dir << "\",\n"
+            << "  embeddings: " << embeddings_str << "\n"
             << "  wtype: " << sd_type_name(wtype) << ",\n"
             << "  tensor_type_rules: \"" << tensor_type_rules << "\",\n"
             << "  lora_model_dir: \"" << lora_model_dir << "\",\n"
@@ -709,6 +774,15 @@ struct SDContextParams {
     }
 
     sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview) {
+        embedding_vec.clear();
+        embedding_vec.reserve(embedding_map.size());
+        for (const auto& kv : embedding_map) {
+            sd_embedding_t item;
+            item.name = kv.first.c_str();
+            item.path = kv.second.c_str();
+            embedding_vec.emplace_back(item);
+        }
+
         sd_ctx_params_t sd_ctx_params = {
             model_path.c_str(),
             clip_l_path.c_str(),
@@ -723,7 +797,8 @@ struct SDContextParams {
             taesd_path.c_str(),
             control_net_path.c_str(),
             lora_model_dir.c_str(),
-            embedding_dir.c_str(),
+            embedding_vec.data(),
+            static_cast<uint32_t>(embedding_vec.size()),
             photo_maker_path.c_str(),
             tensor_type_rules.c_str(),
             vae_decode_only,
@@ -777,6 +852,15 @@ static std::string vec_str_to_string(const std::vector<std::string>& v) {
     return oss.str();
 }
 
+static bool is_absolute_path(const std::string& p) {
+#ifdef _WIN32
+    // Windows: C:/path or C:\path
+    return p.size() > 1 && std::isalpha(static_cast<unsigned char>(p[0])) && p[1] == ':';
+#else
+    return !p.empty() && p[0] == '/';
+#endif
+}
+
 struct SDGenerationParams {
     std::string prompt;
     std::string negative_prompt;
@@ -817,7 +901,12 @@ struct SDGenerationParams {
     std::string pm_id_embed_path;
     float pm_style_strength = 20.f;
 
-    int upscale_repeats = 1;
+    int upscale_repeats   = 1;
+    int upscale_tile_size = 128;
+
+    std::map<std::string, float> lora_map;
+    std::map<std::string, float> high_noise_lora_map;
+    std::vector<sd_lora_t> lora_vec;
 
     SDGenerationParams() {
         sd_sample_params_init(&sample_params);
@@ -910,6 +999,10 @@ struct SDGenerationParams {
              "--upscale-repeats",
              "Run the ESRGAN upscaler this many times (default: 1)",
              &upscale_repeats},
+            {"",
+             "--upscale-tile-size",
+             "tile size for ESRGAN upscaling (default: 128)",
+             &upscale_tile_size},
         };
 
         options.float_options = {
@@ -1248,10 +1341,95 @@ struct SDGenerationParams {
         load_if_exists("skip_layers", skip_layers);
         load_if_exists("high_noise_skip_layers", high_noise_skip_layers);
 
+        load_if_exists("cfg_scale", sample_params.guidance.txt_cfg);
+        load_if_exists("img_cfg_scale", sample_params.guidance.img_cfg);
+        load_if_exists("guidance", sample_params.guidance.distilled_guidance);
+
         return true;
     }
 
-    bool process_and_check(SDMode mode) {
+    void extract_and_remove_lora(const std::string& lora_model_dir) {
+        static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
+        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        std::smatch m;
+
+        std::string tmp = prompt;
+
+        while (std::regex_search(tmp, m, re)) {
+            std::string raw_path      = m[1].str();
+            const std::string raw_mul = m[2].str();
+
+            float mul = 0.f;
+            try {
+                mul = std::stof(raw_mul);
+            } catch (...) {
+                tmp    = m.suffix().str();
+                prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                continue;
+            }
+
+            bool is_high_noise              = false;
+            static const std::string prefix = "|high_noise|";
+            if (raw_path.rfind(prefix, 0) == 0) {
+                raw_path.erase(0, prefix.size());
+                is_high_noise = true;
+            }
+
+            fs::path final_path;
+            if (is_absolute_path(raw_path)) {
+                final_path = raw_path;
+            } else {
+                final_path = fs::path(lora_model_dir) / raw_path;
+            }
+            if (!fs::exists(final_path)) {
+                bool found = false;
+                for (const auto& ext : valid_ext) {
+                    fs::path try_path = final_path;
+                    try_path += ext;
+                    if (fs::exists(try_path)) {
+                        final_path = try_path;
+                        found      = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    printf("can not found lora %s\n", final_path.lexically_normal().string().c_str());
+                    tmp    = m.suffix().str();
+                    prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                    continue;
+                }
+            }
+
+            const std::string key = final_path.lexically_normal().string();
+
+            if (is_high_noise)
+                high_noise_lora_map[key] += mul;
+            else
+                lora_map[key] += mul;
+
+            prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+
+            tmp = m.suffix().str();
+        }
+
+        for (const auto& kv : lora_map) {
+            sd_lora_t item;
+            item.is_high_noise = false;
+            item.path          = kv.first.c_str();
+            item.multiplier    = kv.second;
+            lora_vec.emplace_back(item);
+        }
+
+        for (const auto& kv : high_noise_lora_map) {
+            sd_lora_t item;
+            item.is_high_noise = true;
+            item.path          = kv.first.c_str();
+            item.multiplier    = kv.second;
+            lora_vec.emplace_back(item);
+        }
+    }
+
+    bool process_and_check(SDMode mode, const std::string& lora_model_dir) {
         if (width <= 0) {
             fprintf(stderr, "error: the width must be greater than 0\n");
             return false;
@@ -1350,6 +1528,10 @@ struct SDGenerationParams {
             return false;
         }
 
+        if (upscale_tile_size < 1) {
+            return false;
+        }
+
         if (mode == UPSCALE) {
             if (init_image_path.length() == 0) {
                 fprintf(stderr, "error: upscale mode needs an init image (--init-img)\n");
@@ -1362,14 +1544,44 @@ struct SDGenerationParams {
             seed = rand();
         }
 
+        extract_and_remove_lora(lora_model_dir);
+
         return true;
     }
 
     std::string to_string() const {
         char* sample_params_str            = sd_sample_params_to_str(&sample_params);
         char* high_noise_sample_params_str = sd_sample_params_to_str(&high_noise_sample_params);
+
+        std::ostringstream lora_ss;
+        lora_ss << "{\n";
+        for (auto it = lora_map.begin(); it != lora_map.end(); ++it) {
+            lora_ss << "    \"" << it->first << "\": \"" << it->second << "\"";
+            if (std::next(it) != lora_map.end()) {
+                lora_ss << ",";
+            }
+            lora_ss << "\n";
+        }
+        lora_ss << "  }";
+        std::string loras_str = lora_ss.str();
+
+        lora_ss = std::ostringstream();
+        ;
+        lora_ss << "{\n";
+        for (auto it = high_noise_lora_map.begin(); it != high_noise_lora_map.end(); ++it) {
+            lora_ss << "    \"" << it->first << "\": \"" << it->second << "\"";
+            if (std::next(it) != high_noise_lora_map.end()) {
+                lora_ss << ",";
+            }
+            lora_ss << "\n";
+        }
+        lora_ss << "  }";
+        std::string high_noise_loras_str = lora_ss.str();
+
         std::ostringstream oss;
         oss << "SDGenerationParams {\n"
+            << "  loras: \"" << loras_str << "\",\n"
+            << "  high_noise_loras: \"" << high_noise_loras_str << "\",\n"
             << "  prompt: \"" << prompt << "\",\n"
             << "  negative_prompt: \"" << negative_prompt << "\",\n"
             << "  clip_skip: " << clip_skip << ",\n"
@@ -1405,9 +1617,136 @@ struct SDGenerationParams {
             << "  control_strength: " << control_strength << ",\n"
             << "  seed: " << seed << ",\n"
             << "  upscale_repeats: " << upscale_repeats << ",\n"
+            << "  upscale_tile_size: " << upscale_tile_size << ",\n"
             << "}";
         free(sample_params_str);
         free(high_noise_sample_params_str);
         return oss.str();
     }
 };
+
+static std::string version_string() {
+    return std::string("stable-diffusion.cpp version ") + sd_version() + ", commit " + sd_commit();
+}
+
+uint8_t* load_image_common(bool from_memory,
+                           const char* image_path_or_bytes,
+                           int len,
+                           int& width,
+                           int& height,
+                           int expected_width   = 0,
+                           int expected_height  = 0,
+                           int expected_channel = 3) {
+    int c = 0;
+    const char* image_path;
+    uint8_t* image_buffer = nullptr;
+    if (from_memory) {
+        image_path   = "memory";
+        image_buffer = (uint8_t*)stbi_load_from_memory((const stbi_uc*)image_path_or_bytes, len, &width, &height, &c, expected_channel);
+    } else {
+        image_path   = image_path_or_bytes;
+        image_buffer = (uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel);
+    }
+    if (image_buffer == nullptr) {
+        fprintf(stderr, "load image from '%s' failed\n", image_path);
+        return nullptr;
+    }
+    if (c < expected_channel) {
+        fprintf(stderr,
+                "the number of channels for the input image must be >= %d,"
+                "but got %d channels, image_path = %s\n",
+                expected_channel,
+                c,
+                image_path);
+        free(image_buffer);
+        return nullptr;
+    }
+    if (width <= 0) {
+        fprintf(stderr, "error: the width of image must be greater than 0, image_path = %s\n", image_path);
+        free(image_buffer);
+        return nullptr;
+    }
+    if (height <= 0) {
+        fprintf(stderr, "error: the height of image must be greater than 0, image_path = %s\n", image_path);
+        free(image_buffer);
+        return nullptr;
+    }
+
+    // Resize input image ...
+    if ((expected_width > 0 && expected_height > 0) && (height != expected_height || width != expected_width)) {
+        float dst_aspect = (float)expected_width / (float)expected_height;
+        float src_aspect = (float)width / (float)height;
+
+        int crop_x = 0, crop_y = 0;
+        int crop_w = width, crop_h = height;
+
+        if (src_aspect > dst_aspect) {
+            crop_w = (int)(height * dst_aspect);
+            crop_x = (width - crop_w) / 2;
+        } else if (src_aspect < dst_aspect) {
+            crop_h = (int)(width / dst_aspect);
+            crop_y = (height - crop_h) / 2;
+        }
+
+        if (crop_x != 0 || crop_y != 0) {
+            printf("crop input image from %dx%d to %dx%d, image_path = %s\n", width, height, crop_w, crop_h, image_path);
+            uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
+            if (cropped_image_buffer == nullptr) {
+                fprintf(stderr, "error: allocate memory for crop\n");
+                free(image_buffer);
+                return nullptr;
+            }
+            for (int row = 0; row < crop_h; row++) {
+                uint8_t* src = image_buffer + ((crop_y + row) * width + crop_x) * expected_channel;
+                uint8_t* dst = cropped_image_buffer + (row * crop_w) * expected_channel;
+                memcpy(dst, src, crop_w * expected_channel);
+            }
+
+            width  = crop_w;
+            height = crop_h;
+            free(image_buffer);
+            image_buffer = cropped_image_buffer;
+        }
+
+        printf("resize input image from %dx%d to %dx%d\n", width, height, expected_width, expected_height);
+        int resized_height = expected_height;
+        int resized_width  = expected_width;
+
+        uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * expected_channel);
+        if (resized_image_buffer == nullptr) {
+            fprintf(stderr, "error: allocate memory for resize input image\n");
+            free(image_buffer);
+            return nullptr;
+        }
+        stbir_resize(image_buffer, width, height, 0,
+                     resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
+                     expected_channel, STBIR_ALPHA_CHANNEL_NONE, 0,
+                     STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
+                     STBIR_FILTER_BOX, STBIR_FILTER_BOX,
+                     STBIR_COLORSPACE_SRGB, nullptr);
+        width  = resized_width;
+        height = resized_height;
+        free(image_buffer);
+        image_buffer = resized_image_buffer;
+    }
+    return image_buffer;
+}
+
+uint8_t* load_image_from_file(const char* image_path,
+                              int& width,
+                              int& height,
+                              int expected_width   = 0,
+                              int expected_height  = 0,
+                              int expected_channel = 3) {
+    return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
+}
+
+uint8_t* load_image_from_memory(const char* image_bytes,
+                                int len,
+                                int& width,
+                                int& height,
+                                int expected_width   = 0,
+                                int expected_height  = 0,
+                                int expected_channel = 3) {
+    return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
+}
