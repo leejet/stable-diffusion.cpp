@@ -236,6 +236,60 @@ public:
     }
 };
 
+struct ggml_tensor* patchify(struct ggml_context* ctx,
+                             struct ggml_tensor* x,
+                             int64_t patch_size,
+                             int64_t b = 1) {
+    // x: [f, b*c, h*q, w*r]
+    // return: [f, b*c*r*q, h, w]
+    if (patch_size == 1) {
+        return x;
+    }
+    int64_t r = patch_size;
+    int64_t q = patch_size;
+
+    int64_t W = x->ne[0];
+    int64_t H = x->ne[1];
+    int64_t C = x->ne[2];
+    int64_t f = x->ne[3];
+
+    int64_t w = W / r;
+    int64_t h = H / q;
+
+    x = ggml_reshape_4d(ctx, x, W, q, h, C * f);                         // [W, q, h, C*f]
+    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [W, h, q, C*f]
+    x = ggml_reshape_4d(ctx, x, r, w, h, q * C * f);                     // [r, w, h, q*C*f]
+    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));  // [w, h, r, q*C*f]
+    x = ggml_reshape_4d(ctx, x, w, h, r * q * C, f);                     // [f, b*c*r*q, h, w]
+
+    return x;
+}
+
+struct ggml_tensor* unpatchify(struct ggml_context* ctx,
+                               struct ggml_tensor* x,
+                               int64_t patch_size,
+                               int64_t b = 1) {
+    // x: [f, b*c*r*q, h, w]
+    // return: [f, b*c, h*q, w*r]
+    if (patch_size == 1) {
+        return x;
+    }
+    int64_t r = patch_size;
+    int64_t q = patch_size;
+    int64_t c = x->ne[2] / b / q / r;
+    int64_t f = x->ne[3];
+    int64_t h = x->ne[1];
+    int64_t w = x->ne[0];
+
+    x = ggml_reshape_4d(ctx, x, w, h, r, q * c * b * f);                 // [q*c*b*f, r, h, w]
+    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));  // [r, w, h, q*c*b*f]
+    x = ggml_reshape_4d(ctx, x, r * w, h, q, c * b * f);                 // [c*b*f, q, h, r*w]
+    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [r*w, q, h, c*b*f]
+    x = ggml_reshape_4d(ctx, x, r * w, q * h, c * b, f);
+
+    return x;
+}
+
 class TinyVideoEncoder : public UnaryBlock {
     int in_channels = 3;
     int hidden      = 64;
@@ -263,8 +317,13 @@ public:
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* z) override {
         auto first_conv = std::dynamic_pointer_cast<Conv2d>(blocks["0"]);
-        auto h          = first_conv->forward(ctx, z);
-        h               = ggml_relu_inplace(ctx->ggml_ctx, h);
+
+        if (patch_size > 1) {
+            z = patchify(ctx->ggml_ctx, z, patch_size, 1);
+        }
+
+        auto h = first_conv->forward(ctx, z);
+        h      = ggml_relu_inplace(ctx->ggml_ctx, h);
 
         int index = 2;
         for (int i = 0; i < num_layers; i++) {
@@ -285,62 +344,6 @@ public:
         return h;
     }
 };
-
-
-struct ggml_tensor* patchify(struct ggml_context* ctx,
-                             struct ggml_tensor* x,
-                             int64_t patch_size,
-                             int64_t b = 1) {
-    // x: [f, b*c, h*q, w*r]
-    // return: [f, b*c*r*q, h, w]
-    if (patch_size == 1) {
-        return x;
-    }
-    int64_t r = patch_size;
-    int64_t q = patch_size;
-    
-    int64_t W = x->ne[0];
-    int64_t H = x->ne[1];
-    int64_t C = x->ne[2];
-    int64_t f = x->ne[3];
-    
-    int64_t w = W / r;
-    int64_t h = H / q;
-
-    x = ggml_reshape_4d(ctx, x, W, q, h, C * f);                        // [W, q, h, C*f]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3)); // [W, h, q, C*f]
-    x = ggml_reshape_4d(ctx, x, r, w, h, q * C * f);                    // [r, w, h, q*C*f]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3)); // [w, h, r, q*C*f]
-    x = ggml_reshape_4d(ctx, x, w, h, r * q * C, f);                    // [f, b*c*r*q, h, w]
-    
-    return x;
-}
-
-struct ggml_tensor* unpatchify(struct ggml_context* ctx,
-                               struct ggml_tensor* x,
-                               int64_t patch_size,
-                               int64_t b = 1) {
-    // x: [f, b*c*r*q, h, w]
-    // return: [f, b*c, h*q, w*r]
-    if (patch_size == 1) {
-        return x;
-    }
-    int64_t r = patch_size;
-    int64_t q = patch_size;
-    int64_t c = x->ne[2] / b / q / r;
-    int64_t f = x->ne[3];
-    int64_t h = x->ne[1];
-    int64_t w = x->ne[0];
-
-
-    x = ggml_reshape_4d(ctx, x, w, h, r, q * c * b * f);                // [q*c*b*f, r, h, w]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3)); // [r, w, h, q*c*b*f]
-    x = ggml_reshape_4d(ctx, x, r * w, h, q, c * b * f);                // [c*b*f, q, h, r*w]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3)); // [r*w, q, h, c*b*f]
-    x = ggml_reshape_4d(ctx, x, r * w, q * h, c * b, f);
-
-    return x;
-}
 
 class TinyVideoDecoder : public UnaryBlock {
     int z_channels               = 4;
