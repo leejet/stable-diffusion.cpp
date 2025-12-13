@@ -17,6 +17,6 @@ RUN apt-get update && \
     apt-get install --yes --no-install-recommends libgomp1 && \
     apt-get clean
 
-COPY --from=build /sd.cpp/build/bin/sd /sd
+COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
 
-ENTRYPOINT [ "/sd" ]
+ENTRYPOINT [ "/sd-cli" ]

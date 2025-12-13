@@ -1,20 +1,13 @@
 # Run
 
 ```
-usage: ./bin/sd-cli  [options]
+usage: ./bin/sd-server  [options]
 
-CLI Options:
-  -o, --output <string>       path to write result image to (default: ./output.png)
-  --preview-path <string>     path to write preview image to (default: ./preview.png)
-  --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
-                              every step)
-  --canny                     apply canny preprocessor (edge detection)
+Svr Options:
+  -l, --listen-ip <string>    server listen ip (default: 127.0.0.1)
+  --listen-port <int>         server listen port (default: 1234)
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
-  --taesd-preview-only        prevents usage of taesd for decoding the final image. (for use with --preview tae)
-  --preview-noisy             enables previewing noisy inputs of the models rather than the denoised outputs
-  -M, --mode                  run mode, one of [img_gen, vid_gen, upscale, convert], default: img_gen
-  --preview                   preview method. must be one of the following [none, proj, tae, vae] (default is none)
   -h, --help                  show this help message and exit
 
 Context Options:
@@ -68,7 +61,7 @@ Context Options:
   --vae-relative-tile-size                 relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1
                                            (overrides --vae-tile-size)
 
-Generation Options:
+Default Generation Options:
   -p, --prompt <string>                    the prompt to render
   -n, --negative-prompt <string>           the negative prompt (default: "")
   -i, --init-img <string>                  path to the init image
@@ -92,6 +85,7 @@ Generation Options:
   --timestep-shift <int>                   shift timestep for NitroFusion models (default: 0). recommended N for NitroSD-Realism around 250 and 500 for
                                            NitroSD-Vibrant
   --upscale-repeats <int>                  Run the ESRGAN upscaler this many times (default: 1)
+  --upscale-tile-size <int>                tile size for ESRGAN upscaling (default: 128)
   --cfg-scale <float>                      unconditional guidance scale: (default: 7.0)
   --img-cfg-scale <float>                  image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)
   --guidance <float>                       distilled guidance scale for models with guidance input (default: 3.5)
