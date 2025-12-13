@@ -372,6 +372,10 @@ public:
 
     struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
         auto decoder = std::dynamic_pointer_cast<TinyVideoDecoder>(blocks["decoder"]);
+        if (sd_version_is_wan(version)) {
+            // (W, H, C, T) -> (W, H, T, C)
+            z = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, z, 0, 1, 3, 2));
+        }
         auto result  = decoder->forward(ctx, z);
         if (sd_version_is_wan(version)) {
             // (W, H, C, T) -> (W, H, T, C)
