@@ -2081,10 +2081,6 @@ public:
         conv2d_direct_enabled = enabled;
     }
 
-    void set_circular_enabled(bool enabled) {
-        set_circular_axes(enabled, enabled);
-    }
-
     void set_circular_axes(bool circular_x, bool circular_y) {
         circular_x_enabled = circular_x;
         circular_y_enabled = circular_y;
