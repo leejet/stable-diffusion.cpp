@@ -1349,6 +1349,9 @@ struct SDGenerationParams {
     }
 
     void extract_and_remove_lora(const std::string& lora_model_dir) {
+        if (lora_model_dir.empty()) {
+            return;
+        }
         static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
         static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
         std::smatch m;
