@@ -40,6 +40,7 @@ struct DiffusionModel {
     virtual int64_t get_adm_in_channels()             = 0;
     virtual void set_flash_attn_enabled(bool enabled) = 0;
     virtual void set_circular_pad_enabled(bool enabled) = 0;
+    virtual void set_circular_pad_axes(bool circular_x, bool circular_y) = 0;
     virtual void set_rope_circular_axes(bool circular_x, bool circular_y) {};
 };
 
@@ -90,7 +91,11 @@ struct UNetModel : public DiffusionModel {
     }
 
     void set_circular_pad_enabled(bool enabled) override {
-        unet.set_circular_pad_enabled(enabled);
+        unet.set_circular_pad_axes(enabled, enabled);
+    }
+
+    void set_circular_pad_axes(bool circular_x, bool circular_y) override {
+        unet.set_circular_pad_axes(circular_x, circular_y);
     }
 
     bool compute(int n_threads,
@@ -155,7 +160,11 @@ struct MMDiTModel : public DiffusionModel {
     }
 
     void set_circular_pad_enabled(bool enabled) override {
-        mmdit.set_circular_pad_enabled(enabled);
+        mmdit.set_circular_pad_axes(enabled, enabled);
+    }
+
+    void set_circular_pad_axes(bool circular_x, bool circular_y) override {
+        mmdit.set_circular_pad_axes(circular_x, circular_y);
     }
 
     bool compute(int n_threads,
@@ -221,7 +230,11 @@ struct FluxModel : public DiffusionModel {
     }
 
     void set_circular_pad_enabled(bool enabled) override {
-        flux.set_circular_pad_enabled(enabled);
+        flux.set_circular_pad_axes(enabled, enabled);
+    }
+
+    void set_circular_pad_axes(bool circular_x, bool circular_y) override {
+        flux.set_circular_pad_axes(circular_x, circular_y);
     }
 
     void set_rope_circular_axes(bool circular_x, bool circular_y) override {
@@ -296,7 +309,11 @@ struct WanModel : public DiffusionModel {
     }
 
     void set_circular_pad_enabled(bool enabled) override {
-        wan.set_circular_pad_enabled(enabled);
+        wan.set_circular_pad_axes(enabled, enabled);
+    }
+
+    void set_circular_pad_axes(bool circular_x, bool circular_y) override {
+        wan.set_circular_pad_axes(circular_x, circular_y);
     }
 
     bool compute(int n_threads,
@@ -366,7 +383,11 @@ struct QwenImageModel : public DiffusionModel {
     }
 
     void set_circular_pad_enabled(bool enabled) override {
-        qwen_image.set_circular_pad_enabled(enabled);
+        qwen_image.set_circular_pad_axes(enabled, enabled);
+    }
+
+    void set_circular_pad_axes(bool circular_x, bool circular_y) override {
+        qwen_image.set_circular_pad_axes(circular_x, circular_y);
     }
 
     void set_rope_circular_axes(bool circular_x, bool circular_y) override {
@@ -437,7 +458,11 @@ struct ZImageModel : public DiffusionModel {
     }
 
     void set_circular_pad_enabled(bool enabled) override {
-        z_image.set_circular_pad_enabled(enabled);
+        z_image.set_circular_pad_axes(enabled, enabled);
+    }
+
+    void set_circular_pad_axes(bool circular_x, bool circular_y) override {
+        z_image.set_circular_pad_axes(circular_x, circular_y);
     }
 
     void set_rope_circular_axes(bool circular_x, bool circular_y) override {

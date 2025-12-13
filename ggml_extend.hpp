@@ -1012,6 +1012,69 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_linear(struct ggml_context* ctx,
     return x;
 }
 
+__STATIC_INLINE__ struct ggml_tensor* sd_pad(struct ggml_context* ctx,
+                                             struct ggml_tensor* x,
+                                             int pad_w,
+                                             int pad_h,
+                                             int pad_t       = 0,
+                                             int pad_d       = 0,
+                                             bool circular_x = false,
+                                             bool circular_y = false) {
+    if ((circular_x && circular_y) || (!circular_x && !circular_y)) {
+        return circular_x && circular_y ? ggml_pad_circular(ctx, x, pad_w, pad_h, pad_t, pad_d)
+                                        : ggml_pad(ctx, x, pad_w, pad_h, pad_t, pad_d);
+    }
+
+    int rem_w = pad_w;
+    int rem_h = pad_h;
+
+    if (circular_x && pad_w != 0) {
+        x     = ggml_pad_circular(ctx, x, pad_w, 0, 0, 0);
+        rem_w = 0;
+    }
+    if (circular_y && pad_h != 0) {
+        x     = ggml_pad_circular(ctx, x, 0, pad_h, 0, 0);
+        rem_h = 0;
+    }
+
+    if (rem_w != 0 || rem_h != 0 || pad_t != 0 || pad_d != 0) {
+        x = ggml_pad(ctx, x, rem_w, rem_h, pad_t, pad_d);
+    }
+    return x;
+}
+
+__STATIC_INLINE__ struct ggml_tensor* sd_pad_ext(struct ggml_context* ctx,
+                                                 struct ggml_tensor* x,
+                                                 int lp0,
+                                                 int rp0,
+                                                 int lp1,
+                                                 int rp1,
+                                                 int lp2,
+                                                 int rp2,
+                                                 int lp3,
+                                                 int rp3,
+                                                 bool circular_x = false,
+                                                 bool circular_y = false) {
+    if ((circular_x && circular_y) || (!circular_x && !circular_y)) {
+        return circular_x && circular_y ? ggml_pad_ext_circular(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3)
+                                        : ggml_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+    }
+
+    if (circular_x && (lp0 != 0 || rp0 != 0)) {
+        x   = ggml_pad_ext_circular(ctx, x, lp0, rp0, 0, 0, 0, 0, 0, 0);
+        lp0 = rp0 = 0;
+    }
+    if (circular_y && (lp1 != 0 || rp1 != 0)) {
+        x   = ggml_pad_ext_circular(ctx, x, 0, 0, lp1, rp1, 0, 0, 0, 0);
+        lp1 = rp1 = 0;
+    }
+
+    if (lp0 != 0 || rp0 != 0 || lp1 != 0 || rp1 != 0 || lp2 != 0 || rp2 != 0 || lp3 != 0 || rp3 != 0) {
+        x = ggml_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+    }
+    return x;
+}
+
 // w: [OC，IC, KH, KW]
 // x: [N, IC, IH, IW]
 // b: [OC,]
@@ -1027,7 +1090,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_conv_2d(struct ggml_context* ctx,
                                                        int d0        = 1,
                                                        int d1        = 1,
                                                        bool direct   = false,
-                                                       bool circular = false,
+                                                       bool circular_x = false,
+                                                       bool circular_y = false,
                                                        float scale   = 1.f) {
     if (scale != 1.f) {
         x = ggml_scale(ctx, x, scale);
@@ -1038,8 +1102,8 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_conv_2d(struct ggml_context* ctx,
 
     // use circular padding (on a torus, x and y wrap around) for seamless textures
     // see https://github.com/leejet/stable-diffusion.cpp/pull/914
-    if (circular && (p0 != 0 || p1 != 0)) {
-        x  = ggml_pad_ext_circular(ctx, x, p0, p0, p1, p1, 0, 0, 0, 0);
+    if ((p0 != 0 || p1 != 0) && (circular_x || circular_y)) {
+        x  = sd_pad(ctx, x, p0, p1, 0, 0, circular_x, circular_y);
         p0 = 0;
         p1 = 0;
     }
@@ -1553,7 +1617,8 @@ struct WeightAdapter {
             int d0      = 1;
             int d1      = 1;
             bool direct = false;
-            bool circular = false;
+            bool circular_x = false;
+            bool circular_y = false;
             float scale   = 1.f;
         } conv2d;
     };
@@ -1572,7 +1637,8 @@ struct GGMLRunnerContext {
     ggml_context* ggml_ctx                        = nullptr;
     bool flash_attn_enabled                       = false;
     bool conv2d_direct_enabled                    = false;
-    bool circular_pad_enabled                     = false;
+    bool circular_pad_x_enabled                   = false;
+    bool circular_pad_y_enabled                   = false;
     bool rope_circular_x_enabled                  = false;
     bool rope_circular_y_enabled                  = false;
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
@@ -1611,7 +1677,8 @@ protected:
 
     bool flash_attn_enabled    = false;
     bool conv2d_direct_enabled = false;
-    bool circular_pad_enabled  = false;
+    bool circular_pad_x_enabled  = false;
+    bool circular_pad_y_enabled  = false;
     bool rope_circular_x_enabled = false;
     bool rope_circular_y_enabled = false;
 
@@ -1891,7 +1958,8 @@ public:
         runner_ctx.backend               = runtime_backend;
         runner_ctx.flash_attn_enabled    = flash_attn_enabled;
         runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
-        runner_ctx.circular_pad_enabled  = circular_pad_enabled;
+        runner_ctx.circular_pad_x_enabled = circular_pad_x_enabled;
+        runner_ctx.circular_pad_y_enabled = circular_pad_y_enabled;
         runner_ctx.rope_circular_x_enabled = rope_circular_x_enabled;
         runner_ctx.rope_circular_y_enabled = rope_circular_y_enabled;
         runner_ctx.weight_adapter        = weight_adapter;
@@ -2039,7 +2107,12 @@ public:
     }
 
     void set_circular_pad_enabled(bool enabled) {
-        circular_pad_enabled = enabled;
+        set_circular_pad_axes(enabled, enabled);
+    }
+
+    void set_circular_pad_axes(bool circular_x, bool circular_y) {
+        circular_pad_x_enabled = circular_x;
+        circular_pad_y_enabled = circular_y;
     }
 
     void set_circular_rope_enabled(bool circular_x, bool circular_y) {
@@ -2318,7 +2391,8 @@ public:
             forward_params.conv2d.d0     = dilation.second;
             forward_params.conv2d.d1     = dilation.first;
             forward_params.conv2d.direct = ctx->conv2d_direct_enabled;
-            forward_params.conv2d.circular = ctx->circular_pad_enabled;
+            forward_params.conv2d.circular_x = ctx->circular_pad_x_enabled;
+            forward_params.conv2d.circular_y = ctx->circular_pad_y_enabled;
             forward_params.conv2d.scale    = scale;
             return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
         }
@@ -2333,7 +2407,8 @@ public:
                                 dilation.second,
                                 dilation.first,
                                 ctx->conv2d_direct_enabled,
-                                ctx->circular_pad_enabled,
+                                ctx->circular_pad_x_enabled,
+                                ctx->circular_pad_y_enabled,
                                 scale);
     }
 };

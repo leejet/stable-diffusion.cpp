@@ -599,7 +599,8 @@ struct LoraModel : public GGMLRunner {
                                       forward_params.conv2d.d0,
                                       forward_params.conv2d.d1,
                                       forward_params.conv2d.direct,
-                                      forward_params.conv2d.circular,
+                                      forward_params.conv2d.circular_x,
+                                      forward_params.conv2d.circular_y,
                                       forward_params.conv2d.scale);
                 if (lora_mid) {
                     lx = ggml_ext_conv_2d(ctx,
@@ -613,7 +614,8 @@ struct LoraModel : public GGMLRunner {
                                           1,
                                           1,
                                           forward_params.conv2d.direct,
-                                          forward_params.conv2d.circular,
+                                          forward_params.conv2d.circular_x,
+                                          forward_params.conv2d.circular_y,
                                           forward_params.conv2d.scale);
                 }
                 lx = ggml_ext_conv_2d(ctx,
@@ -627,7 +629,8 @@ struct LoraModel : public GGMLRunner {
                                       1,
                                       1,
                                       forward_params.conv2d.direct,
-                                      forward_params.conv2d.circular,
+                                      forward_params.conv2d.circular_x,
+                                      forward_params.conv2d.circular_y,
                                       forward_params.conv2d.scale);
             }
 
@@ -782,7 +785,8 @@ public:
                                    forward_params.conv2d.d0,
                                    forward_params.conv2d.d1,
                                    forward_params.conv2d.direct,
-                                   forward_params.conv2d.circular,
+                                   forward_params.conv2d.circular_x,
+                                   forward_params.conv2d.circular_y,
                                    forward_params.conv2d.scale);
         }
         for (auto& lora_model : lora_models) {

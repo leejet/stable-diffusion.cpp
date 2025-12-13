@@ -664,7 +664,7 @@ public:
         // concat(patch_embedding, class_embedding) + position_embedding
         struct ggml_tensor* patch_embedding;
         int64_t N       = pixel_values->ne[3];
-        patch_embedding = ggml_ext_conv_2d(ctx->ggml_ctx, pixel_values, patch_embed_weight, nullptr, patch_size, patch_size, 0, 0, 1, 1, false, ctx->circular_pad_enabled);  // [N, embed_dim, image_size // pacht_size, image_size // pacht_size]
+        patch_embedding    = ggml_ext_conv_2d(ctx->ggml_ctx, pixel_values, patch_embed_weight, nullptr, patch_size, patch_size, 0, 0, 1, 1, false, ctx->circular_pad_x_enabled, ctx->circular_pad_y_enabled);  // [N, embed_dim, image_size // pacht_size, image_size // pacht_size]
         patch_embedding = ggml_reshape_3d(ctx->ggml_ctx, patch_embedding, num_patches, embed_dim, N);                          // [N, embed_dim, num_patches]
         patch_embedding = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, patch_embedding, 1, 0, 2, 3));                  // [N, num_patches, embed_dim]
         patch_embedding = ggml_reshape_4d(ctx->ggml_ctx, patch_embedding, 1, embed_dim, num_patches, N);                       // [N, num_patches, embed_dim, 1]

@@ -75,11 +75,7 @@ namespace WAN {
                 lp2 -= (int)cache_x->ne[2];
             }
 
-            if (ctx->circular_pad_enabled) {
-                x = ggml_pad_ext_circular(ctx->ggml_ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0);
-            } else {
-                x = ggml_pad_ext(ctx->ggml_ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0);
-            }
+            x = sd_pad_ext(ctx->ggml_ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0, ctx->circular_pad_x_enabled, ctx->circular_pad_y_enabled);
             return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
                                     std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                     0, 0, 0,
@@ -210,17 +206,9 @@ namespace WAN {
                 } else if (mode == "upsample3d") {
                     x = ggml_upscale(ctx->ggml_ctx, x, 2, GGML_SCALE_MODE_NEAREST);
                 } else if (mode == "downsample2d") {
-                    if (ctx->circular_pad_enabled) {
-                        x = ggml_pad_circular(ctx->ggml_ctx, x, 1, 1, 0, 0);
-                    } else {
-                        x = ggml_pad(ctx->ggml_ctx, x, 1, 1, 0, 0);
-                    }
+                    x = sd_pad(ctx->ggml_ctx, x, 1, 1, 0, 0, ctx->circular_pad_x_enabled, ctx->circular_pad_y_enabled);
                 } else if (mode == "downsample3d") {
-                    if (ctx->circular_pad_enabled) {
-                        x = ggml_pad_circular(ctx->ggml_ctx, x, 1, 1, 0, 0);
-                    } else {
-                        x = ggml_pad(ctx->ggml_ctx, x, 1, 1, 0, 0);
-                    }
+                    x = sd_pad(ctx->ggml_ctx, x, 1, 1, 0, 0, ctx->circular_pad_x_enabled, ctx->circular_pad_y_enabled);
                 }
                 x = resample_1->forward(ctx, x);
                 x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
@@ -1847,12 +1835,7 @@ namespace WAN {
             int pad_t = (std::get<0>(params.patch_size) - T % std::get<0>(params.patch_size)) % std::get<0>(params.patch_size);
             int pad_h = (std::get<1>(params.patch_size) - H % std::get<1>(params.patch_size)) % std::get<1>(params.patch_size);
             int pad_w = (std::get<2>(params.patch_size) - W % std::get<2>(params.patch_size)) % std::get<2>(params.patch_size);
-            if (ctx->circular_pad_enabled) {
-                x = ggml_pad_circular(ctx->ggml_ctx, x, pad_w, pad_h, pad_t, 0);
-            } else  {
-                x = ggml_pad(ctx->ggml_ctx, x, pad_w, pad_h, pad_t, 0);
-            }
-
+            sd_pad(ctx->ggml_ctx, x, pad_w, pad_h, pad_t, 0, ctx->circular_pad_x_enabled, ctx->circular_pad_y_enabled);
             return x;
         }
 

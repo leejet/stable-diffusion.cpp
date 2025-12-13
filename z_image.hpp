@@ -331,11 +331,7 @@ namespace ZImage {
 
             int pad_h = (z_image_params.patch_size - H % z_image_params.patch_size) % z_image_params.patch_size;
             int pad_w = (z_image_params.patch_size - W % z_image_params.patch_size) % z_image_params.patch_size;
-            if (ctx->circular_pad_enabled) {
-                x = ggml_pad_circular(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0);  // [N, C, H + pad_h, W + pad_w]
-            } else {
-                x = ggml_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0);  // [N, C, H + pad_h, W + pad_w]
-            }
+            x = sd_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_pad_x_enabled, ctx->circular_pad_y_enabled);
             return x;
         }
 
