@@ -258,7 +258,15 @@ std::string get_image_params(const SDCliParams& cli_params, const SDContextParam
         parameter_string += "Sampler RNG: " + std::string(sd_rng_type_name(ctx_params.sampler_rng_type)) + ", ";
     }
     parameter_string += "Sampler: " + std::string(sd_sample_method_name(gen_params.sample_params.sample_method));
-    if (gen_params.sample_params.scheduler != SCHEDULER_COUNT) {
+    if (!gen_params.custom_sigmas.empty()) {
+        parameter_string += ", Custom Sigmas: [";
+        for (size_t i = 0; i < gen_params.custom_sigmas.size(); ++i) {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(4) << gen_params.custom_sigmas[i];
+            parameter_string += oss.str() + (i == gen_params.custom_sigmas.size() - 1 ? "" : ", ");
+        }
+        parameter_string += "]";
+    } else if (gen_params.sample_params.scheduler != SCHEDULER_COUNT) {  // Only show schedule if not using custom sigmas
         parameter_string += " " + std::string(sd_scheduler_name(gen_params.sample_params.scheduler));
     }
     parameter_string += ", ";

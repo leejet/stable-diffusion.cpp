@@ -2600,6 +2600,8 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->scheduler                   = SCHEDULER_COUNT;
     sample_params->sample_method               = SAMPLE_METHOD_COUNT;
     sample_params->sample_steps                = 20;
+    sample_params->custom_sigmas               = nullptr;
+    sample_params->custom_sigmas_count         = 0;
 }
 
 char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
@@ -3194,11 +3196,21 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     }
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
 
-    int sample_steps          = sd_img_gen_params->sample_params.sample_steps;
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
-                                                                 sd_ctx->sd->get_image_seq_len(height, width),
-                                                                 sd_img_gen_params->sample_params.scheduler,
-                                                                 sd_ctx->sd->version);
+    int sample_steps = sd_img_gen_params->sample_params.sample_steps;
+    std::vector<float> sigmas;
+    if (sd_img_gen_params->sample_params.custom_sigmas_count > 0) {
+        sigmas = std::vector<float>(sd_img_gen_params->sample_params.custom_sigmas,
+                                    sd_img_gen_params->sample_params.custom_sigmas + sd_img_gen_params->sample_params.custom_sigmas_count);
+        if (sample_steps != sigmas.size() - 1) {
+            sample_steps = static_cast<int>(sigmas.size()) - 1;
+            LOG_WARN("sample_steps != custom_sigmas_count - 1, set sample_steps to %d", sample_steps);
+        }
+    } else {
+        sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
+                                                  sd_ctx->sd->get_image_seq_len(height, width),
+                                                  sd_img_gen_params->sample_params.scheduler,
+                                                  sd_ctx->sd->version);
+    }
 
     ggml_tensor* init_latent   = nullptr;
     ggml_tensor* concat_latent = nullptr;
@@ -3461,7 +3473,29 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     if (high_noise_sample_steps > 0) {
         total_steps += high_noise_sample_steps;
     }
-    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps, 0, sd_vid_gen_params->sample_params.scheduler, sd_ctx->sd->version);
+
+    std::vector<float> sigmas;
+    if (sd_vid_gen_params->sample_params.custom_sigmas_count > 0) {
+        sigmas = std::vector<float>(sd_vid_gen_params->sample_params.custom_sigmas,
+                                    sd_vid_gen_params->sample_params.custom_sigmas + sd_vid_gen_params->sample_params.custom_sigmas_count);
+        if (total_steps != sigmas.size() - 1) {
+            total_steps = static_cast<int>(sigmas.size()) - 1;
+            LOG_WARN("total_steps != custom_sigmas_count - 1, set total_steps to %d", total_steps);
+            if (sample_steps >= total_steps) {
+                sample_steps = total_steps;
+                LOG_WARN("total_steps != custom_sigmas_count - 1, set sample_steps to %d", sample_steps);
+            }
+            if (high_noise_sample_steps > 0) {
+                high_noise_sample_steps = total_steps - sample_steps;
+                LOG_WARN("total_steps != custom_sigmas_count - 1, set high_noise_sample_steps to %d", high_noise_sample_steps);
+            }
+        }
+    } else {
+        sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps,
+                                                  0,
+                                                  sd_vid_gen_params->sample_params.scheduler,
+                                                  sd_ctx->sd->version);
+    }
 
     if (high_noise_sample_steps < 0) {
         // timesteps ∝ sigmas for Flow models (like wan2.2 a14b)

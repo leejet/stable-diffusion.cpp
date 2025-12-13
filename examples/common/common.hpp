@@ -883,6 +883,8 @@ struct SDGenerationParams {
     std::vector<int> high_noise_skip_layers = {7, 8, 9};
     sd_sample_params_t high_noise_sample_params;
 
+    std::vector<float> custom_sigmas;
+
     std::string easycache_option;
     sd_easycache_params_t easycache_params;
 
@@ -1201,6 +1203,43 @@ struct SDGenerationParams {
             return 1;
         };
 
+        auto on_sigmas_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            std::string sigmas_str = argv[index];
+            if (!sigmas_str.empty() && sigmas_str.front() == '[') {
+                sigmas_str.erase(0, 1);
+            }
+            if (!sigmas_str.empty() && sigmas_str.back() == ']') {
+                sigmas_str.pop_back();
+            }
+
+            std::stringstream ss(sigmas_str);
+            std::string item;
+            while (std::getline(ss, item, ',')) {
+                item.erase(0, item.find_first_not_of(" \t\n\r\f\v"));
+                item.erase(item.find_last_not_of(" \t\n\r\f\v") + 1);
+                if (!item.empty()) {
+                    try {
+                        custom_sigmas.push_back(std::stof(item));
+                    } catch (const std::invalid_argument& e) {
+                        fprintf(stderr, "error: invalid float value '%s' in --sigmas\n", item.c_str());
+                        return -1;
+                    } catch (const std::out_of_range& e) {
+                        fprintf(stderr, "error: float value '%s' out of range in --sigmas\n", item.c_str());
+                        return -1;
+                    }
+                }
+            }
+
+            if (custom_sigmas.empty() && !sigmas_str.empty()) {
+                fprintf(stderr, "error: could not parse any sigma values from '%s'\n", argv[index]);
+                return -1;
+            }
+            return 1;
+        };
+
         auto on_ref_image_arg = [&](int argc, const char** argv, int index) {
             if (++index >= argc) {
                 return -1;
@@ -1260,6 +1299,10 @@ struct SDGenerationParams {
              "--scheduler",
              "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm], default: discrete",
              on_scheduler_arg},
+            {"",
+             "--sigmas",
+             "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\").",
+             on_sigmas_arg},
             {"",
              "--skip-layers",
              "layers to skip for SLG steps (default: [7,8,9])",
@@ -1512,6 +1555,8 @@ struct SDGenerationParams {
 
         sample_params.guidance.slg.layers                 = skip_layers.data();
         sample_params.guidance.slg.layer_count            = skip_layers.size();
+        sample_params.custom_sigmas                       = custom_sigmas.data();
+        sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
         high_noise_sample_params.guidance.slg.layers      = high_noise_skip_layers.data();
         high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
 
@@ -1606,6 +1651,7 @@ struct SDGenerationParams {
             << "  sample_params: " << sample_params_str << ",\n"
             << "  high_noise_skip_layers: " << vec_to_string(high_noise_skip_layers) << ",\n"
             << "  high_noise_sample_params: " << high_noise_sample_params_str << ",\n"
+            << "  custom_sigmas: " << vec_to_string(custom_sigmas) << ",\n"
             << "  easycache_option: \"" << easycache_option << "\",\n"
             << "  easycache: "
             << (easycache_params.enabled ? "enabled" : "disabled")

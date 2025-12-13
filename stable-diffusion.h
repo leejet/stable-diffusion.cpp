@@ -225,6 +225,8 @@ typedef struct {
     int sample_steps;
     float eta;
     int shifted_timestep;
+    float* custom_sigmas;
+    int custom_sigmas_count;
 } sd_sample_params_t;
 
 typedef struct {
