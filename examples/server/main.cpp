@@ -179,17 +179,21 @@ void print_usage(int argc, const char* argv[], const std::vector<ArgOptions>& op
     options_list[0].print();
     std::cout << "\nContext Options:\n";
     options_list[1].print();
+    std::cout << "\nDefault Generation Options:\n";
+    options_list[2].print();
 }
 
-void parse_args(int argc, const char** argv, SDSvrParams& svr_params, SDContextParams& ctx_params) {
-    std::vector<ArgOptions> options_vec = {svr_params.get_options(), ctx_params.get_options()};
+void parse_args(int argc, const char** argv, SDSvrParams& svr_params, SDContextParams& ctx_params, SDGenerationParams& default_gen_params) {
+    std::vector<ArgOptions> options_vec = {svr_params.get_options(), ctx_params.get_options(), default_gen_params.get_options()};
 
     if (!parse_options(argc, argv, options_vec)) {
         print_usage(argc, argv, options_vec);
         exit(svr_params.normal_exit ? 0 : 1);
     }
 
-    if (!svr_params.process_and_check() || !ctx_params.process_and_check(IMG_GEN)) {
+    if (!svr_params.process_and_check() ||
+        !ctx_params.process_and_check(IMG_GEN) ||
+        !default_gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
         print_usage(argc, argv, options_vec);
         exit(1);
     }
@@ -298,7 +302,8 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 int main(int argc, const char** argv) {
     SDSvrParams svr_params;
     SDContextParams ctx_params;
-    parse_args(argc, argv, svr_params, ctx_params);
+    SDGenerationParams default_gen_params;
+    parse_args(argc, argv, svr_params, ctx_params, default_gen_params);
 
     sd_set_log_callback(sd_log_cb, (void*)&svr_params);
 
@@ -306,6 +311,7 @@ int main(int argc, const char** argv) {
         printf("%s", sd_get_system_info());
         printf("%s\n", svr_params.to_string().c_str());
         printf("%s\n", ctx_params.to_string().c_str());
+        printf("%s\n", default_gen_params.to_string().c_str());
     }
 
     sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false, false, false);
@@ -319,6 +325,23 @@ int main(int argc, const char** argv) {
     std::mutex sd_ctx_mutex;
 
     httplib::Server svr;
+
+    svr.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
+        std::string origin = req.get_header_value("Origin");
+        if (origin.empty()) {
+            origin = "*";
+        }
+        res.set_header("Access-Control-Allow-Origin", origin);
+        res.set_header("Access-Control-Allow-Credentials", "true");
+        res.set_header("Access-Control-Allow-Methods", "*");
+        res.set_header("Access-Control-Allow-Headers", "*");
+
+        if (req.method == "OPTIONS") {
+            res.status = 204;
+            return httplib::Server::HandlerResponse::Handled;
+        }
+        return httplib::Server::HandlerResponse::Unhandled;
+    });
 
     // health
     svr.Get("/", [&](const httplib::Request&, httplib::Response& res) {
@@ -390,11 +413,11 @@ int main(int argc, const char** argv) {
             out["data"]          = json::array();
             out["output_format"] = output_format;
 
-            SDGenerationParams gen_params;
-            gen_params.prompt      = prompt;
-            gen_params.width       = width;
-            gen_params.height      = height;
-            gen_params.batch_count = n;
+            SDGenerationParams gen_params = default_gen_params;
+            gen_params.prompt             = prompt;
+            gen_params.width              = width;
+            gen_params.height             = height;
+            gen_params.batch_count        = n;
 
             if (!sd_cpp_extra_args_str.empty() && !gen_params.from_json_str(sd_cpp_extra_args_str)) {
                 res.status = 400;
@@ -570,15 +593,21 @@ int main(int argc, const char** argv) {
                 output_compression = 0;
             }
 
-            SDGenerationParams gen_params;
-            gen_params.prompt      = prompt;
-            gen_params.width       = width;
-            gen_params.height      = height;
-            gen_params.batch_count = n;
+            SDGenerationParams gen_params = default_gen_params;
+            gen_params.prompt             = prompt;
+            gen_params.width              = width;
+            gen_params.height             = height;
+            gen_params.batch_count        = n;
 
             if (!sd_cpp_extra_args_str.empty() && !gen_params.from_json_str(sd_cpp_extra_args_str)) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid sd_cpp_extra_args"})", "application/json");
+                return;
+            }
+
+            if (!gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
+                res.status = 400;
+                res.set_content(R"({"error":"invalid params"})", "application/json");
                 return;
             }
 
