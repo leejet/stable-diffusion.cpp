@@ -1484,8 +1484,26 @@ public:
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
         float cfg_scale     = guidance.txt_cfg;
-        float img_cfg_scale = std::isfinite(guidance.img_cfg) ? guidance.img_cfg : guidance.txt_cfg;
-        float slg_scale     = guidance.slg.scale;
+        float img_cfg_scale = guidance.img_cfg;
+        if (cfg_scale < 1.f) {
+            if (cfg_scale == 0.f) {
+                // many distilled model docs mention using 0 as guidance, so relax the message a bit
+                LOG_DEBUG("cfg-scale = 0, disabling classifier‑free guidance");
+            } else if (cfg_scale < 0) {
+                LOG_WARN("negative cfg-scale isn't supported; setting it to 1");
+            } else {
+                LOG_WARN("cfg-scale < 1 isn't supported; setting it to 1");
+            }
+            if (img_cfg_scale == cfg_scale) {
+                img_cfg_scale = 1.f;
+            }
+            cfg_scale = 1.f;
+        }
+
+        if (!std::isfinite(img_cfg_scale)) {
+            img_cfg_scale = cfg_scale;
+        }
+        float slg_scale   = guidance.slg.scale;
 
         if (img_cfg_scale != cfg_scale && !sd_version_is_inpaint_or_unet_edit(version)) {
             LOG_WARN("2-conditioning CFG is not supported with this model, disabling it for better performance...");
