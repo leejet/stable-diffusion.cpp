@@ -781,7 +781,7 @@ namespace Flux {
         Flux(FluxParams params)
             : params(params) {
             if (params.version == VERSION_CHROMA_RADIANCE) {
-                std::pair<int, int> kernel_size = {(int)params.patch_size, (int)params.patch_size};
+                std::pair<int, int> kernel_size = {16, 16};
                 std::pair<int, int> stride      = kernel_size;
 
                 blocks["img_in_patch"] = std::make_shared<Conv2d>(params.in_channels,
@@ -1068,6 +1068,11 @@ namespace Flux {
             auto img      = pad_to_patch_size(ctx->ggml_ctx, x);
             auto orig_img = img;
 
+            if (patch_size != 16) {
+                int ratio = patch_size / 16;
+                img       = ggml_interpolate(ctx->ggml_ctx, img, W / ratio, H / ratio, C, x->ne[3], GGML_SCALE_MODE_NEAREST);
+            }
+
             auto img_in_patch = std::dynamic_pointer_cast<Conv2d>(blocks["img_in_patch"]);
 
             img = img_in_patch->forward(ctx, img);                                                       // [N, hidden_size, H/patch_size, W/patch_size]
@@ -1289,6 +1294,9 @@ namespace Flux {
                 if (tensor_name.find("guidance_in.in_layer.weight") != std::string::npos) {
                     // not schnell
                     flux_params.guidance_embed = true;
+                }
+                if (tensor_name.find("__32x32__") != std::string::npos) {
+                    flux_params.patch_size = 32;
                 }
                 if (tensor_name.find("distilled_guidance_layer.in_proj.weight") != std::string::npos) {
                     // Chroma
