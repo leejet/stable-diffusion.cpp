@@ -1070,7 +1070,10 @@ namespace Flux {
 
             if (patch_size != 16) {
                 int ratio = patch_size / 16;
-                img       = ggml_interpolate(ctx->ggml_ctx, img, W / ratio, H / ratio, C, x->ne[3], GGML_SCALE_MODE_NEAREST);
+                // It's supposed to be using GGML_SCALE_MODE_NEAREST, but this seems more stable
+                // Maybe the implementation of nearest-neighbor interpolation in ggml behaves differently than the one in PyTorch?
+                // img = F.interpolate(img, size=(H//2, W//2), mode="nearest")
+                img       = ggml_interpolate(ctx->ggml_ctx, img, W / ratio, H / ratio, C, x->ne[3], GGML_SCALE_MODE_BILINEAR);
             }
 
             auto img_in_patch = std::dynamic_pointer_cast<Conv2d>(blocks["img_in_patch"]);
