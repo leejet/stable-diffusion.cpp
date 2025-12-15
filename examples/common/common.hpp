@@ -1409,7 +1409,7 @@ struct SDGenerationParams {
              on_high_noise_sample_method_arg},
             {"",
              "--scheduler",
-             "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm], default: discrete",
+             "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm], default: discrete",
              on_scheduler_arg},
             {"",
              "--sigmas",
