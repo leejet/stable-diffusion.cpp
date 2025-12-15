@@ -1755,9 +1755,13 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::pair<int, ggml_tensor*>> image_embeds;
         std::pair<int, int> prompt_attn_range;
         int prompt_template_encode_start_idx = 34;
+        int prompt_template_encode_end_idx   = 0;
         int max_length                       = 0;
         bool spell_quotes                    = false;
         std::set<int> out_layers;
+        std::vector<int> tokens;
+        std::vector<float> weights;
+        std::vector<float> mask;
         if (llm->enable_vision && conditioner_params.ref_images.size() > 0) {
             if (sd_version_is_longcat(version)) {
                 LOG_INFO("LongCatEditPipeline");
@@ -1937,8 +1941,8 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
         } else if (sd_version_is_longcat(version)) {
             prompt_template_encode_start_idx = 36;
-            // prompt_template_encode_end_idx = 5;
-            max_length   = 512;
+            max_length   = 512 + prompt_template_encode_start_idx;
+            prompt_template_encode_end_idx = 5;
             spell_quotes = true;
 
             prompt = "<|im_start|>system\nAs an image captioning expert, generate a descriptive text prompt based on an image content, suitable for input to a text-to-image model.<|im_end|>\n<|im_start|>user\n";
@@ -1947,7 +1951,24 @@ struct LLMEmbedder : public Conditioner {
             prompt += conditioner_params.text;
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
-            prompt += "<|im_end|>\n<|im_start|>assistant\n";
+            auto tokens_and_weights = tokenize(prompt, prompt_attn_range, 0, false, spell_quotes);
+            tokens            = std::get<0>(tokens_and_weights);
+            weights           = std::get<1>(tokens_and_weights);
+
+            mask.insert(mask.end(), tokens.size(), 1.f);
+            if (tokens.size() < max_length) {
+                mask.insert(mask.end(), max_length - tokens.size(), 0.f);
+                tokenizer->pad_tokens(tokens, weights, max_length, true);
+            }
+    
+            std::string prompt_template_suffix = "<|im_end|>\n<|im_start|>assistant\n";
+            auto suffix_tokens = tokenizer->tokenize(prompt_template_suffix, nullptr);
+
+            LOG_DEBUG("%zd", tokens.size());
+
+            tokens.insert(tokens.end(), suffix_tokens.begin(), suffix_tokens.end());
+            weights.insert(weights.end(), suffix_tokens.size(), 1.f);
+            mask.insert(mask.end(), suffix_tokens.size(), 1.f);
         } else {
             prompt_template_encode_start_idx = 34;
 
@@ -1960,17 +1981,33 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         }
 
-        auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0, spell_quotes);
-        auto& tokens            = std::get<0>(tokens_and_weights);
-        auto& weights           = std::get<1>(tokens_and_weights);
+        if (tokens.empty()) {
+            auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0, spell_quotes);
+            tokens            = std::get<0>(tokens_and_weights);
+            weights           = std::get<1>(tokens_and_weights);
+        }
+        
 
         int64_t t0                        = ggml_time_ms();
         struct ggml_tensor* hidden_states = nullptr;  // [N, n_token, 3584]
 
         auto input_ids = vector_to_ggml_tensor_i32(work_ctx, tokens);
+        ggml_tensor* attention_mask = nullptr;
+        if (!mask.empty()) {
+            attention_mask = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, mask.size(), mask.size());
+            ggml_ext_tensor_iter(attention_mask, [&](ggml_tensor* attention_mask, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+                float value = 0.f;
+                if (mask[i0] == 0.f || mask[i1] == 0.f) {
+                    value = -INFINITY;
+                }
+                ggml_ext_tensor_set_f32(attention_mask, value, i0, i1, i2, i3);
+            });
+            print_ggml_tensor(attention_mask);
+        }
 
         llm->compute(n_threads,
                      input_ids,
+                     attention_mask,
                      image_embeds,
                      out_layers,
                      &hidden_states,
@@ -2008,18 +2045,18 @@ struct LLMEmbedder : public Conditioner {
         ggml_tensor* new_hidden_states = ggml_new_tensor_3d(work_ctx,
                                                             GGML_TYPE_F32,
                                                             hidden_states->ne[0],
-                                                            hidden_states->ne[1] - prompt_template_encode_start_idx + zero_pad_len,
+                                                            hidden_states->ne[1] - prompt_template_encode_start_idx + zero_pad_len - prompt_template_encode_end_idx,
                                                             hidden_states->ne[2]);
 
         ggml_ext_tensor_iter(new_hidden_states, [&](ggml_tensor* new_hidden_states, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
             float value = 0.f;
-            if (i1 + prompt_template_encode_start_idx < hidden_states->ne[1]) {
+            if (i1 + prompt_template_encode_start_idx < hidden_states->ne[1] - prompt_template_encode_end_idx) {
                 value = ggml_ext_tensor_get_f32(hidden_states, i0, i1 + prompt_template_encode_start_idx, i2, i3);
             }
             ggml_ext_tensor_set_f32(new_hidden_states, value, i0, i1, i2, i3);
         });
 
-        // print_ggml_tensor(new_hidden_states);
+        print_ggml_tensor(new_hidden_states, true);
 
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
