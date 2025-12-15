@@ -796,7 +796,6 @@ struct SDContextParams {
             vae_path.c_str(),
             taesd_path.c_str(),
             control_net_path.c_str(),
-            lora_model_dir.c_str(),
             embedding_vec.data(),
             static_cast<uint32_t>(embedding_vec.size()),
             photo_maker_path.c_str(),
