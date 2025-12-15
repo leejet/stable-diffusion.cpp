@@ -1477,7 +1477,7 @@ struct SDGenerationParams {
              on_cache_mode_arg},
             {"",
              "--cache-option",
-             "named cache params: easycache/ucache: threshold=,start=,end=,decay=,relative= | cache-dit: Fn=,Bn=,threshold=,warmup=",
+             "named cache params (key=value format, comma-separated):\n                                           - easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=\n                                           - dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=\n                                           Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
              on_cache_option_arg},
             {"",
              "--scm-mask",
@@ -1652,6 +1652,8 @@ struct SDGenerationParams {
                             cache_params.error_decay_rate = std::stof(val);
                         } else if (key == "relative") {
                             cache_params.use_relative_threshold = (std::stof(val) != 0.0f);
+                        } else if (key == "reset") {
+                            cache_params.reset_error_on_compute = (std::stof(val) != 0.0f);
                         } else if (key == "Fn" || key == "fn") {
                             cache_params.Fn_compute_blocks = std::stoi(val);
                         } else if (key == "Bn" || key == "bn") {
@@ -1677,6 +1679,7 @@ struct SDGenerationParams {
                 cache_params.end_percent = 0.95f;
                 cache_params.error_decay_rate = 1.0f;
                 cache_params.use_relative_threshold = true;
+                cache_params.reset_error_on_compute = true;
             } else if (cache_mode == "ucache") {
                 cache_params.mode = SD_CACHE_UCACHE;
                 cache_params.reuse_threshold = 1.0f;
@@ -1684,6 +1687,7 @@ struct SDGenerationParams {
                 cache_params.end_percent = 0.95f;
                 cache_params.error_decay_rate = 1.0f;
                 cache_params.use_relative_threshold = true;
+                cache_params.reset_error_on_compute = true;
             } else if (cache_mode == "dbcache") {
                 cache_params.mode = SD_CACHE_DBCACHE;
                 cache_params.Fn_compute_blocks = 8;

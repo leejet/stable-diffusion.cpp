@@ -1558,15 +1558,17 @@ public:
                     ucache_config.end_percent            = cache_params->end_percent;
                     ucache_config.error_decay_rate       = std::max(0.0f, std::min(1.0f, cache_params->error_decay_rate));
                     ucache_config.use_relative_threshold = cache_params->use_relative_threshold;
+                    ucache_config.reset_error_on_compute = cache_params->reset_error_on_compute;
                     ucache_state.init(ucache_config, denoiser.get());
                     if (ucache_state.enabled()) {
                         ucache_enabled = true;
-                        LOG_INFO("UCache enabled - threshold: %.3f, start: %.2f, end: %.2f, decay: %.2f, relative: %s",
+                        LOG_INFO("UCache enabled - threshold: %.3f, start: %.2f, end: %.2f, decay: %.2f, relative: %s, reset: %s",
                                  ucache_config.reuse_threshold,
                                  ucache_config.start_percent,
                                  ucache_config.end_percent,
                                  ucache_config.error_decay_rate,
-                                 ucache_config.use_relative_threshold ? "true" : "false");
+                                 ucache_config.use_relative_threshold ? "true" : "false",
+                                 ucache_config.reset_error_on_compute ? "true" : "false");
                     } else {
                         LOG_WARN("UCache requested but could not be initialized for this run");
                     }
@@ -2718,6 +2720,7 @@ void sd_cache_params_init(sd_cache_params_t* cache_params) {
     cache_params->end_percent            = 0.95f;
     cache_params->error_decay_rate       = 1.0f;
     cache_params->use_relative_threshold = true;
+    cache_params->reset_error_on_compute = true;
     cache_params->Fn_compute_blocks           = 8;
     cache_params->Bn_compute_blocks           = 0;
     cache_params->residual_diff_threshold     = 0.08f;

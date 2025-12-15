@@ -251,6 +251,7 @@ typedef struct {
     float end_percent;
     float error_decay_rate;
     bool use_relative_threshold;
+    bool reset_error_on_compute;
     int Fn_compute_blocks;
     int Bn_compute_blocks;
     float residual_diff_threshold;

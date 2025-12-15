@@ -19,6 +19,7 @@ struct UCacheConfig {
     bool adaptive_threshold      = true;
     float early_step_multiplier  = 0.5f;
     float late_step_multiplier   = 1.5f;
+    bool reset_error_on_compute  = true;
 };
 
 struct UCacheCacheEntry {
@@ -319,6 +320,8 @@ struct UCacheState {
                 total_steps_skipped++;
                 apply_cache(cond, input, output);
                 return true;
+            } else if (config.reset_error_on_compute) {
+                accumulated_error = 0.0f;
             }
         }
 
