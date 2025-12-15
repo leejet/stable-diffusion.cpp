@@ -1,0 +1,21 @@
+services:
+  sd.cpp:
+    build: .
+    runtime: nvidia
+    container_name: sd_server
+    restart: unless-stopped
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # 1. Map Project Root -> /sdcpp
+      # This gives access to build/bin/sd AND server/app.py
+      - ./:/sdcpp
+      
+      # 2. Map Models (If outside project root, keep this. If inside, above covers it)
+      - ./models:/models:ro
+      
+    ports:
+      - "8000:8000"
+    shm_size: '8gb'

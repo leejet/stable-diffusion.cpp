@@ -1,6 +1,15 @@
-build*/
-test/
+# .dockerignore
 
-.cache/
-*.swp
+# Ignore the massive models (we mount them via volumes instead)
 models/
+models/*
+
+# Ignore outputs (don't bake generated images into the server)
+outputs/*
+
+# Ignore git history and local python enviroments
+.git/
+.gitignore
+venv/
+__pycache__/
+*.pyc

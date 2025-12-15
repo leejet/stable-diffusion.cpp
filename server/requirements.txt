@@ -1,0 +1,6 @@
+fastapi==0.115.0
+uvicorn==0.32.0
+gradio==4.44.0
+Pillow==10.4.0
+pydantic==2.9.2
+huggingface_hub==0.23.2

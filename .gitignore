@@ -13,3 +13,8 @@ output*.png
 models*
 *.log
 preview.png
+outputs/
+sd
+__pycache__/
+*.pyc
+*_backup.py

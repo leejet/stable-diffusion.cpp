@@ -1,22 +1,57 @@
-ARG UBUNTU_VERSION=22.04
+# Runtime only (Ubuntu 24.04 + CUDA 12.6 Runtime)
+# Compatible with Host CUDA 12.9 drivers
+FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04
+ENV DEBIAN_FRONTEND=noninteractive
 
-FROM ubuntu:$UBUNTU_VERSION AS build
+# 1. Install System Deps (Python + Libraries for sd.cpp binary)
+RUN apt-get update && apt-get install -y \
+    python3 python3-pip python3-venv \
+    libgomp1 libopenblas0 \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential git cmake
+# 2. Setup Virtual Environment
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-WORKDIR /sd.cpp
+# 3. Install Python Deps via requirements.txt
+# We copy ONLY the requirements file first to leverage Docker caching
+COPY server/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-COPY . .
+# 4. Copy the sd-cli binary (assuming it's built separately)
+COPY build/bin/sd /usr/local/bin/sd
 
-RUN cmake . -B ./build
-RUN cmake --build ./build --config Release --parallel
+# 5. Set Workspace
+WORKDIR /sdcpp/server
 
-FROM ubuntu:$UBUNTU_VERSION AS runtime
+# 6. Run Server (Reload enabled for dev)
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]# Runtime only (Ubuntu 24.04 + CUDA 12.6 Runtime)
+# Compatible with Host CUDA 12.9 drivers
+FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04
+ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && \
-    apt-get install --yes --no-install-recommends libgomp1 && \
-    apt-get clean
+# 1. Install System Deps (Python + Libraries for sd.cpp binary)
+RUN apt-get update && apt-get install -y \
+    python3 python3-pip python3-venv \
+    libgomp1 libopenblas0 \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
+# 2. Setup Virtual Environment
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-ENTRYPOINT [ "/sd-cli" ]
+# 3. Install Python Deps via requirements.txt
+# We copy ONLY the requirements file first to leverage Docker caching
+COPY server/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# 4. Copy the sd-cli binary (assuming it's built separately)
+COPY build/bin/sd /usr/local/bin/sd
+
+# 5. Set Workspace
+WORKDIR /sdcpp/server
+
+# 6. Run Server (Reload enabled for dev)
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
