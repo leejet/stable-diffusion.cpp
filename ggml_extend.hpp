@@ -2184,7 +2184,7 @@ public:
            bool bias           = true,
            bool force_f32      = false,
            bool force_prec_f32 = false,
-           float scale         = 1.f)
+           float scale         = 1.f / 128.f)
         : in_features(in_features),
           out_features(out_features),
           bias(bias),
