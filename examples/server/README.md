@@ -115,6 +115,7 @@ Default Generation Options:
                                            ddim_trailing, tcd] default: euler for Flux/SD3/Wan, euler_a otherwise
   --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm],
                                            default: discrete
+  --sigmas                                 custom sigma values for the sampler, comma-separated (e.g., "14.61,7.8,3.5,0.0").
   --skip-layers                            layers to skip for SLG steps (default: [7,8,9])
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)

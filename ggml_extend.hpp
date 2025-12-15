@@ -732,34 +732,22 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_slice(struct ggml_context* ctx,
 __STATIC_INLINE__ std::vector<struct ggml_tensor*> ggml_ext_chunk(struct ggml_context* ctx,
                                                                   struct ggml_tensor* x,
                                                                   int num,
-                                                                  int64_t dim) {
+                                                                  int64_t dim,
+                                                                  bool cont = true) {
     GGML_ASSERT(dim >= 0 && dim < 4);
     GGML_ASSERT(x->ne[dim] % num == 0);
 
-    int perm[4] = {0, 1, 2, 3};
-    for (int i = dim; i < 3; ++i)
-        perm[i] = perm[i + 1];
-    perm[3] = dim;
-
-    int inv_perm[4];
-    for (int i = 0; i < 4; ++i)
-        inv_perm[perm[i]] = i;
-
-    if (dim != 3) {
-        x = ggml_ext_torch_permute(ctx, x, perm[0], perm[1], perm[2], perm[3]);
-        x = ggml_cont(ctx, x);
-    }
-
     std::vector<struct ggml_tensor*> chunks;
-    int64_t chunk_size = x->ne[3] / num;
+    int64_t chunk_size  = x->ne[dim] / num;
+    int64_t stride      = chunk_size * x->nb[dim];
+    int64_t chunk_ne[4] = {x->ne[0], x->ne[1], x->ne[2], x->ne[3]};
+    chunk_ne[dim]       = chunk_size;
     for (int i = 0; i < num; i++) {
         auto chunk = ggml_view_4d(
             ctx, x,
-            x->ne[0], x->ne[1], x->ne[2], chunk_size,
-            x->nb[1], x->nb[2], x->nb[3], x->nb[3] * i * chunk_size);
-
-        if (dim != 3) {
-            chunk = ggml_ext_torch_permute(ctx, chunk, inv_perm[0], inv_perm[1], inv_perm[2], inv_perm[3]);
+            chunk_ne[0], chunk_ne[1], chunk_ne[2], chunk_ne[3],
+            x->nb[1], x->nb[2], x->nb[3], stride * i);
+        if (cont) {
             chunk = ggml_cont(ctx, chunk);
         }
         chunks.push_back(chunk);
@@ -772,7 +760,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor*
     // x: [ne3, ne2, ne1, ne0]
     // return: [ne3, ne2, ne1, ne0/2]
 
-    auto x_vec = ggml_ext_chunk(ctx, x, 2, 0);
+    auto x_vec = ggml_ext_chunk(ctx, x, 2, 0, false);
     ggml_tensor* gate;
     if (gate_first) {
         gate = x_vec[0];
@@ -781,7 +769,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor*
         x    = x_vec[0];
         gate = x_vec[1];
     }
-
+    gate = ggml_cont(ctx, gate);
     gate = ggml_silu_inplace(ctx, gate);
 
     x = ggml_mul(ctx, x, gate);  // [ne3, ne2, ne1, ne0/2]
@@ -1282,6 +1270,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
         }
 
         if (mask_in != nullptr) {
+            // the need for padding got removed in ggml 4767bda
+            // ensure we can still use the old version for now
+#ifdef GGML_KQ_MASK_PAD
             int mask_pad = 0;
             if (mask_in->ne[1] % GGML_KQ_MASK_PAD != 0) {
                 mask_pad = GGML_PAD(L_q, GGML_KQ_MASK_PAD) - mask_in->ne[1];
@@ -1289,6 +1280,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
             if (mask_pad > 0) {
                 mask_in = ggml_pad(ctx, mask_in, 0, mask_pad, 0, 0);
             }
+#endif
             mask_in = ggml_cast(ctx, mask_in, GGML_TYPE_F16);
         }
 
