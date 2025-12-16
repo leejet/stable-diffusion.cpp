@@ -31,6 +31,7 @@ Context Options:
   --high-noise-diffusion-model <string>    path to the standalone high noise diffusion model
   --vae <string>                           path to standalone vae model
   --taesd <string>                         path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
+  --tae <string>                           alias of --taesd
   --control-net <string>                   path to control net model
   --embd-dir <string>                      embeddings directory
   --lora-model-dir <string>                lora model directory
