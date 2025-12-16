@@ -1461,7 +1461,7 @@ struct SDGenerationParams {
              on_ref_image_arg},
             {"",
              "--cache-mode",
-             "caching method: 'easycache'/'ucache' (legacy), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)",
+             "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)",
              on_cache_mode_arg},
             {"",
              "--cache-option",
