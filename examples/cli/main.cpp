@@ -31,7 +31,6 @@ struct SDCliParams {
     std::string output_path = "output.png";
 
     bool verbose          = false;
-    bool version          = false;
     bool canny_preprocess = false;
 
     preview_t preview_method = PREVIEW_NONE;
@@ -74,10 +73,6 @@ struct SDCliParams {
              "--verbose",
              "print extra info",
              true, &verbose},
-            {"",
-             "--version",
-             "print stable-diffusion.cpp version",
-             true, &version},
             {"",
              "--color",
              "colors the logging tags according to level",
@@ -354,9 +349,6 @@ int main(int argc, const char* argv[]) {
     SDGenerationParams gen_params;
 
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
-    if (cli_params.verbose || cli_params.version) {
-        std::cout << version_string() << "\n";
-    }
     if (gen_params.video_frames > 4) {
         size_t last_dot_pos   = cli_params.preview_path.find_last_of(".");
         std::string base_path = cli_params.preview_path;
@@ -384,12 +376,11 @@ int main(int argc, const char* argv[]) {
                             cli_params.preview_noisy,
                             (void*)&cli_params);
 
-    if (cli_params.verbose) {
-        LOG_INFO("%s", sd_get_system_info());
-        LOG_INFO("%s", cli_params.to_string().c_str());
-        LOG_INFO("%s", ctx_params.to_string().c_str());
-        LOG_INFO("%s", gen_params.to_string().c_str());
-    }
+    LOG_DEBUG("version: %s", version_string().c_str());
+    LOG_DEBUG("%s", sd_get_system_info());
+    LOG_DEBUG("%s", cli_params.to_string().c_str());
+    LOG_DEBUG("%s", ctx_params.to_string().c_str());
+    LOG_DEBUG("%s", gen_params.to_string().c_str());
 
     if (cli_params.mode == CONVERT) {
         bool success = convert(ctx_params.model_path.c_str(),
