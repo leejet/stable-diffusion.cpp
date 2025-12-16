@@ -166,7 +166,8 @@ class TPool : public UnaryBlock {
     int stride;
 
 public:
-    TPool(int channels, int stride) : stride(stride) {
+    TPool(int channels, int stride)
+        : stride(stride) {
         blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels * stride, channels, {1, 1}, {1, 1}, {0, 0}, {1, 1}, false));
     }
 
@@ -185,7 +186,8 @@ class TGrow : public UnaryBlock {
     int stride;
 
 public:
-    TGrow(int channels, int stride) : stride(stride) {
+    TGrow(int channels, int stride)
+        : stride(stride) {
         blocks["conv"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels * stride, {1, 1}, {1, 1}, {0, 0}, {1, 1}, false));
     }
 
@@ -203,7 +205,8 @@ class MemBlock : public GGMLBlock {
     bool has_skip_conv = false;
 
 public:
-    MemBlock(int channels, int out_channels) : has_skip_conv(channels != out_channels) {
+    MemBlock(int channels, int out_channels)
+        : has_skip_conv(channels != out_channels) {
         blocks["conv.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(channels * 2, out_channels, {3, 3}, {1, 1}, {1, 1}));
         blocks["conv.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
         blocks["conv.4"] = std::shared_ptr<GGMLBlock>(new Conv2d(out_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
@@ -354,7 +357,8 @@ class TinyVideoDecoder : public UnaryBlock {
     int patch_size               = 1;
 
 public:
-    TinyVideoDecoder(int z_channels = 4, int patch_size = 1) : z_channels(z_channels), patch_size(patch_size) {
+    TinyVideoDecoder(int z_channels = 4, int patch_size = 1)
+        : z_channels(z_channels), patch_size(patch_size) {
         int index                       = 1;  // Clamp()
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, channels[0], {3, 3}, {1, 1}, {1, 1}));
         index++;  // nn.ReLU()
