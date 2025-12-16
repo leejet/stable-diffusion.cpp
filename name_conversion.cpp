@@ -835,6 +835,7 @@ std::string convert_sep_to_dot(std::string name) {
         "proj_out",
         "transformer_blocks",
         "single_transformer_blocks",
+        "single_blocks",
         "diffusion_model",
         "cond_stage_model",
         "first_stage_model",
@@ -876,7 +877,12 @@ std::string convert_sep_to_dot(std::string name) {
         "ff_context",
         "norm_added_q",
         "norm_added_v",
-        "to_add_out"};
+        "to_add_out",
+        "txt_mod",
+        "img_mod",
+        "txt_mlp",
+        "img_mlp",
+    };
 
     // record the positions of underscores that should NOT be replaced
     std::unordered_set<size_t> protected_positions;
@@ -1020,7 +1026,9 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
             }
         }
 
-        if (sd_version_is_unet(version) || is_lycoris_underline) {
+        // LOG_DEBUG("name %s %d", name.c_str(), version);
+
+        if (sd_version_is_unet(version) || sd_version_is_flux(version) || is_lycoris_underline) {
             name = convert_sep_to_dot(name);
         }
     }
