@@ -134,7 +134,6 @@ public:
 
     std::map<std::string, struct ggml_tensor*> tensors;
 
-    std::string lora_model_dir;
     // lora_name => multiplier
     std::unordered_map<std::string, float> curr_lora_state;
 
@@ -206,7 +205,6 @@ public:
         n_threads               = sd_ctx_params->n_threads;
         vae_decode_only         = sd_ctx_params->vae_decode_only;
         free_params_immediately = sd_ctx_params->free_params_immediately;
-        lora_model_dir          = SAFE_STR(sd_ctx_params->lora_model_dir);
         taesd_path              = SAFE_STR(sd_ctx_params->taesd_path);
         use_tiny_autoencoder    = taesd_path.size() > 0;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
@@ -2551,7 +2549,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "vae_path: %s\n"
              "taesd_path: %s\n"
              "control_net_path: %s\n"
-             "lora_model_dir: %s\n"
              "photo_maker_path: %s\n"
              "tensor_type_rules: %s\n"
              "vae_decode_only: %s\n"
@@ -2581,7 +2578,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              SAFE_STR(sd_ctx_params->vae_path),
              SAFE_STR(sd_ctx_params->taesd_path),
              SAFE_STR(sd_ctx_params->control_net_path),
-             SAFE_STR(sd_ctx_params->lora_model_dir),
              SAFE_STR(sd_ctx_params->photo_maker_path),
              SAFE_STR(sd_ctx_params->tensor_type_rules),
              BOOL_STR(sd_ctx_params->vae_decode_only),
