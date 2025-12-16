@@ -736,16 +736,13 @@ public:
                 unet_params_mem_size += high_noise_diffusion_model->get_params_buffer_size();
             }
             size_t vae_params_mem_size = 0;
-            LOG_DEBUG("Here");
             if (!use_tiny_autoencoder || sd_ctx_params->tae_preview_only) {
                 vae_params_mem_size = first_stage_model->get_params_buffer_size();
             }
             if (use_tiny_autoencoder) {
-                LOG_DEBUG("Here");
                 if (!tae_first_stage->load_from_file(taesd_path, n_threads)) {
                     return false;
                 }
-                LOG_DEBUG("Here");
                 vae_params_mem_size = tae_first_stage->get_params_buffer_size();
             }
             size_t control_net_params_mem_size = 0;

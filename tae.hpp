@@ -369,7 +369,6 @@ public:
             }
             index++;  // nn.Upsample()
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TGrow(channels[i], stride));
-            LOG_DEBUG("Create Conv2d %d shape = %d %d", index, channels[i], channels[i + 1]);
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels[i], channels[i + 1], {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
         }
         index++;  // nn.ReLU()
