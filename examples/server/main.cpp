@@ -262,6 +262,10 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 }
 
 int main(int argc, const char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--version") {
+        std::cout << version_string() << "\n";
+        return EXIT_SUCCESS;
+    }
     SDSvrParams svr_params;
     SDContextParams ctx_params;
     SDGenerationParams default_gen_params;
@@ -271,12 +275,11 @@ int main(int argc, const char** argv) {
     log_verbose = svr_params.verbose;
     log_color   = svr_params.color;
 
-    if (svr_params.verbose) {
-        LOG_INFO("%s", sd_get_system_info());
-        LOG_INFO("%s", svr_params.to_string().c_str());
-        LOG_INFO("%s", ctx_params.to_string().c_str());
-        LOG_INFO("%s", default_gen_params.to_string().c_str());
-    }
+    LOG_DEBUG("version: %s", version_string().c_str());
+    LOG_DEBUG("%s", sd_get_system_info());
+    LOG_DEBUG("%s", svr_params.to_string().c_str());
+    LOG_DEBUG("%s", ctx_params.to_string().c_str());
+    LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
     sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false, false, false);
     sd_ctx_t* sd_ctx              = new_sd_ctx(&sd_ctx_params);
