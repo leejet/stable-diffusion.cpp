@@ -882,6 +882,8 @@ std::string convert_sep_to_dot(std::string name) {
         "img_mod",
         "txt_mlp",
         "img_mlp",
+        "wi_0",
+        "wi_1",
     };
 
     // record the positions of underscores that should NOT be replaced
@@ -1033,7 +1035,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         }
     }
 
-    std::vector<std::pair<std::string, std::string>> prefix_map = {
+    std::unordered_map<std::string, std::string> prefix_map = {
         {"diffusion_model.", "model.diffusion_model."},
         {"unet.", "model.diffusion_model."},
         {"transformer.", "model.diffusion_model."},  // dit
@@ -1048,7 +1050,12 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         // {"te2.text_model.encoder.layers.", "cond_stage_model.1.model.transformer.resblocks."},
         {"te2.", "cond_stage_model.1.transformer."},
         {"te1.", "cond_stage_model.transformer."},
+        {"te3.", "text_encoders.t5xxl."},
     };
+
+    if (sd_version_is_flux(version)) {
+        prefix_map["te1."] = "text_encoders.clip_l.";
+    }
 
     replace_with_prefix_map(name, prefix_map);
 
