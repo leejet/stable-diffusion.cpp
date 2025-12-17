@@ -537,6 +537,9 @@ public:
             if (sd_ctx_params->diffusion_flash_attn) {
                 LOG_INFO("Using flash attention in the diffusion model");
                 diffusion_model->set_flash_attn_enabled(true);
+                if (high_noise_diffusion_model) {
+                    high_noise_diffusion_model->set_flash_attn_enabled(true);
+                }
             }
 
             cond_stage_model->alloc_params_buffer();
@@ -3722,6 +3725,9 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     if (init_latent == nullptr) {
         init_latent = sd_ctx->sd->generate_init_latent(work_ctx, width, height, frames, true);
     }
+
+    print_ggml_tensor(init_latent, true);
+    print_ggml_tensor(concat_latent, true);
 
     // Get learned condition
     ConditionerParams condition_params;
