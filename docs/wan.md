@@ -39,6 +39,17 @@
         - safetensors: https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/vae/wan_2.1_vae.safetensors
     - wan_2.2_vae (for Wan2.2 TI2V 5B only)
         - safetensors: https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/main/split_files/vae/wan2.2_vae.safetensors
+    <details>
+        <summary>Using tae (taehv) to reduce VRAM requirement (but with poorer results)</summary>
+        
+    - taew2_1 (for all the wan model except Wan2.2 TI2V 5B)
+       - safetensors: https://github.com/madebyollin/taehv/blob/main/safetensors/taew2_1.safetensors
+    - taew2_2 (for Wan2.2 TI2V 5B only)
+       - safetensors: https://github.com/madebyollin/taehv/blob/main/safetensors/taew2_2.safetensors
+
+    > To use these tae, simply replace the `--vae xxx.safetensors` with `--tae xxx.safetensors` in the commands below. If it still out of VRAM, add `--vae-conv-direct` to your command (but will be slower)
+     
+    </details>
 - Download umt5_xxl
     - safetensors: https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/text_encoders/umt5_xxl_fp16.safetensors
     - gguf: https://huggingface.co/city96/umt5-xxl-encoder-gguf/tree/main
