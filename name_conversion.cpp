@@ -1050,11 +1050,11 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         // {"te2.text_model.encoder.layers.", "cond_stage_model.1.model.transformer.resblocks."},
         {"te2.", "cond_stage_model.1.transformer."},
         {"te1.", "cond_stage_model.transformer."},
-        {"te3.", "text_encoders.t5xxl."},
+        {"te3.", "text_encoders.t5xxl.transformer."},
     };
 
     if (sd_version_is_flux(version)) {
-        prefix_map["te1."] = "text_encoders.clip_l.";
+        prefix_map["te1."] = "text_encoders.clip_l.transformer.";
     }
 
     replace_with_prefix_map(name, prefix_map);
