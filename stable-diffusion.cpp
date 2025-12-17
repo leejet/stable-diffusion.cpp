@@ -3726,9 +3726,6 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         init_latent = sd_ctx->sd->generate_init_latent(work_ctx, width, height, frames, true);
     }
 
-    print_ggml_tensor(init_latent, true);
-    print_ggml_tensor(concat_latent, true);
-
     // Get learned condition
     ConditionerParams condition_params;
     condition_params.clip_skip       = sd_vid_gen_params->clip_skip;
