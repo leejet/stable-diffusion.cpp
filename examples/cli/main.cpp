@@ -579,7 +579,7 @@ int main(int argc, const char* argv[]) {
         }
 
         if (gen_params.sample_params.scheduler == SCHEDULER_COUNT) {
-            gen_params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx);
+            gen_params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx, gen_params.sample_params.sample_method);
         }
 
         if (cli_params.mode == IMG_GEN) {
