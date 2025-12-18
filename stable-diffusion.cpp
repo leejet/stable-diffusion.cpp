@@ -3223,7 +3223,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         }
         sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
                                                   sd_ctx->sd->get_image_seq_len(height, width),
-                                                  sd_img_gen_params->sample_params.scheduler,
+                                                  scheduler,
                                                   sd_ctx->sd->version);
     }
 
@@ -3506,9 +3506,13 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             }
         }
     } else {
+        scheduler_t scheduler = sd_vid_gen_params->sample_params.scheduler;
+        if (scheduler == SCHEDULER_COUNT) {
+            scheduler = sd_get_default_scheduler(sd_ctx, sample_method);
+        }
         sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps,
                                                   0,
-                                                  sd_vid_gen_params->sample_params.scheduler,
+                                                  scheduler,
                                                   sd_ctx->sd->version);
     }
 
