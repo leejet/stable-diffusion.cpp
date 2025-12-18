@@ -537,6 +537,9 @@ public:
             if (sd_ctx_params->diffusion_flash_attn) {
                 LOG_INFO("Using flash attention in the diffusion model");
                 diffusion_model->set_flash_attn_enabled(true);
+                if (high_noise_diffusion_model) {
+                    high_noise_diffusion_model->set_flash_attn_enabled(true);
+                }
             }
 
             cond_stage_model->alloc_params_buffer();
