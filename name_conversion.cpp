@@ -882,8 +882,12 @@ std::string convert_sep_to_dot(std::string name) {
         "img_mod",
         "txt_mlp",
         "img_mlp",
+        "proj_mlp",
         "wi_0",
         "wi_1",
+        "norm1_context",
+        "ff_context",
+        "x_embedder",
     };
 
     // record the positions of underscores that should NOT be replaced
