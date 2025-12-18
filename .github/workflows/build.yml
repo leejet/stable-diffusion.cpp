@@ -65,7 +65,6 @@ jobs:
 
       - name: Get commit hash
         id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: pr-mpt/actions-commit-hash@v2
 
       - name: Fetch system info
@@ -78,14 +77,12 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
           zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/*
 
       - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
@@ -118,7 +115,6 @@ jobs:
 
       - name: Get commit hash
         id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: pr-mpt/actions-commit-hash@v2
 
       - name: Fetch system info
@@ -131,14 +127,12 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
           zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/*
 
       - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
@@ -214,12 +208,10 @@ jobs:
 
       - name: Get commit hash
         id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: pr-mpt/actions-commit-hash@v2
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
           $filePath = ".\build\bin\Release\*"
           if (Test-Path $filePath) {
@@ -239,7 +231,7 @@ jobs:
 
       - name: Copy and pack Cuda runtime
         id: pack_cuda_runtime
-        if: ${{ matrix.build == 'cuda12' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
+        if: ${{ matrix.build == 'cuda12' }}
         run: |
           echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
           $dst='.\build\bin\cudart\'
@@ -247,7 +239,7 @@ jobs:
           7z a cudart-sd-bin-win-cu12-x64.zip $dst\*
 
       - name: Upload Cuda runtime
-        if: ${{ matrix.build == 'cuda12' && (github.event_name == 'push' && github.ref == 'refs/heads/master' || github.event.inputs.create_release == 'true') }}
+        if: ${{ matrix.build == 'cuda12' }}
         uses: actions/upload-artifact@v4
         with:
           name: sd-cudart-sd-bin-win-cu12-x64.zip
@@ -255,7 +247,6 @@ jobs:
             cudart-sd-bin-win-cu12-x64.zip
 
       - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip
@@ -337,11 +328,9 @@ jobs:
 
       - name: Get commit hash
         id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: pr-mpt/actions-commit-hash@v2
 
       - name: Pack artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
           md "build\bin\rocblas\library\"
           md "build\bin\hipblaslt\library"
@@ -353,7 +342,6 @@ jobs:
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-x64.zip .\build\bin\*
 
       - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-x64.zip
