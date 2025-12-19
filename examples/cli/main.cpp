@@ -714,11 +714,32 @@ int main(int argc, const char* argv[]) {
 
     if (cli_params.mode == VID_GEN && num_results > 1) {
         std::string vid_output_path = cli_params.output_path;
-        if (file_ext_lower == ".png") {
-            vid_output_path = base_path + ".avi";
+        // if ends with .png and includes format string, write to png sequence
+        std::regex format_specifier_regex("%\\d*d");
+        if (file_ext_lower == ".png" && std::regex_search(vid_output_path, format_specifier_regex)) {
+            for (int i = 0; i < num_results; i++) {
+                if (results[i].data == nullptr) {
+                    continue;
+                }
+                std::string final_image_path = vid_output_path;
+                std::smatch match;
+                while (std::regex_search(final_image_path, match, format_specifier_regex)) {
+                    char buffer[32];
+                    std::snprintf(buffer, sizeof(buffer), match.str(0).c_str(), i + 1);
+                    final_image_path.replace(match.position(0), match.length(0), buffer);
+                }
+                int write_ok = stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                                              results[i].data, 0, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
+                LOG_INFO("save result PNG image %d to '%s' (%s)", i, final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
+            }
         }
-        create_mjpg_avi_from_sd_images(vid_output_path.c_str(), results, num_results, gen_params.fps);
-        LOG_INFO("save result MJPG AVI video to '%s'\n", vid_output_path.c_str());
+        else {
+            if (file_ext_lower == ".png") {
+                vid_output_path = base_path + ".avi";
+            }
+            create_mjpg_avi_from_sd_images(vid_output_path.c_str(), results, num_results, gen_params.fps);
+            LOG_INFO("save result MJPG AVI video to '%s'\n", vid_output_path.c_str());
+        }
     } else {
         // appending ".png" to absent or unknown extension
         if (!is_jpg && file_ext_lower != ".png") {
