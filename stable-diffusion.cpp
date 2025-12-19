@@ -1491,7 +1491,7 @@ public:
                 // recommend 0 as guidance; warn the user that it'll disable prompt folowing
                 LOG_WARN("unconditioned mode, images won't follow the prompt (use cfg-scale=1 for distilled models)");
             } else {
-                LOG_WARN("unsupported cfg-scale value");
+                LOG_WARN("cfg value out of expected range may produce unexpected results");
             }
         }
 
