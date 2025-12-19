@@ -708,6 +708,8 @@ public:
         if (stacked_id) {
             ignore_tensors.insert("pmid.unet.");
         }
+        ignore_tensors.insert("model.diffusion_model.__x0__");
+        ignore_tensors.insert("model.diffusion_model.__32x32__");
 
         if (vae_decode_only) {
             ignore_tensors.insert("first_stage_model.encoder");
@@ -842,6 +844,7 @@ public:
                     }
                 } else if (sd_version_is_flux(version)) {
                     pred_type = FLUX_FLOW_PRED;
+
                     if (flow_shift == INFINITY) {
                         flow_shift = 1.0f;  // TODO: validate
                         for (const auto& [name, tensor_storage] : tensor_storage_map) {
