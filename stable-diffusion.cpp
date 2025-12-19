@@ -482,7 +482,7 @@ public:
                 }
             } else if (sd_version_is_qwen_image(version)) {
                 bool enable_vision = false;
-                if (!vae_decode_only) {
+                if (!vae_decode_only && version != VERSION_QWEN_IMAGE_LAYERED) {
                     enable_vision = true;
                 }
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
