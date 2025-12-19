@@ -47,12 +47,13 @@ namespace Qwen {
     struct QwenTimestepProjEmbeddings : public GGMLBlock {
     protected:
         bool use_additional_t_cond;
+
     public:
-        QwenTimestepProjEmbeddings(int64_t embedding_dim, bool use_additional_t_cond = false) :
-        use_additional_t_cond(use_additional_t_cond) {
+        QwenTimestepProjEmbeddings(int64_t embedding_dim, bool use_additional_t_cond = false)
+            : use_additional_t_cond(use_additional_t_cond) {
             blocks["timestep_embedder"] = std::shared_ptr<GGMLBlock>(new TimestepEmbedding(256, embedding_dim));
             if (use_additional_t_cond) {
-                blocks["addition_t_embedding"] = std::make_shared<GGMLBlock>(new Embedding(2, embedding_dim));
+                blocks["addition_t_embedding"] = std::shared_ptr<GGMLBlock>(new Embedding(2, embedding_dim));
             }
         }
 
@@ -69,7 +70,7 @@ namespace Qwen {
                 auto addition_t_embedding = std::dynamic_pointer_cast<Embedding>(blocks["addition_t_embedding"]);
 
                 auto addition_t_emb = addition_t_embedding->forward(ctx, addition_t_cond);
-                timesteps_emb = ggml_add(ctx->ggml_ctx, timesteps_emb, addition_t_emb);
+                timesteps_emb       = ggml_add(ctx->ggml_ctx, timesteps_emb, addition_t_emb);
             }
             return timesteps_emb;
         }
@@ -541,6 +542,9 @@ namespace Qwen {
                     }
                     continue;
                 }
+            }
+            if (version == VERSION_QWEN_IMAGE_LAYERED) {
+                qwen_image_params.use_additional_t_cond = true;
             }
             LOG_INFO("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
             qwen_image = QwenImageModel(qwen_image_params);

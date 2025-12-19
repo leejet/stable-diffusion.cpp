@@ -43,6 +43,7 @@ enum SDVersion {
     VERSION_WAN2_2_I2V,
     VERSION_WAN2_2_TI2V,
     VERSION_QWEN_IMAGE,
+    VERSION_QWEN_IMAGE_LAYERED,
     VERSION_FLUX2,
     VERSION_Z_IMAGE,
     VERSION_OVIS_IMAGE,
@@ -113,7 +114,7 @@ static inline bool sd_version_is_wan(SDVersion version) {
 }
 
 static inline bool sd_version_is_qwen_image(SDVersion version) {
-    if (version == VERSION_QWEN_IMAGE) {
+    if (version == VERSION_QWEN_IMAGE || VERSION_QWEN_IMAGE_LAYERED) {
         return true;
     }
     return false;

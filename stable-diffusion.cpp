@@ -44,6 +44,7 @@ const char* model_version_to_str[] = {
     "Wan 2.2 I2V",
     "Wan 2.2 TI2V",
     "Qwen Image",
+    "Qwen Image Layered",
     "Flux.2",
     "Z-Image",
     "Ovis Image",
