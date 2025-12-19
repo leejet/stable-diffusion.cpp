@@ -695,6 +695,8 @@ public:
         if (stacked_id) {
             ignore_tensors.insert("pmid.unet.");
         }
+        ignore_tensors.insert("model.diffusion_model.__x0__");
+        ignore_tensors.insert("model.diffusion_model.__32x32__");
 
         if (vae_decode_only) {
             ignore_tensors.insert("first_stage_model.encoder");
@@ -828,11 +830,7 @@ public:
                         }
                     }
                 } else if (sd_version_is_flux(version)) {
-                    if (tensor_storage_map.find("model.diffusion_model.__x0__") != tensor_storage_map.end()) {
-                        pred_type = FLUX_FLOW_X0_PRED;
-                    } else {
-                        pred_type = FLUX_FLOW_PRED;
-                    }
+                    pred_type = FLUX_FLOW_PRED;
 
                     if (flow_shift == INFINITY) {
                         flow_shift = 1.0f;  // TODO: validate
@@ -874,11 +872,6 @@ public:
                 case FLUX2_FLOW_PRED: {
                     LOG_INFO("running in Flux2 FLOW mode");
                     denoiser = std::make_shared<Flux2FlowDenoiser>();
-                    break;
-                }
-                case FLUX_FLOW_X0_PRED: {
-                    LOG_INFO("running in x0-prediction Flux FLOW mode");
-                    denoiser = std::make_shared<FluxFlowX0Denoiser>();
                     break;
                 }
                 default: {
@@ -1326,9 +1319,9 @@ public:
         uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
 
         if (preview_mode == PREVIEW_PROJ) {
-            int64_t patch_sz                        = 1;
-            const float (*latent_rgb_proj)[channel] = nullptr;
-            float* latent_rgb_bias                  = nullptr;
+            int64_t patch_sz                       = 1;
+            const float(*latent_rgb_proj)[channel] = nullptr;
+            float* latent_rgb_bias                 = nullptr;
 
             if (dim == 128) {
                 if (sd_version_is_flux2(version)) {
@@ -2434,7 +2427,6 @@ const char* prediction_to_str[] = {
     "edm_v",
     "sd3_flow",
     "flux_flow",
-    "flux_flow_x0"
     "flux2_flow",
 };
 

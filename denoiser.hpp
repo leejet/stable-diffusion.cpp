@@ -481,14 +481,6 @@ struct CompVisVDenoiser : public CompVisDenoiser {
     }
 };
 
-struct ComVisX0Denoiser : public CompVisDenoiser {
-    std::vector<float> get_scalings(float sigma) override {
-        float c_skip = 0.0f;
-        float c_out  = 1.0f;
-        float c_in   = 1.0f;
-    }
-};
-
 struct EDMVDenoiser : public CompVisVDenoiser {
     float min_sigma = 0.002;
     float max_sigma = 120.0;
@@ -576,15 +568,6 @@ struct DiscreteFlowDenoiser : public Denoiser {
     }
 };
 
-struct DiscreteFlowX0Denoiser : public DiscreteFlowDenoiser {
-    std::vector<float> get_scalings(float sigma) override {
-        float c_skip = 0.0f;
-        float c_out  = 1.0f;
-        float c_in   = 1.0f;
-        return {c_skip, c_out, c_in};
-    }
-};
-
 float flux_time_shift(float mu, float sigma, float t) {
     return std::exp(mu) / (std::exp(mu) + std::pow((1.0 / t - 1.0), sigma));
 }
@@ -645,15 +628,6 @@ struct FluxFlowDenoiser : public Denoiser {
     ggml_tensor* inverse_noise_scaling(float sigma, ggml_tensor* latent) override {
         ggml_ext_tensor_scale_inplace(latent, 1.0f / (1.0f - sigma));
         return latent;
-    }
-};
-
-struct FluxFlowX0Denoiser : public FluxFlowDenoiser {
-    std::vector<float> get_scalings(float sigma) override {
-        float c_skip = 0.0f;
-        float c_out  = 1.0f;
-        float c_in   = 1.0f;
-        return {c_skip, c_out, c_in};
     }
 };
 
