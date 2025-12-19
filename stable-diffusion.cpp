@@ -1484,7 +1484,7 @@ public:
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
         float cfg_scale     = guidance.txt_cfg;
-        if (cfg_scale < 1) {
+        if (cfg_scale < 1.f) {
             if (cfg_scale == 0.f) {
                 // Diffusers follow the convention from the original paper
                 // (https://arxiv.org/abs/2207.12598v1), so many distilled model docs
