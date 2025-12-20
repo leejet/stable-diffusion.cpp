@@ -789,7 +789,7 @@ int main(int argc, const char* argv[]) {
             if (std::regex_search(cli_params.output_path, format_specifier_regex)) {
                 final_image_path = format_frame_idx(cli_params.output_path, cli_params.output_begin_idx + i);
             } else {
-                final_image_path = i > 0 ? base_path + "_" + std::to_string(cli_params.output_begin_idx + i) + file_ext : base_path + file_ext;
+                final_image_path = i > 0 ? base_path + "_" + std::to_string(i + 1) + file_ext : base_path + file_ext;
             }
             if (is_jpg) {
                 write_ok = stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
