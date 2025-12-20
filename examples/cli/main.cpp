@@ -26,9 +26,12 @@ const char* previews_str[] = {
     "vae",
 };
 
+std::regex format_specifier_regex("(?:[^%]|^)(?:%%)*(%\\d{0,3}d)");
+
 struct SDCliParams {
     SDMode mode             = IMG_GEN;
     std::string output_path = "output.png";
+    int output_begin_idx    = 0;
 
     bool verbose          = false;
     bool canny_preprocess = false;
@@ -49,7 +52,7 @@ struct SDCliParams {
         options.string_options = {
             {"-o",
              "--output",
-             "path to write result image to (default: ./output.png)",
+             "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)",
              &output_path},
             {"",
              "--preview-path",
@@ -62,6 +65,10 @@ struct SDCliParams {
              "--preview-interval",
              "interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at every step)",
              &preview_interval},
+            {"",
+             "--output-begin-idx",
+             "starting index for output image sequence (only used when outputting multiple images, default: 0)",
+             &output_begin_idx},
         };
 
         options.bool_options = {
@@ -336,6 +343,25 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
     } else {
         create_mjpg_avi_from_sd_images(cli_params->preview_path.c_str(), image, frame_count, cli_params->preview_fps);
     }
+}
+
+std::string format_frame_idx(std::string pattern, int frame_idx) {
+    std::smatch match;
+    std::string result = pattern;
+    while (std::regex_search(result, match, format_specifier_regex)) {
+        std::string specifier = match.str(1);
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), specifier.c_str(), frame_idx);
+        result.replace(match.position(1), match.length(1), buffer);
+    }
+
+    // Then replace all '%%' with '%'
+    size_t pos = 0;
+    while ((pos = result.find("%%", pos)) != std::string::npos) {
+        result.replace(pos, 2, "%");
+        pos += 1;
+    }
+    return result;
 }
 
 int main(int argc, const char* argv[]) {
@@ -714,28 +740,36 @@ int main(int argc, const char* argv[]) {
 
     if (cli_params.mode == VID_GEN && num_results > 1) {
         std::string vid_output_path = cli_params.output_path;
-        // if ends with .png and includes format string, write to png sequence
-        std::regex format_specifier_regex("%\\d*d");
-        if (file_ext_lower == ".png" && std::regex_search(vid_output_path, format_specifier_regex)) {
+        if (std::regex_search(vid_output_path, format_specifier_regex)) {
+            // writing image sequence, default to PNG
+            if (!is_jpg && file_ext_lower != ".png") {
+                base_path += file_ext;
+                file_ext = ".png";
+            }
+            vid_output_path = base_path + file_ext;
             for (int i = 0; i < num_results; i++) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
-                std::string final_image_path = vid_output_path;
-                std::smatch match;
-                while (std::regex_search(final_image_path, match, format_specifier_regex)) {
-                    char buffer[32];
-                    std::snprintf(buffer, sizeof(buffer), match.str(0).c_str(), i + 1);
-                    final_image_path.replace(match.position(0), match.length(0), buffer);
+                std::string final_image_path = format_frame_idx(vid_output_path, cli_params.output_begin_idx + i);
+                if (is_jpg) {
+                    int write_ok = stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                                                  results[i].data, 90, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
+                    LOG_INFO("save result JPEG image %d to '%s' (%s)", i, final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
+                } else {
+                    int write_ok = stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                                                  results[i].data, 0, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
+                    LOG_INFO("save result PNG image %d to '%s' (%s)", i, final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
                 }
-                int write_ok = stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                                              results[i].data, 0, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
-                LOG_INFO("save result PNG image %d to '%s' (%s)", i, final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
             }
-        }
-        else {
-            if (file_ext_lower == ".png") {
-                vid_output_path = base_path + ".avi";
+        } else {
+            // writing video file
+            if (file_ext_lower != ".avi") {
+                if (!is_jpg && file_ext_lower != ".png") {
+                    base_path += file_ext;
+                }
+                file_ext = ".avi";
+                vid_output_path = base_path + file_ext;
             }
             create_mjpg_avi_from_sd_images(vid_output_path.c_str(), results, num_results, gen_params.fps);
             LOG_INFO("save result MJPG AVI video to '%s'\n", vid_output_path.c_str());
@@ -751,7 +785,12 @@ int main(int argc, const char* argv[]) {
                 continue;
             }
             int write_ok;
-            std::string final_image_path = i > 0 ? base_path + "_" + std::to_string(i + 1) + file_ext : base_path + file_ext;
+            std::string final_image_path;
+            if (std::regex_search(cli_params.output_path, format_specifier_regex)) {
+                final_image_path = format_frame_idx(cli_params.output_path, cli_params.output_begin_idx + i);
+            } else {
+                final_image_path = i > 0 ? base_path + "_" + std::to_string(cli_params.output_begin_idx + i) + file_ext : base_path + file_ext;
+            }
             if (is_jpg) {
                 write_ok = stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                                           results[i].data, 90, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
