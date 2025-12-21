@@ -449,6 +449,10 @@ struct SDContextParams {
     bool diffusion_conv_direct  = false;
     bool vae_conv_direct        = false;
 
+    bool circular   = false;
+    bool circular_x = false;
+    bool circular_y = false;
+
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
@@ -605,6 +609,18 @@ struct SDContextParams {
              "--vae-conv-direct",
              "use ggml_conv2d_direct in the vae model",
              true, &vae_conv_direct},
+            {"",
+             "--circular",
+             "enable circular padding for convolutions",
+             true, &circular},
+            {"",
+             "--circularx",
+             "enable circular RoPE wrapping on x-axis (width) only",
+             true, &circular_x},
+            {"",
+             "--circulary",
+             "enable circular RoPE wrapping on y-axis (height) only",
+             true, &circular_y},
             {"",
              "--chroma-disable-dit-mask",
              "disable dit mask for chroma",
@@ -868,6 +884,9 @@ struct SDContextParams {
             << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
             << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
             << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
+            << "  circular: " << (circular ? "true" : "false") << ",\n"
+            << "  circular_x: " << (circular_x ? "true" : "false") << ",\n"
+            << "  circular_y: " << (circular_y ? "true" : "false") << ",\n"
             << "  chroma_use_dit_mask: " << (chroma_use_dit_mask ? "true" : "false") << ",\n"
             << "  chroma_use_t5_mask: " << (chroma_use_t5_mask ? "true" : "false") << ",\n"
             << "  chroma_t5_mask_pad: " << chroma_t5_mask_pad << ",\n"
@@ -928,6 +947,8 @@ struct SDContextParams {
             taesd_preview,
             diffusion_conv_direct,
             vae_conv_direct,
+            circular || circular_x,
+            circular || circular_y,
             force_sdxl_vae_conv_scale,
             chroma_use_dit_mask,
             chroma_use_t5_mask,
