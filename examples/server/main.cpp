@@ -354,16 +354,14 @@ int main(int argc, const char** argv) {
                 return;
             }
 
-            json j                      = json::parse(req.body);
-            std::string prompt          = j.value("prompt", "");
-            int n                       = std::max(1, j.value("n", 1));
-            std::string size            = j.value("size", "");
-            std::string response_format = j.value("response_format", "b64_json");
-            std::string output_format   = j.value("output_format", "png");
-            int output_compression      = j.value("output_compression", 100);
-            int width                   = j.value("width", 512);
-            int height                  = j.value("height", 512);
-            int sample_steps            = j.value("steps", j.value("sample_steps", 20));
+            json j                    = json::parse(req.body);
+            std::string prompt        = j.value("prompt", "");
+            int n                     = std::max(1, j.value("n", 1));
+            std::string size          = j.value("size", "");
+            std::string output_format = j.value("output_format", "png");
+            int output_compression    = j.value("output_compression", 100);
+            int width                 = 512;
+            int height                = 512;
             if (!size.empty()) {
                 auto pos = size.find('x');
                 if (pos != std::string::npos) {
@@ -382,12 +380,6 @@ int main(int argc, const char** argv) {
             }
 
             std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(prompt);
-
-            if (response_format != "b64_json") {
-                res.status = 400;
-                res.set_content(R"({"error":"invalid response_format, only b64_json is supported"})", "application/json");
-                return;
-            }
 
             if (output_format != "png" && output_format != "jpeg") {
                 res.status = 400;
@@ -410,12 +402,11 @@ int main(int argc, const char** argv) {
             out["data"]          = json::array();
             out["output_format"] = output_format;
 
-            SDGenerationParams gen_params           = default_gen_params;
-            gen_params.prompt                       = prompt;
-            gen_params.width                        = width;
-            gen_params.height                       = height;
-            gen_params.batch_count                  = n;
-            gen_params.sample_params.sample_steps   = sample_steps;
+            SDGenerationParams gen_params = default_gen_params;
+            gen_params.prompt             = prompt;
+            gen_params.width              = width;
+            gen_params.height             = height;
+            gen_params.batch_count        = n;
 
             if (!sd_cpp_extra_args_str.empty() && !gen_params.from_json_str(sd_cpp_extra_args_str)) {
                 res.status = 400;
