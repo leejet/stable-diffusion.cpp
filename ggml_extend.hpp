@@ -1061,8 +1061,6 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_conv_2d(struct ggml_context* ctx,
         w = ggml_reshape_4d(ctx, w, 1, 1, w->ne[0], w->ne[1]);
     }
 
-    // use circular padding (on a torus, x and y wrap around) for seamless textures
-    // see https://github.com/leejet/stable-diffusion.cpp/pull/914
     if ((p0 != 0 || p1 != 0) && (circular_x || circular_y)) {
         x  = ggml_ext_pad(ctx, x, p0, p1, 0, 0, circular_x, circular_y);
         p0 = 0;

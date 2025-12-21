@@ -128,8 +128,6 @@ public:
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
 
-    bool circular_x = false;
-    bool circular_y = false;
     bool stacked_id = false;
 
     bool is_using_v_parameterization     = false;
@@ -231,9 +229,6 @@ public:
         taesd_path              = SAFE_STR(sd_ctx_params->taesd_path);
         use_tiny_autoencoder    = taesd_path.size() > 0;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
-
-        circular_x = sd_ctx_params->circular_x;
-        circular_y = sd_ctx_params->circular_y;
 
         rng = get_rng(sd_ctx_params->rng_type);
         if (sd_ctx_params->sampler_rng_type != RNG_TYPE_COUNT && sd_ctx_params->sampler_rng_type != sd_ctx_params->rng_type) {
@@ -716,18 +711,18 @@ public:
                 pmid_model->get_param_tensors(tensors, "pmid");
             }
 
-            diffusion_model->set_circular_axes(circular_x, circular_y);
+            diffusion_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
             if (high_noise_diffusion_model) {
-                high_noise_diffusion_model->set_circular_axes(circular_x, circular_y);
+                high_noise_diffusion_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
             }
             if (control_net) {
-                control_net->set_circular_axes(circular_x, circular_y);
+                control_net->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
             }
             if (first_stage_model) {
-                first_stage_model->set_circular_axes(circular_x, circular_y);
+                first_stage_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
             }
             if (tae_first_stage) {
-                tae_first_stage->set_circular_axes(circular_x, circular_y);
+                tae_first_stage->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
             }
         }
 
