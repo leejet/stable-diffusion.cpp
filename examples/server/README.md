@@ -6,6 +6,7 @@ usage: ./bin/sd-server  [options]
 Svr Options:
   -l, --listen-ip <string>    server listen ip (default: 127.0.0.1)
   --listen-port <int>         server listen port (default: 1234)
+  --serve-html-path <string>  path to HTML file to serve at root (optional)
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
   -h, --help                  show this help message and exit
@@ -121,4 +122,15 @@ Default Generation Options:
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)
   --easycache                              enable EasyCache for DiT models with optional "threshold,start_percent,end_percent" (default: 0.2,0.15,0.95)
+
+## HTML Interface
+
+To enable a web-based interface, use the `--serve-html-path` option to specify the path to an HTML file. A demo HTML file `demo.html` is provided in this directory for testing purposes.
+
+Example:
+```
+./bin/sd-server --serve-html-path demo.html [other options]
+```
+
+Then open `http://127.0.0.1:1234` in your browser to access the interface.
 ```

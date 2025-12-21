@@ -1,6 +1,0 @@
-file(READ "${INPUT}" hex_data HEX)
-string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," hex_data "${hex_data}")
-string(REGEX REPLACE ",$" "" hex_data "${hex_data}")
-get_filename_component(name "${INPUT}" NAME_WE)
-string(MAKE_C_IDENTIFIER "${name}" name)
-file(WRITE "${OUTPUT}" "unsigned char ${name}[] = {${hex_data}};\nunsigned int ${name}_len = sizeof(${name});\n")
