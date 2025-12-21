@@ -994,21 +994,20 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_linear(struct ggml_context* ctx,
     return x;
 }
 
-__STATIC_INLINE__ struct ggml_tensor* sd_pad_ext(struct ggml_context* ctx,
-                                                 struct ggml_tensor* x,
-                                                 int lp0,
-                                                 int rp0,
-                                                 int lp1,
-                                                 int rp1,
-                                                 int lp2,
-                                                 int rp2,
-                                                 int lp3,
-                                                 int rp3,
-                                                 bool circular_x = false,
-                                                 bool circular_y = false) {
-    if ((circular_x && circular_y) || (!circular_x && !circular_y)) {
-        return circular_x && circular_y ? ggml_pad_ext_circular(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3)
-                                        : ggml_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+__STATIC_INLINE__ struct ggml_tensor* ggml_ext_pad_ext(struct ggml_context* ctx,
+                                                       struct ggml_tensor* x,
+                                                       int lp0,
+                                                       int rp0,
+                                                       int lp1,
+                                                       int rp1,
+                                                       int lp2,
+                                                       int rp2,
+                                                       int lp3,
+                                                       int rp3,
+                                                       bool circular_x = false,
+                                                       bool circular_y = false) {
+    if (circular_x && circular_y) {
+        return ggml_pad_ext_circular(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
     }
 
     if (circular_x && (lp0 != 0 || rp0 != 0)) {
@@ -1026,15 +1025,15 @@ __STATIC_INLINE__ struct ggml_tensor* sd_pad_ext(struct ggml_context* ctx,
     return x;
 }
 
-__STATIC_INLINE__ struct ggml_tensor* sd_pad(struct ggml_context* ctx,
-                                             struct ggml_tensor* x,
-                                             int pad_w,
-                                             int pad_h,
-                                             int pad_t       = 0,
-                                             int pad_d       = 0,
-                                             bool circular_x = false,
-                                             bool circular_y = false) {
-    return sd_pad_ext(ctx, x, pad_w, pad_w, pad_h, pad_h, pad_t, pad_t, pad_d, pad_d, circular_x, circular_y);
+__STATIC_INLINE__ struct ggml_tensor* ggml_ext_pad(struct ggml_context* ctx,
+                                                   struct ggml_tensor* x,
+                                                   int p0,
+                                                   int p1,
+                                                   int p2          = 0,
+                                                   int p3          = 0,
+                                                   bool circular_x = false,
+                                                   bool circular_y = false) {
+    return ggml_ext_pad_ext(ctx, x, p0, p0, p1, p1, p2, p2, p3, p3, circular_x, circular_y);
 }
 
 // w: [OC，IC, KH, KW]
@@ -1065,7 +1064,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_conv_2d(struct ggml_context* ctx,
     // use circular padding (on a torus, x and y wrap around) for seamless textures
     // see https://github.com/leejet/stable-diffusion.cpp/pull/914
     if ((p0 != 0 || p1 != 0) && (circular_x || circular_y)) {
-        x  = sd_pad(ctx, x, p0, p1, 0, 0, circular_x, circular_y);
+        x  = ggml_ext_pad(ctx, x, p0, p1, 0, 0, circular_x, circular_y);
         p0 = 0;
         p1 = 0;
     }
