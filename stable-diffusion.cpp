@@ -127,7 +127,7 @@ public:
     bool use_tiny_autoencoder            = false;
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
-    bool circular                       = false;
+
     bool circular_x                     = false;
     bool circular_y                     = false;
     bool stacked_id                      = false;
@@ -231,10 +231,9 @@ public:
         taesd_path              = SAFE_STR(sd_ctx_params->taesd_path);
         use_tiny_autoencoder    = taesd_path.size() > 0;
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
-        circular            = sd_ctx_params->circular;
-        circular_x          = sd_ctx_params->circular_x || circular;
-        circular_y          = sd_ctx_params->circular_y || circular;
-        bool circular_any   = circular || circular_x || circular_y;
+
+        circular_x = sd_ctx_params->circular_x;
+        circular_y = sd_ctx_params->circular_y;
 
         rng = get_rng(sd_ctx_params->rng_type);
         if (sd_ctx_params->sampler_rng_type != RNG_TYPE_COUNT && sd_ctx_params->sampler_rng_type != sd_ctx_params->rng_type) {
@@ -412,7 +411,7 @@ public:
             vae_decode_only = false;
         }
 
-        if (circular_any) {
+        if (sd_ctx_params->circular_x || sd_ctx_params->circular_y) {
             LOG_INFO("Using circular padding for convolutions");
         }
 
@@ -2583,7 +2582,6 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->keep_control_net_on_cpu = false;
     sd_ctx_params->keep_vae_on_cpu         = false;
     sd_ctx_params->diffusion_flash_attn    = false;
-    sd_ctx_params->circular                = false;
     sd_ctx_params->circular_x              = false;
     sd_ctx_params->circular_y              = false;
     sd_ctx_params->chroma_use_dit_mask     = true;
@@ -2625,7 +2623,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "keep_control_net_on_cpu: %s\n"
              "keep_vae_on_cpu: %s\n"
              "diffusion_flash_attn: %s\n"
-             "circular: %s\n"
              "circular_x: %s\n"
              "circular_y: %s\n"
              "chroma_use_dit_mask: %s\n"
@@ -2657,7 +2654,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
              BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
-             BOOL_STR(sd_ctx_params->circular),
              BOOL_STR(sd_ctx_params->circular_x),
              BOOL_STR(sd_ctx_params->circular_y),
              BOOL_STR(sd_ctx_params->chroma_use_dit_mask),

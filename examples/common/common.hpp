@@ -947,7 +947,6 @@ struct SDContextParams {
             taesd_preview,
             diffusion_conv_direct,
             vae_conv_direct,
-            circular,
             circular || circular_x,
             circular || circular_y,
             force_sdxl_vae_conv_scale,

@@ -189,7 +189,6 @@ typedef struct {
     bool tae_preview_only;
     bool diffusion_conv_direct;
     bool vae_conv_direct;
-    bool circular;
     bool circular_x;
     bool circular_y;
     bool force_sdxl_vae_conv_scale;
