@@ -777,6 +777,7 @@ int main(int argc, const char* argv[]) {
 #include <atomic>
 #include <csignal>
 #include <thread>
+#include <unistd.h>
 
 // this lock is needed to avoid a race condition between
 // free_sd_ctx and a pending sd_cancel_generation call
