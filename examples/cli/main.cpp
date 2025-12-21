@@ -73,7 +73,7 @@ struct SDCliParams {
             {"",
              "--convert-name",
              "convert tensor name (for convert mode)",
-             true, &convert_name,
+             true, &convert_name},
             {"-v",
              "--verbose",
              "print extra info",
