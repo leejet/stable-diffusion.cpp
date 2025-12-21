@@ -386,7 +386,7 @@ __STATIC_INLINE__ uint8_t* ggml_tensor_to_sd_image(struct ggml_tensor* input, ui
     int64_t width    = input->ne[0];
     int64_t height   = input->ne[1];
     int64_t channels = input->ne[2];
-    GGML_ASSERT(channels == 3 && input->type == GGML_TYPE_F32);
+    GGML_ASSERT(input->type == GGML_TYPE_F32);
     if (image_data == nullptr) {
         image_data = (uint8_t*)malloc(width * height * channels);
     }
@@ -1200,7 +1200,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
                                                              bool diag_mask_inf       = false,
                                                              bool skip_reshape        = false,
                                                              bool flash_attn          = false,
-                                                             float kv_scale           = 1.0f) {  // avoid overflow
+                                                             float kv_scale           = 1.0f / 256.f) {  // avoid overflow
     int64_t L_q;
     int64_t L_k;
     int64_t C;
@@ -2142,7 +2142,7 @@ public:
            bool bias           = true,
            bool force_f32      = false,
            bool force_prec_f32 = false,
-           float scale         = 1.f)
+           float scale         = 1.f / 256.f)
         : in_features(in_features),
           out_features(out_features),
           bias(bias),

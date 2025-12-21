@@ -114,7 +114,7 @@ static inline bool sd_version_is_wan(SDVersion version) {
 }
 
 static inline bool sd_version_is_qwen_image(SDVersion version) {
-    if (version == VERSION_QWEN_IMAGE || VERSION_QWEN_IMAGE_LAYERED) {
+    if (version == VERSION_QWEN_IMAGE || version == VERSION_QWEN_IMAGE_LAYERED) {
         return true;
     }
     return false;

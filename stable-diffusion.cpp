@@ -1695,15 +1695,15 @@ public:
                 // GGML_ASSERT(0);
             }
 
-            diffusion_params.x                  = noised_input;
-            diffusion_params.timesteps          = timesteps;
-            diffusion_params.guidance           = guidance_tensor;
-            diffusion_params.ref_latents        = ref_latents;
-            diffusion_params.increase_ref_index = increase_ref_index;
-            diffusion_params.controls           = controls;
-            diffusion_params.control_strength   = control_strength;
-            diffusion_params.vace_context       = vace_context;
-            diffusion_params.vace_strength      = vace_strength;
+            diffusion_params.x                = noised_input;
+            diffusion_params.timesteps        = timesteps;
+            diffusion_params.guidance         = guidance_tensor;
+            diffusion_params.ref_latents      = ref_latents;
+            diffusion_params.ref_index_mode   = increase_ref_index ? Rope::RefIndexMode::INCREASE : Rope::RefIndexMode::FIXED;
+            diffusion_params.controls         = controls;
+            diffusion_params.control_strength = control_strength;
+            diffusion_params.vace_context     = vace_context;
+            diffusion_params.vace_strength    = vace_strength;
 
             const SDCondition* active_condition = nullptr;
             struct ggml_tensor** active_output  = &out_cond;
@@ -1938,6 +1938,28 @@ public:
             }
         }
         return latent_channel;
+    }
+
+    int get_image_channels() {
+        int image_channel = 3;
+        if (version == VERSION_QWEN_IMAGE_LAYERED) {
+            image_channel = 4;
+        }
+        return image_channel;
+    }
+
+    void ensure_image_channels(sd_image_f32_t* image) {
+        if (image->channel == get_image_channels()) {
+            return;
+        }
+        if (get_image_channels() == 4) {
+            sd_image_f32_t new_image = sd_image_to_rgba(*image);
+            free(image->data);
+            image->data    = new_image.data;
+            image->channel = new_image.channel;
+            return;
+        }
+        GGML_ABORT("invalid image channels");
     }
 
     int get_image_seq_len(int h, int w) {
@@ -2265,7 +2287,7 @@ public:
         const int vae_scale_factor = get_vae_scale_factor();
         int64_t W                  = x->ne[0] * vae_scale_factor;
         int64_t H                  = x->ne[1] * vae_scale_factor;
-        int64_t C                  = 3;
+        int64_t C                  = get_image_channels();
         ggml_tensor* result        = nullptr;
         if (decode_video) {
             int T = x->ne[2];
@@ -3066,7 +3088,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         sd_ctx->sd->rng->manual_seed(cur_seed);
         sd_ctx->sd->sampler_rng->manual_seed(cur_seed);
         struct ggml_tensor* x_t   = init_latent;
-        struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
+        struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x_t);
         ggml_ext_im_set_randn_f32(noise, sd_ctx->sd->rng);
 
         int start_merge_step = -1;
@@ -3120,11 +3142,25 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     LOG_INFO("decoding %zu latents", final_latents.size());
     std::vector<struct ggml_tensor*> decoded_images;  // collect decoded images
     for (size_t i = 0; i < final_latents.size(); i++) {
-        t1                      = ggml_time_ms();
-        struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, final_latents[i] /* x_0 */);
-        // print_ggml_tensor(img);
-        if (img != nullptr) {
-            decoded_images.push_back(img);
+        t1 = ggml_time_ms();
+        if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
+            int layers = 4;
+            for (int layer_index = 0; layer_index < layers; layer_index++) {
+                ggml_tensor* final_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, final_latents[i]->ne[0], final_latents[i]->ne[1], final_latents[i]->ne[3], 1);
+                ggml_ext_tensor_iter(final_latent, [&](ggml_tensor* final_latent, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+                    float value = ggml_ext_tensor_get_f32(final_latents[i], i0, i1, layer_index + 1, i2);
+                    ggml_ext_tensor_set_f32(final_latent, value, i0, i1, i2, i3);
+                });
+                struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, final_latent);
+                if (img != nullptr) {
+                    decoded_images.push_back(img);
+                }
+            }
+        } else {
+            struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, final_latents[i] /* x_0 */);
+            if (img != nullptr) {
+                decoded_images.push_back(img);
+            }
         }
         int64_t t2 = ggml_time_ms();
         LOG_INFO("latent %" PRId64 " decoded, taking %.2fs", i + 1, (t2 - t1) * 1.0f / 1000);
@@ -3138,7 +3174,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
 
     sd_ctx->sd->lora_stat();
 
-    sd_image_t* result_images = (sd_image_t*)calloc(batch_count, sizeof(sd_image_t));
+    sd_image_t* result_images = (sd_image_t*)calloc(decoded_images.size(), sizeof(sd_image_t));
     if (result_images == nullptr) {
         ggml_free(work_ctx);
         return nullptr;
@@ -3147,7 +3183,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     for (size_t i = 0; i < decoded_images.size(); i++) {
         result_images[i].width   = width;
         result_images[i].height  = height;
-        result_images[i].channel = 3;
+        result_images[i].channel = sd_ctx->sd->get_image_channels();
         result_images[i].data    = ggml_tensor_to_sd_image(decoded_images[i]);
     }
     ggml_free(work_ctx);
@@ -3159,6 +3195,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
     int width                     = sd_img_gen_params->width;
     int height                    = sd_img_gen_params->height;
+    int image_channels            = sd_ctx->sd->get_image_channels();
 
     int vae_scale_factor            = sd_ctx->sd->get_vae_scale_factor();
     int diffusion_model_down_factor = sd_ctx->sd->get_diffusion_model_down_factor();
@@ -3238,8 +3275,13 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         sigma_sched.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
         sigmas = sigma_sched;
 
-        ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+        ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, image_channels, 1);
         ggml_tensor* mask_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 1, 1);
+
+        sd_image_t init_image = sd_img_gen_params->init_image;
+        if (image_channels != init_image.channel && image_channels == 4) {
+            init_image = sd_image_to_rgba(init_image);
+        }
 
         sd_image_to_ggml_tensor(sd_img_gen_params->mask_image, mask_img);
         sd_image_to_ggml_tensor(sd_img_gen_params->init_image, init_img);
@@ -3333,7 +3375,12 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         if (sd_version_is_inpaint(sd_ctx->sd->version)) {
             LOG_WARN("This is an inpainting model, this should only be used in img2img mode with a mask");
         }
-        init_latent = sd_ctx->sd->generate_init_latent(work_ctx, width, height);
+        if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
+            int layers  = 4;
+            init_latent = sd_ctx->sd->generate_init_latent(work_ctx, width, height, layers + 1, true);
+        } else {
+            init_latent = sd_ctx->sd->generate_init_latent(work_ctx, width, height);
+        }
     }
 
     sd_guidance_params_t guidance = sd_img_gen_params->sample_params.guidance;
@@ -3343,7 +3390,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     }
 
     std::vector<uint8_t> empty_image_data;
-    sd_image_t empty_image = {(uint32_t)width, (uint32_t)height, 3, nullptr};
+    sd_image_t empty_image = {(uint32_t)width, (uint32_t)height, image_channels, nullptr};
     if (ref_images.empty() && sd_version_is_unet_edit(sd_ctx->sd->version)) {
         LOG_WARN("This model needs at least one reference image; using an empty reference");
         empty_image_data.resize(width * height * 3);
@@ -3380,11 +3427,13 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
 
             LOG_DEBUG("resize vae ref image %d from %dx%d to %dx%d", i, ref_image.height, ref_image.width, resized_image.height, resized_image.width);
 
+            sd_ctx->sd->ensure_image_channels(&resized_image);
+
             img = ggml_new_tensor_4d(work_ctx,
                                      GGML_TYPE_F32,
                                      resized_image.width,
                                      resized_image.height,
-                                     3,
+                                     resized_image.channel,
                                      1);
             sd_image_f32_to_ggml_tensor(resized_image, img);
             free(resized_image.data);
@@ -3398,8 +3447,6 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                      1);
             sd_image_to_ggml_tensor(*ref_images[i], img);
         }
-
-        // print_ggml_tensor(img, false, "img");
 
         ggml_tensor* latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
         ref_latents.push_back(latent);
