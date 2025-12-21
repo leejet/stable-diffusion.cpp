@@ -45,19 +45,34 @@ namespace Qwen {
     };
 
     struct QwenTimestepProjEmbeddings : public GGMLBlock {
+    protected:
+        bool use_additional_t_cond;
+
     public:
-        QwenTimestepProjEmbeddings(int64_t embedding_dim) {
+        QwenTimestepProjEmbeddings(int64_t embedding_dim, bool use_additional_t_cond = false)
+            : use_additional_t_cond(use_additional_t_cond) {
             blocks["timestep_embedder"] = std::shared_ptr<GGMLBlock>(new TimestepEmbedding(256, embedding_dim));
+            if (use_additional_t_cond) {
+                blocks["addition_t_embedding"] = std::shared_ptr<GGMLBlock>(new Embedding(2, embedding_dim));
+            }
         }
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* timesteps) {
+                                    struct ggml_tensor* timesteps,
+                                    struct ggml_tensor* addition_t_cond = nullptr) {
             // timesteps: [N,]
             // return: [N, embedding_dim]
             auto timestep_embedder = std::dynamic_pointer_cast<TimestepEmbedding>(blocks["timestep_embedder"]);
 
             auto timesteps_proj = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, 256, 10000, 1.f);
             auto timesteps_emb  = timestep_embedder->forward(ctx, timesteps_proj);
+            if (use_additional_t_cond) {
+                GGML_ASSERT(addition_t_cond != nullptr);
+                auto addition_t_embedding = std::dynamic_pointer_cast<Embedding>(blocks["addition_t_embedding"]);
+
+                auto addition_t_emb = addition_t_embedding->forward(ctx, addition_t_cond);
+                timesteps_emb       = ggml_add(ctx->ggml_ctx, timesteps_emb, addition_t_emb);
+            }
             return timesteps_emb;
         }
     };
@@ -325,6 +340,7 @@ namespace Qwen {
         float theta                 = 10000;
         std::vector<int> axes_dim   = {16, 56, 56};
         int64_t axes_dim_sum        = 128;
+        bool use_additional_t_cond  = false;
     };
 
     class QwenImageModel : public GGMLBlock {
@@ -336,7 +352,7 @@ namespace Qwen {
         QwenImageModel(QwenImageParams params)
             : params(params) {
             int64_t inner_dim         = params.num_attention_heads * params.attention_head_dim;
-            blocks["time_text_embed"] = std::shared_ptr<GGMLBlock>(new QwenTimestepProjEmbeddings(inner_dim));
+            blocks["time_text_embed"] = std::shared_ptr<GGMLBlock>(new QwenTimestepProjEmbeddings(inner_dim, params.use_additional_t_cond));
             blocks["txt_norm"]        = std::shared_ptr<GGMLBlock>(new RMSNorm(params.joint_attention_dim, 1e-6f));
             blocks["img_in"]          = std::shared_ptr<GGMLBlock>(new Linear(params.in_channels, inner_dim));
             blocks["txt_in"]          = std::shared_ptr<GGMLBlock>(new Linear(params.joint_attention_dim, inner_dim));
@@ -367,10 +383,11 @@ namespace Qwen {
 
         struct ggml_tensor* patchify(struct ggml_context* ctx,
                                      struct ggml_tensor* x) {
-            // x: [N, C, H, W]
-            // return: [N, h*w, C * patch_size * patch_size]
-            int64_t N = x->ne[3];
-            int64_t C = x->ne[2];
+            // x: [N*C, T, H, W]
+            // return: [N, T*h*w, C * patch_size * patch_size]
+            int64_t N = 1;
+            int64_t C = x->ne[3] / N;
+            int64_t T = x->ne[2];
             int64_t H = x->ne[1];
             int64_t W = x->ne[0];
             int64_t p = params.patch_size;
@@ -379,27 +396,31 @@ namespace Qwen {
 
             GGML_ASSERT(h * p == H && w * p == W);
 
-            x = ggml_reshape_4d(ctx, x, p, w, p, h * C * N);       // [N*C*h, p, w, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*h, w, p, p]
-            x = ggml_reshape_4d(ctx, x, p * p, w * h, C, N);       // [N, C, h*w, p*p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, h*w, C, p*p]
-            x = ggml_reshape_3d(ctx, x, p * p * C, w * h, N);      // [N, h*w, C*p*p]
+            x = ggml_reshape_4d(ctx, x, p, w, p, h * T * C * N);   // [N*C*T*h, p, w, p]
+            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*T*h, w, p, p]
+            x = ggml_reshape_4d(ctx, x, p * p, w * h * T, C, N);   // [N, C, T*h*w, p*p]
+            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, T*h*w, C, p*p]
+            x = ggml_reshape_3d(ctx, x, p * p * C, w * h * T, N);  // [N, T*h*w, C*p*p]
             return x;
         }
 
         struct ggml_tensor* process_img(struct ggml_context* ctx,
                                         struct ggml_tensor* x) {
             x = pad_to_patch_size(ctx, x);
+            if (x->ne[3] == 1) {  // [N, C, H, W] => [N*C, 1, H, W]
+                x = ggml_reshape_4d(ctx, x, x->ne[0], x->ne[1], 1, x->ne[2]);
+            }
             x = patchify(ctx, x);
             return x;
         }
 
         struct ggml_tensor* unpatchify(struct ggml_context* ctx,
                                        struct ggml_tensor* x,
+                                       int64_t T,
                                        int64_t h,
                                        int64_t w) {
-            // x: [N, h*w, C*patch_size*patch_size]
-            // return: [N, C, H, W]
+            // x: [N, T*h*w, C*patch_size*patch_size]
+            // return: [N*C, T, H, W]
             int64_t N = x->ne[2];
             int64_t C = x->ne[0] / params.patch_size / params.patch_size;
             int64_t H = h * params.patch_size;
@@ -408,11 +429,11 @@ namespace Qwen {
 
             GGML_ASSERT(C * p * p == x->ne[0]);
 
-            x = ggml_reshape_4d(ctx, x, p * p, C, w * h, N);       // [N, h*w, C, p*p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, C, h*w, p*p]
-            x = ggml_reshape_4d(ctx, x, p, p, w, h * C * N);       // [N*C*h, w, p, p]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*h, p, w, p]
-            x = ggml_reshape_4d(ctx, x, W, H, C, N);               // [N, C, h*p, w*p]
+            x = ggml_reshape_4d(ctx, x, p * p, C, w * h * T, N);   // [N, T*h*w, C, p*p]
+            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, C, T*h*w, p*p]
+            x = ggml_reshape_4d(ctx, x, p, p, w, h * T * C * N);   // [N*C*T*h, w, p, p]
+            x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*T*h, p, w, p]
+            x = ggml_reshape_4d(ctx, x, W, H, T, C * N);           // [N*C, T, h*p, w*p]
 
             return x;
         }
@@ -420,6 +441,7 @@ namespace Qwen {
         struct ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
                                          struct ggml_tensor* x,
                                          struct ggml_tensor* timestep,
+                                         struct ggml_tensor* addition_t_cond,
                                          struct ggml_tensor* context,
                                          struct ggml_tensor* pe) {
             auto time_text_embed = std::dynamic_pointer_cast<QwenTimestepProjEmbeddings>(blocks["time_text_embed"]);
@@ -429,7 +451,7 @@ namespace Qwen {
             auto norm_out        = std::dynamic_pointer_cast<AdaLayerNormContinuous>(blocks["norm_out"]);
             auto proj_out        = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
 
-            auto t_emb = time_text_embed->forward(ctx, timestep);
+            auto t_emb = time_text_embed->forward(ctx, timestep, addition_t_cond);
             auto img   = img_in->forward(ctx, x);
             auto txt   = txt_norm->forward(ctx, context);
             txt        = txt_in->forward(ctx, txt);
@@ -451,11 +473,12 @@ namespace Qwen {
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* timestep,
+                                    struct ggml_tensor* addition_t_cond,
                                     struct ggml_tensor* context,
                                     struct ggml_tensor* pe,
                                     std::vector<ggml_tensor*> ref_latents = {}) {
             // Forward pass of DiT.
-            // x: [N, C, H, W]
+            // x: [N, C, H, W] or [N*C, T, H, W]
             // timestep: [N,]
             // context: [N, L, D]
             // pe: [L, d_head/2, 2, 2]
@@ -463,8 +486,15 @@ namespace Qwen {
 
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
-            int64_t C = x->ne[2];
-            int64_t N = x->ne[3];
+            int64_t T = 1;
+            int64_t N = 1;
+            int64_t C;
+            if (x->ne[3] == 1) {
+                C = x->ne[2];
+            } else {
+                T = x->ne[2];
+                C = x->ne[3];
+            }
 
             auto img            = process_img(ctx->ggml_ctx, x);
             uint64_t img_tokens = img->ne[1];
@@ -479,7 +509,7 @@ namespace Qwen {
             int64_t h_len = ((H + (params.patch_size / 2)) / params.patch_size);
             int64_t w_len = ((W + (params.patch_size / 2)) / params.patch_size);
 
-            auto out = forward_orig(ctx, img, timestep, context, pe);  // [N, h_len*w_len, ph*pw*C]
+            auto out = forward_orig(ctx, img, timestep, addition_t_cond, context, pe);  // [N, h_len*w_len, ph*pw*C]
 
             if (out->ne[1] > img_tokens) {
                 out = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, out, 0, 2, 1, 3));  // [num_tokens, N, C * patch_size * patch_size]
@@ -487,7 +517,7 @@ namespace Qwen {
                 out = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, out, 0, 2, 1, 3));  // [N, h*w, C * patch_size * patch_size]
             }
 
-            out = unpatchify(ctx->ggml_ctx, out, h_len, w_len);  // [N, C, H + pad_h, W + pad_w]
+            out = unpatchify(ctx->ggml_ctx, out, T, h_len, w_len);  // [N, C, H + pad_h, W + pad_w]
 
             // slice
             out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N, C, H, W + pad_w]
@@ -502,6 +532,7 @@ namespace Qwen {
         QwenImageParams qwen_image_params;
         QwenImageModel qwen_image;
         std::vector<float> pe_vec;
+        std::vector<int> additional_t_cond_vec;
         SDVersion version;
 
         QwenImageRunner(ggml_backend_t backend,
@@ -509,7 +540,7 @@ namespace Qwen {
                         const String2TensorStorage& tensor_storage_map = {},
                         const std::string prefix                       = "",
                         SDVersion version                              = VERSION_QWEN_IMAGE)
-            : GGMLRunner(backend, offload_params_to_cpu) {
+            : GGMLRunner(backend, offload_params_to_cpu), version(version) {
             qwen_image_params.num_layers = 0;
             for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
@@ -528,6 +559,9 @@ namespace Qwen {
                     continue;
                 }
             }
+            if (version == VERSION_QWEN_IMAGE_LAYERED) {
+                qwen_image_params.use_additional_t_cond = true;
+            }
             LOG_INFO("qwen_image_params.num_layers: %ld", qwen_image_params.num_layers);
             qwen_image = QwenImageModel(qwen_image_params);
             qwen_image.init(params_ctx, tensor_storage_map, prefix);
@@ -545,25 +579,39 @@ namespace Qwen {
                                         struct ggml_tensor* timesteps,
                                         struct ggml_tensor* context,
                                         std::vector<ggml_tensor*> ref_latents = {},
-                                        bool increase_ref_index               = false) {
-            GGML_ASSERT(x->ne[3] == 1);
+                                        Rope::RefIndexMode ref_index_mode     = Rope::RefIndexMode::INCREASE) {
+            int N = 1;
+            int T = 1;
+            if (x->ne[3] != 1) {
+                T = x->ne[2];
+            }
             struct ggml_cgraph* gf = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE);
 
             x         = to_backend(x);
             context   = to_backend(context);
             timesteps = to_backend(timesteps);
 
+            struct ggml_tensor* addition_t_cond = nullptr;
+            if (version == VERSION_QWEN_IMAGE_LAYERED) {
+                additional_t_cond_vec = {0};
+                addition_t_cond       = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_I32, 1);
+                set_backend_tensor_data(addition_t_cond, additional_t_cond_vec.data());
+
+                ref_index_mode = Rope::RefIndexMode::DECREASE;
+            }
+
             for (int i = 0; i < ref_latents.size(); i++) {
                 ref_latents[i] = to_backend(ref_latents[i]);
             }
 
-            pe_vec      = Rope::gen_qwen_image_pe(x->ne[1],
+            pe_vec      = Rope::gen_qwen_image_pe(T,
+                                                  x->ne[1],
                                                   x->ne[0],
                                                   qwen_image_params.patch_size,
-                                                  x->ne[3],
+                                                  N,
                                                   context->ne[1],
                                                   ref_latents,
-                                                  increase_ref_index,
+                                                  ref_index_mode,
                                                   qwen_image_params.theta,
                                                   qwen_image_params.axes_dim);
             int pos_len = pe_vec.size() / qwen_image_params.axes_dim_sum / 2;
@@ -579,6 +627,7 @@ namespace Qwen {
             struct ggml_tensor* out = qwen_image.forward(&runner_ctx,
                                                          x,
                                                          timesteps,
+                                                         addition_t_cond,
                                                          context,
                                                          pe,
                                                          ref_latents);
@@ -593,14 +642,14 @@ namespace Qwen {
                      struct ggml_tensor* timesteps,
                      struct ggml_tensor* context,
                      std::vector<ggml_tensor*> ref_latents = {},
-                     bool increase_ref_index               = false,
+                     Rope::RefIndexMode ref_index_mode     = Rope::RefIndexMode::INCREASE,
                      struct ggml_tensor** output           = nullptr,
                      struct ggml_context* output_ctx       = nullptr) {
-            // x: [N, in_channels, h, w]
+            // x: [N, C, H, W] or [N*C, T, H, W]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, ref_latents, increase_ref_index);
+                return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
             };
 
             return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -632,7 +681,7 @@ namespace Qwen {
                 struct ggml_tensor* out = nullptr;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, {}, false, &out, work_ctx);
+                compute(8, x, timesteps, context, {}, Rope::RefIndexMode::FIXED, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

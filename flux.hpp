@@ -1419,7 +1419,7 @@ namespace Flux {
                                         struct ggml_tensor* y,
                                         struct ggml_tensor* guidance,
                                         std::vector<ggml_tensor*> ref_latents = {},
-                                        bool increase_ref_index               = false,
+                                        Rope::RefIndexMode ref_index_mode     = Rope::RefIndexMode::FIXED,
                                         std::vector<int> skip_layers          = {}) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE);
@@ -1456,8 +1456,8 @@ namespace Flux {
 
             std::set<int> txt_arange_dims;
             if (sd_version_is_flux2(version)) {
-                txt_arange_dims    = {3};
-                increase_ref_index = true;
+                txt_arange_dims = {3};
+                ref_index_mode  = Rope::RefIndexMode::INCREASE;
             } else if (version == VERSION_OVIS_IMAGE) {
                 txt_arange_dims = {1, 2};
             }
@@ -1469,7 +1469,7 @@ namespace Flux {
                                             context->ne[1],
                                             txt_arange_dims,
                                             ref_latents,
-                                            increase_ref_index,
+                                            ref_index_mode,
                                             flux_params.ref_index_scale,
                                             flux_params.theta,
                                             flux_params.axes_dim);
@@ -1520,7 +1520,7 @@ namespace Flux {
                      struct ggml_tensor* y,
                      struct ggml_tensor* guidance,
                      std::vector<ggml_tensor*> ref_latents = {},
-                     bool increase_ref_index               = false,
+                     Rope::RefIndexMode ref_index_mode     = Rope::RefIndexMode::FIXED,
                      struct ggml_tensor** output           = nullptr,
                      struct ggml_context* output_ctx       = nullptr,
                      std::vector<int> skip_layers          = std::vector<int>()) {
@@ -1530,7 +1530,7 @@ namespace Flux {
             // y: [N, adm_in_channels] or [1, adm_in_channels]
             // guidance: [N, ]
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, increase_ref_index, skip_layers);
+                return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, ref_index_mode, skip_layers);
             };
 
             return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -1573,7 +1573,7 @@ namespace Flux {
                 struct ggml_tensor* out = nullptr;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, nullptr, y, guidance, {}, false, &out, work_ctx);
+                compute(8, x, timesteps, context, nullptr, y, guidance, {}, Rope::RefIndexMode::FIXED, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

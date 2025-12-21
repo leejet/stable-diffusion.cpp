@@ -378,6 +378,72 @@ sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image) {
     return converted_image;
 }
 
+sd_image_f32_t sd_image_to_rgba(sd_image_f32_t image) {
+    sd_image_f32_t rgba_image;
+    rgba_image.width   = image.width;
+    rgba_image.height  = image.height;
+    rgba_image.channel = 4;
+
+    size_t total_pixels = (size_t)image.width * image.height;
+    rgba_image.data     = (float*)malloc(total_pixels * 4 * sizeof(float));
+
+    for (size_t i = 0; i < total_pixels; i++) {
+        if (image.channel == 3) {
+            // RGB -> RGBA
+            rgba_image.data[i * 4 + 0] = image.data[i * 3 + 0];  // R
+            rgba_image.data[i * 4 + 1] = image.data[i * 3 + 1];  // G
+            rgba_image.data[i * 4 + 2] = image.data[i * 3 + 2];  // B
+            rgba_image.data[i * 4 + 3] = 1.0f;                   // A (fully opaque)
+        } else if (image.channel == 1) {
+            // Gray -> RGBA
+            float gray                 = image.data[i];
+            rgba_image.data[i * 4 + 0] = gray;  // R
+            rgba_image.data[i * 4 + 1] = gray;  // G
+            rgba_image.data[i * 4 + 2] = gray;  // B
+            rgba_image.data[i * 4 + 3] = 1.0f;  // A (fully opaque)
+        } else if (image.channel == 4) {
+            // Already RGBA
+            memcpy(rgba_image.data, image.data, total_pixels * 4 * sizeof(float));
+            break;
+        }
+    }
+
+    return rgba_image;
+}
+
+sd_image_t sd_image_to_rgba(sd_image_t image) {
+    sd_image_t rgba_image;
+    rgba_image.width   = image.width;
+    rgba_image.height  = image.height;
+    rgba_image.channel = 4;
+
+    size_t total_pixels = (size_t)image.width * image.height;
+    rgba_image.data     = (uint8_t*)malloc(total_pixels * 4 * sizeof(uint8_t));
+
+    for (size_t i = 0; i < total_pixels; i++) {
+        if (image.channel == 3) {
+            // RGB -> RGBA
+            rgba_image.data[i * 4 + 0] = image.data[i * 3 + 0];  // R
+            rgba_image.data[i * 4 + 1] = image.data[i * 3 + 1];  // G
+            rgba_image.data[i * 4 + 2] = image.data[i * 3 + 2];  // B
+            rgba_image.data[i * 4 + 3] = 255;                    // A (fully opaque)
+        } else if (image.channel == 1) {
+            // Gray -> RGBA
+            float gray                 = image.data[i];
+            rgba_image.data[i * 4 + 0] = gray;  // R
+            rgba_image.data[i * 4 + 1] = gray;  // G
+            rgba_image.data[i * 4 + 2] = gray;  // B
+            rgba_image.data[i * 4 + 3] = 255;   // A (fully opaque)
+        } else if (image.channel == 4) {
+            // Already RGBA
+            memcpy(rgba_image.data, image.data, total_pixels * 4 * sizeof(uint8_t));
+            break;
+        }
+    }
+
+    return rgba_image;
+}
+
 // Function to perform double linear interpolation
 float interpolate(float v1, float v2, float v3, float v4, float x_ratio, float y_ratio) {
     return v1 * (1 - x_ratio) * (1 - y_ratio) + v2 * x_ratio * (1 - y_ratio) + v3 * (1 - x_ratio) * y_ratio + v4 * x_ratio * y_ratio;

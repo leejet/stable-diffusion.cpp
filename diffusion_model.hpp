@@ -16,7 +16,7 @@ struct DiffusionParams {
     struct ggml_tensor* y                     = nullptr;
     struct ggml_tensor* guidance              = nullptr;
     std::vector<ggml_tensor*> ref_latents     = {};
-    bool increase_ref_index                   = false;
+    Rope::RefIndexMode ref_index_mode         = Rope::RefIndexMode::FIXED;
     int num_video_frames                      = -1;
     std::vector<struct ggml_tensor*> controls = {};
     float control_strength                    = 0.f;
@@ -222,7 +222,7 @@ struct FluxModel : public DiffusionModel {
                             diffusion_params.y,
                             diffusion_params.guidance,
                             diffusion_params.ref_latents,
-                            diffusion_params.increase_ref_index,
+                            diffusion_params.ref_index_mode,
                             output,
                             output_ctx,
                             diffusion_params.skip_layers);
@@ -352,7 +352,7 @@ struct QwenImageModel : public DiffusionModel {
                                   diffusion_params.timesteps,
                                   diffusion_params.context,
                                   diffusion_params.ref_latents,
-                                  true,  // increase_ref_index
+                                  Rope::RefIndexMode::INCREASE,
                                   output,
                                   output_ctx);
     }
@@ -415,7 +415,7 @@ struct ZImageModel : public DiffusionModel {
                                diffusion_params.timesteps,
                                diffusion_params.context,
                                diffusion_params.ref_latents,
-                               true,  // increase_ref_index
+                               Rope::RefIndexMode::INCREASE,
                                output,
                                output_ctx);
     }

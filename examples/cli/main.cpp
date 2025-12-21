@@ -615,6 +615,7 @@ int main(int argc, const char* argv[]) {
 
             results     = generate_image(sd_ctx, &img_gen_params);
             num_results = gen_params.batch_count;
+            num_results = 4;
         } else if (cli_params.mode == VID_GEN) {
             sd_vid_gen_params_t vid_gen_params = {
                 gen_params.lora_vec.data(),

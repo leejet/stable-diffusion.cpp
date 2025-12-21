@@ -531,7 +531,7 @@ namespace ZImage {
                                         struct ggml_tensor* timesteps,
                                         struct ggml_tensor* context,
                                         std::vector<ggml_tensor*> ref_latents = {},
-                                        bool increase_ref_index               = false) {
+                                        Rope::RefIndexMode ref_index_mode     = Rope::RefIndexMode::FIXED) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE);
 
@@ -550,7 +550,7 @@ namespace ZImage {
                                                context->ne[1],
                                                SEQ_MULTI_OF,
                                                ref_latents,
-                                               increase_ref_index,
+                                               Rope::RefIndexMode::INCREASE,
                                                z_image_params.theta,
                                                z_image_params.axes_dim);
             int pos_len = pe_vec.size() / z_image_params.axes_dim_sum / 2;
@@ -579,14 +579,14 @@ namespace ZImage {
                      struct ggml_tensor* timesteps,
                      struct ggml_tensor* context,
                      std::vector<ggml_tensor*> ref_latents = {},
-                     bool increase_ref_index               = false,
+                     Rope::RefIndexMode ref_index_mode     = Rope::RefIndexMode::FIXED,
                      struct ggml_tensor** output           = nullptr,
                      struct ggml_context* output_ctx       = nullptr) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, ref_latents, increase_ref_index);
+                return build_graph(x, timesteps, context, ref_latents, ref_index_mode);
             };
 
             return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -618,7 +618,7 @@ namespace ZImage {
                 struct ggml_tensor* out = nullptr;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, {}, false, &out, work_ctx);
+                compute(8, x, timesteps, context, {}, Rope::RefIndexMode::INCREASE, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
