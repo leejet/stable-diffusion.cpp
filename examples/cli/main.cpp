@@ -344,6 +344,13 @@ void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, 
     }
 }
 
+#if defined(__unix__) || defined(__APPLE__) || defined(_POSIX_VERSION)
+#define SD_ENABLE_SIGNAL_HANDLER
+static void set_sigint_handler(sd_ctx_t* sd_ctx);
+#else
+#define set_sigint_handler(SD_CTX) ((void)SD_CTX)
+#endif
+
 int main(int argc, const char* argv[]) {
     if (argc > 1 && std::string(argv[1]) == "--version") {
         std::cout << version_string() << "\n";
@@ -577,6 +584,8 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
 
+        set_sigint_handler(sd_ctx);
+
         if (gen_params.sample_params.sample_method == SAMPLE_METHOD_COUNT) {
             gen_params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
         }
@@ -647,6 +656,8 @@ int main(int argc, const char* argv[]) {
 
             results = generate_video(sd_ctx, &vid_gen_params, &num_results);
         }
+
+        set_sigint_handler(nullptr);
 
         if (results == nullptr) {
             LOG_ERROR("generate failed");
@@ -760,3 +771,58 @@ int main(int argc, const char* argv[]) {
 
     return 0;
 }
+
+#ifdef SD_ENABLE_SIGNAL_HANDLER
+
+#include <atomic>
+#include <csignal>
+#include <thread>
+
+// this lock is needed to avoid a race condition between
+// free_sd_ctx and a pending sd_cancel_generation call
+std::atomic_flag signal_lock = ATOMIC_FLAG_INIT;
+static int g_sigint_cnt;
+static sd_ctx_t* g_sd_ctx;
+
+static void sigint_handler(int /* signum */)
+{
+    if (!signal_lock.test_and_set(std::memory_order_acquire)) {
+        if (g_sd_ctx != nullptr) {
+            if (g_sigint_cnt == 1) {
+                char msg[] = "\ngot SIGINT, cancelling new generations\n";
+                write(2, msg, sizeof(msg)-1);
+                /* first Ctrl‑C cancels only the remaining latents on a batch */
+                sd_cancel_generation(g_sd_ctx, SD_CANCEL_NEW_LATENTS);
+                ++g_sigint_cnt;
+            } else {
+                char msg[] = "\ngot SIGINT, cancelling everything\n";
+                write(2, msg, sizeof(msg)-1);
+                /* cancels everything */
+                sd_cancel_generation(g_sd_ctx, SD_CANCEL_ALL);
+            }
+        }
+        signal_lock.clear(std::memory_order_release);
+    }
+}
+
+static void set_sigint_handler(sd_ctx_t* sd_ctx)
+{
+    if (g_sigint_cnt == 0) {
+        g_sigint_cnt++;
+        struct sigaction sa{};
+        sa.sa_handler = sigint_handler;
+        sa.sa_flags   = SA_RESTART;
+        sigaction(SIGINT, &sa, nullptr);
+    }
+
+    while (signal_lock.test_and_set(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+
+    g_sd_ctx = sd_ctx;
+
+    signal_lock.clear(std::memory_order_release);
+}
+
+#endif
+
