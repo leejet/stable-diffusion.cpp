@@ -5,6 +5,7 @@
 #include <inttypes.h>
 #include <stdarg.h>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -19,7 +20,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <atomic>
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -1034,7 +1034,6 @@ __STATIC_INLINE__ struct ggml_tensor* sd_pad(struct ggml_context* ctx,
                                              int pad_d       = 0,
                                              bool circular_x = false,
                                              bool circular_y = false) {
-
     return sd_pad_ext(ctx, x, pad_w, pad_w, pad_h, pad_h, pad_t, pad_t, pad_d, pad_d, circular_x, circular_y);
 }
 
@@ -1046,16 +1045,16 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_conv_2d(struct ggml_context* ctx,
                                                        struct ggml_tensor* x,
                                                        struct ggml_tensor* w,
                                                        struct ggml_tensor* b,
-                                                       int s0        = 1,
-                                                       int s1        = 1,
-                                                       int p0        = 0,
-                                                       int p1        = 0,
-                                                       int d0        = 1,
-                                                       int d1        = 1,
-                                                       bool direct   = false,
+                                                       int s0          = 1,
+                                                       int s1          = 1,
+                                                       int p0          = 0,
+                                                       int p1          = 0,
+                                                       int d0          = 1,
+                                                       int d1          = 1,
+                                                       bool direct     = false,
                                                        bool circular_x = false,
                                                        bool circular_y = false,
-                                                       float scale   = 1.f) {
+                                                       float scale     = 1.f) {
     if (scale != 1.f) {
         x = ggml_scale(ctx, x, scale);
     }
@@ -1577,16 +1576,16 @@ struct WeightAdapter {
             float scale         = 1.f;
         } linear;
         struct {
-            int s0      = 1;
-            int s1      = 1;
-            int p0      = 0;
-            int p1      = 0;
-            int d0      = 1;
-            int d1      = 1;
-            bool direct = false;
+            int s0          = 1;
+            int s1          = 1;
+            int p0          = 0;
+            int p1          = 0;
+            int d0          = 1;
+            int d1          = 1;
+            bool direct     = false;
             bool circular_x = false;
             bool circular_y = false;
-            float scale   = 1.f;
+            float scale     = 1.f;
         } conv2d;
     };
     virtual ggml_tensor* patch_weight(ggml_context* ctx, ggml_tensor* weight, const std::string& weight_name) = 0;
@@ -1642,8 +1641,8 @@ protected:
 
     bool flash_attn_enabled    = false;
     bool conv2d_direct_enabled = false;
-    bool circular_x_enabled = false;
-    bool circular_y_enabled = false;
+    bool circular_x_enabled    = false;
+    bool circular_y_enabled    = false;
 
     void alloc_params_ctx() {
         struct ggml_init_params params;
@@ -1921,8 +1920,8 @@ public:
         runner_ctx.backend               = runtime_backend;
         runner_ctx.flash_attn_enabled    = flash_attn_enabled;
         runner_ctx.conv2d_direct_enabled = conv2d_direct_enabled;
-        runner_ctx.circular_x_enabled = circular_x_enabled;
-        runner_ctx.circular_y_enabled = circular_y_enabled;
+        runner_ctx.circular_x_enabled    = circular_x_enabled;
+        runner_ctx.circular_y_enabled    = circular_y_enabled;
         runner_ctx.weight_adapter        = weight_adapter;
         return runner_ctx;
     }
@@ -2335,17 +2334,17 @@ public:
         }
         if (ctx->weight_adapter) {
             WeightAdapter::ForwardParams forward_params;
-            forward_params.op_type       = WeightAdapter::ForwardParams::op_type_t::OP_CONV2D;
-            forward_params.conv2d.s0     = stride.second;
-            forward_params.conv2d.s1     = stride.first;
-            forward_params.conv2d.p0     = padding.second;
-            forward_params.conv2d.p1     = padding.first;
-            forward_params.conv2d.d0     = dilation.second;
-            forward_params.conv2d.d1     = dilation.first;
-            forward_params.conv2d.direct = ctx->conv2d_direct_enabled;
+            forward_params.op_type           = WeightAdapter::ForwardParams::op_type_t::OP_CONV2D;
+            forward_params.conv2d.s0         = stride.second;
+            forward_params.conv2d.s1         = stride.first;
+            forward_params.conv2d.p0         = padding.second;
+            forward_params.conv2d.p1         = padding.first;
+            forward_params.conv2d.d0         = dilation.second;
+            forward_params.conv2d.d1         = dilation.first;
+            forward_params.conv2d.direct     = ctx->conv2d_direct_enabled;
             forward_params.conv2d.circular_x = ctx->circular_x_enabled;
             forward_params.conv2d.circular_y = ctx->circular_y_enabled;
-            forward_params.conv2d.scale    = scale;
+            forward_params.conv2d.scale      = scale;
             return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
         }
         return ggml_ext_conv_2d(ctx->ggml_ctx,

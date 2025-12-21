@@ -60,28 +60,28 @@ namespace Rope {
         for (size_t i = 0; i < pos.size(); ++i) {
             float position = pos[i];
             for (int j = 0; j < half_dim; ++j) {
-                float omega_val       = omega[j];
-                float original_angle  = position * omega_val;
-                float angle           = original_angle;
-                int wrap_dim = 0;
+                float omega_val      = omega[j];
+                float original_angle = position * omega_val;
+                float angle          = original_angle;
+                int wrap_dim         = 0;
                 if (wrap_dims != nullptr && !wrap_dims->empty()) {
                     size_t wrap_size = wrap_dims->size();
                     // mod batch size since we only store this for one item in the batch
-                    size_t wrap_idx  = wrap_size > 0 ? (i % wrap_size) : 0;
-                    wrap_dim             = (*wrap_dims)[wrap_idx];
+                    size_t wrap_idx = wrap_size > 0 ? (i % wrap_size) : 0;
+                    wrap_dim        = (*wrap_dims)[wrap_idx];
                 }
                 if (wrap_dim > 0) {
                     constexpr float TWO_PI = 6.28318530717958647692f;
-                    float wrap_f            = static_cast<float>(wrap_dim);
-                    float cycles            = omega_val * wrap_f / TWO_PI;
+                    float wrap_f           = static_cast<float>(wrap_dim);
+                    float cycles           = omega_val * wrap_f / TWO_PI;
                     // closest periodic harmonic, necessary to ensure things neatly tile
                     // without this round, things don't tile at the boundaries and you end up
                     // with the model knowing what is "center"
-                    float rounded           = std::round(cycles);
+                    float rounded = std::round(cycles);
                     angle         = position * TWO_PI * rounded / wrap_f;
                 }
-                float sin_val = std::sin(angle);
-                float cos_val = std::cos(angle);
+                float sin_val        = std::sin(angle);
+                float cos_val        = std::cos(angle);
                 result[i][4 * j]     = cos_val;
                 result[i][4 * j + 1] = -sin_val;
                 result[i][4 * j + 2] = sin_val;
@@ -110,9 +110,9 @@ namespace Rope {
                                                                        int patch_size,
                                                                        int bs,
                                                                        int axes_dim_num,
-                                                                       int index    = 0,
-                                                                       int h_offset = 0,
-                                                                       int w_offset = 0,
+                                                                       int index       = 0,
+                                                                       int h_offset    = 0,
+                                                                       int w_offset    = 0,
                                                                        bool scale_rope = false) {
         int h_len = (h + (patch_size / 2)) / patch_size;
         int w_len = (w + (patch_size / 2)) / patch_size;
@@ -298,7 +298,7 @@ namespace Rope {
             if (h_len > 0 && w_len > 0) {
                 size_t pos_len = ids.size() / bs;
                 wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
-                size_t cursor = context_len;  // text first
+                size_t cursor           = context_len;  // text first
                 const size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
                 for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
                     if (circular_h) {
@@ -314,10 +314,10 @@ namespace Rope {
                     if (ref == nullptr) {
                         continue;
                     }
-                    int ref_h   = static_cast<int>(ref->ne[1]);
-                    int ref_w   = static_cast<int>(ref->ne[0]);
-                    int ref_h_l = (ref_h + (patch_size / 2)) / patch_size;
-                    int ref_w_l = (ref_w + (patch_size / 2)) / patch_size;
+                    int ref_h         = static_cast<int>(ref->ne[1]);
+                    int ref_w         = static_cast<int>(ref->ne[0]);
+                    int ref_h_l       = (ref_h + (patch_size / 2)) / patch_size;
+                    int ref_w_l       = (ref_w + (patch_size / 2)) / patch_size;
                     size_t ref_tokens = static_cast<size_t>(ref_h_l) * static_cast<size_t>(ref_w_l);
                     for (size_t token_i = 0; token_i < ref_tokens; ++token_i) {
                         if (circular_h) {
@@ -383,11 +383,11 @@ namespace Rope {
             int h_len = (h + pad_h) / patch_size;
             int w_len = (w + pad_w) / patch_size;
             if (h_len > 0 && w_len > 0) {
-                const size_t total_tokens     = ids.size();
+                const size_t total_tokens = ids.size();
                 // Track per-token wrap lengths for the row/column axes so only spatial tokens become periodic.
                 wrap_dims.assign(axes_dim.size(), std::vector<int>(total_tokens / bs, 0));
-                size_t cursor = context_len; // ignore text tokens
-                const size_t img_tokens       = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
+                size_t cursor           = context_len;  // ignore text tokens
+                const size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
                 for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
                     if (circular_h) {
                         wrap_dims[1][cursor + token_i] = h_len;
@@ -402,13 +402,13 @@ namespace Rope {
                     if (ref == nullptr) {
                         continue;
                     }
-                    int ref_h      = static_cast<int>(ref->ne[1]);
-                    int ref_w      = static_cast<int>(ref->ne[0]);
-                    int ref_pad_h  = (patch_size - (ref_h % patch_size)) % patch_size;
-                    int ref_pad_w  = (patch_size - (ref_w % patch_size)) % patch_size;
-                    int ref_h_len  = (ref_h + ref_pad_h) / patch_size;
-                    int ref_w_len  = (ref_w + ref_pad_w) / patch_size;
-                    size_t ref_n_tokens  = static_cast<size_t>(ref_h_len) * static_cast<size_t>(ref_w_len);
+                    int ref_h           = static_cast<int>(ref->ne[1]);
+                    int ref_w           = static_cast<int>(ref->ne[0]);
+                    int ref_pad_h       = (patch_size - (ref_h % patch_size)) % patch_size;
+                    int ref_pad_w       = (patch_size - (ref_w % patch_size)) % patch_size;
+                    int ref_h_len       = (ref_h + ref_pad_h) / patch_size;
+                    int ref_w_len       = (ref_w + ref_pad_w) / patch_size;
+                    size_t ref_n_tokens = static_cast<size_t>(ref_h_len) * static_cast<size_t>(ref_w_len);
                     for (size_t token_i = 0; token_i < ref_n_tokens; ++token_i) {
                         if (circular_h) {
                             wrap_dims[1][cursor + token_i] = ref_h_len;
@@ -572,7 +572,7 @@ namespace Rope {
             if (h_len > 0 && w_len > 0) {
                 size_t pos_len = ids.size() / bs;
                 wrap_dims.assign(axes_dim.size(), std::vector<int>(pos_len, 0));
-                size_t cursor = context_len + bound_mod(context_len, seq_multi_of);  // skip text (and its padding)
+                size_t cursor     = context_len + bound_mod(context_len, seq_multi_of);  // skip text (and its padding)
                 size_t img_tokens = static_cast<size_t>(h_len) * static_cast<size_t>(w_len);
                 for (size_t token_i = 0; token_i < img_tokens; ++token_i) {
                     if (circular_h) {

@@ -449,9 +449,9 @@ struct SDContextParams {
     bool diffusion_conv_direct  = false;
     bool vae_conv_direct        = false;
 
-    bool circular              = false;
-    bool circular_x            = false;
-    bool circular_y            = false;
+    bool circular   = false;
+    bool circular_x = false;
+    bool circular_y = false;
 
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
@@ -610,9 +610,9 @@ struct SDContextParams {
              "use ggml_conv2d_direct in the vae model",
              true, &vae_conv_direct},
             {"",
-            "--circular",
-            "enable circular padding for convolutions",
-            true, &circular},
+             "--circular",
+             "enable circular padding for convolutions",
+             true, &circular},
             {"",
              "--circularx",
              "enable circular RoPE wrapping on x-axis (width) only",
@@ -620,7 +620,7 @@ struct SDContextParams {
             {"",
              "--circulary",
              "enable circular RoPE wrapping on y-axis (height) only",
-             true, &circular_y}, 
+             true, &circular_y},
             {"",
              "--chroma-disable-dit-mask",
              "disable dit mask for chroma",

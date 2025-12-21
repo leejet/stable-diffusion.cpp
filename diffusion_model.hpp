@@ -37,8 +37,8 @@ struct DiffusionModel {
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) = 0;
     virtual size_t get_params_buffer_size()                                             = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter){};
-    virtual int64_t get_adm_in_channels()             = 0;
-    virtual void set_flash_attn_enabled(bool enabled) = 0;
+    virtual int64_t get_adm_in_channels()                            = 0;
+    virtual void set_flash_attn_enabled(bool enabled)                = 0;
     virtual void set_circular_axes(bool circular_x, bool circular_y) = 0;
 };
 

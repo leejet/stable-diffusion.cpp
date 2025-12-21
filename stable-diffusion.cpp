@@ -128,9 +128,9 @@ public:
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
 
-    bool circular_x                     = false;
-    bool circular_y                     = false;
-    bool stacked_id                      = false;
+    bool circular_x = false;
+    bool circular_y = false;
+    bool stacked_id = false;
 
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
@@ -479,10 +479,10 @@ public:
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<FluxModel>(backend,
-                                                               offload_params_to_cpu,
-                                                               tensor_storage_map,
-                                                               version,
-                                                               sd_ctx_params->chroma_use_dit_mask);
+                                                              offload_params_to_cpu,
+                                                              tensor_storage_map,
+                                                              version,
+                                                              sd_ctx_params->chroma_use_dit_mask);
                 diffusion_model->set_circular_axes(circular_x, circular_y);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
@@ -561,17 +561,17 @@ public:
                                                                                            embbeding_map,
                                                                                            version);
                 }
-        diffusion_model = std::make_shared<UNetModel>(backend,
-                                                      offload_params_to_cpu,
-                                                      tensor_storage_map,
-                                                      version);
-        if (sd_ctx_params->diffusion_conv_direct) {
-                LOG_INFO("Using Conv2d direct in the diffusion model");
-            std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_conv2d_direct_enabled(true);
-        }
-        diffusion_model->set_circular_axes(circular_x, circular_y);
-        std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_circular_axes(circular_x, circular_y);
-        }
+                diffusion_model = std::make_shared<UNetModel>(backend,
+                                                              offload_params_to_cpu,
+                                                              tensor_storage_map,
+                                                              version);
+                if (sd_ctx_params->diffusion_conv_direct) {
+                    LOG_INFO("Using Conv2d direct in the diffusion model");
+                    std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_conv2d_direct_enabled(true);
+                }
+                diffusion_model->set_circular_axes(circular_x, circular_y);
+                std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_circular_axes(circular_x, circular_y);
+            }
 
             if (sd_ctx_params->diffusion_flash_attn) {
                 LOG_INFO("Using flash attention in the diffusion model");
@@ -1542,7 +1542,7 @@ public:
         }
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
-        float cfg_scale     = guidance.txt_cfg;
+        float cfg_scale = guidance.txt_cfg;
         if (cfg_scale < 1.f) {
             if (cfg_scale == 0.f) {
                 // Diffusers follow the convention from the original paper
