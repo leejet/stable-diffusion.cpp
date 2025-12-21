@@ -18,6 +18,6 @@ RUN mkdir build && cd build && \
 
 FROM mthreads/musa:${MUSA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}-amd64 as runtime
 
-COPY --from=build /sd.cpp/build/bin/sd /sd
+COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
 
-ENTRYPOINT [ "/sd" ]
+ENTRYPOINT [ "/sd-cli" ]

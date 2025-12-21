@@ -1520,6 +1520,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         i64_to_i32_vec((int64_t*)read_buf, (int32_t*)target_buf, tensor_storage.nelements());
                     }
                     if (tensor_storage.type != dst_tensor->type) {
+                        if (convert_buf == nullptr) {
+                            LOG_ERROR("read tensor data failed: too less memory for conversion");
+                            failed = true;
+                            return;
+                        }
                         convert_tensor((void*)target_buf,
                                        tensor_storage.type,
                                        convert_buf,
@@ -1731,6 +1736,13 @@ bool ModelLoader::save_to_gguf_file(const std::string& file_path, ggml_type type
         // tensor_storage.n_dims,
         // tensor_storage.ne[0], tensor_storage.ne[1], tensor_storage.ne[2], tensor_storage.ne[3],
         // tensor->n_dims, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+
+        if (!tensor->data) {
+            GGML_ASSERT(ggml_nelements(tensor) == 0);
+            // avoid crashing the gguf writer by setting a dummy pointer for zero-sized tensors
+            LOG_DEBUG("setting dummy pointer for zero-sized tensor %s", name.c_str());
+            tensor->data = ggml_get_mem_buffer(ggml_ctx);
+        }
 
         *dst_tensor = tensor;
 

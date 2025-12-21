@@ -14,6 +14,6 @@ RUN mkdir build && cd build && \
 
 FROM intel/oneapi-basekit:${SYCL_VERSION}-devel-ubuntu24.04 AS runtime
 
-COPY --from=build /sd.cpp/build/bin/sd /sd
+COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
 
-ENTRYPOINT [ "/sd" ]
+ENTRYPOINT [ "/sd-cli" ]

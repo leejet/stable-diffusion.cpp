@@ -114,7 +114,7 @@ API and command-line option may change frequently.***
 ### Generate an image with just one command
 
 ```sh
-./bin/sd -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
+./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 ```
 
 ***For detailed command-line arguments, check out [cli doc](./examples/cli/README.md).***
