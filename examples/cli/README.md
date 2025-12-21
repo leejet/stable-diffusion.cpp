@@ -9,6 +9,7 @@ CLI Options:
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
   --canny                     apply canny preprocessor (edge detection)
+  --convert-name              convert tensor name (for convert mode)
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
   --taesd-preview-only        prevents usage of taesd for decoding the final image. (for use with --preview tae)
