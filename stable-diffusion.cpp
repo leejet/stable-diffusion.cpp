@@ -430,7 +430,6 @@ public:
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
                                                                offload_params_to_cpu,
                                                                tensor_storage_map);
-                diffusion_model->set_circular_axes(circular_x, circular_y);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -471,7 +470,6 @@ public:
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
-                diffusion_model->set_circular_axes(circular_x, circular_y);
             } else if (sd_version_is_flux2(version)) {
                 bool is_chroma   = false;
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
@@ -483,7 +481,6 @@ public:
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
-                diffusion_model->set_circular_axes(circular_x, circular_y);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
@@ -496,14 +493,12 @@ public:
                                                              tensor_storage_map,
                                                              "model.diffusion_model",
                                                              version);
-                diffusion_model->set_circular_axes(circular_x, circular_y);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
                                                                             offload_params_to_cpu,
                                                                             tensor_storage_map,
                                                                             "model.high_noise_diffusion_model",
                                                                             version);
-                    high_noise_diffusion_model->set_circular_axes(circular_x, circular_y);
                 }
                 if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
@@ -530,7 +525,6 @@ public:
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
                                                                    version);
-                diffusion_model->set_circular_axes(circular_x, circular_y);
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
@@ -541,7 +535,6 @@ public:
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
                                                                 version);
-                diffusion_model->set_circular_axes(circular_x, circular_y);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (int i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -569,8 +562,6 @@ public:
                     LOG_INFO("Using Conv2d direct in the diffusion model");
                     std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_conv2d_direct_enabled(true);
                 }
-                diffusion_model->set_circular_axes(circular_x, circular_y);
-                std::dynamic_pointer_cast<UNetModel>(diffusion_model)->unet.set_circular_axes(circular_x, circular_y);
             }
 
             if (sd_ctx_params->diffusion_flash_attn) {
@@ -613,7 +604,6 @@ public:
                                                                             version);
                     first_stage_model->alloc_params_buffer();
                     first_stage_model->get_param_tensors(tensors, "first_stage_model");
-                    first_stage_model->set_circular_axes(circular_x, circular_y);
                 } else {
                     tae_first_stage = std::make_shared<TinyVideoAutoEncoder>(vae_backend,
                                                                              offload_params_to_cpu,
@@ -650,7 +640,6 @@ public:
                         vae_conv_2d_scale);
                     first_stage_model->set_conv2d_scale(vae_conv_2d_scale);
                 }
-                first_stage_model->set_circular_axes(circular_x, circular_y);
                 first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
             } else if (use_tiny_autoencoder) {
@@ -664,7 +653,6 @@ public:
                     LOG_INFO("Using Conv2d direct in the tae model");
                     tae_first_stage->set_conv2d_direct_enabled(true);
                 }
-                tae_first_stage->set_circular_axes(circular_x, circular_y);
             }
             // first_stage_model->get_param_tensors(tensors, "first_stage_model.");
 
@@ -684,7 +672,6 @@ public:
                     LOG_INFO("Using Conv2d direct in the control net");
                     control_net->set_conv2d_direct_enabled(true);
                 }
-                control_net->set_circular_axes(circular_x, circular_y);
             }
 
             if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
@@ -727,6 +714,20 @@ public:
                     return false;
                 }
                 pmid_model->get_param_tensors(tensors, "pmid");
+            }
+
+            diffusion_model->set_circular_axes(circular_x, circular_y);
+            if (high_noise_diffusion_model) {
+                high_noise_diffusion_model->set_circular_axes(circular_x, circular_y);
+            }
+            if (control_net) {
+                control_net->set_circular_axes(circular_x, circular_y);
+            }
+            if (first_stage_model) {
+                first_stage_model->set_circular_axes(circular_x, circular_y);
+            }
+            if (tae_first_stage) {
+                tae_first_stage->set_circular_axes(circular_x, circular_y);
             }
         }
 
