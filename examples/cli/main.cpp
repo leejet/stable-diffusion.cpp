@@ -31,7 +31,7 @@ std::regex format_specifier_regex("(?:[^%]|^)(?:%%)*(%\\d{0,3}d)");
 struct SDCliParams {
     SDMode mode             = IMG_GEN;
     std::string output_path = "output.png";
-    int output_begin_idx    = 0;
+    int output_begin_idx    = -1;
 
     bool verbose          = false;
     bool canny_preprocess = false;
@@ -67,7 +67,7 @@ struct SDCliParams {
              &preview_interval},
             {"",
              "--output-begin-idx",
-             "starting index for output image sequence (only used when outputting multiple images, default: 0)",
+             "starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)",
              &output_begin_idx},
         };
 
@@ -723,7 +723,7 @@ int main(int argc, const char* argv[]) {
     std::string base_path;
     std::string file_ext;
     std::string file_ext_lower;
-    bool is_jpg;
+    bool is_jpg, defined_sequence;
     size_t last_dot_pos   = cli_params.output_path.find_last_of(".");
     size_t last_slash_pos = std::min(cli_params.output_path.find_last_of("/"),
                                      cli_params.output_path.find_last_of("\\"));
@@ -737,10 +737,14 @@ int main(int argc, const char* argv[]) {
         file_ext = file_ext_lower = "";
         is_jpg                    = false;
     }
+    defined_sequence = std::regex_search(cli_params.output_path, format_specifier_regex);
 
     if (cli_params.mode == VID_GEN && num_results > 1) {
         std::string vid_output_path = cli_params.output_path;
-        if (std::regex_search(vid_output_path, format_specifier_regex)) {
+        if (defined_sequence) {
+            if (cli_params.output_begin_idx == -1) {
+                cli_params.output_begin_idx = 0;
+            }
             // writing image sequence, default to PNG
             if (!is_jpg && file_ext_lower != ".png") {
                 base_path += file_ext;
@@ -780,16 +784,23 @@ int main(int argc, const char* argv[]) {
             base_path += file_ext;
             file_ext = ".png";
         }
+        if (cli_params.output_begin_idx == -1) {
+            if (defined_sequence) {
+                cli_params.output_begin_idx = 0;
+            } else {
+                cli_params.output_begin_idx = 1;
+            }
+        }
         for (int i = 0; i < num_results; i++) {
             if (results[i].data == nullptr) {
                 continue;
             }
             int write_ok;
             std::string final_image_path;
-            if (std::regex_search(cli_params.output_path, format_specifier_regex)) {
+            if (defined_sequence) {
                 final_image_path = format_frame_idx(cli_params.output_path, cli_params.output_begin_idx + i);
             } else {
-                final_image_path = i > 0 ? base_path + "_" + std::to_string(i + 1) + file_ext : base_path + file_ext;
+                final_image_path = i > 0 ? base_path + "_" + std::to_string(cli_params.output_begin_idx + i) + file_ext : base_path + file_ext;
             }
             if (is_jpg) {
                 write_ok = stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
