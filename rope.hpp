@@ -44,11 +44,9 @@ namespace Rope {
     __STATIC_INLINE__ std::vector<std::vector<float>> rope(const std::vector<float>& pos,
                                                            int dim,
                                                            int theta,
-                                                           const std::vector<int>* wrap_dims = nullptr) {
+                                                           const std::vector<int>& axis_wrap_dims = {}) {
         assert(dim % 2 == 0);
         int half_dim = dim / 2;
-
-        std::vector<std::vector<float>> result(pos.size(), std::vector<float>(half_dim * 4));
 
         std::vector<float> scale = linspace(0.f, (dim * 1.f - 2) / dim, half_dim);
 
@@ -57,35 +55,38 @@ namespace Rope {
             omega[i] = 1.0f / std::pow(theta, scale[i]);
         }
 
-        for (size_t i = 0; i < pos.size(); ++i) {
-            float position = pos[i];
+        int pos_size = pos.size();
+        std::vector<std::vector<float>> out(pos_size, std::vector<float>(half_dim));
+        for (int i = 0; i < pos_size; ++i) {
             for (int j = 0; j < half_dim; ++j) {
-                float omega_val      = omega[j];
-                float original_angle = position * omega_val;
-                float angle          = original_angle;
-                int wrap_dim         = 0;
-                if (wrap_dims != nullptr && !wrap_dims->empty()) {
-                    size_t wrap_size = wrap_dims->size();
+                float angle = pos[i] * omega[j];
+                if (!axis_wrap_dims.empty()) {
+                    size_t wrap_size = axis_wrap_dims.size();
                     // mod batch size since we only store this for one item in the batch
                     size_t wrap_idx = wrap_size > 0 ? (i % wrap_size) : 0;
-                    wrap_dim        = (*wrap_dims)[wrap_idx];
+                    int wrap_dim    = axis_wrap_dims[wrap_idx];
+                    if (wrap_dim > 0) {
+                        constexpr float TWO_PI = 6.28318530717958647692f;
+                        float cycles           = omega[j] * wrap_dim / TWO_PI;
+                        // closest periodic harmonic, necessary to ensure things neatly tile
+                        // without this round, things don't tile at the boundaries and you end up
+                        // with the model knowing what is "center"
+                        float rounded = std::round(cycles);
+                        angle         = pos[i] * TWO_PI * rounded / wrap_dim;
+                    }
                 }
-                if (wrap_dim > 0) {
-                    constexpr float TWO_PI = 6.28318530717958647692f;
-                    float wrap_f           = static_cast<float>(wrap_dim);
-                    float cycles           = omega_val * wrap_f / TWO_PI;
-                    // closest periodic harmonic, necessary to ensure things neatly tile
-                    // without this round, things don't tile at the boundaries and you end up
-                    // with the model knowing what is "center"
-                    float rounded = std::round(cycles);
-                    angle         = position * TWO_PI * rounded / wrap_f;
-                }
-                float sin_val        = std::sin(angle);
-                float cos_val        = std::cos(angle);
-                result[i][4 * j]     = cos_val;
-                result[i][4 * j + 1] = -sin_val;
-                result[i][4 * j + 2] = sin_val;
-                result[i][4 * j + 3] = cos_val;
+
+                out[i][j] = angle;
+            }
+        }
+
+        std::vector<std::vector<float>> result(pos_size, std::vector<float>(half_dim * 4));
+        for (int i = 0; i < pos_size; ++i) {
+            for (int j = 0; j < half_dim; ++j) {
+                result[i][4 * j]     = std::cos(out[i][j]);
+                result[i][4 * j + 1] = -std::sin(out[i][j]);
+                result[i][4 * j + 2] = std::sin(out[i][j]);
+                result[i][4 * j + 3] = std::cos(out[i][j]);
             }
         }
 
@@ -168,7 +169,7 @@ namespace Rope {
                                                   int bs,
                                                   int theta,
                                                   const std::vector<int>& axes_dim,
-                                                  const std::vector<std::vector<int>>* wrap_dims = nullptr) {
+                                                  const std::vector<std::vector<int>>& wrap_dims = {}) {
         std::vector<std::vector<float>> trans_ids = transpose(ids);
         size_t pos_len                            = ids.size() / bs;
         int num_axes                              = axes_dim.size();
@@ -183,9 +184,9 @@ namespace Rope {
         std::vector<std::vector<float>> emb(bs * pos_len, std::vector<float>(emb_dim * 2 * 2, 0.0));
         int offset = 0;
         for (int i = 0; i < num_axes; ++i) {
-            const std::vector<int>* axis_wrap_dims = nullptr;
-            if (wrap_dims != nullptr && i < (int)wrap_dims->size()) {
-                axis_wrap_dims = &(*wrap_dims)[i];
+            std::vector<int> axis_wrap_dims;
+            if (!wrap_dims.empty() && i < (int)wrap_dims.size()) {
+                axis_wrap_dims = wrap_dims[i];
             }
             std::vector<std::vector<float>> rope_emb =
                 rope(trans_ids[i], axes_dim[i], theta, axis_wrap_dims);  // [bs*pos_len, axes_dim[i]/2 * 2 * 2]
@@ -331,8 +332,7 @@ namespace Rope {
                 }
             }
         }
-        const std::vector<std::vector<int>>* wraps_ptr = wrap_dims.empty() ? nullptr : &wrap_dims;
-        return embed_nd(ids, bs, theta, axes_dim, wraps_ptr);
+        return embed_nd(ids, bs, theta, axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int h,
@@ -421,8 +421,7 @@ namespace Rope {
                 }
             }
         }
-        const std::vector<std::vector<int>>* wraps_ptr = wrap_dims.empty() ? nullptr : &wrap_dims;
-        return embed_nd(ids, bs, theta, axes_dim, wraps_ptr);
+        return embed_nd(ids, bs, theta, axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_vid_ids(int t,
@@ -585,8 +584,7 @@ namespace Rope {
             }
         }
 
-        const std::vector<std::vector<int>>* wraps_ptr = wrap_dims.empty() ? nullptr : &wrap_dims;
-        return embed_nd(ids, bs, theta, axes_dim, wraps_ptr);
+        return embed_nd(ids, bs, theta, axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ struct ggml_tensor* apply_rope(struct ggml_context* ctx,

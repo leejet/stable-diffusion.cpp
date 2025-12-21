@@ -127,8 +127,7 @@ public:
     bool use_tiny_autoencoder            = false;
     sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0, 0};
     bool offload_params_to_cpu           = false;
-
-    bool stacked_id = false;
+    bool stacked_id                      = false;
 
     bool is_using_v_parameterization     = false;
     bool is_using_edm_v_parameterization = false;
