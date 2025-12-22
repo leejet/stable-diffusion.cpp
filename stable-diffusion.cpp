@@ -167,7 +167,27 @@ public:
 #endif
 #ifdef SD_USE_VULKAN
         LOG_DEBUG("Using Vulkan backend");
-        for (int device = 0; device < ggml_backend_vk_get_device_count(); ++device) {
+        size_t device          = 0;
+        const int device_count = ggml_backend_vk_get_device_count();
+        if (device_count) {
+            const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
+            if (SD_VK_DEVICE != nullptr) {
+                std::string sd_vk_device_str = SD_VK_DEVICE;
+                try {
+                    device = std::stoull(sd_vk_device_str);
+                } catch (const std::invalid_argument&) {
+                    LOG_WARN("SD_VK_DEVICE environment variable is not a valid integer (%s). Falling back to device 0.", SD_VK_DEVICE);
+                    device = 0;
+                } catch (const std::out_of_range&) {
+                    LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to device 0.", SD_VK_DEVICE);
+                    device = 0;
+                }
+                if (device >= device_count) {
+                    LOG_WARN("Cannot find targeted vulkan device (%llu). Falling back to device 0.", device);
+                    device = 0;
+                }
+            }
+            LOG_INFO("Vulkan: Using device %llu", device);
             backend = ggml_backend_vk_init(device);
         }
         if (!backend) {
@@ -387,6 +407,10 @@ public:
             vae_decode_only = false;
         }
 
+        if (sd_ctx_params->circular_x || sd_ctx_params->circular_y) {
+            LOG_INFO("Using circular padding for convolutions");
+        }
+
         bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
 
         {
@@ -539,6 +563,9 @@ public:
             if (sd_ctx_params->diffusion_flash_attn) {
                 LOG_INFO("Using flash attention in the diffusion model");
                 diffusion_model->set_flash_attn_enabled(true);
+                if (high_noise_diffusion_model) {
+                    high_noise_diffusion_model->set_flash_attn_enabled(true);
+                }
             }
 
             cond_stage_model->alloc_params_buffer();
@@ -684,6 +711,20 @@ public:
                 }
                 pmid_model->get_param_tensors(tensors, "pmid");
             }
+
+            diffusion_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
+            if (high_noise_diffusion_model) {
+                high_noise_diffusion_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
+            }
+            if (control_net) {
+                control_net->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
+            }
+            if (first_stage_model) {
+                first_stage_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
+            }
+            if (tae_first_stage) {
+                tae_first_stage->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
+            }
         }
 
         struct ggml_init_params params;
@@ -707,6 +748,8 @@ public:
         if (stacked_id) {
             ignore_tensors.insert("pmid.unet.");
         }
+        ignore_tensors.insert("model.diffusion_model.__x0__");
+        ignore_tensors.insert("model.diffusion_model.__32x32__");
 
         if (vae_decode_only) {
             ignore_tensors.insert("first_stage_model.encoder");
@@ -841,6 +884,7 @@ public:
                     }
                 } else if (sd_version_is_flux(version)) {
                     pred_type = FLUX_FLOW_PRED;
+
                     if (flow_shift == INFINITY) {
                         flow_shift = 1.0f;  // TODO: validate
                         for (const auto& [name, tensor_storage] : tensor_storage_map) {
@@ -1495,7 +1539,18 @@ public:
         }
         std::vector<int> skip_layers(guidance.slg.layers, guidance.slg.layers + guidance.slg.layer_count);
 
-        float cfg_scale     = guidance.txt_cfg;
+        float cfg_scale = guidance.txt_cfg;
+        if (cfg_scale < 1.f) {
+            if (cfg_scale == 0.f) {
+                // Diffusers follow the convention from the original paper
+                // (https://arxiv.org/abs/2207.12598v1), so many distilled model docs
+                // recommend 0 as guidance; warn the user that it'll disable prompt folowing
+                LOG_WARN("unconditioned mode, images won't follow the prompt (use cfg-scale=1 for distilled models)");
+            } else {
+                LOG_WARN("cfg value out of expected range may produce unexpected results");
+            }
+        }
+
         float img_cfg_scale = std::isfinite(guidance.img_cfg) ? guidance.img_cfg : guidance.txt_cfg;
         float slg_scale     = guidance.slg.scale;
 
@@ -2623,6 +2678,7 @@ const char* scheduler_to_str[] = {
     "sgm_uniform",
     "simple",
     "smoothstep",
+    "kl_optimal",
     "lcm",
 };
 
@@ -2748,6 +2804,8 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->keep_control_net_on_cpu = false;
     sd_ctx_params->keep_vae_on_cpu         = false;
     sd_ctx_params->diffusion_flash_attn    = false;
+    sd_ctx_params->circular_x              = false;
+    sd_ctx_params->circular_y              = false;
     sd_ctx_params->chroma_use_dit_mask     = true;
     sd_ctx_params->chroma_use_t5_mask      = false;
     sd_ctx_params->chroma_t5_mask_pad      = 1;
@@ -2787,6 +2845,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "keep_control_net_on_cpu: %s\n"
              "keep_vae_on_cpu: %s\n"
              "diffusion_flash_attn: %s\n"
+             "circular_x: %s\n"
+             "circular_y: %s\n"
              "chroma_use_dit_mask: %s\n"
              "chroma_use_t5_mask: %s\n"
              "chroma_t5_mask_pad: %d\n",
@@ -2816,6 +2876,8 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
              BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
+             BOOL_STR(sd_ctx_params->circular_x),
+             BOOL_STR(sd_ctx_params->circular_y),
              BOOL_STR(sd_ctx_params->chroma_use_dit_mask),
              BOOL_STR(sd_ctx_params->chroma_use_t5_mask),
              sd_ctx_params->chroma_t5_mask_pad);
@@ -3006,12 +3068,15 @@ enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
     return EULER_A_SAMPLE_METHOD;
 }
 
-enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx) {
+enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method) {
     if (sd_ctx != nullptr && sd_ctx->sd != nullptr) {
         auto edm_v_denoiser = std::dynamic_pointer_cast<EDMVDenoiser>(sd_ctx->sd->denoiser);
         if (edm_v_denoiser) {
             return EXPONENTIAL_SCHEDULER;
         }
+    }
+    if (sample_method == LCM_SAMPLE_METHOD) {
+        return LCM_SCHEDULER;
     }
     return DISCRETE_SCHEDULER;
 }
@@ -3447,9 +3512,13 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
             LOG_WARN("sample_steps != custom_sigmas_count - 1, set sample_steps to %d", sample_steps);
         }
     } else {
+        scheduler_t scheduler = sd_img_gen_params->sample_params.scheduler;
+        if (scheduler == SCHEDULER_COUNT) {
+            scheduler = sd_get_default_scheduler(sd_ctx, sample_method);
+        }
         sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
                                                   sd_ctx->sd->get_image_seq_len(height, width),
-                                                  sd_img_gen_params->sample_params.scheduler,
+                                                  scheduler,
                                                   sd_ctx->sd->version);
     }
 
@@ -3732,9 +3801,13 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             }
         }
     } else {
+        scheduler_t scheduler = sd_vid_gen_params->sample_params.scheduler;
+        if (scheduler == SCHEDULER_COUNT) {
+            scheduler = sd_get_default_scheduler(sd_ctx, sample_method);
+        }
         sigmas = sd_ctx->sd->denoiser->get_sigmas(total_steps,
                                                   0,
-                                                  sd_vid_gen_params->sample_params.scheduler,
+                                                  scheduler,
                                                   sd_ctx->sd->version);
     }
 

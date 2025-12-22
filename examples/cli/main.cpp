@@ -32,6 +32,7 @@ struct SDCliParams {
 
     bool verbose          = false;
     bool canny_preprocess = false;
+    bool convert_name     = false;
 
     preview_t preview_method = PREVIEW_NONE;
     int preview_interval     = 1;
@@ -69,6 +70,10 @@ struct SDCliParams {
              "--canny",
              "apply canny preprocessor (edge detection)",
              true, &canny_preprocess},
+            {"",
+             "--convert-name",
+             "convert tensor name (for convert mode)",
+             true, &convert_name},
             {"-v",
              "--verbose",
              "print extra info",
@@ -174,6 +179,7 @@ struct SDCliParams {
             << "  verbose: " << (verbose ? "true" : "false") << ",\n"
             << "  color: " << (color ? "true" : "false") << ",\n"
             << "  canny_preprocess: " << (canny_preprocess ? "true" : "false") << ",\n"
+            << "  convert_name: " << (convert_name ? "true" : "false") << ",\n"
             << "  preview_method: " << previews_str[preview_method] << ",\n"
             << "  preview_interval: " << preview_interval << ",\n"
             << "  preview_path: \"" << preview_path << "\",\n"
@@ -387,7 +393,8 @@ int main(int argc, const char* argv[]) {
                                ctx_params.vae_path.c_str(),
                                cli_params.output_path.c_str(),
                                ctx_params.wtype,
-                               ctx_params.tensor_type_rules.c_str());
+                               ctx_params.tensor_type_rules.c_str(),
+                               cli_params.convert_name);
         if (!success) {
             LOG_ERROR("convert '%s'/'%s' to '%s' failed",
                       ctx_params.model_path.c_str(),
@@ -579,7 +586,7 @@ int main(int argc, const char* argv[]) {
         }
 
         if (gen_params.sample_params.scheduler == SCHEDULER_COUNT) {
-            gen_params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx);
+            gen_params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx, gen_params.sample_params.sample_method);
         }
 
         if (cli_params.mode == IMG_GEN) {

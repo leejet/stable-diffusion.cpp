@@ -9,6 +9,7 @@ CLI Options:
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
   --canny                     apply canny preprocessor (edge detection)
+  --convert-name              convert tensor name (for convert mode)
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
   --taesd-preview-only        prevents usage of taesd for decoding the final image. (for use with --preview tae)
@@ -120,7 +121,7 @@ Generation Options:
                                            tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)
   --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm,
                                            ddim_trailing, tcd] default: euler for Flux/SD3/Wan, euler_a otherwise
-  --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm],
+  --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm],
                                            default: discrete
   --sigmas                                 custom sigma values for the sampler, comma-separated (e.g., "14.61,7.8,3.5,0.0").
   --skip-layers                            layers to skip for SLG steps (default: [7,8,9])

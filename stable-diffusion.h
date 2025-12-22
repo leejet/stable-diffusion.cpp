@@ -60,6 +60,7 @@ enum scheduler_t {
     SGM_UNIFORM_SCHEDULER,
     SIMPLE_SCHEDULER,
     SMOOTHSTEP_SCHEDULER,
+    KL_OPTIMAL_SCHEDULER,
     LCM_SCHEDULER,
     SCHEDULER_COUNT
 };
@@ -188,6 +189,8 @@ typedef struct {
     bool tae_preview_only;
     bool diffusion_conv_direct;
     bool vae_conv_direct;
+    bool circular_x;
+    bool circular_y;
     bool force_sdxl_vae_conv_scale;
     bool chroma_use_dit_mask;
     bool chroma_use_t5_mask;
@@ -356,7 +359,7 @@ SD_API void sd_sample_params_init(sd_sample_params_t* sample_params);
 SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
 
 SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
-SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx);
+SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method);
 
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
@@ -384,7 +387,8 @@ SD_API bool convert(const char* input_path,
                     const char* vae_path,
                     const char* output_path,
                     enum sd_type_t output_type,
-                    const char* tensor_type_rules);
+                    const char* tensor_type_rules,
+                    bool convert_name);
 
 SD_API bool preprocess_canny(sd_image_t image,
                              float high_threshold,
