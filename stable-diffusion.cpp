@@ -7,17 +7,17 @@
 #include "stable-diffusion.h"
 #include "util.h"
 
+#include "cache_dit.hpp"
 #include "conditioner.hpp"
 #include "control.hpp"
 #include "denoiser.hpp"
 #include "diffusion_model.hpp"
 #include "easycache.hpp"
 #include "esrgan.hpp"
-#include "ucache.hpp"
-#include "cache_dit.hpp"
 #include "lora.hpp"
 #include "pmid.hpp"
 #include "tae.hpp"
+#include "ucache.hpp"
 #include "vae.hpp"
 
 #include "latent-preview.h"
@@ -1527,12 +1527,12 @@ public:
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         SDCondition id_cond,
-                        std::vector<ggml_tensor*> ref_latents         = {},
-                        bool increase_ref_index                       = false,
-                        ggml_tensor* denoise_mask                     = nullptr,
-                        ggml_tensor* vace_context                     = nullptr,
-                        float vace_strength                           = 1.f,
-                        const sd_cache_params_t* cache_params         = nullptr) {
+                        std::vector<ggml_tensor*> ref_latents = {},
+                        bool increase_ref_index               = false,
+                        ggml_tensor* denoise_mask             = nullptr,
+                        ggml_tensor* vace_context             = nullptr,
+                        float vace_strength                   = 1.f,
+                        const sd_cache_params_t* cache_params = nullptr) {
         if (shifted_timestep > 0 && !sd_version_is_sdxl(version)) {
             LOG_WARN("timestep shifting is only supported for SDXL models!");
             shifted_timestep = 0;
@@ -1636,13 +1636,13 @@ public:
                     LOG_WARN("CacheDIT requested but not supported for this model type (only DiT models)");
                 } else {
                     DBCacheConfig dbcfg;
-                    dbcfg.enabled = (cache_params->mode == SD_CACHE_DBCACHE ||
+                    dbcfg.enabled                     = (cache_params->mode == SD_CACHE_DBCACHE ||
                                      cache_params->mode == SD_CACHE_CACHE_DIT);
-                    dbcfg.Fn_compute_blocks = cache_params->Fn_compute_blocks;
-                    dbcfg.Bn_compute_blocks = cache_params->Bn_compute_blocks;
-                    dbcfg.residual_diff_threshold = cache_params->residual_diff_threshold;
-                    dbcfg.max_warmup_steps = cache_params->max_warmup_steps;
-                    dbcfg.max_cached_steps = cache_params->max_cached_steps;
+                    dbcfg.Fn_compute_blocks           = cache_params->Fn_compute_blocks;
+                    dbcfg.Bn_compute_blocks           = cache_params->Bn_compute_blocks;
+                    dbcfg.residual_diff_threshold     = cache_params->residual_diff_threshold;
+                    dbcfg.max_warmup_steps            = cache_params->max_warmup_steps;
+                    dbcfg.max_cached_steps            = cache_params->max_cached_steps;
                     dbcfg.max_continuous_cached_steps = cache_params->max_continuous_cached_steps;
                     if (cache_params->scm_mask != nullptr && strlen(cache_params->scm_mask) > 0) {
                         dbcfg.steps_computation_mask = parse_scm_mask(cache_params->scm_mask);
@@ -1650,17 +1650,16 @@ public:
                     dbcfg.scm_policy_dynamic = cache_params->scm_policy_dynamic;
 
                     TaylorSeerConfig tcfg;
-                    tcfg.enabled = (cache_params->mode == SD_CACHE_TAYLORSEER ||
+                    tcfg.enabled             = (cache_params->mode == SD_CACHE_TAYLORSEER ||
                                     cache_params->mode == SD_CACHE_CACHE_DIT);
-                    tcfg.n_derivatives = cache_params->taylorseer_n_derivatives;
+                    tcfg.n_derivatives       = cache_params->taylorseer_n_derivatives;
                     tcfg.skip_interval_steps = cache_params->taylorseer_skip_interval;
 
                     cachedit_state.init(dbcfg, tcfg);
                     if (cachedit_state.enabled()) {
                         cachedit_enabled = true;
                         LOG_INFO("CacheDIT enabled - mode: %s, Fn: %d, Bn: %d, threshold: %.3f, warmup: %d",
-                                 cache_params->mode == SD_CACHE_CACHE_DIT ? "DBCache+TaylorSeer" :
-                                 (cache_params->mode == SD_CACHE_DBCACHE ? "DBCache" : "TaylorSeer"),
+                                 cache_params->mode == SD_CACHE_CACHE_DIT ? "DBCache+TaylorSeer" : (cache_params->mode == SD_CACHE_DBCACHE ? "DBCache" : "TaylorSeer"),
                                  dbcfg.Fn_compute_blocks,
                                  dbcfg.Bn_compute_blocks,
                                  dbcfg.residual_diff_threshold,
@@ -1794,10 +1793,10 @@ public:
                     return false;
                 }
                 return ucache_state.before_condition(condition,
-                                                      diffusion_params.x,
-                                                      output_tensor,
-                                                      sigma,
-                                                      ucache_step_index);
+                                                     diffusion_params.x,
+                                                     output_tensor,
+                                                     sigma,
+                                                     ucache_step_index);
             };
 
             auto ucache_after_condition = [&](const SDCondition* condition, struct ggml_tensor* output_tensor) {
@@ -1805,8 +1804,8 @@ public:
                     return;
                 }
                 ucache_state.after_condition(condition,
-                                              diffusion_params.x,
-                                              output_tensor);
+                                             diffusion_params.x,
+                                             output_tensor);
             };
 
             auto ucache_step_is_skipped = [&]() {
@@ -1824,10 +1823,10 @@ public:
                     return false;
                 }
                 return cachedit_state.before_condition(condition,
-                                                        diffusion_params.x,
-                                                        output_tensor,
-                                                        sigma,
-                                                        cachedit_step_index);
+                                                       diffusion_params.x,
+                                                       output_tensor,
+                                                       sigma,
+                                                       cachedit_step_index);
             };
 
             auto cachedit_after_condition = [&](const SDCondition* condition, struct ggml_tensor* output_tensor) {
@@ -1835,8 +1834,8 @@ public:
                     return;
                 }
                 cachedit_state.after_condition(condition,
-                                                diffusion_params.x,
-                                                output_tensor);
+                                               diffusion_params.x,
+                                               output_tensor);
             };
 
             auto cachedit_step_is_skipped = [&]() {
@@ -2769,14 +2768,14 @@ enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
 }
 
 void sd_cache_params_init(sd_cache_params_t* cache_params) {
-    *cache_params                        = {};
-    cache_params->mode                   = SD_CACHE_DISABLED;
-    cache_params->reuse_threshold        = 1.0f;
-    cache_params->start_percent          = 0.15f;
-    cache_params->end_percent            = 0.95f;
-    cache_params->error_decay_rate       = 1.0f;
-    cache_params->use_relative_threshold = true;
-    cache_params->reset_error_on_compute = true;
+    *cache_params                             = {};
+    cache_params->mode                        = SD_CACHE_DISABLED;
+    cache_params->reuse_threshold             = 1.0f;
+    cache_params->start_percent               = 0.15f;
+    cache_params->end_percent                 = 0.95f;
+    cache_params->error_decay_rate            = 1.0f;
+    cache_params->use_relative_threshold      = true;
+    cache_params->reset_error_on_compute      = true;
     cache_params->Fn_compute_blocks           = 8;
     cache_params->Bn_compute_blocks           = 0;
     cache_params->residual_diff_threshold     = 0.08f;
@@ -3102,9 +3101,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     std::vector<sd_image_t*> ref_images,
                                     std::vector<ggml_tensor*> ref_latents,
                                     bool increase_ref_index,
-                                    ggml_tensor* concat_latent                    = nullptr,
-                                    ggml_tensor* denoise_mask                     = nullptr,
-                                    const sd_cache_params_t* cache_params         = nullptr) {
+                                    ggml_tensor* concat_latent            = nullptr,
+                                    ggml_tensor* denoise_mask             = nullptr,
+                                    const sd_cache_params_t* cache_params = nullptr) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library

@@ -10,16 +10,16 @@
 #include "ggml_extend.hpp"
 
 struct UCacheConfig {
-    bool enabled                 = false;
-    float reuse_threshold        = 1.0f;
-    float start_percent          = 0.15f;
-    float end_percent            = 0.95f;
-    float error_decay_rate       = 1.0f;
-    bool use_relative_threshold  = true;
-    bool adaptive_threshold      = true;
-    float early_step_multiplier  = 0.5f;
-    float late_step_multiplier   = 1.5f;
-    bool reset_error_on_compute  = true;
+    bool enabled                = false;
+    float reuse_threshold       = 1.0f;
+    float start_percent         = 0.15f;
+    float end_percent           = 0.95f;
+    float error_decay_rate      = 1.0f;
+    bool use_relative_threshold = true;
+    bool adaptive_threshold     = true;
+    float early_step_multiplier = 0.5f;
+    float late_step_multiplier  = 1.5f;
+    bool reset_error_on_compute = true;
 };
 
 struct UCacheCacheEntry {
@@ -74,8 +74,10 @@ struct UCacheState {
                 sum_transformation_rate += change_rate;
                 sum_output_norm += output_norm;
                 sample_count++;
-                if (change_rate < min_change_rate) min_change_rate = change_rate;
-                if (change_rate > max_change_rate) max_change_rate = change_rate;
+                if (change_rate < min_change_rate)
+                    min_change_rate = change_rate;
+                if (change_rate > max_change_rate)
+                    max_change_rate = change_rate;
             }
         }
 
@@ -136,8 +138,10 @@ struct UCacheState {
         size_t start_step = static_cast<size_t>(config.start_percent * n_steps);
         size_t end_step   = static_cast<size_t>(config.end_percent * n_steps);
 
-        if (start_step >= n_steps) start_step = n_steps - 1;
-        if (end_step >= n_steps) end_step = n_steps - 1;
+        if (start_step >= n_steps)
+            start_step = n_steps - 1;
+        if (end_step >= n_steps)
+            end_step = n_steps - 1;
 
         start_sigma = sigmas[start_step];
         end_sigma   = sigmas[end_step];
@@ -207,8 +211,7 @@ struct UCacheState {
             effective_total = std::max(20, steps_computed_since_active * 2);
         }
 
-        float progress = (effective_total > 0) ?
-            (static_cast<float>(steps_computed_since_active) / effective_total) : 0.0f;
+        float progress = (effective_total > 0) ? (static_cast<float>(steps_computed_since_active) / effective_total) : 0.0f;
 
         float multiplier = 1.0f;
         if (progress < 0.2f) {
@@ -306,9 +309,8 @@ struct UCacheState {
 
         if (has_output_prev_norm && has_relative_transformation_rate &&
             last_input_change > 0.0f && output_prev_norm > 0.0f) {
-
             float approx_output_change_rate = (relative_transformation_rate * last_input_change) / output_prev_norm;
-            accumulated_error = accumulated_error * config.error_decay_rate + approx_output_change_rate;
+            accumulated_error               = accumulated_error * config.error_decay_rate + approx_output_change_rate;
 
             float effective_threshold = get_adaptive_threshold();
             if (config.use_relative_threshold && reference_output_norm > 0.0f) {

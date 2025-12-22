@@ -1735,39 +1735,39 @@ struct SDGenerationParams {
 
         if (!cache_mode.empty()) {
             if (cache_mode == "easycache") {
-                cache_params.mode = SD_CACHE_EASYCACHE;
-                cache_params.reuse_threshold = 0.2f;
-                cache_params.start_percent = 0.15f;
-                cache_params.end_percent = 0.95f;
-                cache_params.error_decay_rate = 1.0f;
+                cache_params.mode                   = SD_CACHE_EASYCACHE;
+                cache_params.reuse_threshold        = 0.2f;
+                cache_params.start_percent          = 0.15f;
+                cache_params.end_percent            = 0.95f;
+                cache_params.error_decay_rate       = 1.0f;
                 cache_params.use_relative_threshold = true;
                 cache_params.reset_error_on_compute = true;
             } else if (cache_mode == "ucache") {
-                cache_params.mode = SD_CACHE_UCACHE;
-                cache_params.reuse_threshold = 1.0f;
-                cache_params.start_percent = 0.15f;
-                cache_params.end_percent = 0.95f;
-                cache_params.error_decay_rate = 1.0f;
+                cache_params.mode                   = SD_CACHE_UCACHE;
+                cache_params.reuse_threshold        = 1.0f;
+                cache_params.start_percent          = 0.15f;
+                cache_params.end_percent            = 0.95f;
+                cache_params.error_decay_rate       = 1.0f;
                 cache_params.use_relative_threshold = true;
                 cache_params.reset_error_on_compute = true;
             } else if (cache_mode == "dbcache") {
-                cache_params.mode = SD_CACHE_DBCACHE;
-                cache_params.Fn_compute_blocks = 8;
-                cache_params.Bn_compute_blocks = 0;
+                cache_params.mode                    = SD_CACHE_DBCACHE;
+                cache_params.Fn_compute_blocks       = 8;
+                cache_params.Bn_compute_blocks       = 0;
                 cache_params.residual_diff_threshold = 0.08f;
-                cache_params.max_warmup_steps = 8;
+                cache_params.max_warmup_steps        = 8;
             } else if (cache_mode == "taylorseer") {
-                cache_params.mode = SD_CACHE_TAYLORSEER;
-                cache_params.Fn_compute_blocks = 8;
-                cache_params.Bn_compute_blocks = 0;
+                cache_params.mode                    = SD_CACHE_TAYLORSEER;
+                cache_params.Fn_compute_blocks       = 8;
+                cache_params.Bn_compute_blocks       = 0;
                 cache_params.residual_diff_threshold = 0.08f;
-                cache_params.max_warmup_steps = 8;
+                cache_params.max_warmup_steps        = 8;
             } else if (cache_mode == "cache-dit") {
-                cache_params.mode = SD_CACHE_CACHE_DIT;
-                cache_params.Fn_compute_blocks = 8;
-                cache_params.Bn_compute_blocks = 0;
+                cache_params.mode                    = SD_CACHE_CACHE_DIT;
+                cache_params.Fn_compute_blocks       = 8;
+                cache_params.Bn_compute_blocks       = 0;
                 cache_params.residual_diff_threshold = 0.08f;
-                cache_params.max_warmup_steps = 8;
+                cache_params.max_warmup_steps        = 8;
             }
 
             if (!cache_option.empty()) {
