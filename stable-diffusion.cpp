@@ -3390,7 +3390,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     }
 
     std::vector<uint8_t> empty_image_data;
-    sd_image_t empty_image = {(uint32_t)width, (uint32_t)height, image_channels, nullptr};
+    sd_image_t empty_image = {(uint32_t)width, (uint32_t)height, (uint32_t)image_channels, nullptr};
     if (ref_images.empty() && sd_version_is_unet_edit(sd_ctx->sd->version)) {
         LOG_WARN("This model needs at least one reference image; using an empty reference");
         empty_image_data.resize(width * height * 3);
