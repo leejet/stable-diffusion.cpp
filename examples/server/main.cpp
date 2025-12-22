@@ -423,6 +423,7 @@ int main(int argc, const char** argv) {
                 gen_params.strength,
                 gen_params.seed,
                 gen_params.batch_count,
+                1,
                 control_image,
                 gen_params.control_strength,
                 {
@@ -636,6 +637,7 @@ int main(int argc, const char** argv) {
                 gen_params.strength,
                 gen_params.seed,
                 gen_params.batch_count,
+                1,
                 control_image,
                 gen_params.control_strength,
                 {

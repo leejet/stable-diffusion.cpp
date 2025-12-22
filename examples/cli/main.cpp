@@ -601,6 +601,7 @@ int main(int argc, const char* argv[]) {
                 gen_params.strength,
                 gen_params.seed,
                 gen_params.batch_count,
+                gen_params.video_frames,
                 control_image,
                 gen_params.control_strength,
                 {

@@ -266,6 +266,7 @@ typedef struct {
     float strength;
     int64_t seed;
     int batch_count;
+    int video_frames;
     sd_image_t control_image;
     float control_strength;
     sd_pm_params_t pm_params;

@@ -2832,7 +2832,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     bool increase_ref_index,
                                     ggml_tensor* concat_latent                    = nullptr,
                                     ggml_tensor* denoise_mask                     = nullptr,
-                                    const sd_easycache_params_t* easycache_params = nullptr) {
+                                    const sd_easycache_params_t* easycache_params = nullptr,
+                                    int video_frames = 1) {
     if (seed < 0) {
         // Generally, when using the provided command line, the seed is always >0.
         // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
@@ -3144,7 +3145,10 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     for (size_t i = 0; i < final_latents.size(); i++) {
         t1 = ggml_time_ms();
         if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
-            int layers = 4;
+            int layers = video_frames;
+            if (layers <= 1) {
+                layers = 4;
+            }
             for (int layer_index = 0; layer_index < layers; layer_index++) {
                 ggml_tensor* final_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, final_latents[i]->ne[0], final_latents[i]->ne[1], final_latents[i]->ne[3], 1);
                 ggml_ext_tensor_iter(final_latent, [&](ggml_tensor* final_latent, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
@@ -3376,7 +3380,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
             LOG_WARN("This is an inpainting model, this should only be used in img2img mode with a mask");
         }
         if (sd_ctx->sd->version == VERSION_QWEN_IMAGE_LAYERED) {
-            int layers  = 4;
+            int layers = sd_img_gen_params->video_frames;
+            if (layers <= 1) {
+                layers = 4;
+            }
             init_latent = sd_ctx->sd->generate_init_latent(work_ctx, width, height, layers + 1, true);
         } else {
             init_latent = sd_ctx->sd->generate_init_latent(work_ctx, width, height);
@@ -3480,7 +3487,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->increase_ref_index,
                                                         concat_latent,
                                                         denoise_mask,
-                                                        &sd_img_gen_params->easycache);
+                                                        &sd_img_gen_params->easycache,
+                                                        sd_img_gen_params->video_frames);
 
     size_t t2 = ggml_time_ms();
 

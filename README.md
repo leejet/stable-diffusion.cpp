@@ -48,6 +48,7 @@ API and command-line option may change frequently.***
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
     - [Qwen Image](./docs/qwen_image.md)
+    - [Qwen Image Layered](./docs/qwen_image_layered.md)
     - [Z-Image](./docs/z_image.md)
     - [Ovis-Image](./docs/ovis_image.md)
   - Image Edit Models
