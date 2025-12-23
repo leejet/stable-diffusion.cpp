@@ -9,6 +9,7 @@ CLI Options:
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
   --canny                     apply canny preprocessor (edge detection)
+  --convert-name              convert tensor name (for convert mode)
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
   --taesd-preview-only        prevents usage of taesd for decoding the final image. (for use with --preview tae)
@@ -31,6 +32,7 @@ Context Options:
   --high-noise-diffusion-model <string>    path to the standalone high noise diffusion model
   --vae <string>                           path to standalone vae model
   --taesd <string>                         path to taesd. Using Tiny AutoEncoder for fast decoding (low quality)
+  --tae <string>                           alias of --taesd
   --control-net <string>                   path to control net model
   --embd-dir <string>                      embeddings directory
   --lora-model-dir <string>                lora model directory
@@ -51,6 +53,9 @@ Context Options:
   --diffusion-fa                           use flash attention in the diffusion model
   --diffusion-conv-direct                  use ggml_conv2d_direct in the diffusion model
   --vae-conv-direct                        use ggml_conv2d_direct in the vae model
+  --circular                               enable circular padding for convolutions
+  --circularx                              enable circular RoPE wrapping on x-axis (width) only
+  --circulary                              enable circular RoPE wrapping on y-axis (height) only
   --chroma-disable-dit-mask                disable dit mask for chroma
   --chroma-enable-t5-mask                  enable t5 mask for chroma
   --type                                   weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). If not specified, the default is the
@@ -92,6 +97,7 @@ Generation Options:
   --timestep-shift <int>                   shift timestep for NitroFusion models (default: 0). recommended N for NitroSD-Realism around 250 and 500 for
                                            NitroSD-Vibrant
   --upscale-repeats <int>                  Run the ESRGAN upscaler this many times (default: 1)
+  --upscale-tile-size <int>                tile size for ESRGAN upscaling (default: 128)
   --cfg-scale <float>                      unconditional guidance scale: (default: 7.0)
   --img-cfg-scale <float>                  image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)
   --guidance <float>                       distilled guidance scale for models with guidance input (default: 3.5)
@@ -119,11 +125,21 @@ Generation Options:
                                            tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)
   --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm,
                                            ddim_trailing, tcd] default: euler for Flux/SD3/Wan, euler_a otherwise
-  --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm],
-                                           default: discrete
+  --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple,
+                                           kl_optimal, lcm], default: discrete
   --sigmas                                 custom sigma values for the sampler, comma-separated (e.g., "14.61,7.8,3.5,0.0").
   --skip-layers                            layers to skip for SLG steps (default: [7,8,9])
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)
-  --easycache                              enable EasyCache for DiT models with optional "threshold,start_percent,end_percent" (default: 0.2,0.15,0.95)
+  --cache-mode                             caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)
+  --cache-option                           named cache params (key=value format, comma-separated):
+                                                                                      - easycache/ucache:
+                                           threshold=,start=,end=,decay=,relative=,reset=
+                                                                                      - dbcache/taylorseer/cache-dit:
+                                           Fn=,Bn=,threshold=,warmup=
+                                                                                      Examples: "threshold=0.25" or
+                                           "threshold=1.5,reset=0"
+  --cache-preset                           cache-dit preset: 'slow'/'s', 'medium'/'m', 'fast'/'f', 'ultra'/'u'
+  --scm-mask                               SCM steps mask for cache-dit: comma-separated 0/1 (e.g., "1,1,1,0,0,1,0,0,1,0") - 1=compute, 0=can cache
+  --scm-policy                             SCM policy: 'dynamic' (default) or 'static'
 ```
