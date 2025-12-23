@@ -231,13 +231,14 @@ namespace Qwen {
             if (index == nullptr) {
                 return ggml_ext_chunk(ctx, mod_params, 6, 0);
             }
+            mod_params          = ggml_reshape_1d(ctx, mod_params, ggml_nelements(mod_params));
             auto mod_params_vec = ggml_ext_chunk(ctx, mod_params, 12, 0);
             index               = ggml_reshape_3d(ctx, index, 1, index->ne[0], index->ne[1]);                                      // [N, n_img_token, 1]
             index               = ggml_repeat_4d(ctx, index, mod_params_vec[0]->ne[0], index->ne[1], index->ne[2], index->ne[3]);  // [N, n_img_token, hidden_size]
             std::vector<ggml_tensor*> mod_results;
             for (int i = 0; i < 6; i++) {
-                auto mod_0 = mod_params_vec[2 * i];
-                auto mod_1 = mod_params_vec[2 * i + 1];
+                auto mod_0 = mod_params_vec[i];
+                auto mod_1 = mod_params_vec[i + 6];
 
                 // mod_result = torch.where(index == 0, mod_0, mod_1)
                 // mod_result = (1 - index)*mod_0 + index*mod_1
@@ -466,14 +467,14 @@ namespace Qwen {
             auto norm_out        = std::dynamic_pointer_cast<AdaLayerNormContinuous>(blocks["norm_out"]);
             auto proj_out        = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
 
-            if (params.zero_cond_t) {
-                timestep = ggml_concat(ctx->ggml_ctx, timestep, ggml_scale(ctx->ggml_ctx, timestep, 0.f), 0);
-            }
-
             auto t_emb = time_text_embed->forward(ctx, timestep);
-            auto img   = img_in->forward(ctx, x);
-            auto txt   = txt_norm->forward(ctx, context);
-            txt        = txt_in->forward(ctx, txt);
+            if (params.zero_cond_t) {
+                auto t_emb_0 = time_text_embed->forward(ctx, ggml_ext_zeros(ctx->ggml_ctx, timestep->ne[0], timestep->ne[1], timestep->ne[2], timestep->ne[3]));
+                t_emb        = ggml_concat(ctx->ggml_ctx, t_emb, t_emb_0, 1);
+            }
+            auto img = img_in->forward(ctx, x);
+            auto txt = txt_norm->forward(ctx, context);
+            txt      = txt_in->forward(ctx, txt);
 
             for (int i = 0; i < params.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<QwenImageTransformerBlock>(blocks["transformer_blocks." + std::to_string(i)]);
@@ -647,7 +648,7 @@ namespace Qwen {
                     modulate_index_vec.insert(modulate_index_vec.end(), num_ref_img_tokens, 1.f);
                 }
 
-                modulate_index = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, modulate_index_vec.size());
+                modulate_index       = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, modulate_index_vec.size());
                 set_backend_tensor_data(modulate_index, modulate_index_vec.data());
             }
 
