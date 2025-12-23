@@ -28,7 +28,13 @@ public:
         if (vae_downsample) {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
 
-            x = ggml_ext_pad(ctx->ggml_ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+            // Commenting out (from commit 50ff966)
+            // x = ggml_ext_pad(ctx->ggml_ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+
+            // Restoring asymmetric padding (right/bottom only) while keeping circular padding support.
+            // Matches original ggml_pad behavior, maintains spatial alignment through VAE encode/decode cycles.
+            x = ggml_ext_pad_ext(ctx->ggml_ctx, x, 0, 1, 0, 1, 0, 0, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+
             x = conv->forward(ctx, x);
         } else {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["op"]);
