@@ -439,9 +439,9 @@ struct ZImageModel : public DiffusionModel {
         return z_image.compute(n_threads,
                                diffusion_params.x,
                                diffusion_params.timesteps,
-                               diffusion_params.context,
+                               {diffusion_params.context},
                                diffusion_params.ref_latents,
-                               true,  // increase_ref_index
+                               {},
                                output,
                                output_ctx);
     }

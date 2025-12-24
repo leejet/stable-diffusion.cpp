@@ -774,34 +774,37 @@ namespace ZImage {
             z_image.get_param_tensors(tensors, prefix);
         }
 
-        struct ggml_cgraph* build_graph(struct ggml_tensor* x,
-                                        struct ggml_tensor* timesteps,
-                                        struct ggml_tensor* context,
-                                        std::vector<ggml_tensor*> ref_latents = {},
-                                        bool increase_ref_index               = false) {
+        struct ggml_cgraph* build_graph(ggml_tensor* x,
+                                        ggml_tensor* timesteps,
+                                        std::vector<ggml_tensor*> contexts,
+                                        std::vector<ggml_tensor*> ref_latents  = {},
+                                        std::vector<ggml_tensor*> siglip_feats = {}) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE);
 
-            x         = to_backend(x);
-            context   = to_backend(context);
+            x = to_backend(x);
+
+            for (int i = 0; i < contexts.size(); i++) {
+                contexts[i] = to_backend(contexts[i]);
+            }
+
             timesteps = to_backend(timesteps);
 
             for (int i = 0; i < ref_latents.size(); i++) {
                 ref_latents[i] = to_backend(ref_latents[i]);
             }
 
-            pe_vec      = Rope::gen_z_image_pe(x->ne[1],
-                                               x->ne[0],
-                                               z_image_params.patch_size,
-                                               x->ne[3],
-                                               context->ne[1],
-                                               SEQ_MULTI_OF,
+            pe_vec      = Rope::gen_z_image_pe(x,
+                                               contexts,
                                                ref_latents,
-                                               increase_ref_index,
+                                               siglip_feats,
+                                               z_image_params.patch_size,
+                                               SEQ_MULTI_OF,
                                                z_image_params.theta,
+                                               z_image_params.axes_dim,
                                                circular_y_enabled,
                                                circular_x_enabled,
-                                               z_image_params.axes_dim);
+                                               x->ne[3]);
             int pos_len = pe_vec.size() / z_image_params.axes_dim_sum / 2;
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
@@ -814,7 +817,7 @@ namespace ZImage {
             struct ggml_tensor* out = z_image.forward(&runner_ctx,
                                                       x,
                                                       timesteps,
-                                                      {context},
+                                                      contexts,
                                                       pe,
                                                       ref_latents);
 
@@ -826,16 +829,16 @@ namespace ZImage {
         bool compute(int n_threads,
                      struct ggml_tensor* x,
                      struct ggml_tensor* timesteps,
-                     struct ggml_tensor* context,
-                     std::vector<ggml_tensor*> ref_latents = {},
-                     bool increase_ref_index               = false,
-                     struct ggml_tensor** output           = nullptr,
-                     struct ggml_context* output_ctx       = nullptr) {
+                     std::vector<ggml_tensor*> contexts,
+                     std::vector<ggml_tensor*> ref_latents  = {},
+                     std::vector<ggml_tensor*> siglip_feats = {},
+                     struct ggml_tensor** output            = nullptr,
+                     struct ggml_context* output_ctx        = nullptr) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, ref_latents, increase_ref_index);
+                return build_graph(x, timesteps, contexts, ref_latents, siglip_feats);
             };
 
             return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -867,7 +870,7 @@ namespace ZImage {
                 struct ggml_tensor* out = nullptr;
 
                 int t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, {}, false, &out, work_ctx);
+                compute(8, x, timesteps, {context}, {}, {}, &out, work_ctx);
                 int t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
