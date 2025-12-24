@@ -105,9 +105,9 @@ struct SDSvrParams {
     std::string listen_ip = "127.0.0.1";
     int listen_port       = 1234;
     std::string serve_html_path;
-    bool normal_exit      = false;
-    bool verbose          = false;
-    bool color            = false;
+    bool normal_exit = false;
+    bool verbose     = false;
+    bool color       = false;
 
     ArgOptions get_options() {
         ArgOptions options;
