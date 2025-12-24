@@ -6,6 +6,7 @@ usage: ./bin/sd-server  [options]
 Svr Options:
   -l, --listen-ip <string>    server listen ip (default: 127.0.0.1)
   --listen-port <int>         server listen port (default: 1234)
+  --serve-html-path <string>  path to HTML file to serve at root (optional)
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
   -h, --help                  show this help message and exit
