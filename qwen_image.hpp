@@ -648,7 +648,7 @@ namespace Qwen {
                     modulate_index_vec.insert(modulate_index_vec.end(), num_ref_img_tokens, 1.f);
                 }
 
-                modulate_index       = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, modulate_index_vec.size());
+                modulate_index = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, modulate_index_vec.size());
                 set_backend_tensor_data(modulate_index, modulate_index_vec.data());
             }
 
