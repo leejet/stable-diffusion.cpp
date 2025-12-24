@@ -104,6 +104,7 @@ std::string iso_timestamp_now() {
 struct SDSvrParams {
     std::string listen_ip = "127.0.0.1";
     int listen_port       = 1234;
+    std::string serve_html_path;
     bool normal_exit      = false;
     bool verbose          = false;
     bool color            = false;
@@ -115,7 +116,11 @@ struct SDSvrParams {
             {"-l",
              "--listen-ip",
              "server listen ip (default: 127.0.0.1)",
-             &listen_ip}};
+             &listen_ip},
+            {"",
+             "--serve-html-path",
+             "path to HTML file to serve at root (optional)",
+             &serve_html_path}};
 
         options.int_options = {
             {"",
@@ -159,6 +164,11 @@ struct SDSvrParams {
             LOG_ERROR("error: listen_port should be in the range [0, 65535]");
             return false;
         }
+
+        if (!serve_html_path.empty() && !fs::exists(serve_html_path)) {
+            LOG_ERROR("error: serve_html_path file does not exist: %s", serve_html_path.c_str());
+            return false;
+        }
         return true;
     }
 
@@ -167,6 +177,7 @@ struct SDSvrParams {
         oss << "SDSvrParams {\n"
             << "  listen_ip: " << listen_ip << ",\n"
             << "  listen_port: \"" << listen_port << "\",\n"
+            << "  serve_html_path: \"" << serve_html_path << "\",\n"
             << "}";
         return oss.str();
     }
@@ -312,7 +323,18 @@ int main(int argc, const char** argv) {
 
     // health
     svr.Get("/", [&](const httplib::Request&, httplib::Response& res) {
-        res.set_content(R"({"ok":true,"service":"sd-cpp-http"})", "application/json");
+        if (!svr_params.serve_html_path.empty()) {
+            std::ifstream file(svr_params.serve_html_path);
+            if (file) {
+                std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                res.set_content(content, "text/html");
+            } else {
+                res.status = 500;
+                res.set_content("Error: Unable to read HTML file", "text/plain");
+            }
+        } else {
+            res.set_content("Stable Diffusion Server is running", "text/plain");
+        }
     });
 
     // models endpoint (minimal)
