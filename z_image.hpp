@@ -644,7 +644,7 @@ namespace ZImage {
                 t_clean = t_embedder->forward(ctx,
                                               ggml_scale(ctx->ggml_ctx,
                                                          ggml_ext_ones(ctx->ggml_ctx, timestep->ne[0], timestep->ne[1], timestep->ne[2], timestep->ne[3]),
-                                                         0.f));
+                                                         1000.f));
             } else {
                 t_emb = t_embedder->forward(ctx, timestep);
             }

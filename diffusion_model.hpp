@@ -23,6 +23,7 @@ struct DiffusionParams {
     struct ggml_tensor* vace_context          = nullptr;
     float vace_strength                       = 1.f;
     std::vector<int> skip_layers              = {};
+    std::vector<struct ggml_tensor*> extra_contexts;  // for z-image-omni
 };
 
 struct DiffusionModel {
@@ -436,10 +437,12 @@ struct ZImageModel : public DiffusionModel {
                  DiffusionParams diffusion_params,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr) override {
+        std::vector<ggml_tensor*> contexts = {diffusion_params.context};
+        contexts.insert(contexts.end(), diffusion_params.extra_contexts.begin(), diffusion_params.extra_contexts.end());
         return z_image.compute(n_threads,
                                diffusion_params.x,
                                diffusion_params.timesteps,
-                               {diffusion_params.context},
+                               contexts,
                                diffusion_params.ref_latents,
                                {},
                                output,

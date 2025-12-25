@@ -1931,10 +1931,11 @@ public:
             struct ggml_tensor** active_output  = &out_cond;
             if (start_merge_step == -1 || step <= start_merge_step) {
                 // cond
-                diffusion_params.context  = cond.c_crossattn;
-                diffusion_params.c_concat = cond.c_concat;
-                diffusion_params.y        = cond.c_vector;
-                active_condition          = &cond;
+                diffusion_params.context        = cond.c_crossattn;
+                diffusion_params.extra_contexts = cond.extra_c_crossattns;
+                diffusion_params.c_concat       = cond.c_concat;
+                diffusion_params.y              = cond.c_vector;
+                active_condition                = &cond;
             } else {
                 diffusion_params.context  = id_cond.c_crossattn;
                 diffusion_params.c_concat = cond.c_concat;
@@ -1965,12 +1966,13 @@ public:
                         LOG_ERROR("controlnet compute failed");
                     }
                 }
-                current_step_skipped      = cache_step_is_skipped();
-                diffusion_params.controls = controls;
-                diffusion_params.context  = uncond.c_crossattn;
-                diffusion_params.c_concat = uncond.c_concat;
-                diffusion_params.y        = uncond.c_vector;
-                bool skip_uncond          = cache_before_condition(&uncond, out_uncond);
+                current_step_skipped            = cache_step_is_skipped();
+                diffusion_params.controls       = controls;
+                diffusion_params.context        = uncond.c_crossattn;
+                diffusion_params.extra_contexts = uncond.extra_c_crossattns;
+                diffusion_params.c_concat       = uncond.c_concat;
+                diffusion_params.y              = uncond.c_vector;
+                bool skip_uncond                = cache_before_condition(&uncond, out_uncond);
                 if (!skip_uncond) {
                     if (!work_diffusion_model->compute(n_threads,
                                                        diffusion_params,
@@ -1985,10 +1987,11 @@ public:
 
             float* img_cond_data = nullptr;
             if (has_img_cond) {
-                diffusion_params.context  = img_cond.c_crossattn;
-                diffusion_params.c_concat = img_cond.c_concat;
-                diffusion_params.y        = img_cond.c_vector;
-                bool skip_img_cond        = cache_before_condition(&img_cond, out_img_cond);
+                diffusion_params.context        = img_cond.c_crossattn;
+                diffusion_params.extra_contexts = img_cond.extra_c_crossattns;
+                diffusion_params.c_concat       = img_cond.c_concat;
+                diffusion_params.y              = img_cond.c_vector;
+                bool skip_img_cond              = cache_before_condition(&img_cond, out_img_cond);
                 if (!skip_img_cond) {
                     if (!work_diffusion_model->compute(n_threads,
                                                        diffusion_params,
