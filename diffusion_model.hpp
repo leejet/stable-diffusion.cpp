@@ -24,6 +24,7 @@ struct DiffusionParams {
     float vace_strength                       = 1.f;
     std::vector<int> skip_layers              = {};
     std::vector<struct ggml_tensor*> extra_contexts;  // for z-image-omni
+    std::vector<struct ggml_tensor*> ref_clip_feats;  // for z-image-omni
 };
 
 struct DiffusionModel {
@@ -444,7 +445,7 @@ struct ZImageModel : public DiffusionModel {
                                diffusion_params.timesteps,
                                contexts,
                                diffusion_params.ref_latents,
-                               {},
+                               diffusion_params.ref_clip_feats,
                                output,
                                output_ctx);
     }
