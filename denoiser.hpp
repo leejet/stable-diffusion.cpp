@@ -276,6 +276,10 @@ struct KarrasScheduler : SigmaScheduler {
         // but does anybody ever bother to touch them?
         float rho = 7.f;
 
+        if (sigma_min <= 1e-6f) {
+            sigma_min = 1e-6f;
+        }
+
         std::vector<float> result(n + 1);
 
         float min_inv_rho = pow(sigma_min, (1.f / rho));
@@ -364,6 +368,10 @@ struct KLOptimalScheduler : SigmaScheduler {
             sigmas.push_back(sigma_max);
             sigmas.push_back(0.0f);
             return sigmas;
+        }
+
+        if (sigma_min <= 1e-6f) {
+            sigma_min = 1e-6f;
         }
 
         sigmas.reserve(n + 1);
@@ -461,10 +469,6 @@ struct CompVisDenoiser : public Denoiser {
     }
 
     float sigma_to_t(float sigma) override {
-        if (sigma <= 1e-6f) {
-            return (float)(TIMESTEPS - 1);
-        }
-
         float log_sigma = std::log(sigma);
         std::vector<float> dists;
         dists.reserve(TIMESTEPS);
@@ -740,12 +744,8 @@ static bool sample_k_diffusion(sample_method_t method,
                     float* vec_x        = (float*)x->data;
                     float* vec_denoised = (float*)denoised->data;
 
-                    if (sigma < 1e-6f) {
-                        ggml_set_f32(d, 0.0f);
-                    } else {
-                        for (int i = 0; i < ggml_nelements(d); i++) {
-                            vec_d[i] = (vec_x[i] - vec_denoised[i]) / sigma;
-                        }
+                    for (int i = 0; i < ggml_nelements(d); i++) {
+                        vec_d[i] = (vec_x[i] - vec_denoised[i]) / sigma;
                     }
                 }
 
