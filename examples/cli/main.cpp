@@ -723,7 +723,7 @@ int main(int argc, const char* argv[]) {
     std::string base_path;
     std::string file_ext;
     std::string file_ext_lower;
-    bool is_jpg, defined_sequence;
+    bool is_jpg;
     size_t last_dot_pos   = cli_params.output_path.find_last_of(".");
     size_t last_slash_pos = std::min(cli_params.output_path.find_last_of("/"),
                                      cli_params.output_path.find_last_of("\\"));
@@ -737,47 +737,44 @@ int main(int argc, const char* argv[]) {
         file_ext = file_ext_lower = "";
         is_jpg                    = false;
     }
-    defined_sequence = std::regex_search(cli_params.output_path, format_specifier_regex);
 
-    if (cli_params.mode == VID_GEN && num_results > 1) {
-        std::string vid_output_path = cli_params.output_path;
-        if (defined_sequence) {
-            if (cli_params.output_begin_idx == -1) {
-                cli_params.output_begin_idx = 0;
+    if (std::regex_search(cli_params.output_path, format_specifier_regex)) {
+        std::string final_output_path = cli_params.output_path;
+        if (cli_params.output_begin_idx == -1) {
+            cli_params.output_begin_idx = 0;
+        }
+        // writing image sequence, default to PNG
+        if (!is_jpg && file_ext_lower != ".png") {
+            base_path += file_ext;
+            file_ext = ".png";
+        }
+        final_output_path = base_path + file_ext;
+        for (int i = 0; i < num_results; i++) {
+            if (results[i].data == nullptr) {
+                continue;
             }
-            // writing image sequence, default to PNG
+            std::string final_image_path = format_frame_idx(final_output_path, cli_params.output_begin_idx + i);
+            if (is_jpg) {
+                int write_ok = stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                                                results[i].data, 90, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
+                LOG_INFO("save result JPEG image %d to '%s' (%s)", i, final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
+            } else {
+                int write_ok = stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
+                                                results[i].data, 0, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
+                LOG_INFO("save result PNG image %d to '%s' (%s)", i, final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
+            }
+        }
+    } else if (cli_params.mode == VID_GEN && num_results > 1) {
+        std::string final_output_path = cli_params.output_path;
+        if (file_ext_lower != ".avi") {
             if (!is_jpg && file_ext_lower != ".png") {
                 base_path += file_ext;
-                file_ext = ".png";
             }
-            vid_output_path = base_path + file_ext;
-            for (int i = 0; i < num_results; i++) {
-                if (results[i].data == nullptr) {
-                    continue;
-                }
-                std::string final_image_path = format_frame_idx(vid_output_path, cli_params.output_begin_idx + i);
-                if (is_jpg) {
-                    int write_ok = stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                                                  results[i].data, 90, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
-                    LOG_INFO("save result JPEG image %d to '%s' (%s)", i, final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
-                } else {
-                    int write_ok = stbi_write_png(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
-                                                  results[i].data, 0, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
-                    LOG_INFO("save result PNG image %d to '%s' (%s)", i, final_image_path.c_str(), write_ok == 0 ? "failure" : "success");
-                }
-            }
-        } else {
-            // writing video file
-            if (file_ext_lower != ".avi") {
-                if (!is_jpg && file_ext_lower != ".png") {
-                    base_path += file_ext;
-                }
-                file_ext = ".avi";
-                vid_output_path = base_path + file_ext;
-            }
-            create_mjpg_avi_from_sd_images(vid_output_path.c_str(), results, num_results, gen_params.fps);
-            LOG_INFO("save result MJPG AVI video to '%s'\n", vid_output_path.c_str());
+            file_ext = ".avi";
+            final_output_path = base_path + file_ext;
         }
+        create_mjpg_avi_from_sd_images(final_output_path.c_str(), results, num_results, gen_params.fps);
+        LOG_INFO("save result MJPG AVI video to '%s'\n", final_output_path.c_str());
     } else {
         // appending ".png" to absent or unknown extension
         if (!is_jpg && file_ext_lower != ".png") {
@@ -785,11 +782,7 @@ int main(int argc, const char* argv[]) {
             file_ext = ".png";
         }
         if (cli_params.output_begin_idx == -1) {
-            if (defined_sequence) {
-                cli_params.output_begin_idx = 0;
-            } else {
-                cli_params.output_begin_idx = 1;
-            }
+            cli_params.output_begin_idx = 1;
         }
         for (int i = 0; i < num_results; i++) {
             if (results[i].data == nullptr) {
@@ -797,11 +790,7 @@ int main(int argc, const char* argv[]) {
             }
             int write_ok;
             std::string final_image_path;
-            if (defined_sequence) {
-                final_image_path = format_frame_idx(cli_params.output_path, cli_params.output_begin_idx + i);
-            } else {
-                final_image_path = i > 0 ? base_path + "_" + std::to_string(cli_params.output_begin_idx + i) + file_ext : base_path + file_ext;
-            }
+            final_image_path = i > 0 ? base_path + "_" + std::to_string(cli_params.output_begin_idx + i) + file_ext : base_path + file_ext;
             if (is_jpg) {
                 write_ok = stbi_write_jpg(final_image_path.c_str(), results[i].width, results[i].height, results[i].channel,
                                           results[i].data, 90, get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + i).c_str());
