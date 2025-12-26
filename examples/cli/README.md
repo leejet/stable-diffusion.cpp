@@ -4,7 +4,8 @@
 usage: ./bin/sd-cli  [options]
 
 CLI Options:
-  -o, --output <string>       path to write result image to (default: ./output.png)
+  -o, --output <string>       path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)
+  --output-begin-idx <int>    starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)
   --preview-path <string>     path to write preview image to (default: ./preview.png)
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
