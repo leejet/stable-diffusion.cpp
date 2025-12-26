@@ -750,6 +750,7 @@ public:
         }
         ignore_tensors.insert("model.diffusion_model.__x0__");
         ignore_tensors.insert("model.diffusion_model.__32x32__");
+        ignore_tensors.insert("model.diffusion_model.__index_timestep_zero__");
 
         if (vae_decode_only) {
             ignore_tensors.insert("first_stage_model.encoder");
