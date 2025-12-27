@@ -1604,6 +1604,7 @@ public:
                         int start_merge_step,
                         SDCondition id_cond,
                         std::vector<ggml_tensor*> ref_latents = {},
+                        std::vector<ggml_tensor*> ref_clip_feats = {},
                         bool increase_ref_index               = false,
                         ggml_tensor* denoise_mask             = nullptr,
                         ggml_tensor* vace_context             = nullptr,
@@ -1727,7 +1728,7 @@ public:
 
                     TaylorSeerConfig tcfg;
                     tcfg.enabled             = (cache_params->mode == SD_CACHE_TAYLORSEER ||
-                                    cache_params->mode == SD_CACHE_CACHE_DIT);
+                                                cache_params->mode == SD_CACHE_CACHE_DIT);
                     tcfg.n_derivatives       = cache_params->taylorseer_n_derivatives;
                     tcfg.skip_interval_steps = cache_params->taylorseer_skip_interval;
 
@@ -1997,6 +1998,7 @@ public:
             diffusion_params.timesteps          = timesteps;
             diffusion_params.guidance           = guidance_tensor;
             diffusion_params.ref_latents        = ref_latents;
+            diffusion_params.ref_clip_feats     = ref_clip_feats;
             diffusion_params.increase_ref_index = increase_ref_index;
             diffusion_params.controls           = controls;
             diffusion_params.control_strength   = control_strength;
@@ -2007,10 +2009,11 @@ public:
             struct ggml_tensor** active_output  = &out_cond;
             if (start_merge_step == -1 || step <= start_merge_step) {
                 // cond
-                diffusion_params.context  = cond.c_crossattn;
-                diffusion_params.c_concat = cond.c_concat;
-                diffusion_params.y        = cond.c_vector;
-                active_condition          = &cond;
+                diffusion_params.context        = cond.c_crossattn;
+                diffusion_params.extra_contexts = cond.extra_c_crossattns;
+                diffusion_params.c_concat       = cond.c_concat;
+                diffusion_params.y              = cond.c_vector;
+                active_condition                = &cond;
             } else {
                 diffusion_params.context  = id_cond.c_crossattn;
                 diffusion_params.c_concat = cond.c_concat;
@@ -2041,12 +2044,13 @@ public:
                         LOG_ERROR("controlnet compute failed");
                     }
                 }
-                current_step_skipped      = cache_step_is_skipped();
-                diffusion_params.controls = controls;
-                diffusion_params.context  = uncond.c_crossattn;
-                diffusion_params.c_concat = uncond.c_concat;
-                diffusion_params.y        = uncond.c_vector;
-                bool skip_uncond          = cache_before_condition(&uncond, out_uncond);
+                current_step_skipped            = cache_step_is_skipped();
+                diffusion_params.controls       = controls;
+                diffusion_params.context        = uncond.c_crossattn;
+                diffusion_params.extra_contexts = uncond.extra_c_crossattns;
+                diffusion_params.c_concat       = uncond.c_concat;
+                diffusion_params.y              = uncond.c_vector;
+                bool skip_uncond                = cache_before_condition(&uncond, out_uncond);
                 if (!skip_uncond) {
                     if (!work_diffusion_model->compute(n_threads,
                                                        diffusion_params,
@@ -2061,10 +2065,11 @@ public:
 
             float* img_cond_data = nullptr;
             if (has_img_cond) {
-                diffusion_params.context  = img_cond.c_crossattn;
-                diffusion_params.c_concat = img_cond.c_concat;
-                diffusion_params.y        = img_cond.c_vector;
-                bool skip_img_cond        = cache_before_condition(&img_cond, out_img_cond);
+                diffusion_params.context        = img_cond.c_crossattn;
+                diffusion_params.extra_contexts = img_cond.extra_c_crossattns;
+                diffusion_params.c_concat       = img_cond.c_concat;
+                diffusion_params.y              = img_cond.c_vector;
+                bool skip_img_cond              = cache_before_condition(&img_cond, out_img_cond);
                 if (!skip_img_cond) {
                     if (!work_diffusion_model->compute(n_threads,
                                                        diffusion_params,
@@ -3176,6 +3181,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     sd_pm_params_t pm_params,
                                     std::vector<sd_image_t*> ref_images,
                                     std::vector<ggml_tensor*> ref_latents,
+                                    std::vector<ggml_tensor*> ref_clip_feats,
                                     bool increase_ref_index,
                                     ggml_tensor* concat_latent            = nullptr,
                                     ggml_tensor* denoise_mask             = nullptr,
@@ -3372,6 +3378,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                      start_merge_step,
                                                      id_cond,
                                                      ref_latents,
+                                                     ref_clip_feats,
                                                      increase_ref_index,
                                                      denoise_mask,
                                                      nullptr,
@@ -3638,6 +3645,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     }
 
     std::vector<ggml_tensor*> ref_latents;
+    std::vector<ggml_tensor*> ref_clip_feats;
     for (int i = 0; i < ref_images.size(); i++) {
         ggml_tensor* img;
         if (sd_img_gen_params->auto_resize_ref_image) {
@@ -3684,6 +3692,9 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
 
         ggml_tensor* latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
         ref_latents.push_back(latent);
+
+        auto clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, *ref_images[i], false, -2);
+        ref_clip_feats.push_back(clip_vision_output);
     }
 
     if (sd_img_gen_params->init_image.data != nullptr || sd_img_gen_params->ref_images_count > 0) {
@@ -3711,6 +3722,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         sd_img_gen_params->pm_params,
                                                         ref_images,
                                                         ref_latents,
+                                                        ref_clip_feats,
                                                         sd_img_gen_params->increase_ref_index,
                                                         concat_latent,
                                                         denoise_mask,
@@ -4079,8 +4091,9 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                  high_noise_sample_method,
                                  high_noise_sigmas,
                                  -1,
-                                 {},
-                                 {},
+                                 {}, // id_cond
+                                 {}, // ref_latents
+                                 {}, // ref_clip_feats
                                  false,
                                  denoise_mask,
                                  vace_context,
@@ -4116,8 +4129,9 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           sample_method,
                                           sigmas,
                                           -1,
-                                          {},
-                                          {},
+                                          {}, // id_cond
+                                          {}, // ref_latents
+                                          {}, // ref_clip_feats
                                           false,
                                           denoise_mask,
                                           vace_context,
