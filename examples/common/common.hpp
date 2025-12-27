@@ -95,17 +95,28 @@ static void print_utf8(FILE* stream, const char* utf8) {
                    ? GetStdHandle(STD_ERROR_HANDLE)
                    : GetStdHandle(STD_OUTPUT_HANDLE);
 
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-    if (wlen <= 0)
-        return;
+    DWORD mode;
+    BOOL is_console = GetConsoleMode(h, &mode);
 
-    wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
-    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+    if (is_console) {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+        if (wlen <= 0)
+            return;
 
-    DWORD written;
-    WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
+        wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
+        if (!wbuf)
+            return;
 
-    free(wbuf);
+        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+
+        DWORD written;
+        WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
+
+        free(wbuf);
+    } else {
+        DWORD written;
+        WriteFile(h, utf8, (DWORD)strlen(utf8), &written, NULL);
+    }
 #else
     fputs(utf8, stream);
 #endif
