@@ -126,13 +126,9 @@ Default Generation Options:
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)
   --cache-mode                             caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)
-  --cache-option                           named cache params (key=value format, comma-separated):
-                                                                                      - easycache/ucache:
-                                           threshold=,start=,end=,decay=,relative=,reset=
-                                                                                      - dbcache/taylorseer/cache-dit:
-                                           Fn=,Bn=,threshold=,warmup=
-                                                                                      Examples: "threshold=0.25" or
-                                           "threshold=1.5,reset=0"
+  --cache-option                           named cache params (key=value format, comma-separated). easycache/ucache:
+                                           threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples:
+                                           "threshold=0.25" or "threshold=1.5,reset=0"
   --cache-preset                           cache-dit preset: 'slow'/'s', 'medium'/'m', 'fast'/'f', 'ultra'/'u'
   --scm-mask                               SCM steps mask for cache-dit: comma-separated 0/1 (e.g., "1,1,1,0,0,1,0,0,1,0") - 1=compute, 0=can cache
   --scm-policy                             SCM policy: 'dynamic' (default) or 'static'

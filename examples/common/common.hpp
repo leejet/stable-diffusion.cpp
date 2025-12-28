@@ -1512,7 +1512,7 @@ struct SDGenerationParams {
              on_cache_mode_arg},
             {"",
              "--cache-option",
-             "named cache params (key=value format, comma-separated):\n                                           - easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=\n                                           - dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=\n                                           Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
+             "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
              on_cache_option_arg},
             {"",
              "--cache-preset",
