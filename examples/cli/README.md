@@ -48,6 +48,7 @@ Context Options:
   --vae-tiling                             process vae in tiles to reduce memory usage
   --force-sdxl-vae-conv-scale              force use of conv scale on sdxl vae
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM when needed
+  --mmap                                   whether to memory-map model
   --control-net-cpu                        keep controlnet in cpu (for low vram)
   --clip-on-cpu                            keep clip in cpu (for low vram)
   --vae-on-cpu                             keep vae in cpu (for low vram)
