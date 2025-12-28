@@ -50,10 +50,10 @@ public:
 
     virtual ~MmapWrapper() = default;
 
-    MmapWrapper(const MmapWrapper&) = delete;
+    MmapWrapper(const MmapWrapper&)            = delete;
     MmapWrapper& operator=(const MmapWrapper&) = delete;
-    MmapWrapper(MmapWrapper&&) = delete;
-    MmapWrapper& operator=(MmapWrapper&&) = delete;
+    MmapWrapper(MmapWrapper&&)                 = delete;
+    MmapWrapper& operator=(MmapWrapper&&)      = delete;
 
     const uint8_t* data() const { return static_cast<uint8_t*>(data_); }
     size_t size() const { return size_; }
@@ -61,7 +61,7 @@ public:
 
 protected:
     MmapWrapper(void* data, size_t size)
-      : data_(data), size_(size) {}
+        : data_(data), size_(size) {}
     void* data_  = nullptr;
     size_t size_ = 0;
 };

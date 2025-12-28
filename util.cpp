@@ -122,8 +122,7 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
         NULL,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
-        NULL
-    );
+        NULL);
 
     if (file_handle == INVALID_HANDLE_VALUE) {
         return nullptr;
@@ -174,7 +173,8 @@ bool is_directory(const std::string& path) {
 
 class MmapWrapperImpl : public MmapWrapper {
 public:
-    MmapWrapperImpl(void* data, size_t size) : MmapWrapper(data, size) {}
+    MmapWrapperImpl(void* data, size_t size)
+        : MmapWrapper(data, size) {}
 
     ~MmapWrapperImpl() override {
         munmap(data_, size_);
@@ -191,8 +191,8 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
 #ifdef __linux__
     // performance flags used by llama.cpp
-    //posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
-    //mmap_flags |= MAP_POPULATE;
+    // posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
+    // mmap_flags |= MAP_POPULATE;
 #endif
 
     struct stat sb;
@@ -201,7 +201,7 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
         return nullptr;
     }
 
-    size_t file_size  = sb.st_size;
+    size_t file_size = sb.st_size;
 
     void* mapped_data = mmap(NULL, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
 
@@ -213,7 +213,7 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
 
 #ifdef __linux__
     // performance flags used by llama.cpp
-    //posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+    // posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
 #endif
 
     return std::make_unique<MmapWrapperImpl>(mapped_data, file_size);
