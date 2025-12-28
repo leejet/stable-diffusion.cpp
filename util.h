@@ -46,7 +46,7 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int targe
 
 class MmapWrapper {
 public:
-    static std::shared_ptr<MmapWrapper> create(const std::string& filename);
+    static std::unique_ptr<MmapWrapper> create(const std::string& filename);
 
     virtual ~MmapWrapper() = default;
 

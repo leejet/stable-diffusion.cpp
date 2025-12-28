@@ -111,7 +111,7 @@ private:
     HANDLE hmapping_;
 };
 
-std::shared_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
     void* mapped_data = nullptr;
     size_t file_size  = 0;
 
@@ -152,7 +152,7 @@ std::shared_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
         return nullptr;
     }
 
-    return std::make_shared<MmapWrapperImpl>(mapped_data, file_size, file_handle, mapping_handle);
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size, file_handle, mapping_handle);
 }
 
 #else  // Unix
@@ -181,8 +181,7 @@ public:
     }
 };
 
-std::shared_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
-
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
     int file_descriptor = open(filename.c_str(), O_RDONLY);
     if (file_descriptor == -1) {
         return nullptr;
@@ -217,7 +216,7 @@ std::shared_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
     //posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
 #endif
 
-    return std::make_shared<MmapWrapperImpl>(mapped_data, file_size);
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size);
 }
 
 #endif

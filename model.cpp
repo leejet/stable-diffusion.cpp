@@ -1390,7 +1390,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             }
         }
 
-        std::shared_ptr<MmapWrapper> mmapped;
+        std::unique_ptr<MmapWrapper> mmapped;
         if (enable_mmap && !is_zip) {
             LOG_DEBUG("using mmap for I/O");
             mmapped = MmapWrapper::create(file_path);
