@@ -602,7 +602,7 @@ struct SDContextParams {
             {"",
              "--mmap",
              "whether to memory-map model",
-             false, &enable_mmap},
+             true, &enable_mmap},
             {"",
              "--control-net-cpu",
              "keep controlnet in cpu (for low vram)",
