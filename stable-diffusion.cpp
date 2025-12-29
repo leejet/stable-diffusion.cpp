@@ -2489,10 +2489,15 @@ public:
                 ne2 = 1;
                 ne3 = C * x->ne[3];
             } else {
-                if (!use_tiny_autoencoder) {
-                    C *= 2;
+                int out_channels        = C;
+                bool encode_outputs_mu = use_tiny_autoencoder ||
+                                         sd_version_is_wan(version) ||
+                                         sd_version_is_flux2(version) ||
+                                         version == VERSION_CHROMA_RADIANCE;
+                if (!encode_outputs_mu) {
+                    out_channels *= 2;
                 }
-                ne2 = C;
+                ne2 = out_channels;
                 ne3 = x->ne[3];
             }
             result = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, ne2, ne3);
@@ -2633,7 +2638,7 @@ public:
             }
             process_latent_out(x);
             // x = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
-            if (vae_tiling_params.enabled && !decode_video) {
+            if (vae_tiling_params.enabled) {
                 float tile_overlap;
                 int tile_size_x, tile_size_y;
                 get_tile_sizes(tile_size_x, tile_size_y, tile_overlap, vae_tiling_params, x->ne[0], x->ne[1]);
@@ -2651,7 +2656,7 @@ public:
             first_stage_model->free_compute_buffer();
             process_vae_output_tensor(result);
         } else {
-            if (vae_tiling_params.enabled && !decode_video) {
+            if (vae_tiling_params.enabled) {
                 // split latent in 64x64 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     tae_first_stage->compute(n_threads, in, true, &out);
@@ -3099,6 +3104,7 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     sd_vid_gen_params->video_frames                          = 6;
     sd_vid_gen_params->moe_boundary                          = 0.875f;
     sd_vid_gen_params->vace_strength                         = 1.f;
+    sd_vid_gen_params->vae_tiling_params                     = {false, 0, 0, 0.5f, 0.0f, 0.0f};
     sd_cache_params_init(&sd_vid_gen_params->cache);
 }
 
@@ -3728,6 +3734,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     if (sd_ctx == nullptr || sd_vid_gen_params == nullptr) {
         return nullptr;
     }
+    sd_ctx->sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
 
     std::string prompt          = SAFE_STR(sd_vid_gen_params->prompt);
     std::string negative_prompt = SAFE_STR(sd_vid_gen_params->negative_prompt);
