@@ -7,6 +7,7 @@
 #include <mutex>
 #include <sstream>
 #include <vector>
+#include <random>
 
 #include "httplib.h"
 #include "stable-diffusion.h"
@@ -407,6 +408,12 @@ int main(int argc, const char** argv) {
             gen_params.width              = width;
             gen_params.height             = height;
             gen_params.batch_count        = n;
+
+            // If seed is -1 (random), generate a fresh seed for each request
+            if (gen_params.seed == -1) {
+                std::random_device rd;
+                gen_params.seed = static_cast<int64_t>(rd());
+            }
 
             if (!sd_cpp_extra_args_str.empty() && !gen_params.from_json_str(sd_cpp_extra_args_str)) {
                 res.status = 400;
