@@ -1038,6 +1038,7 @@ SDVersion ModelLoader::get_sd_version() {
     int64_t patch_embedding_channels = 0;
     bool has_img_emb                 = false;
     bool has_middle_block_1          = false;
+    bool has_output_block_71         = false;
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
         if (!(is_xl)) {
@@ -1093,6 +1094,9 @@ SDVersion ModelLoader::get_sd_version() {
         if (tensor_storage.name.find("model.diffusion_model.middle_block.1.") != std::string::npos ||
             tensor_storage.name.find("unet.mid_block.resnets.1.") != std::string::npos) {
             has_middle_block_1 = true;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1") != std::string::npos) {
+            has_output_block_71 = true;
         }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||
@@ -1155,6 +1159,9 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_SD1_PIX2PIX;
         }
         if (!has_middle_block_1) {
+            if (!has_output_block_71) {
+                return VERSION_SDXS;
+            }
             return VERSION_SD1_TINY_UNET;
         }
         return VERSION_SD1;
