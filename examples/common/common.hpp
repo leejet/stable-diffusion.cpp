@@ -1610,13 +1610,12 @@ struct SDGenerationParams {
 
         fs::path raw_path(raw_path_str);
 
-        // Disallow absolute paths.
+        // Disallow absolute paths and '..' components
         if (raw_path.is_absolute()) {
             LOG_WARN("lora path must be relative: %s", raw_path_str.c_str());
             return false;
         }
 
-        // Disallow '..' in the raw path to prevent basic traversal attempts.
         for (const auto& part : raw_path) {
             if (part == "..") {
                 LOG_WARN("lora path cannot contain '..': %s", raw_path_str.c_str());
@@ -1624,34 +1623,26 @@ struct SDGenerationParams {
             }
         }
 
+        // Construct and canonicalize paths
         fs::path lora_dir(lora_model_dir);
         full_path = lora_dir / raw_path;
 
-        // --- Security Checks on Canonical Path ---
-        // Canonicalize paths to resolve symlinks and normalize separators for robust checks.
-        // weakly_canonical is used because the target file might not exist yet.
         auto canonical_lora_dir  = fs::weakly_canonical(lora_dir);
         auto canonical_full_path = fs::weakly_canonical(full_path);
 
-        // 1. The resolved path must not be a directory.
+        // Check if path is a directory
         if (fs::is_directory(canonical_full_path)) {
             LOG_WARN("lora path resolved to a directory, not a file: %s", raw_path_str.c_str());
             return false;
         }
 
-        // 2. The file must be inside the designated lora directory.
-        //    We check this by ensuring the relative path does not climb up with '..'.
-        fs::path relative_path = canonical_full_path.lexically_relative(canonical_lora_dir);
-        for (const auto& part : relative_path) {
-            if (part == "..") {
-                LOG_WARN("lora path is outside of the lora model directory: %s", raw_path_str.c_str());
-                return false;
-            }
-        }
+        // Verify path stays within lora directory
+        auto [root_end, nothing] = std::mismatch(
+            canonical_lora_dir.begin(), canonical_lora_dir.end(),
+            canonical_full_path.begin(), canonical_full_path.end());
 
-        // 3. The file must be directly in the lora directory, not in a subdirectory.
-        if (relative_path.has_parent_path() && !relative_path.parent_path().empty()) {
-            LOG_WARN("lora path in subdirectories is not allowed: %s", raw_path_str.c_str());
+        if (root_end != canonical_lora_dir.end()) {
+            LOG_WARN("lora path is outside of the lora model directory: %s", raw_path_str.c_str());
             return false;
         }
 
@@ -1700,7 +1691,7 @@ struct SDGenerationParams {
                     fs::path try_path = final_path;
                     try_path += ext;
                     if (fs::exists(try_path)) {
-                        final_path = try_path.lexically_normal();
+                        final_path = try_path;
                         found      = true;
                         break;
                     }
