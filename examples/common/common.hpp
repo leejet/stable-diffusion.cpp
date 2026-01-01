@@ -413,7 +413,7 @@ static bool parse_options(int argc, const char** argv, const std::vector<ArgOpti
                 break;
         }
 
-        if (invalid_arg) {
+        if (invalid_arg && arg != "-h") {
             LOG_ERROR("error: invalid parameter for argument: %s", arg.c_str());
             return false;
         }

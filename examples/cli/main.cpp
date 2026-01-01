@@ -210,11 +210,14 @@ void print_usage(int argc, const char* argv[], const std::vector<ArgOptions>& op
     options_list[2].print();
 }
 
-int parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextParams& ctx_params, SDGenerationParams& gen_params) {
+int parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextParams& ctx_params, SDGenerationParams& gen_params, bool& proceed) {
     std::vector<ArgOptions> options_vec = {cli_params.get_options(), ctx_params.get_options(), gen_params.get_options()};
+
+    proceed = true;
 
     if (!parse_options(argc, argv, options_vec)) {
         print_usage(argc, argv, options_vec);
+        proceed = false;
         return cli_params.normal_exit ? 0 : 1;
     }
 
@@ -222,6 +225,7 @@ int parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextPa
         !ctx_params.process_and_check(cli_params.mode) ||
         !gen_params.process_and_check(cli_params.mode, ctx_params.lora_model_dir)) {
         print_usage(argc, argv, options_vec);
+        proceed = false;
         return 1;
     }
 }
@@ -470,8 +474,9 @@ int main(int argc, const char* argv[]) {
     SDContextParams ctx_params;
     SDGenerationParams gen_params;
 
-    int parsing_exit_code = parse_args(argc, argv, cli_params, ctx_params, gen_params);
-    if (parsing_exit_code == 0) {
+    bool proceed;
+    int parsing_exit_code = parse_args(argc, argv, cli_params, ctx_params, gen_params, proceed);
+    if (proceed) {
     if (gen_params.video_frames > 4) {
         size_t last_dot_pos   = cli_params.preview_path.find_last_of(".");
         std::string base_path = cli_params.preview_path;
