@@ -18,5 +18,6 @@ RUN apt-get update && \
     apt-get clean
 
 COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
+COPY --from=build /sd.cpp/build/bin/sd-server /sd-server
 
 ENTRYPOINT [ "/sd-cli" ]
