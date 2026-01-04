@@ -158,7 +158,7 @@ jobs:
 
     strategy:
       matrix:
-        variant: [musa, syscl, vulkan]
+        variant: [musa, sycl, vulkan]
 
     env:
       REGISTRY: ghcr.io
@@ -190,6 +190,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: false
 
       - name: Build and push Docker image
         id: build-push
