@@ -809,7 +809,7 @@ struct SDContextParams {
     }
 
     void build_embedding_map() {
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
 
         if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
             return;
@@ -1606,7 +1606,7 @@ struct SDGenerationParams {
             return;
         }
         static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
         std::smatch m;
 
         std::string tmp = prompt;
