@@ -44,7 +44,7 @@ inline bool is_base64(unsigned char c) {
 }
 
 std::vector<uint8_t> base64_decode(const std::string& encoded_string) {
-    int in_len = encoded_string.size();
+    int in_len = static_cast<int>(encoded_string.size());
     int i      = 0;
     int j      = 0;
     int in_    = 0;
@@ -611,7 +611,7 @@ int main(int argc, const char** argv) {
                 int img_h           = height;
                 uint8_t* raw_pixels = load_image_from_memory(
                     reinterpret_cast<const char*>(bytes.data()),
-                    bytes.size(),
+                    static_cast<int>(bytes.size()),
                     img_w, img_h,
                     width, height, 3);
 
@@ -629,7 +629,7 @@ int main(int argc, const char** argv) {
                 int mask_h        = height;
                 uint8_t* mask_raw = load_image_from_memory(
                     reinterpret_cast<const char*>(mask_bytes.data()),
-                    mask_bytes.size(),
+                    static_cast<int>(mask_bytes.size()),
                     mask_w, mask_h,
                     width, height, 1);
                 mask_image = {(uint32_t)mask_w, (uint32_t)mask_h, 1, mask_raw};

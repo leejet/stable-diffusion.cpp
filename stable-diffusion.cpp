@@ -534,7 +534,7 @@ public:
                                                                 version);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
-                for (int i = 0; i < sd_ctx_params->embedding_count; i++) {
+                for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
                     embbeding_map.emplace(SAFE_STR(sd_ctx_params->embeddings[i].name), SAFE_STR(sd_ctx_params->embeddings[i].path));
                 }
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
@@ -1191,7 +1191,7 @@ public:
 
     void apply_loras(const sd_lora_t* loras, uint32_t lora_count) {
         std::unordered_map<std::string, float> lora_f2m;
-        for (int i = 0; i < lora_count; i++) {
+        for (uint32_t i = 0; i < lora_count; i++) {
             std::string lora_id = SAFE_STR(loras[i].path);
             if (loras[i].is_high_noise) {
                 lora_id = "|high_noise|" + lora_id;
@@ -1443,12 +1443,12 @@ public:
                        void* step_callback_data,
                        bool is_noisy) {
         const uint32_t channel = 3;
-        uint32_t width         = latents->ne[0];
-        uint32_t height        = latents->ne[1];
-        uint32_t dim           = latents->ne[ggml_n_dims(latents) - 1];
+        uint32_t width         = static_cast<uint32_t>(latents->ne[0]);
+        uint32_t height        = static_cast<uint32_t>(latents->ne[1]);
+        uint32_t dim           = static_cast<uint32_t>(latents->ne[ggml_n_dims(latents) - 1]);
 
         if (preview_mode == PREVIEW_PROJ) {
-            int64_t patch_sz                       = 1;
+            int patch_sz                           = 1;
             const float(*latent_rgb_proj)[channel] = nullptr;
             float* latent_rgb_bias                 = nullptr;
 
@@ -1508,7 +1508,7 @@ public:
 
             uint32_t frames = 1;
             if (ggml_n_dims(latents) == 4) {
-                frames = latents->ne[2];
+                frames = static_cast<uint32_t>(latents->ne[2]);
             }
 
             uint32_t img_width  = width * patch_sz;
@@ -1518,7 +1518,7 @@ public:
 
             preview_latent_video(data, latents, latent_rgb_proj, latent_rgb_bias, patch_sz);
             sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
-            for (int i = 0; i < frames; i++) {
+            for (uint32_t i = 0; i < frames; i++) {
                 images[i] = {img_width, img_height, channel, data + i * img_width * img_height * channel};
             }
             step_callback(step, frames, images, is_noisy, step_callback_data);
@@ -1563,22 +1563,22 @@ public:
             ggml_ext_tensor_clamp_inplace(result, 0.0f, 1.0f);
             uint32_t frames = 1;
             if (ggml_n_dims(latents) == 4) {
-                frames = result->ne[2];
+                frames = static_cast<uint32_t>(result->ne[2]);
             }
 
             sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
             // print_ggml_tensor(result,true);
             for (size_t i = 0; i < frames; i++) {
-                images[i].width   = result->ne[0];
-                images[i].height  = result->ne[1];
+                images[i].width   = static_cast<uint32_t>(result->ne[0]);
+                images[i].height  = static_cast<uint32_t>(result->ne[1]);
                 images[i].channel = 3;
-                images[i].data    = ggml_tensor_to_sd_image(result, i, ggml_n_dims(latents) == 4);
+                images[i].data    = ggml_tensor_to_sd_image(result, static_cast<int>(i), ggml_n_dims(latents) == 4);
             }
 
             step_callback(step, frames, images, is_noisy, step_callback_data);
 
             ggml_ext_tensor_scale_inplace(result, 0);
-            for (int i = 0; i < frames; i++) {
+            for (uint32_t i = 0; i < frames; i++) {
                 free(images[i].data);
             }
 
@@ -1800,7 +1800,7 @@ public:
             int64_t H = x->ne[1] * get_vae_scale_factor();
             if (ggml_n_dims(x) == 4) {
                 // assuming video mode (if batch processing gets implemented this will break)
-                int T = x->ne[2];
+                int64_t T = x->ne[2];
                 if (sd_version_is_wan(version)) {
                     T = ((T - 1) * 4) + 1;
                 }
@@ -2077,7 +2077,7 @@ public:
                 img_cond_data = (float*)out_img_cond->data;
             }
 
-            int step_count         = sigmas.size();
+            int step_count         = static_cast<int>(sigmas.size());
             bool is_skiplayer_step = has_skiplayer && step > (int)(guidance.slg.layer_start * step_count) && step < (int)(guidance.slg.layer_end * step_count);
             float* skip_layer_data = has_skiplayer ? (float*)out_skip->data : nullptr;
             if (is_skiplayer_step) {
@@ -2449,11 +2449,11 @@ public:
                         int& tile_size_y,
                         float& tile_overlap,
                         const sd_tiling_params_t& params,
-                        int latent_x,
-                        int latent_y,
+                        int64_t latent_x,
+                        int64_t latent_y,
                         float encoding_factor = 1.0f) {
         tile_overlap       = std::max(std::min(params.target_overlap, 0.5f), 0.0f);
-        auto get_tile_size = [&](int requested_size, float factor, int latent_size) {
+        auto get_tile_size = [&](int requested_size, float factor, int64_t latent_size) {
             const int default_tile_size  = 32;
             const int min_tile_dimension = 4;
             int tile_size                = default_tile_size;
@@ -2462,12 +2462,12 @@ public:
             if (factor > 0.f) {
                 if (factor > 1.0)
                     factor = 1 / (factor - factor * tile_overlap + tile_overlap);
-                tile_size = std::round(latent_size * factor);
+                tile_size = static_cast<int>(std::round(latent_size * factor));
             } else if (requested_size >= min_tile_dimension) {
                 tile_size = requested_size;
             }
-            tile_size *= encoding_factor;
-            return std::max(std::min(tile_size, latent_size), min_tile_dimension);
+            tile_size = static_cast<int>(tile_size * encoding_factor);
+            return std::max(std::min(tile_size, static_cast<int>(latent_size)), min_tile_dimension);
         };
 
         tile_size_x = get_tile_size(params.tile_size_x, params.rel_size_x, latent_x);
@@ -2478,13 +2478,13 @@ public:
         int64_t t0                 = ggml_time_ms();
         ggml_tensor* result        = nullptr;
         const int vae_scale_factor = get_vae_scale_factor();
-        int W                      = x->ne[0] / vae_scale_factor;
-        int H                      = x->ne[1] / vae_scale_factor;
-        int C                      = get_latent_channel();
+        int64_t W                  = x->ne[0] / vae_scale_factor;
+        int64_t H                  = x->ne[1] / vae_scale_factor;
+        int64_t C                  = get_latent_channel();
         if (vae_tiling_params.enabled && !encode_video) {
             // TODO wan2.2 vae support?
-            int ne2;
-            int ne3;
+            int64_t ne2;
+            int64_t ne3;
             if (sd_version_is_qwen_image(version)) {
                 ne2 = 1;
                 ne3 = C * x->ne[3];
@@ -2608,7 +2608,7 @@ public:
         int64_t C                  = 3;
         ggml_tensor* result        = nullptr;
         if (decode_video) {
-            int T = x->ne[2];
+            int64_t T = x->ne[2];
             if (sd_version_is_wan(version)) {
                 T = ((T - 1) * 4) + 1;
             }
@@ -3193,7 +3193,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         guidance.img_cfg = guidance.txt_cfg;
     }
 
-    int sample_steps = sigmas.size() - 1;
+    int sample_steps = static_cast<int>(sigmas.size() - 1);
 
     int64_t t0 = ggml_time_ms();
 
@@ -3203,7 +3203,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     condition_params.width           = width;
     condition_params.height          = height;
     condition_params.ref_images      = ref_images;
-    condition_params.adm_in_channels = sd_ctx->sd->diffusion_model->get_adm_in_channels();
+    condition_params.adm_in_channels = static_cast<int>(sd_ctx->sd->diffusion_model->get_adm_in_channels());
 
     // Photo Maker
     SDCondition id_cond = sd_ctx->sd->get_pmid_conditon(work_ctx, pm_params, condition_params);
@@ -3799,7 +3799,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         // timesteps ∝ sigmas for Flow models (like wan2.2 a14b)
         for (size_t i = 0; i < sigmas.size(); ++i) {
             if (sigmas[i] < sd_vid_gen_params->moe_boundary) {
-                high_noise_sample_steps = i;
+                high_noise_sample_steps = static_cast<int>(i);
                 break;
             }
         }
@@ -3977,7 +3977,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         int64_t length = inactive->ne[2];
         if (ref_image_latent) {
             length += 1;
-            frames        = (length - 1) * 4 + 1;
+            frames        = static_cast<int>((length - 1) * 4 + 1);
             ref_image_num = 1;
         }
         vace_context = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, inactive->ne[0], inactive->ne[1], length, 96);  // [b*96, t, h/vae_scale_factor, w/vae_scale_factor]
@@ -4043,7 +4043,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     int W = width / vae_scale_factor;
     int H = height / vae_scale_factor;
-    int T = init_latent->ne[2];
+    int T = static_cast<int>(init_latent->ne[2]);
     int C = sd_ctx->sd->get_latent_channel();
 
     struct ggml_tensor* final_latent;
@@ -4162,13 +4162,13 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         ggml_free(work_ctx);
         return nullptr;
     }
-    *num_frames_out = vid->ne[2];
+    *num_frames_out = static_cast<int>(vid->ne[2]);
 
-    for (size_t i = 0; i < vid->ne[2]; i++) {
-        result_images[i].width   = vid->ne[0];
-        result_images[i].height  = vid->ne[1];
+    for (int64_t i = 0; i < vid->ne[2]; i++) {
+        result_images[i].width   = static_cast<uint32_t>(vid->ne[0]);
+        result_images[i].height  = static_cast<uint32_t>(vid->ne[1]);
         result_images[i].channel = 3;
-        result_images[i].data    = ggml_tensor_to_sd_image(vid, i, true);
+        result_images[i].data    = ggml_tensor_to_sd_image(vid, static_cast<int>(i), true);
     }
     ggml_free(work_ctx);
 
