@@ -202,11 +202,17 @@ void parse_args(int argc, const char** argv, SDSvrParams& svr_params, SDContextP
         exit(svr_params.normal_exit ? 0 : 1);
     }
 
+    const bool random_seed_requested = default_gen_params.seed < 0;
+
     if (!svr_params.process_and_check() ||
         !ctx_params.process_and_check(IMG_GEN) ||
         !default_gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
         print_usage(argc, argv, options_vec);
         exit(1);
+    }
+
+    if (random_seed_requested) {
+        default_gen_params.seed = -1;
     }
 }
 
