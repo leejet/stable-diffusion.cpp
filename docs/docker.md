@@ -1,15 +1,23 @@
-## Docker
+# Docker
 
-### Building using Docker
+## Building using Docker
 
 ```shell
 docker build -t sd .
 ```
 
-### Run
+## Run CLI
 
 ```shell
-docker run -v /path/to/models:/models -v /path/to/output/:/output sd-cli [args...]
+docker run --rm -v /path/to/models:/models -v /path/to/output/:/output sd [args...]
 # For example
-# docker run -v ./models:/models -v ./build:/output sd-cli -m /models/sd-v1-4.ckpt -p "a lovely cat" -v -o /output/output.png
+# docker run --rm -v ./models:/models -v ./build:/output sd -m /models/sd-v1-4.ckpt -p "a lovely cat" -v -o /output/output.png
+```
+
+## Run server
+
+```shell
+docker run --rm --init -v /path/to/models:/models -v /path/to/output/:/output -p "1234:1234" --entrypoint "/sd-server" sd [args...]
+# For example
+# docker run --rm --init -v ./models:/models -v ./build:/output -p "1234:1234" --entrypoint "/sd-server" sd -m /models/sd-v1-4.ckpt -p "a lovely cat" -v -o /output/output.png
 ```
