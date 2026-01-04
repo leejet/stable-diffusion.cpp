@@ -351,11 +351,6 @@ struct SmoothStepScheduler : SigmaScheduler {
     }
 };
 
-/*
-* KL Optimal:
-*     Original work from https://github.com/AUTOMATIC1111/stable-diffusion-webui/pull/15608.
-*     Implemented using https://github.com/comfyanonymous/ComfyUI/pull/6206 as a reference.
-*/
 struct KLOptimalScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         std::vector<float> sigmas;
@@ -380,8 +375,7 @@ struct KLOptimalScheduler : SigmaScheduler {
         float alpha_max = std::atan(sigma_max);
 
         for (uint32_t i = 0; i < n; ++i) {
-
-            float t = static_cast<float>(i) / static_cast<float>(n - 1);
+            float t     = static_cast<float>(i) / static_cast<float>(n - 1);
             float angle = t * alpha_min + (1.0f - t) * alpha_max;
             sigmas.push_back(std::tan(angle));
         }
