@@ -245,7 +245,7 @@ struct SGMUniformScheduler : SigmaScheduler {
         int t_max                    = TIMESTEPS - 1;
         int t_min                    = 0;
         std::vector<float> timesteps = linear_space(static_cast<float>(t_max), static_cast<float>(t_min), n + 1);
-        for (int i = 0; i < n; i++) {
+        for (uint32_t i = 0; i < n; i++) {
             result.push_back(t_to_sigma_func(timesteps[i]));
         }
         result.push_back(0.0f);
@@ -259,11 +259,11 @@ struct LCMScheduler : SigmaScheduler {
         result.reserve(n + 1);
         const int original_steps = 50;
         const int k              = TIMESTEPS / original_steps;
-        for (int i = 0; i < n; i++) {
+        for (uint32_t i = 0; i < n; i++) {
             // the rounding ensures we match the training schedule of the LCM model
             int index    = (i * original_steps) / n;
             int timestep = (original_steps - index) * k - 1;
-            result.push_back(t_to_sigma(timestep));
+            result.push_back(t_to_sigma(static_cast<float>(timestep)));
         }
         result.push_back(0.0f);
         return result;
@@ -525,8 +525,8 @@ struct CompVisVDenoiser : public CompVisDenoiser {
 };
 
 struct EDMVDenoiser : public CompVisVDenoiser {
-    float min_sigma = 0.002;
-    float max_sigma = 120.0;
+    float min_sigma = 0.002f;
+    float max_sigma = 120.0f;
 
     EDMVDenoiser(float min_sigma = 0.002, float max_sigma = 120.0)
         : min_sigma(min_sigma), max_sigma(max_sigma) {
@@ -537,7 +537,7 @@ struct EDMVDenoiser : public CompVisVDenoiser {
     }
 
     float sigma_to_t(float s) override {
-        return 0.25 * std::log(s);
+        return 0.25f * std::log(s);
     }
 
     float sigma_min() override {
@@ -569,7 +569,7 @@ struct DiscreteFlowDenoiser : public Denoiser {
 
     void set_parameters() {
         for (int i = 1; i < TIMESTEPS + 1; i++) {
-            sigmas[i - 1] = t_to_sigma(i);
+            sigmas[i - 1] = t_to_sigma(static_cast<float>(i));
         }
     }
 
@@ -612,7 +612,7 @@ struct DiscreteFlowDenoiser : public Denoiser {
 };
 
 float flux_time_shift(float mu, float sigma, float t) {
-    return std::exp(mu) / (std::exp(mu) + std::pow((1.0 / t - 1.0), sigma));
+    return ::expf(mu) / (::expf(mu) + ::powf((1.0f / t - 1.0f), sigma));
 }
 
 struct FluxFlowDenoiser : public Denoiser {
@@ -632,7 +632,7 @@ struct FluxFlowDenoiser : public Denoiser {
     void set_parameters(float shift) {
         set_shift(shift);
         for (int i = 0; i < TIMESTEPS; i++) {
-            sigmas[i] = t_to_sigma(i);
+            sigmas[i] = t_to_sigma(static_cast<float>(i));
         }
     }
 
@@ -1327,15 +1327,12 @@ static bool sample_k_diffusion(sample_method_t method,
                 // - pred_sample_direction -> "direction pointing to
                 //   x_t"
                 // - pred_prev_sample -> "x_t-1"
-                int timestep =
-                    roundf(TIMESTEPS -
-                           i * ((float)TIMESTEPS / steps)) -
-                    1;
+                int timestep = static_cast<int>(roundf(TIMESTEPS - i * ((float)TIMESTEPS / steps))) - 1;
                 // 1. get previous step value (=t-1)
-                int prev_timestep = timestep - TIMESTEPS / steps;
+                int prev_timestep = timestep - TIMESTEPS / static_cast<int>(steps);
                 // The sigma here is chosen to cause the
                 // CompVisDenoiser to produce t = timestep
-                float sigma = compvis_sigmas[timestep];
+                float sigma = static_cast<float>(compvis_sigmas[timestep]);
                 if (i == 0) {
                     // The function add_noise intializes x to
                     // Diffusers' latents * sigma (as in Diffusers'
@@ -1392,10 +1389,10 @@ static bool sample_k_diffusion(sample_method_t method,
                     }
                 }
                 // 2. compute alphas, betas
-                float alpha_prod_t = alphas_cumprod[timestep];
+                float alpha_prod_t = static_cast<float>(alphas_cumprod[timestep]);
                 // Note final_alpha_cumprod = alphas_cumprod[0] due to
                 // trailing timestep spacing
-                float alpha_prod_t_prev = prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0];
+                float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
                 float beta_prod_t       = 1 - alpha_prod_t;
                 // 3. compute predicted original sample from predicted
                 // noise also called "predicted x_0" of formula (12)
@@ -1442,8 +1439,8 @@ static bool sample_k_diffusion(sample_method_t method,
                         // Two step inner loop without an explicit
                         // tensor
                         float pred_sample_direction =
-                            std::sqrt(1 - alpha_prod_t_prev -
-                                      std::pow(std_dev_t, 2)) *
+                            ::sqrtf(1 - alpha_prod_t_prev -
+                                    ::powf(std_dev_t, 2)) *
                             vec_model_output[j];
                         vec_x[j] = std::sqrt(alpha_prod_t_prev) *
                                        vec_pred_original_sample[j] +
@@ -1518,7 +1515,7 @@ static bool sample_k_diffusion(sample_method_t method,
                 // Begin k-diffusion specific workaround for
                 // evaluating F_theta(x; ...) from D(x, sigma), same
                 // as in DDIM (and see there for detailed comments)
-                float sigma = compvis_sigmas[timestep];
+                float sigma = static_cast<float>(compvis_sigmas[timestep]);
                 if (i == 0) {
                     float* vec_x = (float*)x->data;
                     for (int j = 0; j < ggml_nelements(x); j++) {
@@ -1557,14 +1554,14 @@ static bool sample_k_diffusion(sample_method_t method,
                 // is different from the notation alpha_t in
                 // DPM-Solver. In fact, we have alpha_{t_n} =
                 // \sqrt{\hat{alpha_n}}, [...]"
-                float alpha_prod_t = alphas_cumprod[timestep];
+                float alpha_prod_t = static_cast<float>(alphas_cumprod[timestep]);
                 float beta_prod_t  = 1 - alpha_prod_t;
                 // Note final_alpha_cumprod = alphas_cumprod[0] since
                 // TCD is always "trailing"
-                float alpha_prod_t_prev = prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0];
+                float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
                 // The subscript _s are the only portion in this
                 // section (2) unique to TCD
-                float alpha_prod_s = alphas_cumprod[timestep_s];
+                float alpha_prod_s = static_cast<float>(alphas_cumprod[timestep_s]);
                 float beta_prod_s  = 1 - alpha_prod_s;
                 // 3. Compute the predicted noised sample x_s based on
                 // the model parameterization
