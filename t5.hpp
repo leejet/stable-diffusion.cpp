@@ -608,7 +608,7 @@ public:
             }
         }
 
-        k = ggml_scale_inplace(ctx->ggml_ctx, k, std::sqrtf(static_cast<float>(d_head)));
+        k = ggml_scale_inplace(ctx->ggml_ctx, k, ::sqrtf(static_cast<float>(d_head)));
 
         x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
 

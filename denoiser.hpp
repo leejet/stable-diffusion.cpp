@@ -608,7 +608,7 @@ struct DiscreteFlowDenoiser : public Denoiser {
 };
 
 float flux_time_shift(float mu, float sigma, float t) {
-    return std::expf(mu) / (std::expf(mu) + std::powf((1.0f / t - 1.0f), sigma));
+    return ::expf(mu) / (::expf(mu) + ::powf((1.0f / t - 1.0f), sigma));
 }
 
 struct FluxFlowDenoiser : public Denoiser {
@@ -1435,8 +1435,8 @@ static bool sample_k_diffusion(sample_method_t method,
                         // Two step inner loop without an explicit
                         // tensor
                         float pred_sample_direction =
-                            std::sqrtf(1 - alpha_prod_t_prev -
-                                       std::powf(std_dev_t, 2)) *
+                            ::sqrtf(1 - alpha_prod_t_prev -
+                                    ::powf(std_dev_t, 2)) *
                             vec_model_output[j];
                         vec_x[j] = std::sqrt(alpha_prod_t_prev) *
                                        vec_pred_original_sample[j] +

@@ -52,7 +52,7 @@ namespace Rope {
 
         std::vector<float> omega(half_dim);
         for (int i = 0; i < half_dim; ++i) {
-            omega[i] = 1.0f / std::powf(1.f * theta, scale[i]);
+            omega[i] = 1.0f / ::powf(1.f * theta, scale[i]);
         }
 
         size_t pos_size = pos.size();
