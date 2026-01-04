@@ -192,7 +192,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@v1
+        uses: jlumbroso/free-disk-space@v1.3.1
         with:
           # this might remove tools that are actually needed,
           # if set to "true" but frees about 6 GB
