@@ -146,7 +146,7 @@ jobs:
             sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip
 
   windows-latest-cmake:
-    runs-on: windows-2025
+    runs-on: windows-2022
 
     env:
       VULKAN_VERSION: 1.4.328.1
@@ -200,8 +200,8 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake .. -DCMAKE_CXX_FLAGS='/bigobj' -G Ninja -DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe ${{ matrix.defines }}
-          cmake --build . --config Release
+          cmake .. -DCMAKE_CXX_FLAGS='/bigobj' -G Ninja -DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_BUILD_TYPE=Release ${{ matrix.defines }}
+          cmake --build .
 
       - name: Check AVX512F support
         id: check_avx512f
