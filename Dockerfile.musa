@@ -1,5 +1,5 @@
 ARG MUSA_VERSION=rc4.2.0
-ARG UBUNTU_VERSION=22.04
+ARG UBUNTU_VERSION=24.04
 
 FROM mthreads/musa:${MUSA_VERSION}-devel-ubuntu${UBUNTU_VERSION}-amd64 as build
 
@@ -19,5 +19,6 @@ RUN mkdir build && cd build && \
 FROM mthreads/musa:${MUSA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}-amd64 as runtime
 
 COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
+COPY --from=build /sd.cpp/build/bin/sd-server /sd-server
 
 ENTRYPOINT [ "/sd-cli" ]
