@@ -537,7 +537,7 @@ int main(int argc, const char** argv) {
             }
 
             std::vector<uint8_t> mask_bytes;
-            if (req.form.has_field("mask")) {
+            if (req.form.has_file("mask")) {
                 auto file = req.form.get_file("mask");
                 mask_bytes.assign(file.content.begin(), file.content.end());
             }
