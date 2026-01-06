@@ -1766,7 +1766,7 @@ struct LLMEmbedder : public Conditioner {
             if (sd_version_is_longcat(version)) {
                 LOG_INFO("LongCatEditPipeline");
                 prompt_template_encode_start_idx = 67;
-                // prompt_template_encode_end_idx = 5;
+                prompt_template_encode_end_idx = 5;
                 int image_embed_idx = 36 + 6;
 
                 int min_pixels          = 384 * 384;
@@ -1820,16 +1820,33 @@ struct LLMEmbedder : public Conditioner {
                     img_prompt += "<|vision_end|>";
                 }
 
-                max_length   = 512;
-                spell_quotes = true;
-                prompt       = "<|im_start|>system\nAs an image editing expert, first analyze the content and attributes of the input image(s). Then, based on the user's editing instructions, clearly and precisely determine how to modify the given image(s), ensuring that only the specified parts are altered and all other aspects remain consistent with the original(s).<|im_end|>\n<|im_start|>user\n";
+                max_length = 512 + prompt_template_encode_start_idx;
+                spell_quotes            = true;
+                prompt                  = "<|im_start|>system\nAs an image editing expert, first analyze the content and attributes of the input image(s). Then, based on the user's editing instructions, clearly and precisely determine how to modify the given image(s), ensuring that only the specified parts are altered and all other aspects remain consistent with the original(s).<|im_end|>\n<|im_start|>user\n";
                 prompt += img_prompt;
 
                 prompt_attn_range.first = static_cast<int>(prompt.size());
                 prompt += conditioner_params.text;
                 prompt_attn_range.second = static_cast<int>(prompt.size());
 
-                prompt += "<|im_end|>\n<|im_start|>assistant\n";
+                auto tokens_and_weights = tokenize(prompt, prompt_attn_range, 0, false, spell_quotes);
+                tokens                  = std::get<0>(tokens_and_weights);
+                weights                 = std::get<1>(tokens_and_weights);
+
+                mask.insert(mask.end(), tokens.size(), 1.f);
+                if (tokens.size() < max_length) {
+                    mask.insert(mask.end(), max_length - tokens.size(), 0.f);
+                    tokenizer->pad_tokens(tokens, weights, max_length, true);
+                }
+
+                std::string prompt_template_suffix = "<|im_end|>\n<|im_start|>assistant\n";
+                auto suffix_tokens                 = tokenizer->tokenize(prompt_template_suffix, nullptr);
+
+                LOG_DEBUG("%zd", tokens.size());
+
+                tokens.insert(tokens.end(), suffix_tokens.begin(), suffix_tokens.end());
+                weights.insert(weights.end(), suffix_tokens.size(), 1.f);
+                mask.insert(mask.end(), suffix_tokens.size(), 1.f);
 
             } else {
                 LOG_INFO("QwenImageEditPlusPipeline");
