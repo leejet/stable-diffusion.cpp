@@ -83,7 +83,7 @@ python convert_diffusers_to_original_stable_diffusion.py \
 The file segmind_tiny-sd.ckpt will be generated and is now ready for use with sd.cpp. You can follow a similar process for the other models mentioned above.
 
 
-### Another available .ckpt file:
+##### Another available .ckpt file:
 
  * https://huggingface.co/ClashSAN/small-sd/resolve/main/tinySDdistilled.ckpt
 
@@ -97,3 +97,26 @@ for key, value in ckpt['state_dict'].items():
         ckpt['state_dict'][key] = value.contiguous()
 torch.save(ckpt, "tinySDdistilled_fixed.ckpt")
 ```
+
+
+### SDXS-512
+
+Another very tiny and **incredibly fast**  model is SDXS.  The authors refer to it as *"Real-Time One-Step Latent Diffusion Models with Image Conditions"*. For details read the paper: https://arxiv.org/pdf/2403.16627 . Once again the authors removed some more blocks of U-Net part and unlike other SD1 models they use an adjusted _AutoencoderTiny_ instead of default _AutoencoderKL_ for the VAE part.
+
+##### First download the diffusers models from  Hugging Face using Python:
+
+```python
+from diffusers import StableDiffusionPipeline
+pipe = StableDiffusionPipeline.from_pretrained("IDKiro/sdxs-512-dreamshaper")
+pipe.save_pretrained(save_directory="sdxs")
+```
+
+##### Second run the model as follows:
+
+```python
+~/stable-diffusion.cpp/build/bin/sd-cli -m sdxs  -p "portrait of a lovely cat" \
+  --cfg-scale 1 --steps 1 \
+  --taesd  sdxs/vae/diffusion_pytorch_model.safetensors
+```
+
+All options: ``` --cfg-scale 1 ``` , ``` --steps 1 ```  and  ``` --taesd sdxs/vae/diffusion_pytorch_model.safetensors```  are mandatory here.                                                 
