@@ -3046,7 +3046,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "height: %d\n"
              "sample_params: %s\n"
              "strength: %.2f\n"
-             "seed: %" PRId64
+             "seed: %" PRId64 "\n"
              "batch_count: %d\n"
              "ref_images_count: %d\n"
              "auto_resize_ref_image: %s\n"
