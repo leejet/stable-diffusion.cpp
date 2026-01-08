@@ -2489,7 +2489,7 @@ public:
                 ne2 = 1;
                 ne3 = C * x->ne[3];
             } else {
-                int out_channels       = C;
+                int64_t out_channels   = C;
                 bool encode_outputs_mu = use_tiny_autoencoder ||
                                          sd_version_is_wan(version) ||
                                          sd_version_is_flux2(version) ||
@@ -3051,7 +3051,8 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "height: %d\n"
              "sample_params: %s\n"
              "strength: %.2f\n"
-             "seed: %" PRId64 "\n"
+             "seed: %" PRId64
+             "\n"
              "batch_count: %d\n"
              "ref_images_count: %d\n"
              "auto_resize_ref_image: %s\n"
