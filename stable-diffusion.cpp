@@ -116,8 +116,7 @@ public:
     std::shared_ptr<DiffusionModel> diffusion_model;
     std::shared_ptr<DiffusionModel> high_noise_diffusion_model;
     std::shared_ptr<VAE> first_stage_model = nullptr;
-    std::shared_ptr<TinyAutoEncoder> first_stage_model_tiny = nullptr;
-    std::shared_ptr<TinyAutoEncoder> tae_first_stage;
+    std::shared_ptr<TinyAutoEncoder> tae_first_stage = nullptr;
     std::shared_ptr<ControlNet> control_net;
     std::shared_ptr<PhotoMakerIDEncoder> pmid_model;
     std::shared_ptr<LoraModel> pmid_lora;
@@ -593,7 +592,7 @@ public:
                 vae_backend = backend;
             }
 
-            if (!use_tiny_autoencoder || sd_ctx_params->tae_preview_only) {
+            if (!(use_tiny_autoencoder || version == VERSION_SDXS) || sd_ctx_params->tae_preview_only) {
                 if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
                     first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
                                                                             offload_params_to_cpu,
@@ -607,46 +606,31 @@ public:
                     first_stage_model = std::make_shared<FakeVAE>(vae_backend,
                                                                   offload_params_to_cpu);
                 } else {
-                    if (version == VERSION_SDXS) {
-                        first_stage_model_tiny = std::make_shared<TinyImageAutoEncoder>(vae_backend,
-                                                                                        offload_params_to_cpu,
-                                                                                        tensor_storage_map,
-                                                                                        "decoder.layers",
-                                                                                        vae_decode_only,
-                                                                                        version);
-                        first_stage_model_tiny->alloc_params_buffer();
-                        first_stage_model_tiny->get_param_tensors(tensors,"first_stage_model");
-                        if (sd_ctx_params->vae_conv_direct) {
-                            first_stage_model_tiny->set_conv2d_direct_enabled(true);
-                        }
-                    } else {
-                        first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend,
-                                                                            offload_params_to_cpu,
-                                                                            tensor_storage_map,
-                                                                            "first_stage_model",
-                                                                            vae_decode_only,
-                                                                            false,
-                                                                            version);
-                        if (sd_ctx_params->vae_conv_direct) {
-                            LOG_INFO("Using Conv2d direct in the vae model");
-                            first_stage_model->set_conv2d_direct_enabled(true);
-                        }
-                        if (version == VERSION_SDXL &&
-                            (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale)) {
-                            float vae_conv_2d_scale = 1.f / 32.f;
-                            LOG_WARN(
-                                "No VAE specified with --vae or --force-sdxl-vae-conv-scale flag set, "
-                                "using Conv2D scale %.3f",
-                                 vae_conv_2d_scale);
-                            first_stage_model->set_conv2d_scale(vae_conv_2d_scale);
-                        }
-                        first_stage_model->alloc_params_buffer();
-                        first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                    first_stage_model = std::make_shared<AutoEncoderKL>(vae_backend,
+                                                                        offload_params_to_cpu,
+                                                                        tensor_storage_map,
+                                                                        "first_stage_model",
+                                                                        vae_decode_only,
+                                                                        false,
+                                                                        version);
+                    if (sd_ctx_params->vae_conv_direct) {
+                        LOG_INFO("Using Conv2d direct in the vae model");
+                        first_stage_model->set_conv2d_direct_enabled(true);
                     }
+                    if (version == VERSION_SDXL &&
+                        (strlen(SAFE_STR(sd_ctx_params->vae_path)) == 0 || sd_ctx_params->force_sdxl_vae_conv_scale)) {
+                        float vae_conv_2d_scale = 1.f / 32.f;
+                        LOG_WARN(
+                            "No VAE specified with --vae or --force-sdxl-vae-conv-scale flag set, "
+                            "using Conv2D scale %.3f",
+                            vae_conv_2d_scale);
+                        first_stage_model->set_conv2d_scale(vae_conv_2d_scale);
+                    }
+                    first_stage_model->alloc_params_buffer();
+                    first_stage_model->get_param_tensors(tensors, "first_stage_model");
                 }
             }
-
-            if (use_tiny_autoencoder) {
+            if (use_tiny_autoencoder || version == VERSION_SDXS) {
                 if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
                     tae_first_stage = std::make_shared<TinyVideoAutoEncoder>(vae_backend,
                                                                              offload_params_to_cpu,
@@ -661,6 +645,10 @@ public:
                                                                              "decoder.layers",
                                                                              vae_decode_only,
                                                                              version);
+                    if (version == VERSION_SDXS) {
+                        tae_first_stage->alloc_params_buffer();
+                        tae_first_stage->get_param_tensors(tensors,"first_stage_model");
+                    } 
                 }
                 if (sd_ctx_params->vae_conv_direct) {
                     LOG_INFO("Using Conv2d direct in the tae model");
@@ -738,9 +726,6 @@ public:
             if (first_stage_model) {
                 first_stage_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
             }
-            if (first_stage_model_tiny) {
-                first_stage_model_tiny->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
-            }
             if (tae_first_stage) {
                 tae_first_stage->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
             }
@@ -801,17 +786,14 @@ public:
                 unet_params_mem_size += high_noise_diffusion_model->get_params_buffer_size();
             }
             size_t vae_params_mem_size = 0;
-            if (!use_tiny_autoencoder || sd_ctx_params->tae_preview_only) {
-                if (first_stage_model_tiny != nullptr) {
-                    vae_params_mem_size = first_stage_model_tiny->get_params_buffer_size();
-                } else {
-                    vae_params_mem_size = first_stage_model->get_params_buffer_size();
-                }
+            if (!(use_tiny_autoencoder || version == VERSION_SDXS) || sd_ctx_params->tae_preview_only) {
+                vae_params_mem_size = first_stage_model->get_params_buffer_size();
             }
-            if (use_tiny_autoencoder) {
-                if (!tae_first_stage->load_from_file(taesd_path, n_threads)) {
+            if (use_tiny_autoencoder || version == VERSION_SDXS) {
+                if (use_tiny_autoencoder && !tae_first_stage->load_from_file(taesd_path, n_threads)) {
                     return false;
                 }
+                use_tiny_autoencoder = true; // now the processing is identical for VERSION_SDXS
                 vae_params_mem_size = tae_first_stage->get_params_buffer_size();
             }
             size_t control_net_params_mem_size = 0;
@@ -2540,17 +2522,9 @@ public:
                 };
                 sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, on_tiling);
             } else {
-                if (version == VERSION_SDXS) {
-                    first_stage_model_tiny->compute(n_threads, x, false, &result, work_ctx);
-                } else {
-                    first_stage_model->compute(n_threads, x, false, &result, work_ctx);
-                }
+                first_stage_model->compute(n_threads, x, false, &result, work_ctx);
             }
-            if (version == VERSION_SDXS) {
-                first_stage_model_tiny->free_compute_buffer();
-            } else {
-                first_stage_model->free_compute_buffer();
-            }
+            first_stage_model->free_compute_buffer();
         } else {
             if (vae_tiling_params.enabled && !encode_video) {
                 // split latent in 32x32 tiles and compute in several steps
@@ -2604,7 +2578,6 @@ public:
             sd_version_is_qwen_image(version) ||
             sd_version_is_wan(version) ||
             sd_version_is_flux2(version) ||
-            version == VERSION_SDXS ||
             version == VERSION_CHROMA_RADIANCE) {
             latent = vae_output;
         } else if (version == VERSION_SD1_PIX2PIX) {
@@ -2663,9 +2636,7 @@ public:
             if (sd_version_is_qwen_image(version)) {
                 x = ggml_reshape_4d(work_ctx, x, x->ne[0], x->ne[1], 1, x->ne[2] * x->ne[3]);
             }
-            if (first_stage_model_tiny == nullptr) {
-                process_latent_out(x);
-            }
+            process_latent_out(x);
             // x = load_tensor_from_file(work_ctx, "wan_vae_z.bin");
             if (vae_tiling_params.enabled && !decode_video) {
                 float tile_overlap;
@@ -2676,22 +2647,14 @@ public:
 
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
-                    first_stage_model_tiny != nullptr ? first_stage_model_tiny->compute(n_threads, in, true, &out, nullptr) : first_stage_model->compute(n_threads, in, true, &out, nullptr);
+                    first_stage_model->compute(n_threads, in, true, &out, nullptr);
                 };
                 sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, on_tiling);
             } else {
-                if (first_stage_model_tiny != nullptr) {
-                    first_stage_model_tiny->compute(n_threads, x, true, &result, work_ctx);
-                } else {
-                    first_stage_model->compute(n_threads, x, true, &result, work_ctx);
-                }
+                first_stage_model->compute(n_threads, x, true, &result, work_ctx);
             }
-            if (first_stage_model_tiny != nullptr) {
-                first_stage_model_tiny->free_compute_buffer();
-            } else {
-                first_stage_model->free_compute_buffer();
-                process_vae_output_tensor(result);
-            }
+            first_stage_model->free_compute_buffer();
+            process_vae_output_tensor(result);
         } else {
             if (vae_tiling_params.enabled && !decode_video) {
                 // split latent in 64x64 tiles and compute in several steps
@@ -3453,11 +3416,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     int64_t t4 = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t4 - t3) * 1.0f / 1000);
     if (sd_ctx->sd->free_params_immediately && !sd_ctx->sd->use_tiny_autoencoder) {
-        if (sd_ctx->sd->first_stage_model_tiny != nullptr) {
-            sd_ctx->sd->first_stage_model_tiny->free_params_buffer();
-        } else {
-            sd_ctx->sd->first_stage_model->free_params_buffer();
-        }
+        sd_ctx->sd->first_stage_model->free_params_buffer();
     }
 
     sd_ctx->sd->lora_stat();
