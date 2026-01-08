@@ -2414,7 +2414,7 @@ public:
                 ne2 = 1;
                 ne3 = C * x->ne[3];
             } else {
-                int out_channels        = C;
+                int out_channels       = C;
                 bool encode_outputs_mu = use_tiny_autoencoder ||
                                          sd_version_is_wan(version) ||
                                          sd_version_is_flux2(version) ||
