@@ -70,7 +70,7 @@ API and command-line option may change frequently.***
   - SYCL
 - Supported weight formats
   - Pytorch checkpoint (`.ckpt` or `.pth`)
-  - Safetensors (`./safetensors`)
+  - Safetensors (`.safetensors`)
   - GGUF (`.gguf`)
 - Supported platforms
     - Linux

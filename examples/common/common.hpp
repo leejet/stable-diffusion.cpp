@@ -95,17 +95,28 @@ static void print_utf8(FILE* stream, const char* utf8) {
                    ? GetStdHandle(STD_ERROR_HANDLE)
                    : GetStdHandle(STD_OUTPUT_HANDLE);
 
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-    if (wlen <= 0)
-        return;
+    DWORD mode;
+    BOOL is_console = GetConsoleMode(h, &mode);
 
-    wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
-    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+    if (is_console) {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+        if (wlen <= 0)
+            return;
 
-    DWORD written;
-    WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
+        wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
+        if (!wbuf)
+            return;
 
-    free(wbuf);
+        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+
+        DWORD written;
+        WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
+
+        free(wbuf);
+    } else {
+        DWORD written;
+        WriteFile(h, utf8, (DWORD)strlen(utf8), &written, NULL);
+    }
 #else
     fputs(utf8, stream);
 #endif
@@ -442,6 +453,7 @@ struct SDContextParams {
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
+    bool enable_mmap            = false;
     bool control_net_cpu        = false;
     bool clip_on_cpu            = false;
     bool vae_on_cpu             = false;
@@ -587,6 +599,10 @@ struct SDContextParams {
              "--offload-to-cpu",
              "place the weights in RAM to save VRAM, and automatically load them into VRAM when needed",
              true, &offload_params_to_cpu},
+            {"",
+             "--mmap",
+             "whether to memory-map model",
+             true, &enable_mmap},
             {"",
              "--control-net-cpu",
              "keep controlnet in cpu (for low vram)",
@@ -793,7 +809,7 @@ struct SDContextParams {
     }
 
     void build_embedding_map() {
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
 
         if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
             return;
@@ -884,6 +900,7 @@ struct SDContextParams {
             << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
             << "  flow_shift: " << (std::isinf(flow_shift) ? "INF" : std::to_string(flow_shift)) << "\n"
             << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
+            << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
             << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
             << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
             << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
@@ -947,6 +964,7 @@ struct SDContextParams {
             prediction,
             lora_apply_mode,
             offload_params_to_cpu,
+            enable_mmap,
             clip_on_cpu,
             control_net_cpu,
             vae_on_cpu,
@@ -1368,10 +1386,10 @@ struct SDGenerationParams {
                 if (!item.empty()) {
                     try {
                         custom_sigmas.push_back(std::stof(item));
-                    } catch (const std::invalid_argument& e) {
+                    } catch (const std::invalid_argument&) {
                         LOG_ERROR("error: invalid float value '%s' in --sigmas", item.c_str());
                         return -1;
-                    } catch (const std::out_of_range& e) {
+                    } catch (const std::out_of_range&) {
                         LOG_ERROR("error: float value '%s' out of range in --sigmas", item.c_str());
                         return -1;
                     }
@@ -1494,7 +1512,7 @@ struct SDGenerationParams {
              on_cache_mode_arg},
             {"",
              "--cache-option",
-             "named cache params (key=value format, comma-separated):\n                                           - easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=\n                                           - dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=\n                                           Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
+             "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
              on_cache_option_arg},
             {"",
              "--cache-preset",
@@ -1588,7 +1606,7 @@ struct SDGenerationParams {
             return;
         }
         static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
         std::smatch m;
 
         std::string tmp = prompt;
