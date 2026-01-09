@@ -447,6 +447,13 @@ struct SDContextParams {
     std::string tensor_type_rules;
     std::string lora_model_dir = ".";
 
+    std::string main_backend_device;
+    std::string diffusion_backend_device;
+    std::string clip_backend_device;
+    std::string vae_backend_device;
+    std::string tae_backend_device;
+    std::string control_net_backend_device;
+
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
 
@@ -454,9 +461,6 @@ struct SDContextParams {
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
     bool enable_mmap            = false;
-    bool control_net_cpu        = false;
-    bool clip_on_cpu            = false;
-    bool vae_on_cpu             = false;
     bool flash_attn             = false;
     bool diffusion_flash_attn   = false;
     bool diffusion_conv_direct  = false;
@@ -562,6 +566,31 @@ struct SDContextParams {
              "--upscale-model",
              "path to esrgan model.",
              &esrgan_path},
+            {"",
+             "--main-backend-device",
+             "default device to use for all backends (defaults to main gpu device if hardware acceleration is available, otherwise cpu)",
+             &main_backend_device},
+            {"",
+             "--diffusion-backend-device",
+             "device to use for diffusion (defaults to main-backend-device)",
+             &diffusion_backend_device},
+            {"",
+             "--clip-backend-device",
+             "device to use for clip (defaults to main-backend-device)",
+             &clip_backend_device},
+            {"",
+             "--vae-backend-device",
+             "device to use for vae (defaults to main-backend-device). Also applies to tae, unless tae-backend-device is specified",
+             &vae_backend_device},
+            {"",
+             "--tae-backend-device",
+             "device to use for tae (defaults to vae-backend-device)",
+             &tae_backend_device},
+            {"",
+             "--control-net-backend-device",
+             "device to use for control net (defaults to main-backend-device)",
+             &control_net_backend_device},
+
         };
 
         options.int_options = {
@@ -604,18 +633,6 @@ struct SDContextParams {
              "--mmap",
              "whether to memory-map model",
              true, &enable_mmap},
-            {"",
-             "--control-net-cpu",
-             "keep controlnet in cpu (for low vram)",
-             true, &control_net_cpu},
-            {"",
-             "--clip-on-cpu",
-             "keep clip in cpu (for low vram)",
-             true, &clip_on_cpu},
-            {"",
-             "--vae-on-cpu",
-             "keep vae in cpu (for low vram)",
-             true, &vae_on_cpu},
             {"",
              "--fa",
              "use flash attention",
@@ -880,6 +897,7 @@ struct SDContextParams {
 
         std::string embeddings_str = emb_ss.str();
         std::ostringstream oss;
+        // TODO backend devices
         oss << "SDContextParams {\n"
             << "  n_threads: " << n_threads << ",\n"
             << "  model_path: \"" << model_path << "\",\n"
@@ -906,9 +924,9 @@ struct SDContextParams {
             << "  flow_shift: " << (std::isinf(flow_shift) ? "INF" : std::to_string(flow_shift)) << "\n"
             << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
             << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
-            << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
-            << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
-            << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
+            // << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
+            // << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
+            // << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
             << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
             << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
             << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
@@ -971,9 +989,6 @@ struct SDContextParams {
             lora_apply_mode,
             offload_params_to_cpu,
             enable_mmap,
-            clip_on_cpu,
-            control_net_cpu,
-            vae_on_cpu,
             flash_attn,
             diffusion_flash_attn,
             taesd_preview,
@@ -987,6 +1002,12 @@ struct SDContextParams {
             chroma_t5_mask_pad,
             qwen_image_zero_cond_t,
             flow_shift,
+            main_backend_device.c_str(),
+            diffusion_backend_device.c_str(),
+            clip_backend_device.c_str(),
+            vae_backend_device.c_str(),
+            tae_backend_device.c_str(),
+            control_net_backend_device.c_str(),
         };
         return sd_ctx_params;
     }
