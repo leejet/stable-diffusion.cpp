@@ -697,7 +697,7 @@ public:
                 ggml_backend_t controlnet_backend = nullptr;
                 if (!control_net_backend_is_default) {
                     control_net_backend = init_named_backend(control_net_backend_name);
-                    LOG_INFO("ControlNet: Using %s backend", control_net_backend_name);
+                    LOG_INFO("ControlNet: Using %s backend", ggml_backend_name(controlnet_backend));
                 } else {
                     controlnet_backend = backend;
                 }
