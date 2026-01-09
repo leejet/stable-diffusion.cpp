@@ -183,9 +183,9 @@ typedef struct {
     enum lora_apply_mode_t lora_apply_mode;
     bool offload_params_to_cpu;
     bool enable_mmap;
-    bool keep_clip_on_cpu;
-    bool keep_control_net_on_cpu;
-    bool keep_vae_on_cpu;
+    // bool keep_clip_on_cpu;
+    // bool keep_control_net_on_cpu;
+    // bool keep_vae_on_cpu;
     bool diffusion_flash_attn;
     bool tae_preview_only;
     bool diffusion_conv_direct;
@@ -198,6 +198,12 @@ typedef struct {
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
     float flow_shift;
+    const char* main_device;
+    const char* diffusion_device;
+    const char* clip_device;
+    const char* vae_device;
+    const char* tae_device;
+    const char* control_net_device;
 } sd_ctx_params_t;
 
 typedef struct {
