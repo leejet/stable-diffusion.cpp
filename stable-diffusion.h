@@ -186,7 +186,7 @@ typedef struct {
     bool keep_clip_on_cpu;
     bool keep_control_net_on_cpu;
     bool keep_vae_on_cpu;
-    bool diffusion_flash_attn;
+    bool flash_attn;
     bool tae_preview_only;
     bool diffusion_conv_direct;
     bool vae_conv_direct;
