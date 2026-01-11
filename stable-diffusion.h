@@ -409,6 +409,11 @@ SD_API bool preprocess_canny(sd_image_t image,
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
 
+SD_API size_t backend_list_size(void);
+SD_API void list_backends_to_buffer(char* buffer, size_t buffer_size);
+
+SD_API void add_rpc_device(const char* address);
+
 #ifdef __cplusplus
 }
 #endif
