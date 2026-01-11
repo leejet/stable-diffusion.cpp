@@ -420,6 +420,9 @@ int main(int argc, const char** argv) {
                 return;
             }
 
+            if (gen_params.sample_params.sample_steps > 100)
+                gen_params.sample_params.sample_steps = 100;
+
             if (!gen_params.process_and_check(IMG_GEN, "")) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
@@ -597,6 +600,9 @@ int main(int argc, const char** argv) {
                 res.set_content(R"({"error":"invalid sd_cpp_extra_args"})", "application/json");
                 return;
             }
+
+            if (gen_params.sample_params.sample_steps > 100)
+                gen_params.sample_params.sample_steps = 100;
 
             if (!gen_params.process_and_check(IMG_GEN, "")) {
                 res.status = 400;
