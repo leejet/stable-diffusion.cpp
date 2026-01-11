@@ -34,6 +34,8 @@ namespace fs = std::filesystem;
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
+#define VALID_BREAK_OPT -42
+
 const char* modes_str[] = {
     "img_gen",
     "vid_gen",
@@ -401,16 +403,26 @@ static bool parse_options(int argc, const char** argv, const std::vector<ArgOpti
                 }))
                 break;
 
+            bool kill_flow = false;
             if (match_and_apply(options.manual_options, [&](auto& option) {
                     int ret = option.cb(argc, argv, i);
+                    if (ret == VALID_BREAK_OPT) {
+                        // not an error, but still break out of the loop (e.g. --help)
+                        kill_flow = true;
+                        return;
+                    }
                     if (ret < 0) {
                         invalid_arg = true;
                         return;
                     }
                     i += ret;
                     found_arg = true;
-                }))
+                })) {
+                if (kill_flow) {
+                    return false;
+                }
                 break;
+            }
         }
 
         if (invalid_arg) {
