@@ -52,7 +52,7 @@ Context Options:
   --control-net-cpu                        keep controlnet in cpu (for low vram)
   --clip-on-cpu                            keep clip in cpu (for low vram)
   --vae-on-cpu                             keep vae in cpu (for low vram)
-  --diffusion-fa                           use flash attention in the diffusion model
+  --disable-fa                             disable flash attention
   --diffusion-conv-direct                  use ggml_conv2d_direct in the diffusion model
   --vae-conv-direct                        use ggml_conv2d_direct in the vae model
   --circular                               enable circular padding for convolutions

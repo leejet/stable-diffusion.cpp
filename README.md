@@ -144,6 +144,7 @@ If you want to improve performance or reduce VRAM/RAM usage, please refer to [pe
 - [Docker](./docs/docker.md)
 - [Quantization and GGUF](./docs/quantization_and_gguf.md)
 - [Inference acceleration via caching](./docs/caching.md)
+- [Troubleshooting](./docs/troubleshooting.md)
 
 ## Bindings
 
