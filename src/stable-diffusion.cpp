@@ -175,7 +175,8 @@ public:
         // TODO: expose via C API and fill a cstr
         const int device_count = ggml_backend_dev_count();
         for (int i = 0; i < device_count; i++) {
-            LOG_INFO("%s", ggml_backend_dev_name(ggml_backend_dev_get(i)));
+            auto dev = ggml_backend_dev_get(i);
+            LOG_INFO("%s (%s)", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev));
         }
     }
 
