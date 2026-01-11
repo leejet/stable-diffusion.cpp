@@ -96,6 +96,90 @@ void suppress_pp(int step, int steps, float time, void* data) {
     return;
 }
 
+std::vector<std::string> string_split(const std::string & input, char separator)
+{
+    std::vector<std::string> parts;
+    size_t begin_pos = 0;
+    size_t separator_pos = input.find(separator);
+    while (separator_pos != std::string::npos) {
+        std::string part = input.substr(begin_pos, separator_pos - begin_pos);
+        parts.emplace_back(part);
+        begin_pos = separator_pos + 1;
+        separator_pos = input.find(separator, begin_pos);
+    }
+    parts.emplace_back(input.substr(begin_pos, separator_pos - begin_pos));
+    return parts;
+}
+
+static void add_rpc_devices(const std::string & servers) {
+    auto rpc_servers = string_split(servers, ',');
+    if (rpc_servers.empty()) {
+        throw std::invalid_argument("no RPC servers specified");
+    }
+    ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (!rpc_reg) {
+        throw std::invalid_argument("failed to find RPC backend");
+    }
+    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char * endpoint);
+    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (!ggml_backend_rpc_add_server_fn) {
+        throw std::invalid_argument("failed to find RPC add server function");
+    }
+    for (const auto & server : rpc_servers) {
+        auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
+        ggml_backend_register(reg);
+    }
+}
+
+void add_rpc_device(const char* servers_cstr){
+    std::string servers(servers_cstr);
+    add_rpc_devices(servers);
+}
+
+std::vector<std::pair<std::string, std::string>> list_backends_vector() {
+    std::vector<std::pair<std::string, std::string>> backends;
+    const int device_count = ggml_backend_dev_count();
+    for (int i = 0; i < device_count; i++) {
+        auto dev = ggml_backend_dev_get(i);
+        backends.push_back({ggml_backend_dev_name(dev), ggml_backend_dev_description(dev)});
+    }
+    return backends;
+}
+
+SD_API size_t backend_list_size(){
+    // for C API
+    size_t buffer_size = 0;
+    auto backends = list_backends_vector();
+    for (auto& backend : backends) {
+        auto dev_name_size = backend.first.size();
+        auto dev_desc_size = backend.second.size();
+        buffer_size+=dev_name_size+dev_desc_size+2; // +2 for the separators
+    }
+    return buffer_size;
+}
+
+// devices are separated by \n and name and description are separated by \t
+SD_API void list_backends_to_buffer(char* buffer, size_t buffer_size) {
+    auto backends = list_backends_vector();
+    size_t offset = 0;
+    for (auto& backend : backends) {
+        size_t name_size = backend.first.size();
+        size_t desc_size = backend.second.size();
+        if (offset + name_size + desc_size + 2 > buffer_size) {
+            break; // Not enough space in the buffer
+        }
+        memcpy(buffer + offset, backend.first.c_str(), name_size);
+        offset += name_size;
+        buffer[offset++] = '\t';
+        memcpy(buffer + offset, backend.second.c_str(), desc_size);
+        offset += desc_size;
+        buffer[offset++] = '\n'; 
+    }
+    if (offset < buffer_size) {
+        buffer[offset] = '\0'; // Ensure the buffer is null-terminated at the end
+    }
+}
+
 /*=============================================== StableDiffusionGGML ================================================*/
 
 class StableDiffusionGGML {
@@ -171,8 +255,8 @@ public:
         ggml_backend_free(backend);
     }
 
-    void list_backends() {
-        // TODO: expose via C API and fill a cstr
+
+    void log_backends() {
         const int device_count = ggml_backend_dev_count();
         for (int i = 0; i < device_count; i++) {
             auto dev = ggml_backend_dev_get(i);
@@ -243,7 +327,7 @@ public:
 
         ggml_log_set(ggml_log_callback_default, nullptr);
 
-        list_backends();
+        log_backends();
 
         std::string default_backend_name = get_default_backend_name();
 

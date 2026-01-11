@@ -46,6 +46,7 @@ struct SDCliParams {
     bool color               = false;
 
     bool normal_exit = false;
+    bool skip_usage = false;
 
     ArgOptions get_options() {
         ArgOptions options;
@@ -143,7 +144,27 @@ struct SDCliParams {
 
         auto on_help_arg = [&](int argc, const char** argv, int index) {
             normal_exit = true;
-            return -1;
+            return VALID_BREAK_OPT;
+        };
+
+        auto on_rpc_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            const char* rpc_device = argv[index];
+            add_rpc_device(rpc_device);
+            return 1; 
+        };
+
+        auto on_list_devices_arg = [&](int argc, const char** argv, int index) {
+            size_t buff_size = backend_list_size();
+            char* buff = (char*)malloc(buff_size);
+            list_backends_to_buffer(buff, buff_size);
+            printf("List of available GGML devices:\nName\tDescription\n-------------------\n%s\n", buff);
+            free(buff);
+            normal_exit = true;
+            skip_usage = true;
+            return VALID_BREAK_OPT;
         };
 
         options.manual_options = {
@@ -159,6 +180,14 @@ struct SDCliParams {
              "--help",
              "show this help message and exit",
              on_help_arg},
+            {"",
+             "--rpc",
+             "add a rpc device", 
+             on_rpc_arg},
+             {"",
+              "--list-devices",
+              "list available ggml compute devices",
+              on_list_devices_arg},
         };
 
         return options;
@@ -213,7 +242,9 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
     std::vector<ArgOptions> options_vec = {cli_params.get_options(), ctx_params.get_options(), gen_params.get_options()};
 
     if (!parse_options(argc, argv, options_vec)) {
-        print_usage(argc, argv, options_vec);
+        if (!cli_params.skip_usage){
+            print_usage(argc, argv, options_vec);
+        }
         exit(cli_params.normal_exit ? 0 : 1);
     }
 
