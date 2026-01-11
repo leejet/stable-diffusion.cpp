@@ -32,6 +32,10 @@ def parse_arguments():
         help="image height, in pixel space (default: 512)")
     ap.add_argument("-W", "--width", type=int,
         help="image width, in pixel space (default: 512)")
+    ap.add_argument("--steps", type=int,
+        help="number of sample steps (default: 20)")
+    ap.add_argument("--high-noise-steps", type=int, dest="high_noise_steps",
+        help="(high noise) number of sample steps (default: -1 = auto)")
     ap.add_argument("--clip-skip", type=int, dest="clip_skip",
         help="ignore last layers of CLIP network; 1 ignores none, 2 ignores one layer (default: -1). <= 0 represents unspecified, will be 1 for SD1.x, 2 for SD2.x")
     ap.add_argument("-b", "--batch-count", type=int, dest="batch_count",
@@ -64,6 +68,12 @@ def parse_arguments():
         help="disable auto resize of ref images")
     ap.add_argument("-s", "--seed", type=int,
         help="RNG seed (default: 42, use random seed for < 0)")
+    ap.add_argument("--sampling-method", dest="sample_method", default=None,
+        help="sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)")
+    ap.add_argument("--high-noise-sampling-method", dest="high_noise_sample_method", default=None,
+        help="(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)")
+    ap.add_argument("--scheduler", default=None,
+        help="denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm], default: discrete")
     ap.add_argument("--skip-layers", dest="skip_layers", default=None,
         help="layers to skip for SLG steps (default: [7,8,9]).")
     ap.add_argument("--high-noise-skip-layers", dest="high_noise_skip_layers", default=None,
@@ -110,6 +120,8 @@ def build_openai_payload(gen_opts, util_opts):
     extension_keys = [
         "negative_prompt", "seed", "video_frames", "fps",
         "cfg_scale", "img_cfg_scale", "guidance", "strength",
+        "steps", "sample_method", "scheduler",
+        "high_noise_steps", "high_noise_sample_method",
         "clip_skip", "upscale_repeats", "moe_boundary",
         "control_strength", "pm_style_strength", "vace_strength",
         "cache_mode", "cache_option", "cache_preset", "scm_mask",
