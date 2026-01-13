@@ -44,7 +44,7 @@ inline bool is_base64(unsigned char c) {
 }
 
 std::vector<uint8_t> base64_decode(const std::string& encoded_string) {
-    int in_len = encoded_string.size();
+    int in_len = static_cast<int>(encoded_string.size());
     int i      = 0;
     int j      = 0;
     int in_    = 0;
@@ -202,11 +202,17 @@ void parse_args(int argc, const char** argv, SDSvrParams& svr_params, SDContextP
         exit(svr_params.normal_exit ? 0 : 1);
     }
 
+    const bool random_seed_requested = default_gen_params.seed < 0;
+
     if (!svr_params.process_and_check() ||
         !ctx_params.process_and_check(IMG_GEN) ||
         !default_gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
         print_usage(argc, argv, options_vec);
         exit(1);
+    }
+
+    if (random_seed_requested) {
+        default_gen_params.seed = -1;
     }
 }
 
@@ -414,6 +420,9 @@ int main(int argc, const char** argv) {
                 return;
             }
 
+            if (gen_params.sample_params.sample_steps > 100)
+                gen_params.sample_params.sample_steps = 100;
+
             if (!gen_params.process_and_check(IMG_GEN, "")) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
@@ -531,7 +540,7 @@ int main(int argc, const char** argv) {
             }
 
             std::vector<uint8_t> mask_bytes;
-            if (req.form.has_field("mask")) {
+            if (req.form.has_file("mask")) {
                 auto file = req.form.get_file("mask");
                 mask_bytes.assign(file.content.begin(), file.content.end());
             }
@@ -592,6 +601,9 @@ int main(int argc, const char** argv) {
                 return;
             }
 
+            if (gen_params.sample_params.sample_steps > 100)
+                gen_params.sample_params.sample_steps = 100;
+
             if (!gen_params.process_and_check(IMG_GEN, "")) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
@@ -611,7 +623,7 @@ int main(int argc, const char** argv) {
                 int img_h           = height;
                 uint8_t* raw_pixels = load_image_from_memory(
                     reinterpret_cast<const char*>(bytes.data()),
-                    bytes.size(),
+                    static_cast<int>(bytes.size()),
                     img_w, img_h,
                     width, height, 3);
 
@@ -629,7 +641,7 @@ int main(int argc, const char** argv) {
                 int mask_h        = height;
                 uint8_t* mask_raw = load_image_from_memory(
                     reinterpret_cast<const char*>(mask_bytes.data()),
-                    mask_bytes.size(),
+                    static_cast<int>(mask_bytes.size()),
                     mask_w, mask_h,
                     width, height, 1);
                 mask_image = {(uint32_t)mask_w, (uint32_t)mask_h, 1, mask_raw};
