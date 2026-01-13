@@ -505,7 +505,7 @@ struct TinyAutoEncoder : public GGMLRunner {
                          struct ggml_tensor** output,
                          struct ggml_context* output_ctx = nullptr) = 0;
 
-    virtual bool load_from_file(const std::string& file_path, int n_threads) = 0;
+    virtual bool load_from_file(const std::string& file_path, int n_threads)                                      = 0;
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) = 0;
 };
 
@@ -557,7 +557,7 @@ struct TinyImageAutoEncoder : public TinyAutoEncoder {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        taesd.get_param_tensors(tensors,prefix);
+        taesd.get_param_tensors(tensors, prefix);
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
@@ -630,7 +630,7 @@ struct TinyVideoAutoEncoder : public TinyAutoEncoder {
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
-        taehv.get_param_tensors(tensors,prefix);
+        taehv.get_param_tensors(tensors, prefix);
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
