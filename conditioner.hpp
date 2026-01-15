@@ -1614,9 +1614,9 @@ struct LLMEmbedder : public Conditioner {
                 bool enable_vision                             = false)
         : version(version) {
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
-        if (sd_version_is_flux2(version)) {
+        if (version == VERSION_FLUX2) {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
-        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE) {
+        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
         }
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2) {
@@ -1771,7 +1771,7 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
-        } else if (sd_version_is_flux2(version)) {
+        } else if (version == VERSION_FLUX2) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {10, 20, 30};
 
@@ -1793,17 +1793,17 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
-        } else if (sd_version_is_flux2(version)) {
+        } else if (version == VERSION_FLUX2_KLEIN) {
             prompt_template_encode_start_idx = 0;
-            out_layers                       = {10, 20, 30};
+            out_layers                       = {9, 18, 27};
 
-            prompt = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
+            prompt = "<|im_start|>user\n";
 
             prompt_attn_range.first = static_cast<int>(prompt.size());
             prompt += conditioner_params.text;
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
-            prompt += "[/INST]";
+            prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
         } else if (version == VERSION_OVIS_IMAGE) {
             prompt_template_encode_start_idx = 28;
             max_length                       = prompt_template_encode_start_idx + 256;

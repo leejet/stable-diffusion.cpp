@@ -45,6 +45,7 @@ enum SDVersion {
     VERSION_WAN2_2_TI2V,
     VERSION_QWEN_IMAGE,
     VERSION_FLUX2,
+    VERSION_FLUX2_KLEIN,
     VERSION_Z_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_COUNT,
@@ -100,7 +101,7 @@ static inline bool sd_version_is_flux(SDVersion version) {
 }
 
 static inline bool sd_version_is_flux2(SDVersion version) {
-    if (version == VERSION_FLUX2) {
+    if (version == VERSION_FLUX2 || version == VERSION_FLUX2_KLEIN) {
         return true;
     }
     return false;

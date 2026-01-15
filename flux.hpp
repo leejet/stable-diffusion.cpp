@@ -1291,10 +1291,16 @@ namespace Flux {
                 flux_params.context_in_dim    = 2048;
                 flux_params.vec_in_dim        = 0;
             } else if (sd_version_is_flux2(version)) {
-                flux_params.context_in_dim   = 15360;
+                if (version == VERSION_FLUX2_KLEIN) {
+                    flux_params.context_in_dim   = 7680;
+                    flux_params.hidden_size      = 3072;
+                    flux_params.num_heads        = 24;
+                } else {
+                    flux_params.context_in_dim   = 15360;
+                    flux_params.hidden_size      = 6144;
+                    flux_params.num_heads        = 48;
+                }
                 flux_params.in_channels      = 128;
-                flux_params.hidden_size      = 6144;
-                flux_params.num_heads        = 48;
                 flux_params.patch_size       = 1;
                 flux_params.out_channels     = 128;
                 flux_params.mlp_ratio        = 3.f;
