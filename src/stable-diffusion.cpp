@@ -177,6 +177,9 @@ SD_API void list_backends_to_buffer(char* buffer, size_t buffer_size) {
     }
     if (offset < buffer_size) {
         buffer[offset] = '\0'; // Ensure the buffer is null-terminated at the end
+    } else {
+        LOG_WARN("Provided buffer size is too small to contain details of all devices.");
+        buffer[buffer_size - 1] = '\0';  // Ensure the buffer is null-terminated at the end
     }
 }
 
