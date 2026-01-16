@@ -48,7 +48,7 @@ const char* model_version_to_str[] = {
     "Wan 2.2 TI2V",
     "Qwen Image",
     "Flux.2",
-    "Flux.2 klein"
+    "Flux.2 klein",
     "Z-Image",
     "Ovis Image",
 };
