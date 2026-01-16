@@ -209,6 +209,7 @@ typedef struct {
     const char* tae_device;
     const char* control_net_device;
     const char* photomaker_device;
+    const char* vision_device;
 } sd_ctx_params_t;
 
 typedef struct {

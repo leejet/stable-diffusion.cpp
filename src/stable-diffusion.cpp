@@ -194,8 +194,7 @@ public:
     ggml_backend_t vae_backend         = nullptr;
     ggml_backend_t tae_backend         = nullptr;
     ggml_backend_t pmid_backend        = nullptr;
-
-    // TODO: clip_vision and photomaker backends
+    ggml_backend_t vision_backend      = nullptr;
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -312,6 +311,7 @@ public:
         std::string vae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->vae_device));
         std::string tae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->tae_device));
         std::string pmid_backend_name        = sanitize_backend_name(SAFE_STR(sd_ctx_params->photomaker_device));
+        std::string vision_backend_name      = sanitize_backend_name(SAFE_STR(sd_ctx_params->vision_device));
 
         bool diffusion_backend_is_default   = diffusion_backend_name.empty() || diffusion_backend_name == default_backend_name;
         bool clip_backend_is_default        = (clip_backend_name.empty() || clip_backend_name == default_backend_name);
@@ -320,9 +320,11 @@ public:
         // if tae_backend_name is empty, it will use the same backend as vae
         bool tae_backend_is_default = (tae_backend_name.empty() && vae_backend_is_default) || tae_backend_name == default_backend_name;
         bool pmid_backend_is_default = (pmid_backend_name.empty() || pmid_backend_name == default_backend_name);
+        // if vision_backend_name is empty, it will use the same backend as clip
+        bool vision_backend_is_default = (vision_backend_name.empty() && clip_backend_is_default) || vision_backend_name == default_backend_name;
 
         // if some backend is not specified or is the same as the default backend, use the default backend
-        bool use_default_backend = diffusion_backend_is_default || clip_backend_is_default || control_net_backend_is_default || vae_backend_is_default || tae_backend_is_default || pmid_backend_is_default;
+        bool use_default_backend = diffusion_backend_is_default || clip_backend_is_default || control_net_backend_is_default || vae_backend_is_default || tae_backend_is_default || pmid_backend_is_default || vision_backend_is_default;
 
         if (use_default_backend) {
             backend = init_named_backend(override_default_backend_name);
@@ -596,7 +598,7 @@ public:
                 if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-I2V-1.3B") {
-                    clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
+                    clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(vision_backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map);
                     clip_vision->alloc_params_buffer();
