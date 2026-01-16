@@ -387,7 +387,8 @@ SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
                                         bool offload_params_to_cpu,
                                         bool direct,
                                         int n_threads,
-                                        int tile_size);
+                                        int tile_size,
+                                        const char * device);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
 SD_API sd_image_t upscale(upscaler_ctx_t* upscaler_ctx,
