@@ -1349,7 +1349,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
 
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
         ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-        kq      = ggml_scale_inplace(ctx, kq, scale);
+        kq = ggml_scale_inplace(ctx, kq, scale);
         if (mask) {
             kq = ggml_add_inplace(ctx, kq, mask);
         }

@@ -1798,7 +1798,7 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (version == VERSION_FLUX2_KLEIN) {
             prompt_template_encode_start_idx = 0;
-            max_length = 512;
+            max_length                       = 512;
             out_layers                       = {9, 18, 27};
 
             prompt = "<|im_start|>user\n";
@@ -1810,8 +1810,8 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
 
             auto tokens_and_weights = tokenize(prompt, prompt_attn_range, 0, false);
-            tokens            = std::get<0>(tokens_and_weights);
-            weights           = std::get<1>(tokens_and_weights);
+            tokens                  = std::get<0>(tokens_and_weights);
+            weights                 = std::get<1>(tokens_and_weights);
 
             mask.insert(mask.end(), tokens.size(), 1.f);
             if (tokens.size() < max_length) {
@@ -1843,8 +1843,8 @@ struct LLMEmbedder : public Conditioner {
 
         if (tokens.empty()) {
             auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0);
-            tokens            = std::get<0>(tokens_and_weights);
-            weights           = std::get<1>(tokens_and_weights);
+            tokens                  = std::get<0>(tokens_and_weights);
+            weights                 = std::get<1>(tokens_and_weights);
         }
 
         int64_t t0                        = ggml_time_ms();
