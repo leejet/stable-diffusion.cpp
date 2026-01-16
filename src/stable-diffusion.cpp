@@ -267,42 +267,6 @@ public:
         }
     }
 
-    bool backend_name_exists(std::string name) {
-        const int device_count = ggml_backend_dev_count();
-        for (int i = 0; i < device_count; i++) {
-            if (name == ggml_backend_dev_name(ggml_backend_dev_get(i))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    std::string sanitize_backend_name(std::string name) {
-        if (name == "" || backend_name_exists(name)) {
-            return name;
-        } else {
-            LOG_WARN("Backend %s not found, using default backend", name.c_str());
-            return "";
-        }
-    }
-
-    std::string get_default_backend_name() {
-        // should pick the same backend as ggml_backend_init_best
-        ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-        dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
-        dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-        return ggml_backend_dev_name(dev);
-    }
-
-    ggml_backend_t init_named_backend(std::string name = "") {
-        LOG_DEBUG("Initializing backend: %s", name.c_str());
-        if (name.empty()) {
-            return ggml_backend_init_best();
-        } else {
-            return ggml_backend_init_by_name(name.c_str(), nullptr);
-        }
-    }
-
     std::shared_ptr<RNG> get_rng(rng_type_t rng_type) {
         if (rng_type == STD_DEFAULT_RNG) {
             return std::make_shared<STDDefaultRNG>();
