@@ -465,6 +465,8 @@ struct SDContextParams {
     std::string vae_backend_device;
     std::string tae_backend_device;
     std::string control_net_backend_device;
+    std::string upscaler_backend_device;
+
 
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
@@ -602,6 +604,11 @@ struct SDContextParams {
              "--control-net-backend-device",
              "device to use for control net (defaults to main-backend-device)",
              &control_net_backend_device},
+             {"",
+             "--upscaler-backend-device",
+             "device to use for upscaling models (defaults to main-backend-device)",
+             &upscaler_backend_device},
+
 
         };
 

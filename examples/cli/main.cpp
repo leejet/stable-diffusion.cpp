@@ -829,7 +829,8 @@ int main(int argc, const char* argv[]) {
                                                         ctx_params.offload_params_to_cpu,
                                                         ctx_params.diffusion_conv_direct,
                                                         ctx_params.n_threads,
-                                                        gen_params.upscale_tile_size);
+                                                        gen_params.upscale_tile_size,
+                                                        ctx_params.upscaler_backend_device.c_str());
 
         if (upscaler_ctx == nullptr) {
             LOG_ERROR("new_upscaler_ctx failed");
