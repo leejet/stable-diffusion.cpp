@@ -779,7 +779,7 @@ public:
                                                                    version);
             }
             if (strlen(SAFE_STR(sd_ctx_params->photo_maker_path)) > 0) {
-                pmid_lora               = std::make_shared<LoraModel>("pmid", backend, sd_ctx_params->photo_maker_path, "", version);
+                pmid_lora               = std::make_shared<LoraModel>("pmid", diffusion_backend, sd_ctx_params->photo_maker_path, "", version);
                 auto lora_tensor_filter = [&](const std::string& tensor_name) {
                     if (starts_with(tensor_name, "lora.model")) {
                         return true;
@@ -1156,8 +1156,11 @@ public:
 
         for (auto& kv : lora_state_diff) {
             int64_t t0 = ggml_time_ms();
-
-            auto lora = load_lora_model_from_file(kv.first, kv.second, backend);
+            // TODO: Fix that
+            if(diffusion_backend!=clip_backend && !ggml_backend_is_cpu(clip_backend)){
+                LOG_WARN("Diffusion models and text encoders are running on different backends. This may cause issues when immediately applying LoRAs.");
+            }
+            auto lora = load_lora_model_from_file(kv.first, kv.second, diffusion_backend);
             if (!lora || lora->lora_tensors.empty()) {
                 continue;
             }
@@ -1235,7 +1238,7 @@ public:
                 const std::string& lora_name = kv.first;
                 float multiplier             = kv.second;
 
-                auto lora = load_lora_model_from_file(lora_name, multiplier, backend, lora_tensor_filter);
+                auto lora = load_lora_model_from_file(lora_name, multiplier, diffusion_backend, lora_tensor_filter);
                 if (lora && !lora->lora_tensors.empty()) {
                     lora->preprocess_lora_tensors(tensors);
                     diffusion_lora_models.push_back(lora);
