@@ -193,6 +193,7 @@ public:
     ggml_backend_t control_net_backend = nullptr;
     ggml_backend_t vae_backend         = nullptr;
     ggml_backend_t tae_backend         = nullptr;
+    ggml_backend_t pmid_backend        = nullptr;
 
     // TODO: clip_vision and photomaker backends
 
@@ -310,6 +311,7 @@ public:
         std::string control_net_backend_name = sanitize_backend_name(SAFE_STR(sd_ctx_params->control_net_device));
         std::string vae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->vae_device));
         std::string tae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->tae_device));
+        std::string pmid_backend_name        = sanitize_backend_name(SAFE_STR(sd_ctx_params->photomaker_device));
 
         bool diffusion_backend_is_default   = diffusion_backend_name.empty() || diffusion_backend_name == default_backend_name;
         bool clip_backend_is_default        = (clip_backend_name.empty() || clip_backend_name == default_backend_name);
@@ -317,9 +319,10 @@ public:
         bool vae_backend_is_default         = (vae_backend_name.empty() || vae_backend_name == default_backend_name);
         // if tae_backend_name is empty, it will use the same backend as vae
         bool tae_backend_is_default = (tae_backend_name.empty() && vae_backend_is_default) || tae_backend_name == default_backend_name;
+        bool pmid_backend_is_default = (pmid_backend_name.empty() || pmid_backend_name == default_backend_name);
 
         // if some backend is not specified or is the same as the default backend, use the default backend
-        bool use_default_backend = diffusion_backend_is_default || clip_backend_is_default || control_net_backend_is_default || vae_backend_is_default || tae_backend_is_default;
+        bool use_default_backend = diffusion_backend_is_default || clip_backend_is_default || control_net_backend_is_default || vae_backend_is_default || tae_backend_is_default || pmid_backend_is_default;
 
         if (use_default_backend) {
             backend = init_named_backend(override_default_backend_name);
@@ -746,14 +749,13 @@ public:
             }
 
             if (strlen(SAFE_STR(sd_ctx_params->control_net_path)) > 0) {
-                ggml_backend_t controlnet_backend = nullptr;
                 if (!control_net_backend_is_default) {
                     control_net_backend = init_named_backend(control_net_backend_name);
-                    LOG_INFO("ControlNet: Using %s backend", ggml_backend_name(controlnet_backend));
+                    LOG_INFO("ControlNet: Using %s backend", ggml_backend_name(control_net_backend));
                 } else {
-                    controlnet_backend = backend;
+                    control_net_backend = backend;
                 }
-                control_net = std::make_shared<ControlNet>(controlnet_backend,
+                control_net = std::make_shared<ControlNet>(control_net_backend,
                                                            offload_params_to_cpu,
                                                            tensor_storage_map,
                                                            version);
@@ -762,9 +764,15 @@ public:
                     control_net->set_conv2d_direct_enabled(true);
                 }
             }
-
+             pmid_backend = backend;
+            if (!pmid_backend_is_default) {
+                pmid_backend = init_named_backend(pmid_backend_name);
+                LOG_INFO("PhotoMaker: Using %s backend", ggml_backend_name(pmid_backend));
+            } else {
+                pmid_backend = backend;
+            }
             if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
-                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend,
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(pmid_backend,
                                                                    offload_params_to_cpu,
                                                                    tensor_storage_map,
                                                                    "pmid",
@@ -772,7 +780,7 @@ public:
                                                                    PM_VERSION_2);
                 LOG_INFO("using PhotoMaker Version 2");
             } else {
-                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend,
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(pmid_backend,
                                                                    offload_params_to_cpu,
                                                                    tensor_storage_map,
                                                                    "pmid",
@@ -961,7 +969,7 @@ public:
                 control_net_params_mem_size / 1024.0 / 1024.0,
                 ggml_backend_is_cpu(control_net_backend) ? "RAM" : "VRAM",
                 pmid_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM");
+                ggml_backend_is_cpu(pmid_backend) ? "RAM" : "VRAM");
         }
 
         // init denoiser
