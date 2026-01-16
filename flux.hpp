@@ -1354,8 +1354,8 @@ namespace Flux {
 
             flux_params.num_heads =  static_cast<int>(flux_params.hidden_size / head_dim);
 
-            LOG_INFO("double blocks: %d, single blocks: %d, guidance_embed: %s, context_in_dim: %" PRId64
-                     ", hidden_size: %" PRId64 ", num_heads: %d",
+            LOG_INFO("flux: depth = %d, depth_single_blocks = %d, guidance_embed = %s, context_in_dim = %" PRId64
+                     ", hidden_size = %" PRId64 ", num_heads = %d",
                      flux_params.depth,
                      flux_params.depth_single_blocks,
                      flux_params.guidance_embed ? "true" : "false",

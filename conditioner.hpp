@@ -1708,6 +1708,9 @@ struct LLMEmbedder : public Conditioner {
         int prompt_template_encode_start_idx = 34;
         int max_length                       = 0;
         std::set<int> out_layers;
+        std::vector<int> tokens;
+        std::vector<float> weights;
+        std::vector<float> mask;
         if (llm->enable_vision && conditioner_params.ref_images.size() > 0) {
             LOG_INFO("QwenImageEditPlusPipeline");
             prompt_template_encode_start_idx = 64;
@@ -1795,6 +1798,7 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (version == VERSION_FLUX2_KLEIN) {
             prompt_template_encode_start_idx = 0;
+            max_length = 512;
             out_layers                       = {9, 18, 27};
 
             prompt = "<|im_start|>user\n";
@@ -1804,6 +1808,16 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+
+            auto tokens_and_weights = tokenize(prompt, prompt_attn_range, 0, false);
+            tokens            = std::get<0>(tokens_and_weights);
+            weights           = std::get<1>(tokens_and_weights);
+
+            mask.insert(mask.end(), tokens.size(), 1.f);
+            if (tokens.size() < max_length) {
+                mask.insert(mask.end(), max_length - tokens.size(), 0.f);
+                tokenizer->pad_tokens(tokens, weights, max_length, true);
+            }
         } else if (version == VERSION_OVIS_IMAGE) {
             prompt_template_encode_start_idx = 28;
             max_length                       = prompt_template_encode_start_idx + 256;
@@ -1827,17 +1841,34 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         }
 
-        auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0);
-        auto& tokens            = std::get<0>(tokens_and_weights);
-        auto& weights           = std::get<1>(tokens_and_weights);
+        if (tokens.empty()) {
+            auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0);
+            tokens            = std::get<0>(tokens_and_weights);
+            weights           = std::get<1>(tokens_and_weights);
+        }
 
         int64_t t0                        = ggml_time_ms();
         struct ggml_tensor* hidden_states = nullptr;  // [N, n_token, 3584]
 
         auto input_ids = vector_to_ggml_tensor_i32(work_ctx, tokens);
 
+        ggml_tensor* attention_mask = nullptr;
+        if (!mask.empty()) {
+            attention_mask = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, mask.size(), mask.size());
+            ggml_ext_tensor_iter(attention_mask, [&](ggml_tensor* attention_mask, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+                float value = 0.f;
+                if (mask[i0] == 0.f) {
+                    value = -INFINITY;
+                } else if (i0 > i1) {
+                    value = -INFINITY;
+                }
+                ggml_ext_tensor_set_f32(attention_mask, value, i0, i1, i2, i3);
+            });
+        }
+
         llm->compute(n_threads,
                      input_ids,
+                     attention_mask,
                      image_embeds,
                      out_layers,
                      &hidden_states,
@@ -1861,7 +1892,7 @@ struct LLMEmbedder : public Conditioner {
         GGML_ASSERT(hidden_states->ne[1] > prompt_template_encode_start_idx);
 
         int64_t min_length = 0;
-        if (sd_version_is_flux2(version)) {
+        if (version == VERSION_FLUX2) {
             min_length = 512;
         }
 

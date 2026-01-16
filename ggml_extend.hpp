@@ -1228,7 +1228,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
                                                              bool diag_mask_inf       = false,
                                                              bool skip_reshape        = false,
                                                              bool flash_attn          = false,
-                                                             float kv_scale           = 1.0f) {  // avoid overflow
+                                                             float kv_scale           = 1.0f / 128.f) {  // avoid overflow
     int64_t L_q;
     int64_t L_k;
     int64_t C;
@@ -1348,6 +1348,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_attention_ext(struct ggml_context
         v = ggml_reshape_3d(ctx, v, L_k, d_head, n_kv_head * N);   // [N * n_kv_head, d_head, L_k]
 
         auto kq = ggml_mul_mat(ctx, k, q);  // [N * n_head, L_q, L_k]
+        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
         kq      = ggml_scale_inplace(ctx, kq, scale);
         if (mask) {
             kq = ggml_add_inplace(ctx, kq, mask);
@@ -2183,7 +2184,7 @@ public:
            bool bias           = true,
            bool force_f32      = false,
            bool force_prec_f32 = false,
-           float scale         = 1.f)
+           float scale         = 1.f / 128.f)
         : in_features(in_features),
           out_features(out_features),
           bias(bias),
