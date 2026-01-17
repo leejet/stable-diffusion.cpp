@@ -838,6 +838,7 @@ int main(int argc, const char** argv) {
             sd_image_t init_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
             sd_image_t control_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
             sd_image_t mask_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 1, nullptr};
+            std::vector<uint8_t>    mask_data;
             std::vector<sd_image_t> pmid_images;
             std::vector<sd_image_t> ref_images;
 
@@ -878,6 +879,12 @@ int main(int argc, const char** argv) {
                             mask_image.data[i] = 255 - mask_image.data[i];
                         }
                     }
+                } else {
+                    mask_data          = std::vector<uint8_t>(width*height, 255);
+                    mask_image.width   = width;
+                    mask_image.height  = height;
+                    mask_image.channel = 1;
+                    mask_image.data    = mask_data.data();
                 }
 
                 if (j.contains("extra_images") && j["extra_images"].is_array()) {
@@ -967,7 +974,7 @@ int main(int argc, const char** argv) {
             if (init_image.data) {
                 stbi_image_free(init_image.data);
             }
-            if (mask_image.data) {
+            if (mask_image.data && mask_data.empty()) {
                 stbi_image_free(mask_image.data);
             }
             for (auto ref_image : ref_images) {
