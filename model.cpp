@@ -1034,6 +1034,8 @@ SDVersion ModelLoader::get_sd_version() {
 
     bool is_xl                       = false;
     bool is_flux                     = false;
+    bool is_flux2                    = false;
+    bool has_single_block_47         = false;
     bool is_wan                      = false;
     int64_t patch_embedding_channels = 0;
     bool has_img_emb                 = false;
@@ -1055,7 +1057,10 @@ SDVersion ModelLoader::get_sd_version() {
                 return VERSION_QWEN_IMAGE;
             }
             if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
-                return VERSION_FLUX2;
+                is_flux2 = true;
+            }
+            if (tensor_storage.name.find("single_blocks.47.linear1.weight") != std::string::npos) {
+                has_single_block_47 = true;
             }
             if (tensor_storage.name.find("model.diffusion_model.double_blocks.0.img_mlp.gate_proj.weight") != std::string::npos) {
                 return VERSION_OVIS_IMAGE;
@@ -1138,7 +1143,7 @@ SDVersion ModelLoader::get_sd_version() {
         return VERSION_SDXL;
     }
 
-    if (is_flux) {
+    if (is_flux && !is_flux2) {
         if (input_block_weight.ne[0] == 384) {
             return VERSION_FLUX_FILL;
         }
@@ -1149,6 +1154,13 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_FLEX_2;
         }
         return VERSION_FLUX;
+    }
+
+    if (is_flux2) {
+        if (has_single_block_47) {
+            return VERSION_FLUX2;
+        }
+        return VERSION_FLUX2_KLEIN;
     }
 
     if (token_embedding_weight.ne[0] == 768) {
