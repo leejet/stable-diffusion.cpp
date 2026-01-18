@@ -126,13 +126,11 @@ class TinyDecoder : public UnaryBlock {
     int channels     = 64;
     int out_channels = 3;
     int num_blocks   = 3;
-    int index_offset = 0;
 
 public:
     TinyDecoder(int z_channels = 4, bool use_midblock_gn = false)
         : z_channels(z_channels) {
-        index_offset = use_midblock_gn ? 1 : 0;
-        int index    = index_offset;
+        int index = 0;
 
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, channels, {3, 3}, {1, 1}, {1, 1}));
         index++;  // nn.ReLU()
@@ -167,9 +165,9 @@ public:
         h      = ggml_tanh_inplace(ctx->ggml_ctx, h);
         h      = ggml_scale(ctx->ggml_ctx, h, 3.0f);
 
-        for (int i = index_offset; i < num_blocks * 3 + 10 + index_offset; i++) {
+        for (int i = 0; i < num_blocks * 3 + 10; i++) {
             if (blocks.find(std::to_string(i)) == blocks.end()) {
-                if (i == 1 + index_offset) {
+                if (i == 1) {
                     h = ggml_relu_inplace(ctx->ggml_ctx, h);
                 } else {
                     h = ggml_upscale(ctx->ggml_ctx, h, 2, GGML_SCALE_MODE_NEAREST);
