@@ -854,7 +854,7 @@ int main(int argc, const char** argv) {
                         int img_w         = image.width;
                         int img_h         = image.height;
                         uint8_t* raw_data = load_image_from_memory(
-                            (const char*)img_data.data(), img_data.size(),
+                            (const char*)img_data.data(), (int)img_data.size(),
                             img_w, img_h,
                             image.width, image.height, image.channel);
                         if (raw_data) {
@@ -875,7 +875,7 @@ int main(int argc, const char** argv) {
                     decode_image(mask_image, encoded);
                     bool inpainting_mask_invert = j.value("inpainting_mask_invert", 0) != 0;
                     if (inpainting_mask_invert && mask_image.data != nullptr) {
-                        for (int i = 0; i < mask_image.width * mask_image.height; i++) {
+                        for (uint32_t i = 0; i < mask_image.width * mask_image.height; i++) {
                             mask_image.data[i] = 255 - mask_image.data[i];
                         }
                     }
