@@ -749,44 +749,60 @@ int main(int argc, const char** argv) {
             int width                   = j.value("width", 512);
             int height                  = j.value("height", 512);
             int steps                   = j.value("steps", -1);
-            float cfg_scale             = j.value("cfg_scale", -1.0f);
+            float cfg_scale             = j.value("cfg_scale", 7.f);
             int64_t seed                = j.value("seed", -1);
-            int batch_size              = j.value("batch_size", -1);
+            int batch_size              = j.value("batch_size", 1);
             int clip_skip               = j.value("clip_skip", -1);
             std::string sampler_name    = j.value("sampler_name", "");
             std::string scheduler_name  = j.value("scheduler", "");
 
-            if (prompt.empty()) {
+            auto bad = [&](const std::string& msg) {
                 res.status = 400;
-                res.set_content(R"({"error":"prompt required"})", "application/json");
+                res.set_content("{\"error\":\"" + msg + "\"}", "application/json");
                 return;
+            };
+
+            if (width <= 0 || height <= 0) {
+                return bad("width and height must be positive");
+            }
+
+            if (steps < 1 || steps > 150) {
+                return bad("steps must be in range [1, 150]");
+            }
+
+            if (batch_size < 1 || batch_size > 8) {
+                return bad("batch_size must be in range [1, 8]");
+            }
+
+            if (cfg_scale < 0.f) {
+                return bad("cfg_scale must be positive");
+            }
+
+            if (prompt.empty()) {
+                return bad("prompt required");
             }
 
             auto get_sample_method = [](std::string name) -> enum sample_method_t {
                 enum sample_method_t result = str_to_sample_method(name.c_str());
-                if (result != SAMPLE_METHOD_COUNT)
-                    return result;
+                if (result != SAMPLE_METHOD_COUNT) return result;
                 // some applications use a hardcoded sampler list
                 std::transform(name.begin(), name.end(), name.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-                static const std::unordered_map<std::string_view, sample_method_t> hardcoded
-                {
-                    {"euler a",    EULER_A_SAMPLE_METHOD},
-                    {"k_euler_a",  EULER_A_SAMPLE_METHOD},
-                    {"euler",      EULER_SAMPLE_METHOD},
-                    {"k_euler",    EULER_SAMPLE_METHOD},
-                    {"heun",       HEUN_SAMPLE_METHOD},
-                    {"k_heun",     HEUN_SAMPLE_METHOD},
-                    {"dpm2",       DPM2_SAMPLE_METHOD},
-                    {"k_dpm_2",    DPM2_SAMPLE_METHOD},
-                    {"lcm",        LCM_SAMPLE_METHOD},
-                    {"ddim",       DDIM_TRAILING_SAMPLE_METHOD},
-                    {"dpm++ 2m",   DPMPP2M_SAMPLE_METHOD},
-                    {"k_dpmpp_2m", DPMPP2M_SAMPLE_METHOD}
-                };
-                auto it = hardcoded.find(name);
-                if (it != hardcoded.end())
-                   return it->second;
+                               [](unsigned char c) { return std::tolower(c); });
+                static const std::unordered_map<std::string_view, sample_method_t> hardcoded{
+                    {"euler a", EULER_A_SAMPLE_METHOD},
+                    {"k_euler_a", EULER_A_SAMPLE_METHOD},
+                    {"euler", EULER_SAMPLE_METHOD},
+                    {"k_euler", EULER_SAMPLE_METHOD},
+                    {"heun", HEUN_SAMPLE_METHOD},
+                    {"k_heun", HEUN_SAMPLE_METHOD},
+                    {"dpm2", DPM2_SAMPLE_METHOD},
+                    {"k_dpm_2", DPM2_SAMPLE_METHOD},
+                    {"lcm", LCM_SAMPLE_METHOD},
+                    {"ddim", DDIM_TRAILING_SAMPLE_METHOD},
+                    {"dpm++ 2m", DPMPP2M_SAMPLE_METHOD},
+                    {"k_dpmpp_2m", DPMPP2M_SAMPLE_METHOD}};
+                auto it            = hardcoded.find(name);
+                if (it != hardcoded.end()) return it->second;
                 return SAMPLE_METHOD_COUNT;
             };
 
@@ -796,33 +812,17 @@ int main(int argc, const char** argv) {
 
             // avoid excessive resource usage
 
-            if (batch_size > 8)
-                batch_size = 8;
-
-            if (steps > 100)
-                steps = 100;
-
-            SDGenerationParams gen_params = default_gen_params;
-            gen_params.prompt             = prompt;
-            gen_params.negative_prompt    = negative_prompt;
-            gen_params.width              = width;
-            gen_params.height             = height;
-            gen_params.seed               = seed;
-
-            if (batch_size > 0) {
-                gen_params.batch_count = batch_size;
-            }
+            SDGenerationParams gen_params         = default_gen_params;
+            gen_params.prompt                     = prompt;
+            gen_params.negative_prompt            = negative_prompt;
+            gen_params.width                      = width;
+            gen_params.height                     = height;
+            gen_params.seed                       = seed;
+            gen_params.sample_params.sample_steps = steps;
+            gen_params.batch_count                = batch_size;
 
             if (clip_skip > 0) {
                 gen_params.clip_skip = clip_skip;
-            }
-
-            if (steps > 0) {
-                gen_params.sample_params.sample_steps = steps;
-            }
-
-            if (cfg_scale >= 0.f) {
-                gen_params.sample_params.guidance.txt_cfg = cfg_scale;
             }
 
             if (sample_method != SAMPLE_METHOD_COUNT) {
@@ -838,7 +838,7 @@ int main(int argc, const char** argv) {
             sd_image_t init_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
             sd_image_t control_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
             sd_image_t mask_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 1, nullptr};
-            std::vector<uint8_t>    mask_data;
+            std::vector<uint8_t> mask_data;
             std::vector<sd_image_t> pmid_images;
             std::vector<sd_image_t> ref_images;
 
@@ -880,7 +880,7 @@ int main(int argc, const char** argv) {
                         }
                     }
                 } else {
-                    mask_data          = std::vector<uint8_t>(width*height, 255);
+                    mask_data          = std::vector<uint8_t>(width * height, 255);
                     mask_image.width   = width;
                     mask_image.height  = height;
                     mask_image.channel = 1;
