@@ -787,10 +787,10 @@ namespace Flux {
             : params(params) {
             if (params.version == VERSION_CHROMA_RADIANCE) {
                 std::pair<int, int> kernel_size = {params.patch_size, params.patch_size};
-                if(params.chroma_radiance_params.fake_patch_size_x2){
-                    kernel_size = {params.patch_size/2, params.patch_size/2};
+                if (params.chroma_radiance_params.fake_patch_size_x2) {
+                    kernel_size = {params.patch_size / 2, params.patch_size / 2};
                 }
-                std::pair<int, int> stride      = kernel_size;
+                std::pair<int, int> stride = kernel_size;
 
                 blocks["img_in_patch"] = std::make_shared<Conv2d>(params.in_channels,
                                                                   params.hidden_size,
@@ -1307,7 +1307,7 @@ namespace Flux {
                 flux_params.use_mlp_silu_act = true;
             }
             int64_t head_dim                   = 0;
-            int64_t actual_radiance_patch_size = 16;
+            int64_t actual_radiance_patch_size = -1;
             for (auto pair : tensor_storage_map) {
                 std::string tensor_name = pair.first;
                 if (!starts_with(tensor_name, prefix))
@@ -1358,7 +1358,7 @@ namespace Flux {
                     head_dim = pair.second.ne[0];
                 }
             }
-            if (actual_radiance_patch_size != flux_params.patch_size) {
+            if (actual_radiance_patch_size > 0 && actual_radiance_patch_size != flux_params.patch_size) {
                 GGML_ASSERT(flux_params.patch_size == 2 * actual_radiance_patch_size);
                 LOG_DEBUG("using fake x2 patch size");
                 flux_params.chroma_radiance_params.fake_patch_size_x2 = true;
