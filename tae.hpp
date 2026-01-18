@@ -509,11 +509,7 @@ public:
             z_channels      = 32;
             use_midblock_gn = true;
         }
-        std::string decoder_key = "decoder.layers";
-        if (taef2 && decode_only) {
-            decoder_key = "";
-        }
-        blocks[decoder_key] = std::shared_ptr<GGMLBlock>(new TinyDecoder(z_channels, use_midblock_gn));
+        blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyDecoder(z_channels, use_midblock_gn));
 
         if (!decode_only) {
             blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyEncoder(z_channels, use_midblock_gn));
@@ -521,7 +517,7 @@ public:
     }
 
     struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
-        auto decoder = std::dynamic_pointer_cast<TinyDecoder>(blocks.begin()->second);
+        auto decoder = std::dynamic_pointer_cast<TinyDecoder>(blocks["decoder.layers"]);
         if (taef2) {
             z = unpatchify(ctx->ggml_ctx, z, 2);
         }
@@ -564,8 +560,7 @@ struct TinyImageAutoEncoder : public TinyAutoEncoder {
         : decode_only(decoder_only),
           taesd(decoder_only, version),
           TinyAutoEncoder(backend, offload_params_to_cpu) {
-        bool taef2 = sd_version_is_flux2(version);
-        taesd.init(params_ctx, tensor_storage_map, taef2 ? "" : prefix);
+        taesd.init(params_ctx, tensor_storage_map, prefix);
     }
 
     std::string get_desc() override {
