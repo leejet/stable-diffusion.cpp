@@ -202,7 +202,7 @@ public:
             num_heads             = -1;
             use_linear_projection = true;
             if (version == VERSION_SDXL_VEGA) {
-                transformer_depth     = {1, 1, 2};
+                transformer_depth = {1, 1, 2};
             }
         } else if (version == VERSION_SVD) {
             in_channels           = 8;
