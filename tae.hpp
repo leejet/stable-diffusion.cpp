@@ -29,7 +29,7 @@ public:
             blocks["skip"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_in, n_out, {1, 1}, {1, 1}, {1, 1}, {1, 1}, false));
         }
         if (use_midblock_gn) {
-            int n_gn = n_in * 4;
+            int n_gn         = n_in * 4;
             blocks["pool.0"] = std::shared_ptr<GGMLBlock>(new Conv2d(n_in, n_gn, {1, 1}, {1, 1}, {0, 0}, {1, 1}, false));
             blocks["pool.1"] = std::shared_ptr<GGMLBlock>(new GroupNorm(4, n_gn));
             // pool.2 is ReLU, handled in forward
