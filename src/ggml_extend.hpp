@@ -30,26 +30,6 @@
 #include "model.h"
 #include "tensor.hpp"
 
-#ifdef SD_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef SD_USE_METAL
-#include "ggml-metal.h"
-#endif
-
-#ifdef SD_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-
-#ifdef SD_USE_OPENCL
-#include "ggml-opencl.h"
-#endif
-
-#ifdef SD_USE_SYCL
-#include "ggml-sycl.h"
-#endif
-
 #include "rng.hpp"
 #include "tensor_ggml.hpp"
 #include "util.h"
@@ -2371,6 +2351,14 @@ public:
           force_f32(force_f32),
           force_prec_f32(force_prec_f32),
           scale(scale) {}
+
+    void set_scale(float scale_){
+        scale = scale_;
+    }
+
+    void set_force_prec_32(bool force_prec_f32_){
+        force_prec_f32 = force_prec_f32_;
+    }
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         ggml_tensor* w = params["weight"];
