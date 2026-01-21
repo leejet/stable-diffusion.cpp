@@ -7,6 +7,14 @@
 #include "ggml_extend.hpp"
 #include "mmdit.hpp"
 
+#ifdef SD_USE_VULKAN
+#include "ggml-vulkan.h"
+#endif
+
+#if GGML_USE_HIP
+#include "ggml-cuda.h"
+#endif
+
 // Ref: https://github.com/Alpha-VLLM/Lumina-Image-2.0/blob/main/models/model.py
 // Ref: https://github.com/huggingface/diffusers/pull/12703
 
