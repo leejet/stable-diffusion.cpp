@@ -31,10 +31,6 @@ namespace ZImage {
             : head_dim(head_dim), num_heads(num_heads), num_kv_heads(num_kv_heads), qk_norm(qk_norm) {
             blocks["qkv"] = std::make_shared<Linear>(hidden_size, (num_heads + num_kv_heads * 2) * head_dim, false);
             float scale   = 1.f;
-#if GGML_USE_HIP
-            // Prevent NaN issues with certain ROCm setups
-            scale = 1.f / 16.f;
-#endif
             blocks["out"] = std::make_shared<Linear>(num_heads * head_dim, hidden_size, false, false, false, scale);
             if (qk_norm) {
                 blocks["q_norm"] = std::make_shared<RMSNorm>(head_dim);
@@ -51,6 +47,12 @@ namespace ZImage {
             int64_t N       = x->ne[2];
             auto qkv_proj   = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
             auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks["out"]);
+#if GGML_USE_HIP
+            // Prevent NaN issues with certain ROCm setups
+            if (ggml_backend_is_cuda(ctx->backend)) {
+                out_proj->set_scale(1.f / 16.f);
+            }
+#endif
 
             auto qkv = qkv_proj->forward(ctx, x);                                                                            // [N, n_token, (num_heads + num_kv_heads*2)*head_dim]
             qkv      = ggml_reshape_4d(ctx->ggml_ctx, qkv, head_dim, num_heads + num_kv_heads * 2, qkv->ne[1], qkv->ne[2]);  // [N, n_token, num_heads + num_kv_heads*2, head_dim]
@@ -115,9 +117,7 @@ namespace ZImage {
 
             bool force_prec_f32 = false;
             float scale         = 1.f / 128.f;
-#ifdef SD_USE_VULKAN
-            force_prec_f32 = true;
-#endif
+
             // The purpose of the scale here is to prevent NaN issues in certain situations.
             // For example, when using CUDA but the weights are k-quants.
             blocks["w2"] = std::make_shared<Linear>(hidden_dim, dim, false, false, force_prec_f32, scale);
@@ -128,6 +128,11 @@ namespace ZImage {
             auto w1 = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
+#ifdef SD_USE_VULKAN
+            if(ggml_backend_is_vk(ctx->backend)){
+                w2->set_force_prec_32(true);
+            }
+#endif
 
             auto x1 = w1->forward(ctx, x);
             auto x3 = w3->forward(ctx, x);
