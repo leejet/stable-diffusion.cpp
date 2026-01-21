@@ -7,6 +7,10 @@
 #include "flux.hpp"
 #include "ggml_extend.hpp"
 
+#ifdef SD_USE_VULKAN
+#include "ggml-vulkan.h"
+#endif
+
 namespace Qwen {
     constexpr int QWEN_IMAGE_GRAPH_SIZE = 20480;
 
