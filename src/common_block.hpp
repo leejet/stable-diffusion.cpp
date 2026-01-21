@@ -3,6 +3,10 @@
 
 #include "ggml_extend.hpp"
 
+#ifdef SD_USE_VULKAN
+#include "ggml-vulkan.h"
+#endif
+
 class DownSampleBlock : public GGMLBlock {
 protected:
     int channels;
