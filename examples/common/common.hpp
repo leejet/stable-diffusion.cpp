@@ -546,7 +546,7 @@ struct SDContextParams {
              &embedding_dir},
             {"",
              "--lora-model-dir",
-             "lora model directory",
+             "lora model directory (lora tags in prompt are ignored when unset)",
              &lora_model_dir},
 
             {"",

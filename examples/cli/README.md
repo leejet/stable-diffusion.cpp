@@ -36,7 +36,7 @@ Context Options:
   --tae <string>                           alias of --taesd
   --control-net <string>                   path to control net model
   --embd-dir <string>                      embeddings directory
-  --lora-model-dir <string>                lora model directory
+  --lora-model-dir <string>                lora model directory (lora tags in prompt are ignored when unset)
   --tensor-type-rules <string>             weight type per tensor pattern (example: "^vae\.=f16,model\.=q8_0")
   --photo-maker <string>                   path to PHOTOMAKER model
   --upscale-model <string>                 path to esrgan model.
