@@ -1705,18 +1705,6 @@ struct SDGenerationParams {
         }
     }
 
-    void set_width_if_unset(int w) {
-        if (width <= 0) {
-            width = w;
-        }
-    }
-
-    void set_height_if_unset(int h) {
-        if (height <= 0) {
-            height = h;
-        }
-    }
-
     bool width_and_height_are_set() const {
         return width > 0 && height > 0;
     }
