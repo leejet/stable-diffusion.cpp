@@ -445,7 +445,7 @@ struct SDContextParams {
     std::string photo_maker_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
-    std::string lora_model_dir;
+    std::string lora_model_dir = ".";
 
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
