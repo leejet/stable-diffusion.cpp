@@ -457,7 +457,7 @@ struct SDContextParams {
     bool control_net_cpu        = false;
     bool clip_on_cpu            = false;
     bool vae_on_cpu             = false;
-    bool diffusion_flash_attn   = false;
+    bool flash_attn             = true;
     bool diffusion_conv_direct  = false;
     bool vae_conv_direct        = false;
 
@@ -616,9 +616,9 @@ struct SDContextParams {
              "keep vae in cpu (for low vram)",
              true, &vae_on_cpu},
             {"",
-             "--diffusion-fa",
-             "use flash attention in the diffusion model",
-             true, &diffusion_flash_attn},
+             "--disable-fa",
+             "disable flash attention",
+             false, &flash_attn},
             {"",
              "--diffusion-conv-direct",
              "use ggml_conv2d_direct in the diffusion model",
@@ -904,7 +904,7 @@ struct SDContextParams {
             << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
             << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
             << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
-            << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
+            << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
             << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
             << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
             << "  circular: " << (circular ? "true" : "false") << ",\n"
@@ -968,7 +968,7 @@ struct SDContextParams {
             clip_on_cpu,
             control_net_cpu,
             vae_on_cpu,
-            diffusion_flash_attn,
+            flash_attn,
             taesd_preview,
             diffusion_conv_direct,
             vae_conv_direct,

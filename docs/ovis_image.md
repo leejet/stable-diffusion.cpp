@@ -13,7 +13,7 @@
 ## Examples
 
 ```
-.\bin\Release\sd-cli.exe --diffusion-model  ovis_image-Q4_0.gguf --vae ..\..\ComfyUI\models\vae\ae.sft  --llm ..\..\ComfyUI\models\text_encoders\ovis_2.5.safetensors -p "a lovely cat" --cfg-scale 5.0 -v --offload-to-cpu --diffusion-fa
+.\bin\Release\sd-cli.exe --diffusion-model  ovis_image-Q4_0.gguf --vae ..\..\ComfyUI\models\vae\ae.sft  --llm ..\..\ComfyUI\models\text_encoders\ovis_2.5.safetensors -p "a lovely cat" --cfg-scale 5.0 -v --offload-to-cpu
 ```
 
 <img alt="ovis image example" src="../assets/ovis_image/example.png" />
