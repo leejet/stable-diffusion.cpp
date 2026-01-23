@@ -2243,7 +2243,7 @@ public:
         scale = scale_;
     }
 
-    void set_force_prec_32(bool force_prec_f32_){
+    void set_force_prec_f32(bool force_prec_f32_){
         force_prec_f32 = force_prec_f32_;
     }
 

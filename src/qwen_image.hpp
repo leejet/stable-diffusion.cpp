@@ -128,7 +128,7 @@ namespace Qwen {
             auto to_out_0 = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
 #ifdef SD_USE_VULKAN
             if(ggml_backend_is_vk(ctx->backend)){
-                to_out_0->set_force_prec_32(true);
+                to_out_0->set_force_prec_f32(true);
             }
 #endif
 

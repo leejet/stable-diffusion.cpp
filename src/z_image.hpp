@@ -138,7 +138,7 @@ namespace ZImage {
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
 #ifdef SD_USE_VULKAN
             if(ggml_backend_is_vk(ctx->backend)){
-                w2->set_force_prec_32(true);
+                w2->set_force_prec_f32(true);
             }
 #endif
 
