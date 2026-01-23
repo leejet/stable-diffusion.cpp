@@ -267,7 +267,7 @@ public:
         auto net_2 = std::dynamic_pointer_cast<Linear>(blocks["net.2"]);
         #ifdef SD_USE_VULKAN
             if(ggml_backend_is_vk(ctx->backend)){
-                net_2->set_force_prec_32(true);
+                net_2->set_force_prec_f32(true);
             }
         #endif
 
