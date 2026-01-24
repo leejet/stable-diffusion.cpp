@@ -1014,14 +1014,14 @@ namespace Flux {
                 txt_img = block->forward(ctx, txt_img, vec, pe, txt_img_mask, ss_mods);
             }
 
-            img     = ggml_view_3d(ctx->ggml_ctx,
-                                   txt_img,
-                                   txt_img->ne[0],
-                                   img->ne[1],
-                                   txt_img->ne[2],
-                                   txt_img->nb[1],
-                                   txt_img->nb[2],
-                                   txt->ne[1] * txt_img->nb[1]);                               // [N, n_img_token, hidden_size]
+            img = ggml_view_3d(ctx->ggml_ctx,
+                               txt_img,
+                               txt_img->ne[0],
+                               img->ne[1],
+                               txt_img->ne[2],
+                               txt_img->nb[1],
+                               txt_img->nb[2],
+                               txt->ne[1] * txt_img->nb[1]);  // [N, n_img_token, hidden_size]
 
             if (final_layer) {
                 img = final_layer->forward(ctx, img, vec);  // (N, T, patch_size ** 2 * out_channels)

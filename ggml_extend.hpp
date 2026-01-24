@@ -687,42 +687,19 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_slice(struct ggml_context* ctx,
                                                      struct ggml_tensor* x,
                                                      int dim,
                                                      int64_t start,
-                                                     int64_t end) {
+                                                     int64_t end,
+                                                     bool cont = true) {
     GGML_ASSERT(dim >= 0 && dim < 4);
-    if (x->ne[dim] == 1) {
-        return x;
-    }
-    while (start < 0) {
-        start = x->ne[dim] + start;
-    }
-    while (end < 0) {
-        end = x->ne[dim] + end;
-    }
-    GGML_ASSERT(end > start);
-    GGML_ASSERT(start >= 0 && start < x->ne[dim]);
-    GGML_ASSERT(end > start && end <= x->ne[dim]);
 
-    int perm[4] = {0, 1, 2, 3};
-    for (int i = dim; i < 3; ++i)
-        perm[i] = perm[i + 1];
-    perm[3] = dim;
+    int64_t slice_size  = end - start;
+    int64_t slice_ne[4] = {x->ne[0], x->ne[1], x->ne[2], x->ne[3]};
+    slice_ne[dim]       = slice_size;
 
-    int inv_perm[4];
-    for (int i = 0; i < 4; ++i)
-        inv_perm[perm[i]] = i;
+    x = ggml_view_4d(ctx, x,
+                     slice_ne[0], slice_ne[1], slice_ne[2], slice_ne[3],
+                     x->nb[1], x->nb[2], x->nb[3], start * x->nb[dim]);
 
-    if (dim != 3) {
-        x = ggml_ext_torch_permute(ctx, x, perm[0], perm[1], perm[2], perm[3]);
-        x = ggml_cont(ctx, x);
-    }
-
-    x = ggml_view_4d(
-        ctx, x,
-        x->ne[0], x->ne[1], x->ne[2], end - start,
-        x->nb[1], x->nb[2], x->nb[3], x->nb[3] * start);
-
-    if (dim != 3) {
-        x = ggml_ext_torch_permute(ctx, x, inv_perm[0], inv_perm[1], inv_perm[2], inv_perm[3]);
+    if (cont) {
         x = ggml_cont(ctx, x);
     }
 
