@@ -690,6 +690,18 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_slice(struct ggml_context* ctx,
                                                      int64_t end,
                                                      bool cont = true) {
     GGML_ASSERT(dim >= 0 && dim < 4);
+    if (x->ne[dim] == 1) {
+        return x;
+    }
+    while (start < 0) {
+        start = x->ne[dim] + start;
+    }
+    while (end < 0) {
+        end = x->ne[dim] + end;
+    }
+    GGML_ASSERT(end > start);
+    GGML_ASSERT(start >= 0 && start < x->ne[dim]);
+    GGML_ASSERT(end > start && end <= x->ne[dim]);
 
     int64_t slice_size  = end - start;
     int64_t slice_ne[4] = {x->ne[0], x->ne[1], x->ne[2], x->ne[3]};
@@ -944,6 +956,9 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_linear(struct ggml_context* ctx,
                                                       bool force_prec_f32 = false,
                                                       float scale         = 1.f) {
     if (scale != 1.f) {
+        if (!ggml_is_contiguous(x)) {
+            x = ggml_cont(ctx, x);
+        }
         x = ggml_scale(ctx, x, scale);
     }
     if (x->ne[2] * x->ne[3] > 1024) {
