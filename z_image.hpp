@@ -517,7 +517,7 @@ namespace ZImage {
             out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N, C, H, W + pad_w]
             out = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W);  // [N, C, H, W]
 
-            out = ggml_scale(ctx->ggml_ctx, out, -1.f);
+            out = ggml_ext_scale(ctx->ggml_ctx, out, -1.f);
 
             return out;
         }

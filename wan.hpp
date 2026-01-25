@@ -1576,7 +1576,7 @@ namespace WAN {
             y = modulate_add(ctx->ggml_ctx, y, es[3]);
 
             y = ffn_0->forward(ctx, y);
-            y = ggml_gelu_inplace(ctx->ggml_ctx, y);
+            y = ggml_ext_gelu(ctx->ggml_ctx, y, true);
             y = ffn_2->forward(ctx, y);
 
             x = ggml_add(ctx->ggml_ctx, x, modulate_mul(ctx->ggml_ctx, y, es[5]));
@@ -1723,7 +1723,7 @@ namespace WAN {
 
             auto x = proj_0->forward(ctx, image_embeds);
             x      = proj_1->forward(ctx, x);
-            x      = ggml_gelu_inplace(ctx->ggml_ctx, x);
+            x      = ggml_ext_gelu(ctx->ggml_ctx, x, true);
             x      = proj_3->forward(ctx, x);
             x      = proj_4->forward(ctx, x);
 
@@ -1910,7 +1910,7 @@ namespace WAN {
             e0      = ggml_reshape_4d(ctx->ggml_ctx, e0, e0->ne[0] / 6, 6, e0->ne[1], e0->ne[2]);  //  [N, 6, dim] or [N, T, 6, dim]
 
             context = text_embedding_0->forward(ctx, context);
-            context = ggml_gelu(ctx->ggml_ctx, context);
+            context = ggml_ext_gelu(ctx->ggml_ctx, context);
             context = text_embedding_2->forward(ctx, context);  // [N, context_txt_len, dim]
 
             int64_t context_img_len = 0;
@@ -1949,7 +1949,7 @@ namespace WAN {
                     auto result = vace_block->forward(ctx, c, x_orig, e0, pe, context, context_img_len);
                     auto c_skip = result.first;
                     c           = result.second;
-                    c_skip      = ggml_scale(ctx->ggml_ctx, c_skip, vace_strength);
+                    c_skip      = ggml_ext_scale(ctx->ggml_ctx, c_skip, vace_strength);
                     x           = ggml_add(ctx->ggml_ctx, x, c_skip);
                 }
             }

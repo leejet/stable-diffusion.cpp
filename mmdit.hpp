@@ -33,7 +33,7 @@ public:
         auto fc2 = std::dynamic_pointer_cast<Linear>(blocks["fc2"]);
 
         x = fc1->forward(ctx, x);
-        x = ggml_gelu_inplace(ctx->ggml_ctx, x);
+        x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
         x = fc2->forward(ctx, x);
         return x;
     }

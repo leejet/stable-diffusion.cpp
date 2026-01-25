@@ -153,7 +153,7 @@ namespace Flux {
             if (use_mlp_silu_act) {
                 x = ggml_ext_silu_act(ctx->ggml_ctx, x);
             } else {
-                x = ggml_gelu_inplace(ctx->ggml_ctx, x);
+                x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
             }
             x = mlp_2->forward(ctx, x);
             return x;
@@ -511,7 +511,7 @@ namespace Flux {
             } else if (use_mlp_silu_act) {
                 mlp = ggml_ext_silu_act(ctx->ggml_ctx, mlp);
             } else {
-                mlp = ggml_gelu_inplace(ctx->ggml_ctx, mlp);
+                mlp = ggml_ext_gelu(ctx->ggml_ctx, mlp, true);
             }
             auto attn_mlp = ggml_concat(ctx->ggml_ctx, attn, mlp, 0);  // [N, n_token, hidden_size + mlp_hidden_dim]
             auto output   = linear2->forward(ctx, attn_mlp);           // [N, n_token, hidden_size]

@@ -479,9 +479,9 @@ public:
 
         x = fc1->forward(ctx, x);
         if (use_gelu) {
-            x = ggml_gelu_inplace(ctx->ggml_ctx, x);
+            x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
         } else {
-            x = ggml_gelu_quick_inplace(ctx->ggml_ctx, x);
+            x = ggml_ext_gelu_quick(ctx->ggml_ctx, x, true);
         }
         x = fc2->forward(ctx, x);
         return x;
