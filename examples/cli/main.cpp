@@ -603,7 +603,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if (gen_params.mask_image_path.size() > 0) {
-        if (load_sd_image_from_file(&mask_image,
+        if (!load_sd_image_from_file(&mask_image,
                                     gen_params.mask_image_path.c_str(),
                                     gen_params.get_resolved_width(),
                                     gen_params.get_resolved_height(),
@@ -625,7 +625,7 @@ int main(int argc, const char* argv[]) {
     }
 
     if (gen_params.control_image_path.size() > 0) {
-        if (load_sd_image_from_file(&control_image,
+        if (!load_sd_image_from_file(&control_image,
                                     gen_params.control_image_path.c_str(),
                                     gen_params.get_resolved_width(),
                                     gen_params.get_resolved_height())) {
