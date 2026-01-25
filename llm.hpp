@@ -638,7 +638,7 @@ namespace LLM {
             x = ln_q->forward(ctx, x);
             x = ggml_reshape_2d(ctx->ggml_ctx, x, hidden_size, ggml_nelements(x) / hidden_size);
             x = mlp_0->forward(ctx, x);
-            x = ggml_gelu(ctx->ggml_ctx, x);
+            x = ggml_ext_gelu(ctx->ggml_ctx, x);
             x = mlp_2->forward(ctx, x);
             return x;
         }

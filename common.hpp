@@ -200,7 +200,7 @@ public:
 
         gate = ggml_cont(ctx->ggml_ctx, gate);
 
-        gate = ggml_gelu_inplace(ctx->ggml_ctx, gate);
+        gate = ggml_ext_gelu(ctx->ggml_ctx, gate, true);
 
         x = ggml_mul(ctx->ggml_ctx, x, gate);  // [ne3, ne2, ne1, dim_out]
 
@@ -220,7 +220,7 @@ public:
         auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
         x = proj->forward(ctx, x);
-        x = ggml_gelu_inplace(ctx->ggml_ctx, x);
+        x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
         return x;
     }
 };
@@ -536,8 +536,8 @@ public:
         // image_only_indicator is always tensor([0.])
         float alpha = get_alpha();
         auto x      = ggml_add(ctx->ggml_ctx,
-                               ggml_scale(ctx->ggml_ctx, x_spatial, alpha),
-                               ggml_scale(ctx->ggml_ctx, x_temporal, 1.0f - alpha));
+                               ggml_ext_scale(ctx->ggml_ctx, x_spatial, alpha),
+                               ggml_ext_scale(ctx->ggml_ctx, x_temporal, 1.0f - alpha));
         return x;
     }
 };
