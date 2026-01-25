@@ -285,8 +285,8 @@ public:
         auto adaLN_modulation_1 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.1"]);
 
         int n_mods = 9;
-        auto m         = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, n_mods * hidden_size]
-        auto m_vec     = ggml_ext_chunk(ctx->ggml_ctx, m, n_mods, 0);
+        auto m     = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, n_mods * hidden_size]
+        auto m_vec = ggml_ext_chunk(ctx->ggml_ctx, m, n_mods, 0);
 
         auto shift_msa  = m_vec[0];  // [N, hidden_size]
         auto scale_msa  = m_vec[1];  // [N, hidden_size]
