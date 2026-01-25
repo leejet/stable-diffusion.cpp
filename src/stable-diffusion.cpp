@@ -1,3 +1,4 @@
+#include "ggml-cpu.h"
 #include "ggml_extend.hpp"
 
 #include "model.h"
@@ -5,6 +6,7 @@
 #include "rng_mt19937.hpp"
 #include "rng_philox.hpp"
 #include "stable-diffusion.h"
+#include <vector>
 #include "util.h"
 
 #include "cache_dit.hpp"
@@ -136,6 +138,29 @@ void add_rpc_device(const char* servers_cstr){
     add_rpc_devices(servers);
 }
 
+std::vector<std::string> sanitize_backend_name_list(std::string name) {
+    std::vector<std::string> vec = {};
+    if (name == "" || backend_name_exists(name)) {
+        // single backend
+        vec.push_back(name);
+    } else if (name.find(",") != std::string::npos) {
+        // comma-separated backend names
+        std::stringstream ss(name);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            if (token == "" || backend_name_exists(token)) {
+                vec.push_back(token);
+            } else {
+                LOG_WARN("backend name %s not found, using default", token.c_str());
+                vec.push_back("");
+            }
+        }
+    } else {
+        vec.push_back("");
+    }
+    return vec;
+}
+
 std::vector<std::pair<std::string, std::string>> list_backends_vector() {
     std::vector<std::pair<std::string, std::string>> backends;
     const int device_count = ggml_backend_dev_count();
@@ -189,12 +214,13 @@ class StableDiffusionGGML {
 public:
     ggml_backend_t backend             = nullptr;  // general backend
     ggml_backend_t diffusion_backend   = nullptr;
-    ggml_backend_t clip_backend        = nullptr;
     ggml_backend_t control_net_backend = nullptr;
     ggml_backend_t vae_backend         = nullptr;
     ggml_backend_t tae_backend         = nullptr;
     ggml_backend_t pmid_backend        = nullptr;
     ggml_backend_t vision_backend      = nullptr;
+
+    std::vector<ggml_backend_t> clip_backends        = {nullptr};
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -243,8 +269,10 @@ public:
         if (diffusion_backend != backend) {
             ggml_backend_free(diffusion_backend);
         }
-        if (clip_backend != backend) {
-            ggml_backend_free(clip_backend);
+        for(auto clip_backend : clip_backends) {
+            if (clip_backend != backend) {
+                ggml_backend_free(clip_backend);
+            }
         }
         if (control_net_backend != backend) {
             ggml_backend_free(control_net_backend);
@@ -306,7 +334,7 @@ public:
         }
 
         std::string diffusion_backend_name   = sanitize_backend_name(SAFE_STR(sd_ctx_params->diffusion_device));
-        std::string clip_backend_name        = sanitize_backend_name(SAFE_STR(sd_ctx_params->clip_device));
+        std::vector<std::string> clip_backend_names        = sanitize_backend_name_list(SAFE_STR(sd_ctx_params->clip_device));
         std::string control_net_backend_name = sanitize_backend_name(SAFE_STR(sd_ctx_params->control_net_device));
         std::string vae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->vae_device));
         std::string tae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->tae_device));
@@ -314,17 +342,22 @@ public:
         std::string vision_backend_name      = sanitize_backend_name(SAFE_STR(sd_ctx_params->vision_device));
 
         bool diffusion_backend_is_default   = diffusion_backend_name.empty() || diffusion_backend_name == default_backend_name;
-        bool clip_backend_is_default        = (clip_backend_name.empty() || clip_backend_name == default_backend_name);
+        bool clip_backends_are_default = true;
+        for (const auto& clip_backend_name : clip_backend_names) {
+            if (!clip_backend_name.empty() && clip_backend_name != default_backend_name) {
+                clip_backends_are_default = false;
+                break;
+            }
+        }
         bool control_net_backend_is_default = (control_net_backend_name.empty() || control_net_backend_name == default_backend_name);
         bool vae_backend_is_default         = (vae_backend_name.empty() || vae_backend_name == default_backend_name);
         // if tae_backend_name is empty, it will use the same backend as vae
         bool tae_backend_is_default = (tae_backend_name.empty() && vae_backend_is_default) || tae_backend_name == default_backend_name;
         bool pmid_backend_is_default = (pmid_backend_name.empty() || pmid_backend_name == default_backend_name);
-        // if vision_backend_name is empty, it will use the same backend as clip
-        bool vision_backend_is_default = (vision_backend_name.empty() && clip_backend_is_default) || vision_backend_name == default_backend_name;
+        bool vision_backend_is_default = (vision_backend_name.empty() || vision_backend_name == default_backend_name);
 
         // if some backend is not specified or is the same as the default backend, use the default backend
-        bool use_default_backend = diffusion_backend_is_default || clip_backend_is_default || control_net_backend_is_default || vae_backend_is_default || tae_backend_is_default || pmid_backend_is_default || vision_backend_is_default;
+        bool use_default_backend = diffusion_backend_is_default || clip_backends_are_default || control_net_backend_is_default || vae_backend_is_default || tae_backend_is_default || pmid_backend_is_default || vision_backend_is_default;
 
         if (use_default_backend) {
             backend = init_named_backend(override_default_backend_name);
@@ -513,13 +546,18 @@ public:
         }
 
         {
-            clip_backend = backend;
-            if (!clip_backend_is_default) {
-                clip_backend = init_named_backend(clip_backend_name);
-                LOG_INFO("CLIP: Using %s backend", ggml_backend_name(clip_backend));
+            if (!clip_backends_are_default) {
+                clip_backends.clear();
+                for(auto clip_backend_name : clip_backend_names){
+                    auto clip_backend = init_named_backend(clip_backend_name);
+                    LOG_INFO("CLIP: Using %s backend", ggml_backend_name(clip_backend));
+                    clip_backends.push_back(clip_backend); 
+                }
+            }else{
+                clip_backends = {backend};
             }
             if (sd_version_is_sd3(version)) {
-                cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backends,
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<MMDiTModel>(diffusion_backend,
@@ -543,20 +581,20 @@ public:
                             "--chroma-disable-dit-mask as a workaround.");
                     }
 
-                    cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
+                    cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backends[0],
                                                                         offload_params_to_cpu,
                                                                         tensor_storage_map,
                                                                         sd_ctx_params->chroma_use_t5_mask,
                                                                         sd_ctx_params->chroma_t5_mask_pad);
                 } else if (version == VERSION_OVIS_IMAGE) {
-                    cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                    cond_stage_model = std::make_shared<LLMEmbedder>(clip_backends[0],
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map,
                                                                      version,
                                                                      "",
                                                                      false);
                 } else {
-                    cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend,
+                    cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backends,
                                                                           offload_params_to_cpu,
                                                                           tensor_storage_map);
                 }
@@ -567,7 +605,7 @@ public:
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_flux2(version)) {
                 bool is_chroma   = false;
-                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backends[0],
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
@@ -577,7 +615,7 @@ public:
                                                                version,
                                                                sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
-                cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backends[0],
                                                                     offload_params_to_cpu,
                                                                     tensor_storage_map,
                                                                     true,
@@ -609,7 +647,7 @@ public:
                 if (!vae_decode_only) {
                     enable_vision = true;
                 }
-                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backends[0],
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version,
@@ -622,7 +660,7 @@ public:
                                                                     version,
                                                                     sd_ctx_params->qwen_image_zero_cond_t);
             } else if (sd_version_is_z_image(version)) {
-                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backends[0],
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
@@ -637,14 +675,14 @@ public:
                     embbeding_map.emplace(SAFE_STR(sd_ctx_params->embeddings[i].name), SAFE_STR(sd_ctx_params->embeddings[i].path));
                 }
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
-                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backends,
                                                                                            offload_params_to_cpu,
                                                                                            tensor_storage_map,
                                                                                            embbeding_map,
                                                                                            version,
                                                                                            PM_VERSION_2);
                 } else {
-                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backends,
                                                                                            offload_params_to_cpu,
                                                                                            tensor_storage_map,
                                                                                            embbeding_map,
@@ -931,7 +969,9 @@ public:
 
             size_t total_params_ram_size  = 0;
             size_t total_params_vram_size = 0;
-            if (ggml_backend_is_cpu(clip_backend)) {
+            
+            // TODO: split by individual text encoders
+            if (ggml_backend_is_cpu(clip_backends[0])) {
                 total_params_ram_size += clip_params_mem_size + pmid_params_mem_size;
             } else {
                 total_params_vram_size += clip_params_mem_size + pmid_params_mem_size;
@@ -963,7 +1003,8 @@ public:
                 total_params_vram_size / 1024.0 / 1024.0,
                 total_params_ram_size / 1024.0 / 1024.0,
                 clip_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM",
+                // TODO: split
+                ggml_backend_is_cpu(clip_backends[0]) ? "RAM" : "VRAM",
                 unet_params_mem_size / 1024.0 / 1024.0,
                 ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
                 vae_params_mem_size / 1024.0 / 1024.0,
@@ -1167,7 +1208,11 @@ public:
         for (auto& kv : lora_state_diff) {
             int64_t t0 = ggml_time_ms();
             // TODO: Fix that
-            if(diffusion_backend!=clip_backend && !ggml_backend_is_cpu(clip_backend)){
+            bool are_clip_backends_compatible = true;
+            for (auto backend: clip_backends){
+                are_clip_backends_compatible = are_clip_backends_compatible && (diffusion_backend==backend || ggml_backend_is_cpu(backend));
+            }
+            if(!are_clip_backends_compatible){
                 LOG_WARN("Diffusion models and text encoders are running on different backends. This may cause issues when immediately applying LoRAs.");
             }
             auto lora = load_lora_model_from_file(kv.first, kv.second, diffusion_backend);
@@ -1215,8 +1260,8 @@ public:
             for (auto& kv : lora_state_diff) {
                 const std::string& lora_id = kv.first;
                 float multiplier           = kv.second;
-
-                auto lora = load_lora_model_from_file(lora_id, multiplier, clip_backend, lora_tensor_filter);
+                //TODO: split by model
+                auto lora = load_lora_model_from_file(lora_id, multiplier, clip_backends[0], lora_tensor_filter);
                 if (lora && !lora->lora_tensors.empty()) {
                     lora->preprocess_lora_tensors(tensors);
                     cond_stage_lora_models.push_back(lora);
