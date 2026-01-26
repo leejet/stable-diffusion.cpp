@@ -51,6 +51,7 @@ const char* model_version_to_str[] = {
     "Flux.2",
     "Flux.2 klein",
     "Z-Image",
+    "Z-Image-Omni",
     "Ovis Image",
 };
 
@@ -3713,8 +3714,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         ggml_tensor* latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
         ref_latents.push_back(latent);
 
-        auto clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, *ref_images[i], false, -2);
-        ref_clip_feats.push_back(clip_vision_output);
+        if (sd_ctx->sd->version == VERSION_Z_IMAGE_OMNI) {
+            auto clip_vision_output = sd_ctx->sd->get_clip_vision_output(work_ctx, *ref_images[i], false, -2);
+            ref_clip_feats.push_back(clip_vision_output);
+        }
     }
 
     if (sd_img_gen_params->init_image.data != nullptr || sd_img_gen_params->ref_images_count > 0) {
