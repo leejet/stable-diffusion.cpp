@@ -1186,6 +1186,7 @@ namespace LLM {
             struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
             input_ids = to_backend(input_ids);
+            attention_mask = to_backend(attention_mask);
 
             for (auto& image_embed : image_embeds) {
                 image_embed.second = to_backend(image_embed.second);
