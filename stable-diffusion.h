@@ -182,6 +182,7 @@ typedef struct {
     enum prediction_t prediction;
     enum lora_apply_mode_t lora_apply_mode;
     bool offload_params_to_cpu;
+    bool enable_mmap;
     bool keep_clip_on_cpu;
     bool keep_control_net_on_cpu;
     bool keep_vae_on_cpu;
@@ -318,6 +319,7 @@ typedef struct {
     int64_t seed;
     int video_frames;
     float vace_strength;
+    sd_tiling_params_t vae_tiling_params;
     sd_cache_params_t cache;
 } sd_vid_gen_params_t;
 

@@ -95,17 +95,28 @@ static void print_utf8(FILE* stream, const char* utf8) {
                    ? GetStdHandle(STD_ERROR_HANDLE)
                    : GetStdHandle(STD_OUTPUT_HANDLE);
 
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-    if (wlen <= 0)
-        return;
+    DWORD mode;
+    BOOL is_console = GetConsoleMode(h, &mode);
 
-    wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
-    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+    if (is_console) {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+        if (wlen <= 0)
+            return;
 
-    DWORD written;
-    WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
+        wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
+        if (!wbuf)
+            return;
 
-    free(wbuf);
+        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+
+        DWORD written;
+        WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
+
+        free(wbuf);
+    } else {
+        DWORD written;
+        WriteFile(h, utf8, (DWORD)strlen(utf8), &written, NULL);
+    }
 #else
     fputs(utf8, stream);
 #endif
@@ -434,7 +445,7 @@ struct SDContextParams {
     std::string photo_maker_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
-    std::string lora_model_dir;
+    std::string lora_model_dir = ".";
 
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
@@ -442,6 +453,7 @@ struct SDContextParams {
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
+    bool enable_mmap            = false;
     bool control_net_cpu        = false;
     bool clip_on_cpu            = false;
     bool vae_on_cpu             = false;
@@ -587,6 +599,10 @@ struct SDContextParams {
              "--offload-to-cpu",
              "place the weights in RAM to save VRAM, and automatically load them into VRAM when needed",
              true, &offload_params_to_cpu},
+            {"",
+             "--mmap",
+             "whether to memory-map model",
+             true, &enable_mmap},
             {"",
              "--control-net-cpu",
              "keep controlnet in cpu (for low vram)",
@@ -793,7 +809,7 @@ struct SDContextParams {
     }
 
     void build_embedding_map() {
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
 
         if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
             return;
@@ -884,6 +900,7 @@ struct SDContextParams {
             << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
             << "  flow_shift: " << (std::isinf(flow_shift) ? "INF" : std::to_string(flow_shift)) << "\n"
             << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
+            << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
             << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
             << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
             << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
@@ -947,6 +964,7 @@ struct SDContextParams {
             prediction,
             lora_apply_mode,
             offload_params_to_cpu,
+            enable_mmap,
             clip_on_cpu,
             control_net_cpu,
             vae_on_cpu,
@@ -1006,8 +1024,8 @@ struct SDGenerationParams {
     std::string prompt_with_lora;  // for metadata record only
     std::string negative_prompt;
     int clip_skip   = -1;  // <= 0 represents unspecified
-    int width       = 512;
-    int height      = 512;
+    int width       = -1;
+    int height      = -1;
     int batch_count = 1;
     std::string init_image_path;
     std::string end_image_path;
@@ -1368,10 +1386,10 @@ struct SDGenerationParams {
                 if (!item.empty()) {
                     try {
                         custom_sigmas.push_back(std::stof(item));
-                    } catch (const std::invalid_argument& e) {
+                    } catch (const std::invalid_argument&) {
                         LOG_ERROR("error: invalid float value '%s' in --sigmas", item.c_str());
                         return -1;
-                    } catch (const std::out_of_range& e) {
+                    } catch (const std::out_of_range&) {
                         LOG_ERROR("error: float value '%s' out of range in --sigmas", item.c_str());
                         return -1;
                     }
@@ -1494,7 +1512,7 @@ struct SDGenerationParams {
              on_cache_mode_arg},
             {"",
              "--cache-option",
-             "named cache params (key=value format, comma-separated):\n                                           - easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=\n                                           - dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=\n                                           Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
+             "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
              on_cache_option_arg},
             {"",
              "--cache-preset",
@@ -1576,9 +1594,29 @@ struct SDGenerationParams {
         load_if_exists("skip_layers", skip_layers);
         load_if_exists("high_noise_skip_layers", high_noise_skip_layers);
 
+        load_if_exists("steps", sample_params.sample_steps);
+        load_if_exists("high_noise_steps", high_noise_sample_params.sample_steps);
         load_if_exists("cfg_scale", sample_params.guidance.txt_cfg);
         load_if_exists("img_cfg_scale", sample_params.guidance.img_cfg);
         load_if_exists("guidance", sample_params.guidance.distilled_guidance);
+
+        auto load_sampler_if_exists = [&](const char* key, enum sample_method_t& out) {
+            if (j.contains(key) && j[key].is_string()) {
+                enum sample_method_t tmp = str_to_sample_method(j[key].get<std::string>().c_str());
+                if (tmp != SAMPLE_METHOD_COUNT) {
+                    out = tmp;
+                }
+            }
+        };
+        load_sampler_if_exists("sample_method", sample_params.sample_method);
+        load_sampler_if_exists("high_noise_sample_method", high_noise_sample_params.sample_method);
+
+        if (j.contains("scheduler") && j["scheduler"].is_string()) {
+            enum scheduler_t tmp = str_to_scheduler(j["scheduler"].get<std::string>().c_str());
+            if (tmp != SCHEDULER_COUNT) {
+                sample_params.scheduler = tmp;
+            }
+        }
 
         return true;
     }
@@ -1588,7 +1626,7 @@ struct SDGenerationParams {
             return;
         }
         static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
         std::smatch m;
 
         std::string tmp = prompt;
@@ -1667,17 +1705,24 @@ struct SDGenerationParams {
         }
     }
 
+    bool width_and_height_are_set() const {
+        return width > 0 && height > 0;
+    }
+
+    void set_width_and_height_if_unset(int w, int h) {
+        if (!width_and_height_are_set()) {
+            LOG_INFO("set width x height to %d x %d", w, h);
+            width  = w;
+            height = h;
+        }
+    }
+
+    int get_resolved_width() const { return (width > 0) ? width : 512; }
+
+    int get_resolved_height() const { return (height > 0) ? height : 512; }
+
     bool process_and_check(SDMode mode, const std::string& lora_model_dir) {
         prompt_with_lora = prompt;
-        if (width <= 0) {
-            LOG_ERROR("error: the width must be greater than 0\n");
-            return false;
-        }
-
-        if (height <= 0) {
-            LOG_ERROR("error: the height must be greater than 0\n");
-            return false;
-        }
 
         if (sample_params.sample_steps <= 0) {
             LOG_ERROR("error: the sample_steps must be greater than 0\n");
@@ -2043,6 +2088,22 @@ uint8_t* load_image_from_file(const char* image_path,
                               int expected_height  = 0,
                               int expected_channel = 3) {
     return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
+}
+
+bool load_sd_image_from_file(sd_image_t* image,
+                             const char* image_path,
+                             int expected_width   = 0,
+                             int expected_height  = 0,
+                             int expected_channel = 3) {
+    int width;
+    int height;
+    image->data = load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
+    if (image->data == nullptr) {
+        return false;
+    }
+    image->width  = width;
+    image->height = height;
+    return true;
 }
 
 uint8_t* load_image_from_memory(const char* image_bytes,

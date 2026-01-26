@@ -28,9 +28,11 @@ enum SDVersion {
     VERSION_SD2,
     VERSION_SD2_INPAINT,
     VERSION_SD2_TINY_UNET,
+    VERSION_SDXS,
     VERSION_SDXL,
     VERSION_SDXL_INPAINT,
     VERSION_SDXL_PIX2PIX,
+    VERSION_SDXL_VEGA,
     VERSION_SDXL_SSD1B,
     VERSION_SVD,
     VERSION_SD3,
@@ -44,13 +46,14 @@ enum SDVersion {
     VERSION_WAN2_2_TI2V,
     VERSION_QWEN_IMAGE,
     VERSION_FLUX2,
+    VERSION_FLUX2_KLEIN,
     VERSION_Z_IMAGE,
     VERSION_OVIS_IMAGE,
     VERSION_COUNT,
 };
 
 static inline bool sd_version_is_sd1(SDVersion version) {
-    if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT || version == VERSION_SD1_PIX2PIX || version == VERSION_SD1_TINY_UNET) {
+    if (version == VERSION_SD1 || version == VERSION_SD1_INPAINT || version == VERSION_SD1_PIX2PIX || version == VERSION_SD1_TINY_UNET || version == VERSION_SDXS) {
         return true;
     }
     return false;
@@ -64,7 +67,7 @@ static inline bool sd_version_is_sd2(SDVersion version) {
 }
 
 static inline bool sd_version_is_sdxl(SDVersion version) {
-    if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT || version == VERSION_SDXL_PIX2PIX || version == VERSION_SDXL_SSD1B) {
+    if (version == VERSION_SDXL || version == VERSION_SDXL_INPAINT || version == VERSION_SDXL_PIX2PIX || version == VERSION_SDXL_SSD1B || version == VERSION_SDXL_VEGA) {
         return true;
     }
     return false;
@@ -99,7 +102,7 @@ static inline bool sd_version_is_flux(SDVersion version) {
 }
 
 static inline bool sd_version_is_flux2(SDVersion version) {
-    if (version == VERSION_FLUX2) {
+    if (version == VERSION_FLUX2 || version == VERSION_FLUX2_KLEIN) {
         return true;
     }
     return false;
@@ -310,10 +313,11 @@ public:
     std::map<ggml_type, uint32_t> get_vae_wtype_stat();
     String2TensorStorage& get_tensor_storage_map() { return tensor_storage_map; }
     void set_wtype_override(ggml_type wtype, std::string tensor_type_rules = "");
-    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0);
+    bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0, bool use_mmap = false);
     bool load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                       std::set<std::string> ignore_tensors = {},
-                      int n_threads                        = 0);
+                      int n_threads                        = 0,
+                      bool use_mmap                        = false);
 
     std::vector<std::string> get_tensor_names() const {
         std::vector<std::string> names;

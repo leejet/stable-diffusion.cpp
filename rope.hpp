@@ -22,11 +22,11 @@ namespace Rope {
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> transpose(const std::vector<std::vector<float>>& mat) {
-        int rows = mat.size();
-        int cols = mat[0].size();
+        size_t rows = mat.size();
+        size_t cols = mat[0].size();
         std::vector<std::vector<float>> transposed(cols, std::vector<float>(rows));
-        for (int i = 0; i < rows; ++i) {
-            for (int j = 0; j < cols; ++j) {
+        for (size_t i = 0; i < rows; ++i) {
+            for (size_t j = 0; j < cols; ++j) {
                 transposed[j][i] = mat[i][j];
             }
         }
@@ -52,13 +52,13 @@ namespace Rope {
 
         std::vector<float> omega(half_dim);
         for (int i = 0; i < half_dim; ++i) {
-            omega[i] = 1.0f / std::pow(theta, scale[i]);
+            omega[i] = 1.0f / ::powf(1.f * theta, scale[i]);
         }
 
-        int pos_size = pos.size();
+        size_t pos_size = pos.size();
         std::vector<std::vector<float>> out(pos_size, std::vector<float>(half_dim));
-        for (int i = 0; i < pos_size; ++i) {
-            for (int j = 0; j < half_dim; ++j) {
+        for (size_t i = 0; i < pos_size; ++i) {
+            for (size_t j = 0; j < half_dim; ++j) {
                 float angle = pos[i] * omega[j];
                 if (!axis_wrap_dims.empty()) {
                     size_t wrap_size = axis_wrap_dims.size();
@@ -99,7 +99,7 @@ namespace Rope {
         for (int dim = 0; dim < axes_dim_num; dim++) {
             if (arange_dims.find(dim) != arange_dims.end()) {
                 for (int i = 0; i < bs * context_len; i++) {
-                    txt_ids[i][dim] = (i % context_len);
+                    txt_ids[i][dim] = 1.f * (i % context_len);
                 }
             }
         }
@@ -128,12 +128,12 @@ namespace Rope {
             w_start -= w_len / 2;
         }
 
-        std::vector<float> row_ids = linspace<float>(h_start, h_start + h_len - 1, h_len);
-        std::vector<float> col_ids = linspace<float>(w_start, w_start + w_len - 1, w_len);
+        std::vector<float> row_ids = linspace<float>(1.f * h_start, 1.f * h_start + h_len - 1, h_len);
+        std::vector<float> col_ids = linspace<float>(1.f * w_start, 1.f * w_start + w_len - 1, w_len);
 
         for (int i = 0; i < h_len; ++i) {
             for (int j = 0; j < w_len; ++j) {
-                img_ids[i * w_len + j][0] = index;
+                img_ids[i * w_len + j][0] = 1.f * index;
                 img_ids[i * w_len + j][1] = row_ids[i];
                 img_ids[i * w_len + j][2] = col_ids[j];
             }
@@ -172,7 +172,7 @@ namespace Rope {
                                                   const std::vector<std::vector<int>>& wrap_dims = {}) {
         std::vector<std::vector<float>> trans_ids = transpose(ids);
         size_t pos_len                            = ids.size() / bs;
-        int num_axes                              = axes_dim.size();
+        size_t num_axes                           = axes_dim.size();
         // for (int i = 0; i < pos_len; i++) {
         //     std::cout << trans_ids[0][i] << " " << trans_ids[1][i] << " " << trans_ids[2][i] << std::endl;
         // }
@@ -182,8 +182,8 @@ namespace Rope {
             emb_dim += d / 2;
 
         std::vector<std::vector<float>> emb(bs * pos_len, std::vector<float>(emb_dim * 2 * 2, 0.0));
-        int offset = 0;
-        for (int i = 0; i < num_axes; ++i) {
+        size_t offset = 0;
+        for (size_t i = 0; i < num_axes; ++i) {
             std::vector<int> axis_wrap_dims;
             if (!wrap_dims.empty() && i < (int)wrap_dims.size()) {
                 axis_wrap_dims = wrap_dims[i];
@@ -211,12 +211,12 @@ namespace Rope {
                                                                    float ref_index_scale,
                                                                    bool scale_rope) {
         std::vector<std::vector<float>> ids;
-        uint64_t curr_h_offset = 0;
-        uint64_t curr_w_offset = 0;
-        int index              = 1;
+        int curr_h_offset = 0;
+        int curr_w_offset = 0;
+        int index         = 1;
         for (ggml_tensor* ref : ref_latents) {
-            uint64_t h_offset = 0;
-            uint64_t w_offset = 0;
+            int h_offset = 0;
+            int w_offset = 0;
             if (!increase_ref_index) {
                 if (ref->ne[1] + curr_h_offset > ref->ne[0] + curr_w_offset) {
                     w_offset = curr_w_offset;
@@ -226,8 +226,8 @@ namespace Rope {
                 scale_rope = false;
             }
 
-            auto ref_ids = gen_flux_img_ids(ref->ne[1],
-                                            ref->ne[0],
+            auto ref_ids = gen_flux_img_ids(static_cast<int>(ref->ne[1]),
+                                            static_cast<int>(ref->ne[0]),
                                             patch_size,
                                             bs,
                                             axes_dim_num,
@@ -241,8 +241,8 @@ namespace Rope {
                 index++;
             }
 
-            curr_h_offset = std::max(curr_h_offset, ref->ne[1] + h_offset);
-            curr_w_offset = std::max(curr_w_offset, ref->ne[0] + w_offset);
+            curr_h_offset = std::max(curr_h_offset, static_cast<int>(ref->ne[1]) + h_offset);
+            curr_w_offset = std::max(curr_w_offset, static_cast<int>(ref->ne[0]) + w_offset);
         }
         return ids;
     }
@@ -345,7 +345,7 @@ namespace Rope {
         int h_len        = (h + (patch_size / 2)) / patch_size;
         int w_len        = (w + (patch_size / 2)) / patch_size;
         int txt_id_start = std::max(h_len, w_len);
-        auto txt_ids     = linspace<float>(txt_id_start, context_len + txt_id_start, context_len);
+        auto txt_ids     = linspace<float>(1.f * txt_id_start, 1.f * context_len + txt_id_start, context_len);
         std::vector<std::vector<float>> txt_ids_repeated(bs * context_len, std::vector<float>(3));
         for (int i = 0; i < bs; ++i) {
             for (int j = 0; j < txt_ids.size(); ++j) {
@@ -440,9 +440,9 @@ namespace Rope {
 
         std::vector<std::vector<float>> vid_ids(t_len * h_len * w_len, std::vector<float>(3, 0.0));
 
-        std::vector<float> t_ids = linspace<float>(t_offset, t_len - 1 + t_offset, t_len);
-        std::vector<float> h_ids = linspace<float>(h_offset, h_len - 1 + h_offset, h_len);
-        std::vector<float> w_ids = linspace<float>(w_offset, w_len - 1 + w_offset, w_len);
+        std::vector<float> t_ids = linspace<float>(1.f * t_offset, 1.f * t_len - 1 + t_offset, t_len);
+        std::vector<float> h_ids = linspace<float>(1.f * h_offset, 1.f * h_len - 1 + h_offset, h_len);
+        std::vector<float> w_ids = linspace<float>(1.f * w_offset, 1.f * w_len - 1 + w_offset, w_len);
 
         for (int i = 0; i < t_len; ++i) {
             for (int j = 0; j < h_len; ++j) {
@@ -493,8 +493,8 @@ namespace Rope {
 
                         GGML_ASSERT(i < grid_h * grid_w);
 
-                        ids[i][0] = ih + iy;
-                        ids[i][1] = iw + ix;
+                        ids[i][0] = static_cast<float>(ih + iy);
+                        ids[i][1] = static_cast<float>(iw + ix);
                         index++;
                     }
                 }
@@ -531,7 +531,7 @@ namespace Rope {
         std::vector<int> context_end_pos;
         std::vector<std::vector<float>> txt_ids;
         for (auto context : contexts) {
-            int padded_context_len = context->ne[1] + bound_mod(context->ne[1], seq_multi_of);
+            int padded_context_len = static_cast<int>(context->ne[1]) + bound_mod(static_cast<int>(context->ne[1]), seq_multi_of);
             auto curr_txt_ids      = std::vector<std::vector<float>>(bs * padded_context_len, std::vector<float>(3, 0.0f));
             for (int i = 0; i < bs * padded_context_len; i++) {
                 curr_txt_ids[i][0] = static_cast<float>((i % padded_context_len) + context_cu_len);
@@ -548,7 +548,7 @@ namespace Rope {
         for (int i = 0; i < all_img.size(); i++) {
             int axes_dim_num  = 3;
             int index         = context_end_pos[i];
-            auto curr_img_ids = gen_flux_img_ids(all_img[i]->ne[1], all_img[i]->ne[0], patch_size, bs, axes_dim_num, index);
+            auto curr_img_ids = gen_flux_img_ids(static_cast<int>(all_img[i]->ne[1]), static_cast<int>(all_img[i]->ne[0]), patch_size, bs, axes_dim_num, index);
 
             int img_pad_len = bound_mod(static_cast<int>(curr_img_ids.size() / bs), seq_multi_of);
             if (img_pad_len > 0) {
@@ -562,19 +562,19 @@ namespace Rope {
         for (int i = 0; i < siglip_feats.size(); i++) {
             int axes_dim_num = 3;
             int index        = context_end_pos[i] + 1;
-            int h_len        = siglip_feats[i]->ne[1];
-            int w_len        = siglip_feats[i]->ne[0];
+            int h_len        = static_cast<int>(siglip_feats[i]->ne[1]);
+            int w_len        = static_cast<int>(siglip_feats[i]->ne[0]);
 
             std::vector<std::vector<float>> curr_sig_ids(bs * h_len * w_len, std::vector<float>(axes_dim_num, 0.0));
 
             // scale position IDs to match img resolution
-            std::vector<float> row_ids = linspace<float>(0, all_img[i]->ne[1] - 1, h_len);
-            std::vector<float> col_ids = linspace<float>(0, all_img[i]->ne[0] - 1, w_len);
+            std::vector<float> row_ids = linspace<float>(0, static_cast<float>(all_img[i]->ne[1]) - 1.f, h_len);
+            std::vector<float> col_ids = linspace<float>(0, static_cast<float>(all_img[i]->ne[0]) - 1.f, w_len);
 
             for (int ib = 0; ib < bs; ++ib) {
                 for (int ih = 0; ih < h_len; ++ih) {
                     for (int iw = 0; iw < w_len; ++iw) {
-                        curr_sig_ids[ib * h_len * w_len + ih * w_len + iw][0] = index;
+                        curr_sig_ids[ib * h_len * w_len + ih * w_len + iw][0] = static_cast<float>(index);
                         curr_sig_ids[ib * h_len * w_len + ih * w_len + iw][1] = row_ids[ih];
                         curr_sig_ids[ib * h_len * w_len + ih * w_len + iw][2] = col_ids[iw];
                     }
@@ -615,11 +615,11 @@ namespace Rope {
         if ((circular_h || circular_w) && bs > 0 && axes_dim.size() >= 3) {
             int context_len = 0;
             for (auto context : contexts) {
-                int padded_context_len = context->ne[1] + bound_mod(context->ne[1], seq_multi_of);
+                int padded_context_len = static_cast<int>(context->ne[1]) + bound_mod(static_cast<int>(context->ne[1]), seq_multi_of);
                 context_len += padded_context_len;
             }
-            int h     = x->ne[1];
-            int w     = x->ne[0];
+            int h     = static_cast<int>(x->ne[1]);
+            int w     = static_cast<int>(x->ne[0]);
             int pad_h = (patch_size - (h % patch_size)) % patch_size;
             int pad_w = (patch_size - (w % patch_size)) % patch_size;
             int h_len = (h + pad_h) / patch_size;
@@ -699,7 +699,7 @@ namespace Rope {
         q = apply_rope(ctx->ggml_ctx, q, pe, rope_interleaved);  // [N*n_head, L, d_head]
         k = apply_rope(ctx->ggml_ctx, k, pe, rope_interleaved);  // [N*n_head, L, d_head]
 
-        auto x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, v->ne[1], mask, false, true, ctx->flash_attn_enabled, kv_scale);  // [N, L, n_head*d_head]
+        auto x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, v->ne[1], mask, true, ctx->flash_attn_enabled, kv_scale);  // [N, L, n_head*d_head]
         return x;
     }
 };  // namespace Rope

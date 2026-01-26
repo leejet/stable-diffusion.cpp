@@ -376,7 +376,11 @@ bool ModelLoader::init_from_file(const std::string& file_path, const std::string
         LOG_INFO("load %s using checkpoint format", file_path.c_str());
         return init_from_ckpt_file(file_path, prefix);
     } else {
-        LOG_WARN("unknown format %s", file_path.c_str());
+        if (file_exists(file_path)) {
+            LOG_WARN("unknown format %s", file_path.c_str());
+        } else {
+            LOG_WARN("file %s not found", file_path.c_str());
+        }
         return false;
     }
 }
@@ -436,7 +440,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
                 name,
                 gguf_tensor_info.type,
                 gguf_tensor_info.shape.data(),
-                gguf_tensor_info.shape.size(),
+                static_cast<int>(gguf_tensor_info.shape.size()),
                 file_index,
                 data_offset + gguf_tensor_info.offset);
 
@@ -448,7 +452,7 @@ bool ModelLoader::init_from_gguf_file(const std::string& file_path, const std::s
         return true;
     }
 
-    int n_tensors = gguf_get_n_tensors(ctx_gguf_);
+    int n_tensors = static_cast<int>(gguf_get_n_tensors(ctx_gguf_));
 
     size_t total_size  = 0;
     size_t data_offset = gguf_get_data_offset(ctx_gguf_);
@@ -1034,10 +1038,14 @@ SDVersion ModelLoader::get_sd_version() {
 
     bool is_xl                       = false;
     bool is_flux                     = false;
+    bool is_flux2                    = false;
+    bool has_single_block_47         = false;
     bool is_wan                      = false;
     int64_t patch_embedding_channels = 0;
     bool has_img_emb                 = false;
     bool has_middle_block_1          = false;
+    bool has_output_block_311        = false;
+    bool has_output_block_71         = false;
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
         if (!(is_xl)) {
@@ -1054,7 +1062,10 @@ SDVersion ModelLoader::get_sd_version() {
                 return VERSION_QWEN_IMAGE;
             }
             if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
-                return VERSION_FLUX2;
+                is_flux2 = true;
+            }
+            if (tensor_storage.name.find("single_blocks.47.linear1.weight") != std::string::npos) {
+                has_single_block_47 = true;
             }
             if (tensor_storage.name.find("model.diffusion_model.double_blocks.0.img_mlp.gate_proj.weight") != std::string::npos) {
                 return VERSION_OVIS_IMAGE;
@@ -1094,6 +1105,12 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage.name.find("unet.mid_block.resnets.1.") != std::string::npos) {
             has_middle_block_1 = true;
         }
+        if (tensor_storage.name.find("model.diffusion_model.output_blocks.3.1.transformer_blocks.1") != std::string::npos) {
+            has_output_block_311 = true;
+        }
+        if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1") != std::string::npos) {
+            has_output_block_71 = true;
+        }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||
             tensor_storage.name == "text_model.embeddings.token_embedding.weight" ||
@@ -1129,12 +1146,15 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_SDXL_PIX2PIX;
         }
         if (!has_middle_block_1) {
+            if (!has_output_block_311) {
+                return VERSION_SDXL_VEGA;
+            }
             return VERSION_SDXL_SSD1B;
         }
         return VERSION_SDXL;
     }
 
-    if (is_flux) {
+    if (is_flux && !is_flux2) {
         if (input_block_weight.ne[0] == 384) {
             return VERSION_FLUX_FILL;
         }
@@ -1147,6 +1167,13 @@ SDVersion ModelLoader::get_sd_version() {
         return VERSION_FLUX;
     }
 
+    if (is_flux2) {
+        if (has_single_block_47) {
+            return VERSION_FLUX2;
+        }
+        return VERSION_FLUX2_KLEIN;
+    }
+
     if (token_embedding_weight.ne[0] == 768) {
         if (is_inpaint) {
             return VERSION_SD1_INPAINT;
@@ -1155,6 +1182,9 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_SD1_PIX2PIX;
         }
         if (!has_middle_block_1) {
+            if (!has_output_block_71) {
+                return VERSION_SDXS;
+            }
             return VERSION_SD1_TINY_UNET;
         }
         return VERSION_SD1;
@@ -1340,7 +1370,7 @@ std::string ModelLoader::load_umt5_tokenizer_json() {
     return json_str;
 }
 
-bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p) {
+bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool enable_mmap) {
     int64_t process_time_ms = 0;
     std::atomic<int64_t> read_time_ms(0);
     std::atomic<int64_t> memcpy_time_ms(0);
@@ -1390,6 +1420,15 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             }
         }
 
+        std::unique_ptr<MmapWrapper> mmapped;
+        if (enable_mmap && !is_zip) {
+            LOG_DEBUG("using mmap for I/O");
+            mmapped = MmapWrapper::create(file_path);
+            if (!mmapped) {
+                LOG_WARN("failed to memory-map '%s'", file_path.c_str());
+            }
+        }
+
         int n_threads = is_zip ? 1 : std::min(num_threads_to_use, (int)file_tensors.size());
         if (n_threads < 1) {
             n_threads = 1;
@@ -1411,7 +1450,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         failed = true;
                         return;
                     }
-                } else {
+                } else if (!mmapped) {
                     file.open(file_path, std::ios::binary);
                     if (!file.is_open()) {
                         LOG_ERROR("failed to open '%s'", file_path.c_str());
@@ -1464,6 +1503,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                                 zip_entry_noallocread(zip, (void*)buf, n);
                             }
                             zip_entry_close(zip);
+                        } else if (mmapped) {
+                            if (!mmapped->copy_data(buf, n, tensor_storage.offset)) {
+                                LOG_ERROR("read tensor data failed: '%s'", file_path.c_str());
+                                failed = true;
+                            }
                         } else {
                             file.seekg(tensor_storage.offset);
                             file.read(buf, n);
@@ -1556,7 +1600,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                 break;
             }
             size_t curr_num = total_tensors_processed + current_idx;
-            pretty_progress(curr_num, total_tensors_to_process, (ggml_time_ms() - t_start) / 1000.0f / (curr_num + 1e-6f));
+            pretty_progress(static_cast<int>(curr_num), static_cast<int>(total_tensors_to_process), (ggml_time_ms() - t_start) / 1000.0f / (curr_num + 1e-6f));
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
 
@@ -1569,7 +1613,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
             break;
         }
         total_tensors_processed += file_tensors.size();
-        pretty_progress(total_tensors_processed, total_tensors_to_process, (ggml_time_ms() - t_start) / 1000.0f / (total_tensors_processed + 1e-6f));
+        pretty_progress(static_cast<int>(total_tensors_processed), static_cast<int>(total_tensors_to_process), (ggml_time_ms() - t_start) / 1000.0f / (total_tensors_processed + 1e-6f));
         if (total_tensors_processed < total_tensors_to_process) {
             printf("\n");
         }
@@ -1588,7 +1632,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
 bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tensors,
                                std::set<std::string> ignore_tensors,
-                               int n_threads) {
+                               int n_threads,
+                               bool enable_mmap) {
     std::set<std::string> tensor_names_in_file;
     std::mutex tensor_names_mutex;
     auto on_new_tensor_cb = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) -> bool {
@@ -1631,7 +1676,7 @@ bool ModelLoader::load_tensors(std::map<std::string, struct ggml_tensor*>& tenso
         return true;
     };
 
-    bool success = load_tensors(on_new_tensor_cb, n_threads);
+    bool success = load_tensors(on_new_tensor_cb, n_threads, enable_mmap);
     if (!success) {
         LOG_ERROR("load tensors from file failed");
         return false;

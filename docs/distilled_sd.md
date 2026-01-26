@@ -1,8 +1,8 @@
-# Running distilled models: SSD1B and SDx.x with tiny U-Nets
+# Running distilled models: SSD1B, Vega and SDx.x with tiny U-Nets
 
 ## Preface 
 
-These models feature a reduced U-Net architecture. Unlike standard SDXL models, the SSD-1B U-Net contains only one middle block and fewer attention layers in its up- and down-blocks, resulting in significantly smaller file sizes. Using these models can reduce inference time by more than 33%. For more details, refer to Segmind's paper: https://arxiv.org/abs/2401.02677v1.
+These models feature a reduced U-Net architecture. Unlike standard SDXL models, the SSD-1B and Vega U-Net contains only one middle block and fewer attention layers in its up- and down-blocks, resulting in significantly smaller file sizes. Using these models can reduce inference time by more than 33%. For more details, refer to Segmind's paper: https://arxiv.org/abs/2401.02677v1.
 Similarly, SD1.x- and SD2.x-style models with a tiny U-Net consist of only 6 U-Net blocks, leading to very small files and time savings of up to 50%. For more information, see the paper: https://arxiv.org/pdf/2305.15798.pdf.
 
 ## SSD1B
@@ -17,7 +17,17 @@ Useful LoRAs are also available:
  * https://huggingface.co/seungminh/lora-swarovski-SSD-1B/resolve/main/pytorch_lora_weights.safetensors
  * https://huggingface.co/kylielee505/mylcmlorassd/resolve/main/pytorch_lora_weights.safetensors
 
-These files can be used out-of-the-box, unlike the models described in the next section.
+## Vega
+
+Segmind's Vega model is available online here:
+
+ * https://huggingface.co/segmind/Segmind-Vega/resolve/main/segmind-vega.safetensors
+ 
+VegaRT is an example for an LCM-LoRA:
+
+ * https://huggingface.co/segmind/Segmind-VegaRT/resolve/main/pytorch_lora_weights.safetensors
+
+Both files can be used out-of-the-box, unlike the models described in next sections.
 
 
 ## SD1.x, SD2.x with tiny U-Nets
@@ -83,7 +93,7 @@ python convert_diffusers_to_original_stable_diffusion.py \
 The file segmind_tiny-sd.ckpt will be generated and is now ready for use with sd.cpp. You can follow a similar process for the other models mentioned above.
 
 
-### Another available .ckpt file:
+##### Another available .ckpt file:
 
  * https://huggingface.co/ClashSAN/small-sd/resolve/main/tinySDdistilled.ckpt
 
@@ -97,3 +107,31 @@ for key, value in ckpt['state_dict'].items():
         ckpt['state_dict'][key] = value.contiguous()
 torch.save(ckpt, "tinySDdistilled_fixed.ckpt")
 ```
+
+
+### SDXS-512
+
+Another very tiny and **incredibly fast**  model is SDXS by IDKiro et al.  The authors refer to it as *"Real-Time One-Step Latent Diffusion Models with Image Conditions"*. For details read the paper: https://arxiv.org/pdf/2403.16627 . Once again the authors removed some more blocks of U-Net part and unlike other SD1 models they use an adjusted _AutoEncoderTiny_ instead of default _AutoEncoderKL_ for the VAE part.
+
+##### 1. Download the diffusers model from  Hugging Face using Python:
+
+```python
+from diffusers import StableDiffusionPipeline
+pipe = StableDiffusionPipeline.from_pretrained("IDKiro/sdxs-512-dreamshaper")
+pipe.save_pretrained(save_directory="sdxs")
+```
+##### 2. Create a safetensors file
+
+```bash
+python convert_diffusers_to_original_stable_diffusion.py \
+    --model_path  sdxs  --checkpoint_path sdxs.safetensors --half --use_safetensors
+```
+
+##### 3. Run the model as follows:
+
+```bash
+~/stable-diffusion.cpp/build/bin/sd-cli -m sdxs.safetensors -p "portrait of a lovely cat" \
+  --cfg-scale 1 --steps 1
+```
+
+Both options: ``` --cfg-scale 1 ``` and  ``` --steps 1 ``` are mandatory here.                                                 

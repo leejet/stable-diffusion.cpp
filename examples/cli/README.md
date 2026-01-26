@@ -4,7 +4,8 @@
 usage: ./bin/sd-cli  [options]
 
 CLI Options:
-  -o, --output <string>       path to write result image to (default: ./output.png)
+  -o, --output <string>       path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)
+  --output-begin-idx <int>    starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)
   --preview-path <string>     path to write preview image to (default: ./preview.png)
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
@@ -47,6 +48,7 @@ Context Options:
   --vae-tiling                             process vae in tiles to reduce memory usage
   --force-sdxl-vae-conv-scale              force use of conv scale on sdxl vae
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM when needed
+  --mmap                                   whether to memory-map model
   --control-net-cpu                        keep controlnet in cpu (for low vram)
   --clip-on-cpu                            keep clip in cpu (for low vram)
   --vae-on-cpu                             keep vae in cpu (for low vram)
@@ -132,13 +134,9 @@ Generation Options:
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)
   --cache-mode                             caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)
-  --cache-option                           named cache params (key=value format, comma-separated):
-                                                                                      - easycache/ucache:
-                                           threshold=,start=,end=,decay=,relative=,reset=
-                                                                                      - dbcache/taylorseer/cache-dit:
-                                           Fn=,Bn=,threshold=,warmup=
-                                                                                      Examples: "threshold=0.25" or
-                                           "threshold=1.5,reset=0"
+  --cache-option                           named cache params (key=value format, comma-separated). easycache/ucache:
+                                           threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples:
+                                           "threshold=0.25" or "threshold=1.5,reset=0"
   --cache-preset                           cache-dit preset: 'slow'/'s', 'medium'/'m', 'fast'/'f', 'ultra'/'u'
   --scm-mask                               SCM steps mask for cache-dit: comma-separated 0/1 (e.g., "1,1,1,0,0,1,0,0,1,0") - 1=compute, 0=can cache
   --scm-policy                             SCM policy: 'dynamic' (default) or 'static'

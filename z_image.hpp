@@ -54,15 +54,37 @@ namespace ZImage {
 
             auto qkv = qkv_proj->forward(ctx, x);                                                                            // [N, n_token, (num_heads + num_kv_heads*2)*head_dim]
             qkv      = ggml_reshape_4d(ctx->ggml_ctx, qkv, head_dim, num_heads + num_kv_heads * 2, qkv->ne[1], qkv->ne[2]);  // [N, n_token, num_heads + num_kv_heads*2, head_dim]
-            qkv      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, qkv, 0, 2, 3, 1));                     // [num_heads + num_kv_heads*2, N, n_token, head_dim]
 
-            auto q = ggml_view_4d(ctx->ggml_ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], num_heads, qkv->nb[1], qkv->nb[2], qkv->nb[3], 0);                                           // [num_heads, N, n_token, head_dim]
-            auto k = ggml_view_4d(ctx->ggml_ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], num_kv_heads, qkv->nb[1], qkv->nb[2], qkv->nb[3], qkv->nb[3] * num_heads);                   // [num_kv_heads, N, n_token, head_dim]
-            auto v = ggml_view_4d(ctx->ggml_ctx, qkv, qkv->ne[0], qkv->ne[1], qkv->ne[2], num_kv_heads, qkv->nb[1], qkv->nb[2], qkv->nb[3], qkv->nb[3] * (num_heads + num_kv_heads));  // [num_kv_heads, N, n_token, head_dim]
-
-            q = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, q, 0, 3, 1, 2));  // [N, n_token, num_heads, head_dim]
-            k = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, k, 0, 3, 1, 2));  // [N, n_token, num_kv_heads, head_dim]
-            v = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, v, 0, 3, 1, 2));  // [N, n_token, num_kv_heads, head_dim]
+            auto q = ggml_view_4d(ctx->ggml_ctx,
+                                  qkv,
+                                  qkv->ne[0],
+                                  num_heads,
+                                  qkv->ne[2],
+                                  qkv->ne[3],
+                                  qkv->nb[1],
+                                  qkv->nb[2],
+                                  qkv->nb[3],
+                                  0);  // [N, n_token, num_heads, head_dim]
+            auto k = ggml_view_4d(ctx->ggml_ctx,
+                                  qkv,
+                                  qkv->ne[0],
+                                  num_kv_heads,
+                                  qkv->ne[2],
+                                  qkv->ne[3],
+                                  qkv->nb[1],
+                                  qkv->nb[2],
+                                  qkv->nb[3],
+                                  num_heads * qkv->nb[1]);  // [N, n_token, num_kv_heads, head_dim]
+            auto v = ggml_view_4d(ctx->ggml_ctx,
+                                  qkv,
+                                  qkv->ne[0],
+                                  num_kv_heads,
+                                  qkv->ne[2],
+                                  qkv->ne[3],
+                                  qkv->nb[1],
+                                  qkv->nb[2],
+                                  qkv->nb[3],
+                                  (num_heads + num_kv_heads) * qkv->nb[1]);  // [N, n_token, num_kv_heads, head_dim]
 
             if (qk_norm) {
                 auto q_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
@@ -309,7 +331,7 @@ namespace ZImage {
     };
 
     struct ZImageParams {
-        int64_t patch_size         = 2;
+        int patch_size             = 2;
         int64_t hidden_size        = 3840;
         int64_t in_channels        = 16;
         int64_t out_channels       = 16;
@@ -319,12 +341,12 @@ namespace ZImage {
         int64_t num_heads          = 30;
         int64_t num_kv_heads       = 30;
         int64_t multiple_of        = 256;
-        float ffn_dim_multiplier   = 8.0 / 3.0f;
+        float ffn_dim_multiplier   = 8.0f / 3.0f;
         float norm_eps             = 1e-5f;
         bool qk_norm               = true;
         int64_t cap_feat_dim       = 2560;
         int64_t siglip_feat_dim    = 0;
-        float theta                = 256.f;
+        int theta                  = 256;
         std::vector<int> axes_dim  = {32, 48, 48};
         int64_t axes_dim_sum       = 128;
     };
@@ -487,7 +509,7 @@ namespace ZImage {
                                                                       ggml_tensor* pad_token,
                                                                       int N,
                                                                       float noise_mask_value = 1.f) {
-            int64_t n_pad_token = Rope::bound_mod(x->ne[1], SEQ_MULTI_OF);
+            int64_t n_pad_token = Rope::bound_mod(static_cast<int>(x->ne[1]), SEQ_MULTI_OF);
             if (n_pad_token > 0) {
                 auto pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, pad_token, pad_token->ne[0], n_pad_token, N, 1);
                 x               = ggml_concat(ctx->ggml_ctx, x, pad_tokens, 1);  // [N, n_token + n_pad_token, hidden_size]
@@ -535,7 +557,7 @@ namespace ZImage {
                     noise_mask_value = (i < ref_latents.size() ? 0.f : 1.f);
                 }
 
-                auto [curr_txt, curr_txt_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_txt_raw, txt_pad_token, N, noise_mask_value);
+                auto [curr_txt, curr_txt_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_txt_raw, txt_pad_token, static_cast<int>(N), noise_mask_value);
                 if (txt == nullptr) {
                     txt = curr_txt;
                 } else {
@@ -561,7 +583,7 @@ namespace ZImage {
                     noise_mask_value = 0.f;
                 }
 
-                auto [curr_img, curr_img_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_img_raw, img_pad_token, N, noise_mask_value);
+                auto [curr_img, curr_img_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_img_raw, img_pad_token, static_cast<int>(N), noise_mask_value);
                 if (img == nullptr) {
                     img = curr_img;
                 } else {
@@ -588,7 +610,7 @@ namespace ZImage {
                     noise_mask_value = 0.f;
                 }
 
-                auto [curr_img, curr_img_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_img_raw, img_pad_token, N, noise_mask_value);
+                auto [curr_img, curr_img_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_img_raw, img_pad_token, static_cast<int>(N), noise_mask_value);
                 if (img == nullptr) {
                     img = curr_img;
                 } else {
@@ -603,7 +625,7 @@ namespace ZImage {
                     }
                 }
 
-                final_img_pad_len = Rope::bound_mod(curr_img_raw->ne[1], SEQ_MULTI_OF);
+                final_img_pad_len = Rope::bound_mod(static_cast<int>(curr_img_raw->ne[1]), SEQ_MULTI_OF);
             }
 
             ggml_tensor* sig            = nullptr;
@@ -620,7 +642,7 @@ namespace ZImage {
                     noise_mask_value = (i < ref_latents.size() ? 0.f : 1.f);
                 }
 
-                auto [curr_sig, curr_sig_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_sig_raw, sig_pad_token, N, noise_mask_value);
+                auto [curr_sig, curr_sig_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_sig_raw, sig_pad_token, static_cast<int>(N), noise_mask_value);
                 if (sig == nullptr) {
                     sig = curr_sig;
                 } else {
@@ -742,7 +764,7 @@ namespace ZImage {
             out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N, C, H, W + pad_w]
             out = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W);  // [N, C, H, W]
 
-            out = ggml_scale(ctx->ggml_ctx, out, -1.f);
+            out = ggml_ext_scale(ctx->ggml_ctx, out, -1.f);
 
             return out;
         }
@@ -804,8 +826,8 @@ namespace ZImage {
                                                z_image_params.axes_dim,
                                                circular_y_enabled,
                                                circular_x_enabled,
-                                               x->ne[3]);
-            int pos_len = pe_vec.size() / z_image_params.axes_dim_sum / 2;
+                                               static_cast<int>(x->ne[3]));
+            int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
             // pe->data = pe_vec.data();
@@ -869,12 +891,12 @@ namespace ZImage {
 
                 struct ggml_tensor* out = nullptr;
 
-                int t0 = ggml_time_ms();
+                int64_t t0 = ggml_time_ms();
                 compute(8, x, timesteps, {context}, {}, {}, &out, work_ctx);
-                int t1 = ggml_time_ms();
+                int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
-                LOG_DEBUG("z_image test done in %dms", t1 - t0);
+                LOG_DEBUG("z_image test done in %lldms", t1 - t0);
             }
         }
 

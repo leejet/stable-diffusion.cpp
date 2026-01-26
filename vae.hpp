@@ -127,8 +127,6 @@ public:
             q = q_proj->forward(ctx, h_);  // [N, h * w, in_channels]
             k = k_proj->forward(ctx, h_);  // [N, h * w, in_channels]
             v = v_proj->forward(ctx, h_);  // [N, h * w, in_channels]
-
-            v = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));  // [N, in_channels, h * w]
         } else {
             q = q_proj->forward(ctx, h_);                                              // [N, in_channels, h, w]
             q = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, q, 1, 2, 0, 3));  // [N, h, w, in_channels]
@@ -138,11 +136,12 @@ public:
             k = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, k, 1, 2, 0, 3));  // [N, h, w, in_channels]
             k = ggml_reshape_3d(ctx->ggml_ctx, k, c, h * w, n);                        // [N, h * w, in_channels]
 
-            v = v_proj->forward(ctx, h_);                        // [N, in_channels, h, w]
-            v = ggml_reshape_3d(ctx->ggml_ctx, v, h * w, c, n);  // [N, in_channels, h * w]
+            v = v_proj->forward(ctx, h_);                                              // [N, in_channels, h, w]
+            v = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, v, 1, 2, 0, 3));  // [N, h, w, in_channels]
+            v = ggml_reshape_3d(ctx->ggml_ctx, v, c, h * w, n);                        // [N, h * w, in_channels]
         }
 
-        h_ = ggml_ext_attention(ctx->ggml_ctx, q, k, v, false);  // [N, h * w, in_channels]
+        h_ = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, 1, nullptr, true, false);
 
         if (use_linear) {
             h_ = proj_out->forward(ctx, h_);  // [N, h * w, in_channels]
@@ -166,18 +165,18 @@ public:
     AE3DConv(int64_t in_channels,
              int64_t out_channels,
              std::pair<int, int> kernel_size,
-             int64_t video_kernel_size    = 3,
+             int video_kernel_size        = 3,
              std::pair<int, int> stride   = {1, 1},
              std::pair<int, int> padding  = {0, 0},
              std::pair<int, int> dilation = {1, 1},
              bool bias                    = true)
         : Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, bias) {
-        int64_t kernel_padding  = video_kernel_size / 2;
-        blocks["time_mix_conv"] = std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(out_channels,
-                                                                             out_channels,
-                                                                             video_kernel_size,
-                                                                             1,
-                                                                             kernel_padding));
+        int kernel_padding      = video_kernel_size / 2;
+        blocks["time_mix_conv"] = std::shared_ptr<GGMLBlock>(new Conv3d(out_channels,
+                                                                        out_channels,
+                                                                        {video_kernel_size, 1, 1},
+                                                                        {1, 1, 1},
+                                                                        {kernel_padding, 0, 0}));
     }
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -186,7 +185,7 @@ public:
         // skip_video always False
         // x: [N, IC, IH, IW]
         // result: [N, OC, OH, OW]
-        auto time_mix_conv = std::dynamic_pointer_cast<Conv3dnx1x1>(blocks["time_mix_conv"]);
+        auto time_mix_conv = std::dynamic_pointer_cast<Conv3d>(blocks["time_mix_conv"]);
 
         x = Conv2d::forward(ctx, x);
         // timesteps = x.shape[0]
@@ -254,8 +253,8 @@ public:
 
         float alpha = get_alpha();
         x           = ggml_add(ctx->ggml_ctx,
-                               ggml_scale(ctx->ggml_ctx, x, alpha),
-                               ggml_scale(ctx->ggml_ctx, x_mix, 1.0f - alpha));
+                               ggml_ext_scale(ctx->ggml_ctx, x, alpha),
+                               ggml_ext_scale(ctx->ggml_ctx, x_mix, 1.0f - alpha));
 
         x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // b c t (h w) -> b t c (h w)
         x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, C, T * B);                     // b t c (h w) -> (b t) c h w
@@ -409,8 +408,8 @@ public:
           z_channels(z_channels),
           video_decoder(video_decoder),
           video_kernel_size(video_kernel_size) {
-        size_t num_resolutions = ch_mult.size();
-        int block_in           = ch * ch_mult[num_resolutions - 1];
+        int num_resolutions = static_cast<int>(ch_mult.size());
+        int block_in        = ch * ch_mult[num_resolutions - 1];
 
         blocks["conv_in"] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, block_in, {3, 3}, {1, 1}, {1, 1}));
 
@@ -461,7 +460,7 @@ public:
         h = mid_block_2->forward(ctx, h);  // [N, block_in, h, w]
 
         // upsampling
-        size_t num_resolutions = ch_mult.size();
+        int num_resolutions = static_cast<int>(ch_mult.size());
         for (int i = num_resolutions - 1; i >= 0; i--) {
             for (int j = 0; j < num_res_blocks + 1; j++) {
                 std::string name = "up." + std::to_string(i) + ".block." + std::to_string(j);
@@ -745,12 +744,12 @@ struct AutoEncoderKL : public VAE {
             print_ggml_tensor(x);
             struct ggml_tensor* out = nullptr;
 
-            int t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             compute(8, x, false, &out, work_ctx);
-            int t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
-            LOG_DEBUG("encode test done in %dms", t1 - t0);
+            LOG_DEBUG("encode test done in %lldms", t1 - t0);
         }
 
         if (false) {
@@ -763,12 +762,12 @@ struct AutoEncoderKL : public VAE {
             print_ggml_tensor(z);
             struct ggml_tensor* out = nullptr;
 
-            int t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             compute(8, z, true, &out, work_ctx);
-            int t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
-            LOG_DEBUG("decode test done in %dms", t1 - t0);
+            LOG_DEBUG("decode test done in %lldms", t1 - t0);
         }
     };
 };

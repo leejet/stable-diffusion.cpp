@@ -95,9 +95,71 @@ bool is_directory(const std::string& path) {
     return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size, HANDLE hfile, HANDLE hmapping)
+        : MmapWrapper(data, size), hfile_(hfile), hmapping_(hmapping) {}
+
+    ~MmapWrapperImpl() override {
+        UnmapViewOfFile(data_);
+        CloseHandle(hmapping_);
+        CloseHandle(hfile_);
+    }
+
+private:
+    HANDLE hfile_;
+    HANDLE hmapping_;
+};
+
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+    void* mapped_data = nullptr;
+    size_t file_size  = 0;
+
+    HANDLE file_handle = CreateFileA(
+        filename.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
+
+    if (file_handle == INVALID_HANDLE_VALUE) {
+        return nullptr;
+    }
+
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(file_handle, &size)) {
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    file_size = static_cast<size_t>(size.QuadPart);
+
+    HANDLE mapping_handle = CreateFileMapping(file_handle, NULL, PAGE_READONLY, 0, 0, NULL);
+
+    if (mapping_handle == NULL) {
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    mapped_data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, file_size);
+
+    if (mapped_data == NULL) {
+        CloseHandle(mapping_handle);
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size, file_handle, mapping_handle);
+}
+
 #else  // Unix
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 bool file_exists(const std::string& filename) {
     struct stat buffer;
@@ -109,7 +171,63 @@ bool is_directory(const std::string& path) {
     return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
 }
 
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size)
+        : MmapWrapper(data, size) {}
+
+    ~MmapWrapperImpl() override {
+        munmap(data_, size_);
+    }
+};
+
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+    int file_descriptor = open(filename.c_str(), O_RDONLY);
+    if (file_descriptor == -1) {
+        return nullptr;
+    }
+
+    int mmap_flags = MAP_PRIVATE;
+
+#ifdef __linux__
+    // performance flags used by llama.cpp
+    // posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
+    // mmap_flags |= MAP_POPULATE;
 #endif
+
+    struct stat sb;
+    if (fstat(file_descriptor, &sb) == -1) {
+        close(file_descriptor);
+        return nullptr;
+    }
+
+    size_t file_size = sb.st_size;
+
+    void* mapped_data = mmap(NULL, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
+
+    close(file_descriptor);
+
+    if (mapped_data == MAP_FAILED) {
+        return nullptr;
+    }
+
+#ifdef __linux__
+    // performance flags used by llama.cpp
+    // posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+#endif
+
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size);
+}
+
+#endif
+
+bool MmapWrapper::copy_data(void* buf, size_t n, size_t offset) const {
+    if (offset >= size_ || n > (size_ - offset)) {
+        return false;
+    }
+    std::memcpy(buf, data() + offset, n);
+    return true;
+}
 
 // get_num_physical_cores is copy from
 // https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
@@ -370,7 +488,7 @@ sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image) {
     // Allocate memory for float data
     converted_image.data = (float*)malloc(image.width * image.height * image.channel * sizeof(float));
 
-    for (int i = 0; i < image.width * image.height * image.channel; i++) {
+    for (uint32_t i = 0; i < image.width * image.height * image.channel; i++) {
         // Convert uint8_t to float
         converted_image.data[i] = (float)image.data[i];
     }
@@ -402,7 +520,7 @@ sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int
             uint32_t x2 = std::min(x1 + 1, image.width - 1);
             uint32_t y2 = std::min(y1 + 1, image.height - 1);
 
-            for (int k = 0; k < image.channel; k++) {
+            for (uint32_t k = 0; k < image.channel; k++) {
                 float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
                 float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
                 float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
@@ -422,9 +540,9 @@ sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int
 }
 
 void normalize_sd_image_f32_t(sd_image_f32_t image, float means[3], float stds[3]) {
-    for (int y = 0; y < image.height; y++) {
-        for (int x = 0; x < image.width; x++) {
-            for (int k = 0; k < image.channel; k++) {
+    for (uint32_t y = 0; y < image.height; y++) {
+        for (uint32_t x = 0; x < image.width; x++) {
+            for (uint32_t k = 0; k < image.channel; k++) {
                 int index         = (y * image.width + x) * image.channel + k;
                 image.data[index] = (image.data[index] - means[k]) / stds[k];
             }
@@ -433,8 +551,8 @@ void normalize_sd_image_f32_t(sd_image_f32_t image, float means[3], float stds[3
 }
 
 // Constants for means and std
-float means[3] = {0.48145466, 0.4578275, 0.40821073};
-float stds[3]  = {0.26862954, 0.26130258, 0.27577711};
+float means[3] = {0.48145466f, 0.4578275f, 0.40821073f};
+float stds[3]  = {0.26862954f, 0.26130258f, 0.27577711f};
 
 // Function to clip and preprocess sd_image_f32_t
 sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int target_height) {
@@ -458,7 +576,7 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int targe
             uint32_t x2 = std::min(x1 + 1, image.width - 1);
             uint32_t y2 = std::min(y1 + 1, image.height - 1);
 
-            for (int k = 0; k < image.channel; k++) {
+            for (uint32_t k = 0; k < image.channel; k++) {
                 float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
                 float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
                 float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
@@ -484,11 +602,11 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int targe
     result.channel = image.channel;
     result.data    = (float*)malloc(target_height * target_width * image.channel * sizeof(float));
 
-    for (int k = 0; k < image.channel; k++) {
-        for (int i = 0; i < result.height; i++) {
-            for (int j = 0; j < result.width; j++) {
-                int src_y = std::min(i + h_offset, resized_height - 1);
-                int src_x = std::min(j + w_offset, resized_width - 1);
+    for (uint32_t k = 0; k < image.channel; k++) {
+        for (uint32_t i = 0; i < result.height; i++) {
+            for (uint32_t j = 0; j < result.width; j++) {
+                int src_y = std::min(static_cast<int>(i + h_offset), resized_height - 1);
+                int src_x = std::min(static_cast<int>(j + w_offset), resized_width - 1);
                 *(result.data + i * result.width * image.channel + j * image.channel + k) =
                     fmin(fmax(*(resized_data + src_y * resized_width * image.channel + src_x * image.channel + k), 0.0f), 255.0f) / 255.0f;
             }
@@ -499,9 +617,9 @@ sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int targe
     free(resized_data);
 
     // Normalize
-    for (int k = 0; k < image.channel; k++) {
-        for (int i = 0; i < result.height; i++) {
-            for (int j = 0; j < result.width; j++) {
+    for (uint32_t k = 0; k < image.channel; k++) {
+        for (uint32_t i = 0; i < result.height; i++) {
+            for (uint32_t j = 0; j < result.width; j++) {
                 // *(result.data + i * size * image.channel + j * image.channel + k) = 0.5f;
                 int offset  = i * result.width * image.channel + j * image.channel + k;
                 float value = *(result.data + offset);
