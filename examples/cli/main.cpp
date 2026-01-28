@@ -357,12 +357,14 @@ bool save_results(const SDCliParams& cli_params,
         if (!img.data)
             return false;
 
-        std::string params = get_image_params(ctx_params, gen_params, gen_params.seed + idx);
+        std::string params = gen_params.embed_image_metadata
+            ? get_image_params(ctx_params, gen_params, gen_params.seed + idx)
+            : "";
         int ok             = 0;
         if (is_jpg) {
-            ok = stbi_write_jpg(path.string().c_str(), img.width, img.height, img.channel, img.data, 90, params.c_str());
+            ok = stbi_write_jpg(path.string().c_str(), img.width, img.height, img.channel, img.data, 90, params.size() > 0 ? params.c_str() : nullptr);
         } else {
-            ok = stbi_write_png(path.string().c_str(), img.width, img.height, img.channel, img.data, 0, params.c_str());
+            ok = stbi_write_png(path.string().c_str(), img.width, img.height, img.channel, img.data, 0, params.size() > 0 ? params.c_str() : nullptr);
         }
         LOG_INFO("save result image %d to '%s' (%s)", idx, path.string().c_str(), ok ? "success" : "failure");
         return ok != 0;
