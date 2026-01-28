@@ -1042,6 +1042,7 @@ struct SDGenerationParams {
     std::string control_video_path;
     bool auto_resize_ref_image = true;
     bool increase_ref_index    = false;
+    bool embed_image_metadata  = true;
 
     std::vector<int> skip_layers = {7, 8, 9};
     sd_sample_params_t sample_params;
@@ -1267,6 +1268,11 @@ struct SDGenerationParams {
              "disable auto resize of ref images",
              false,
              &auto_resize_ref_image},
+            {"",
+             "--disable-image-metadata",
+             "do not embed generation metadata on image files",
+             false,
+             &embed_image_metadata},
         };
 
         auto on_seed_arg = [&](int argc, const char** argv, int index) {
@@ -1597,6 +1603,7 @@ struct SDGenerationParams {
 
         load_if_exists("auto_resize_ref_image", auto_resize_ref_image);
         load_if_exists("increase_ref_index", increase_ref_index);
+        load_if_exists("embed_image_metadata", embed_image_metadata);
 
         load_if_exists("skip_layers", skip_layers);
         load_if_exists("high_noise_skip_layers", high_noise_skip_layers);

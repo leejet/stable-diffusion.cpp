@@ -256,7 +256,7 @@ std::vector<uint8_t> write_image_to_vector(
             result = stbi_write_jpg_to_func(c_func, &ctx, width, height, channels, image, quality);
             break;
         case ImageFormat::PNG:
-            result = stbi_ext_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels, params.c_str());
+            result = stbi_ext_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels, params.size() > 0 ? params.c_str() : nullptr);
             break;
         default:
             throw std::runtime_error("invalid image format");
@@ -528,7 +528,9 @@ int main(int argc, const char** argv) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
-                std::string params = get_image_params(ctx_params, gen_params, gen_params.seed + i);
+                std::string params = gen_params.embed_image_metadata
+                    ? get_image_params(ctx_params, gen_params, gen_params.seed + i)
+                    : "";
                 auto image_bytes = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
                                                          results[i].data,
                                                          results[i].width,
@@ -775,7 +777,9 @@ int main(int argc, const char** argv) {
             for (int i = 0; i < num_results; i++) {
                 if (results[i].data == nullptr)
                     continue;
-                std::string params = get_image_params(ctx_params, gen_params, gen_params.seed + i);
+                std::string params = gen_params.embed_image_metadata
+                    ? get_image_params(ctx_params, gen_params, gen_params.seed + i)
+                    : "";
                 auto image_bytes = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
                                                          results[i].data,
                                                          results[i].width,
@@ -1093,7 +1097,9 @@ int main(int argc, const char** argv) {
                     continue;
                 }
 
-                std::string params = get_image_params(ctx_params, gen_params, gen_params.seed + i);
+                std::string params = gen_params.embed_image_metadata
+                    ? get_image_params(ctx_params, gen_params, gen_params.seed + i)
+                    : "";
                 auto image_bytes = write_image_to_vector(ImageFormat::PNG,
                                                          results[i].data,
                                                          results[i].width,
