@@ -1,3 +1,4 @@
+#include "ggml-cpu.h"
 #include "ggml_extend.hpp"
 
 #include "model.h"
@@ -5,6 +6,7 @@
 #include "rng_mt19937.hpp"
 #include "rng_philox.hpp"
 #include "stable-diffusion.h"
+#include <vector>
 #include "util.h"
 
 #include "cache_dit.hpp"
@@ -94,14 +96,129 @@ void suppress_pp(int step, int steps, float time, void* data) {
     return;
 }
 
+std::vector<std::string> string_split(const std::string & input, char separator)
+{
+    std::vector<std::string> parts;
+    size_t begin_pos = 0;
+    size_t separator_pos = input.find(separator);
+    while (separator_pos != std::string::npos) {
+        std::string part = input.substr(begin_pos, separator_pos - begin_pos);
+        parts.emplace_back(part);
+        begin_pos = separator_pos + 1;
+        separator_pos = input.find(separator, begin_pos);
+    }
+    parts.emplace_back(input.substr(begin_pos, separator_pos - begin_pos));
+    return parts;
+}
+
+static void add_rpc_devices(const std::string & servers) {
+    auto rpc_servers = string_split(servers, ',');
+    if (rpc_servers.empty()) {
+        throw std::invalid_argument("no RPC servers specified");
+    }
+    ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (!rpc_reg) {
+        throw std::invalid_argument("failed to find RPC backend");
+    }
+    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char * endpoint);
+    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (!ggml_backend_rpc_add_server_fn) {
+        throw std::invalid_argument("failed to find RPC add server function");
+    }
+    for (const auto & server : rpc_servers) {
+        auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
+        ggml_backend_register(reg);
+    }
+}
+
+void add_rpc_device(const char* servers_cstr){
+    std::string servers(servers_cstr);
+    add_rpc_devices(servers);
+}
+
+std::vector<std::string> sanitize_backend_name_list(std::string name) {
+    std::vector<std::string> vec = {};
+    if (name == "" || backend_name_exists(name)) {
+        // single backend
+        vec.push_back(name);
+    } else if (name.find(",") != std::string::npos) {
+        // comma-separated backend names
+        std::stringstream ss(name);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            if (token == "" || backend_name_exists(token)) {
+                vec.push_back(token);
+            } else {
+                LOG_WARN("backend name %s not found, using default", token.c_str());
+                vec.push_back("");
+            }
+        }
+    } else {
+        vec.push_back("");
+    }
+    return vec;
+}
+
+std::vector<std::pair<std::string, std::string>> list_backends_vector() {
+    std::vector<std::pair<std::string, std::string>> backends;
+    const int device_count = ggml_backend_dev_count();
+    for (int i = 0; i < device_count; i++) {
+        auto dev = ggml_backend_dev_get(i);
+        backends.push_back({ggml_backend_dev_name(dev), ggml_backend_dev_description(dev)});
+    }
+    return backends;
+}
+
+SD_API size_t backend_list_size(){
+    // for C API
+    size_t buffer_size = 0;
+    auto backends = list_backends_vector();
+    for (auto& backend : backends) {
+        auto dev_name_size = backend.first.size();
+        auto dev_desc_size = backend.second.size();
+        buffer_size+=dev_name_size+dev_desc_size+2; // +2 for the separators
+    }
+    return buffer_size;
+}
+
+// devices are separated by \n and name and description are separated by \t
+SD_API void list_backends_to_buffer(char* buffer, size_t buffer_size) {
+    auto backends = list_backends_vector();
+    size_t offset = 0;
+    for (auto& backend : backends) {
+        size_t name_size = backend.first.size();
+        size_t desc_size = backend.second.size();
+        if (offset + name_size + desc_size + 2 > buffer_size) {
+            break; // Not enough space in the buffer
+        }
+        memcpy(buffer + offset, backend.first.c_str(), name_size);
+        offset += name_size;
+        buffer[offset++] = '\t';
+        memcpy(buffer + offset, backend.second.c_str(), desc_size);
+        offset += desc_size;
+        buffer[offset++] = '\n'; 
+    }
+    if (offset < buffer_size) {
+        buffer[offset] = '\0'; // Ensure the buffer is null-terminated at the end
+    } else {
+        LOG_WARN("Provided buffer size is too small to contain details of all devices.");
+        buffer[buffer_size - 1] = '\0';  // Ensure the buffer is null-terminated at the end
+    }
+}
+
 /*=============================================== StableDiffusionGGML ================================================*/
 
 class StableDiffusionGGML {
 public:
     ggml_backend_t backend             = nullptr;  // general backend
-    ggml_backend_t clip_backend        = nullptr;
+    ggml_backend_t diffusion_backend   = nullptr;
     ggml_backend_t control_net_backend = nullptr;
     ggml_backend_t vae_backend         = nullptr;
+    ggml_backend_t tae_backend         = nullptr;
+    ggml_backend_t pmid_backend        = nullptr;
+    ggml_backend_t vision_backend      = nullptr;
+
+    std::vector<ggml_backend_t> clip_backends        = {nullptr};
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -147,11 +264,19 @@ public:
     StableDiffusionGGML() = default;
 
     ~StableDiffusionGGML() {
-        if (clip_backend != backend) {
-            ggml_backend_free(clip_backend);
+        if (diffusion_backend != backend) {
+            ggml_backend_free(diffusion_backend);
+        }
+        for(auto clip_backend : clip_backends) {
+            if (clip_backend != backend) {
+                ggml_backend_free(clip_backend);
+            }
         }
         if (control_net_backend != backend) {
             ggml_backend_free(control_net_backend);
+        }
+        if (tae_backend != vae_backend) {
+            ggml_backend_free(tae_backend);
         }
         if (vae_backend != backend) {
             ggml_backend_free(vae_backend);
@@ -159,60 +284,12 @@ public:
         ggml_backend_free(backend);
     }
 
-    void init_backend() {
-#ifdef SD_USE_CUDA
-        LOG_DEBUG("Using CUDA backend");
-        backend = ggml_backend_cuda_init(0);
-#endif
-#ifdef SD_USE_METAL
-        LOG_DEBUG("Using Metal backend");
-        backend = ggml_backend_metal_init();
-#endif
-#ifdef SD_USE_VULKAN
-        LOG_DEBUG("Using Vulkan backend");
-        size_t device          = 0;
-        const int device_count = ggml_backend_vk_get_device_count();
-        if (device_count) {
-            const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
-            if (SD_VK_DEVICE != nullptr) {
-                std::string sd_vk_device_str = SD_VK_DEVICE;
-                try {
-                    device = std::stoull(sd_vk_device_str);
-                } catch (const std::invalid_argument&) {
-                    LOG_WARN("SD_VK_DEVICE environment variable is not a valid integer (%s). Falling back to device 0.", SD_VK_DEVICE);
-                    device = 0;
-                } catch (const std::out_of_range&) {
-                    LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to device 0.", SD_VK_DEVICE);
-                    device = 0;
-                }
-                if (device >= device_count) {
-                    LOG_WARN("Cannot find targeted vulkan device (%llu). Falling back to device 0.", device);
-                    device = 0;
-                }
-            }
-            LOG_INFO("Vulkan: Using device %llu", device);
-            backend = ggml_backend_vk_init(device);
-        }
-        if (!backend) {
-            LOG_WARN("Failed to initialize Vulkan backend");
-        }
-#endif
-#ifdef SD_USE_OPENCL
-        LOG_DEBUG("Using OpenCL backend");
-        // ggml_log_set(ggml_log_callback_default, nullptr); // Optional ggml logs
-        backend = ggml_backend_opencl_init();
-        if (!backend) {
-            LOG_WARN("Failed to initialize OpenCL backend");
-        }
-#endif
-#ifdef SD_USE_SYCL
-        LOG_DEBUG("Using SYCL backend");
-        backend = ggml_backend_sycl_init(0);
-#endif
 
-        if (!backend) {
-            LOG_DEBUG("Using CPU backend");
-            backend = ggml_backend_cpu_init();
+    void log_backends() {
+        const int device_count = ggml_backend_dev_count();
+        for (int i = 0; i < device_count; i++) {
+            auto dev = ggml_backend_dev_get(i);
+            LOG_INFO("%s (%s)", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev));
         }
     }
 
@@ -243,7 +320,54 @@ public:
 
         ggml_log_set(ggml_log_callback_default, nullptr);
 
-        init_backend();
+        log_backends();
+
+        std::string default_backend_name = get_default_backend_name();
+
+        std::string override_default_backend_name = sanitize_backend_name(SAFE_STR(sd_ctx_params->main_device));
+
+        if (override_default_backend_name.size() > 0) {
+            LOG_INFO("Setting default backend to %s", override_default_backend_name.c_str());
+            default_backend_name = override_default_backend_name;
+        }
+
+        std::string diffusion_backend_name   = sanitize_backend_name(SAFE_STR(sd_ctx_params->diffusion_device));
+        std::vector<std::string> clip_backend_names        = sanitize_backend_name_list(SAFE_STR(sd_ctx_params->clip_device));
+        std::string control_net_backend_name = sanitize_backend_name(SAFE_STR(sd_ctx_params->control_net_device));
+        std::string vae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->vae_device));
+        std::string tae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->tae_device));
+        std::string pmid_backend_name        = sanitize_backend_name(SAFE_STR(sd_ctx_params->photomaker_device));
+        std::string vision_backend_name      = sanitize_backend_name(SAFE_STR(sd_ctx_params->vision_device));
+
+        bool diffusion_backend_is_default   = diffusion_backend_name.empty() || diffusion_backend_name == default_backend_name;
+        bool clip_backends_are_default = true;
+        for (const auto& clip_backend_name : clip_backend_names) {
+            if (!clip_backend_name.empty() && clip_backend_name != default_backend_name) {
+                clip_backends_are_default = false;
+                break;
+            }
+        }
+        bool control_net_backend_is_default = (control_net_backend_name.empty() || control_net_backend_name == default_backend_name);
+        bool vae_backend_is_default         = (vae_backend_name.empty() || vae_backend_name == default_backend_name);
+        // if tae_backend_name is empty, it will use the same backend as vae
+        bool tae_backend_is_default = (tae_backend_name.empty() && vae_backend_is_default) || tae_backend_name == default_backend_name;
+        bool pmid_backend_is_default = (pmid_backend_name.empty() || pmid_backend_name == default_backend_name);
+        bool vision_backend_is_default = (vision_backend_name.empty() || vision_backend_name == default_backend_name);
+
+        // if some backend is not specified or is the same as the default backend, use the default backend
+        bool use_default_backend = diffusion_backend_is_default || clip_backends_are_default || control_net_backend_is_default || vae_backend_is_default || tae_backend_is_default || pmid_backend_is_default || vision_backend_is_default;
+
+        if (use_default_backend) {
+            backend = init_named_backend(override_default_backend_name);
+            LOG_DEBUG("Loaded default backend %s", ggml_backend_name(backend));
+        }
+
+        if (!diffusion_backend_is_default) {
+            diffusion_backend = init_named_backend(diffusion_backend_name);
+            LOG_INFO("Using diffusion backend: %s", ggml_backend_name(diffusion_backend));
+        } else {
+            diffusion_backend = backend;
+        }
 
         ModelLoader model_loader;
 
@@ -419,21 +543,24 @@ public:
             LOG_INFO("Using circular padding for convolutions");
         }
 
-        bool clip_on_cpu = sd_ctx_params->keep_clip_on_cpu;
-
         {
-            clip_backend = backend;
-            if (clip_on_cpu && !ggml_backend_is_cpu(backend)) {
-                LOG_INFO("CLIP: Using CPU backend");
-                clip_backend = ggml_backend_cpu_init();
+            if (!clip_backends_are_default) {
+                clip_backends.clear();
+                for(auto clip_backend_name : clip_backend_names){
+                    auto clip_backend = init_named_backend(clip_backend_name);
+                    LOG_INFO("CLIP: Using %s backend", ggml_backend_name(clip_backend));
+                    clip_backends.push_back(clip_backend); 
+                }
+            }else{
+                clip_backends = {backend};
             }
             if (sd_version_is_sd3(version)) {
-                cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backends,
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map);
-                diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                               offload_params_to_cpu,
-                                                               tensor_storage_map);
+                diffusion_model  = std::make_shared<MMDiTModel>(diffusion_backend,
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -452,53 +579,53 @@ public:
                             "--chroma-disable-dit-mask as a workaround.");
                     }
 
-                    cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
+                    cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backends[0],
                                                                         offload_params_to_cpu,
                                                                         tensor_storage_map,
                                                                         sd_ctx_params->chroma_use_t5_mask,
                                                                         sd_ctx_params->chroma_t5_mask_pad);
                 } else if (version == VERSION_OVIS_IMAGE) {
-                    cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                    cond_stage_model = std::make_shared<LLMEmbedder>(clip_backends[0],
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map,
                                                                      version,
                                                                      "",
                                                                      false);
                 } else {
-                    cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backend,
+                    cond_stage_model = std::make_shared<FluxCLIPEmbedder>(clip_backends,
                                                                           offload_params_to_cpu,
                                                                           tensor_storage_map);
                 }
-                diffusion_model = std::make_shared<FluxModel>(backend,
+                diffusion_model = std::make_shared<FluxModel>(diffusion_backend,
                                                               offload_params_to_cpu,
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_flux2(version)) {
                 bool is_chroma   = false;
-                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backends[0],
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
-                diffusion_model  = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
-                                                              tensor_storage_map,
-                                                              version,
-                                                              sd_ctx_params->chroma_use_dit_mask);
+                diffusion_model  = std::make_shared<FluxModel>(diffusion_backend,
+                                                               offload_params_to_cpu,
+                                                               tensor_storage_map,
+                                                               version,
+                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
-                cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backends[0],
                                                                     offload_params_to_cpu,
                                                                     tensor_storage_map,
                                                                     true,
                                                                     1,
                                                                     true);
-                diffusion_model  = std::make_shared<WanModel>(backend,
-                                                             offload_params_to_cpu,
-                                                             tensor_storage_map,
-                                                             "model.diffusion_model",
-                                                             version);
+                diffusion_model  = std::make_shared<WanModel>(diffusion_backend,
+                                                              offload_params_to_cpu,
+                                                              tensor_storage_map,
+                                                              "model.diffusion_model",
+                                                              version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
-                    high_noise_diffusion_model = std::make_shared<WanModel>(backend,
+                    high_noise_diffusion_model = std::make_shared<WanModel>(diffusion_backend,
                                                                             offload_params_to_cpu,
                                                                             tensor_storage_map,
                                                                             "model.high_noise_diffusion_model",
@@ -507,7 +634,7 @@ public:
                 if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-I2V-1.3B") {
-                    clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
+                    clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(vision_backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map);
                     clip_vision->alloc_params_buffer();
@@ -518,48 +645,48 @@ public:
                 if (!vae_decode_only) {
                     enable_vision = true;
                 }
-                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backends[0],
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version,
                                                                  "",
                                                                  enable_vision);
-                diffusion_model  = std::make_shared<QwenImageModel>(backend,
-                                                                   offload_params_to_cpu,
-                                                                   tensor_storage_map,
-                                                                   "model.diffusion_model",
-                                                                   version,
-                                                                   sd_ctx_params->qwen_image_zero_cond_t);
+                diffusion_model  = std::make_shared<QwenImageModel>(diffusion_backend,
+                                                                    offload_params_to_cpu,
+                                                                    tensor_storage_map,
+                                                                    "model.diffusion_model",
+                                                                    version,
+                                                                    sd_ctx_params->qwen_image_zero_cond_t);
             } else if (sd_version_is_z_image(version)) {
-                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
+                cond_stage_model = std::make_shared<LLMEmbedder>(clip_backends[0],
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
-                diffusion_model  = std::make_shared<ZImageModel>(backend,
-                                                                offload_params_to_cpu,
-                                                                tensor_storage_map,
-                                                                "model.diffusion_model",
-                                                                version);
+                diffusion_model  = std::make_shared<ZImageModel>(diffusion_backend,
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 "model.diffusion_model",
+                                                                 version);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
                     embbeding_map.emplace(SAFE_STR(sd_ctx_params->embeddings[i].name), SAFE_STR(sd_ctx_params->embeddings[i].path));
                 }
                 if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
-                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backends,
                                                                                            offload_params_to_cpu,
                                                                                            tensor_storage_map,
                                                                                            embbeding_map,
                                                                                            version,
                                                                                            PM_VERSION_2);
                 } else {
-                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backend,
+                    cond_stage_model = std::make_shared<FrozenCLIPEmbedderWithCustomWords>(clip_backends,
                                                                                            offload_params_to_cpu,
                                                                                            tensor_storage_map,
                                                                                            embbeding_map,
                                                                                            version);
                 }
-                diffusion_model = std::make_shared<UNetModel>(backend,
+                diffusion_model = std::make_shared<UNetModel>(diffusion_backend,
                                                               offload_params_to_cpu,
                                                               tensor_storage_map,
                                                               version);
@@ -592,11 +719,15 @@ public:
                 high_noise_diffusion_model->get_param_tensors(tensors);
             }
 
-            if (sd_ctx_params->keep_vae_on_cpu && !ggml_backend_is_cpu(backend)) {
-                LOG_INFO("VAE Autoencoder: Using CPU backend");
-                vae_backend = ggml_backend_cpu_init();
-            } else {
-                vae_backend = backend;
+            vae_backend = backend;
+            if (!vae_backend_is_default) {
+                vae_backend = init_named_backend(vae_backend_name);
+                LOG_INFO("VAE Autoencoder: Using %s backend", ggml_backend_name(vae_backend));
+            }
+            tae_backend = vae_backend;
+            if (tae_backend_name.length() > 0 && tae_backend_name != vae_backend_name) {
+                tae_backend = init_named_backend(tae_backend_name);
+                LOG_INFO("Tiny Autoencoder: Using %s backend", ggml_backend_name(tae_backend));
             }
 
             if (!(use_tiny_autoencoder || version == VERSION_SDXS) || tae_preview_only) {
@@ -639,14 +770,14 @@ public:
             }
             if (use_tiny_autoencoder || version == VERSION_SDXS) {
                 if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
-                    tae_first_stage = std::make_shared<TinyVideoAutoEncoder>(vae_backend,
+                    tae_first_stage = std::make_shared<TinyVideoAutoEncoder>(tae_backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map,
                                                                              "decoder",
                                                                              vae_decode_only,
                                                                              version);
                 } else {
-                    tae_first_stage = std::make_shared<TinyImageAutoEncoder>(vae_backend,
+                    tae_first_stage = std::make_shared<TinyImageAutoEncoder>(tae_backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map,
                                                                              "decoder.layers",
@@ -664,14 +795,13 @@ public:
             }
 
             if (strlen(SAFE_STR(sd_ctx_params->control_net_path)) > 0) {
-                ggml_backend_t controlnet_backend = nullptr;
-                if (sd_ctx_params->keep_control_net_on_cpu && !ggml_backend_is_cpu(backend)) {
-                    LOG_DEBUG("ControlNet: Using CPU backend");
-                    controlnet_backend = ggml_backend_cpu_init();
+                if (!control_net_backend_is_default) {
+                    control_net_backend = init_named_backend(control_net_backend_name);
+                    LOG_INFO("ControlNet: Using %s backend", ggml_backend_name(control_net_backend));
                 } else {
-                    controlnet_backend = backend;
+                    control_net_backend = backend;
                 }
-                control_net = std::make_shared<ControlNet>(controlnet_backend,
+                control_net = std::make_shared<ControlNet>(control_net_backend,
                                                            offload_params_to_cpu,
                                                            tensor_storage_map,
                                                            version);
@@ -680,9 +810,15 @@ public:
                     control_net->set_conv2d_direct_enabled(true);
                 }
             }
-
+             pmid_backend = backend;
+            if (!pmid_backend_is_default) {
+                pmid_backend = init_named_backend(pmid_backend_name);
+                LOG_INFO("PhotoMaker: Using %s backend", ggml_backend_name(pmid_backend));
+            } else {
+                pmid_backend = backend;
+            }
             if (strstr(SAFE_STR(sd_ctx_params->photo_maker_path), "v2")) {
-                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend,
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(pmid_backend,
                                                                    offload_params_to_cpu,
                                                                    tensor_storage_map,
                                                                    "pmid",
@@ -690,14 +826,14 @@ public:
                                                                    PM_VERSION_2);
                 LOG_INFO("using PhotoMaker Version 2");
             } else {
-                pmid_model = std::make_shared<PhotoMakerIDEncoder>(backend,
+                pmid_model = std::make_shared<PhotoMakerIDEncoder>(pmid_backend,
                                                                    offload_params_to_cpu,
                                                                    tensor_storage_map,
                                                                    "pmid",
                                                                    version);
             }
             if (strlen(SAFE_STR(sd_ctx_params->photo_maker_path)) > 0) {
-                pmid_lora               = std::make_shared<LoraModel>("pmid", backend, sd_ctx_params->photo_maker_path, "", version);
+                pmid_lora               = std::make_shared<LoraModel>("pmid", diffusion_backend, sd_ctx_params->photo_maker_path, "", version);
                 auto lora_tensor_filter = [&](const std::string& tensor_name) {
                     if (starts_with(tensor_name, "lora.model")) {
                         return true;
@@ -817,13 +953,15 @@ public:
 
             size_t total_params_ram_size  = 0;
             size_t total_params_vram_size = 0;
-            if (ggml_backend_is_cpu(clip_backend)) {
+            
+            // TODO: split by individual text encoders
+            if (ggml_backend_is_cpu(clip_backends[0])) {
                 total_params_ram_size += clip_params_mem_size + pmid_params_mem_size;
             } else {
                 total_params_vram_size += clip_params_mem_size + pmid_params_mem_size;
             }
 
-            if (ggml_backend_is_cpu(backend)) {
+            if (ggml_backend_is_cpu(diffusion_backend)) {
                 total_params_ram_size += unet_params_mem_size;
             } else {
                 total_params_vram_size += unet_params_mem_size;
@@ -849,7 +987,8 @@ public:
                 total_params_vram_size / 1024.0 / 1024.0,
                 total_params_ram_size / 1024.0 / 1024.0,
                 clip_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM",
+                // TODO: split
+                ggml_backend_is_cpu(clip_backends[0]) ? "RAM" : "VRAM",
                 unet_params_mem_size / 1024.0 / 1024.0,
                 ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
                 vae_params_mem_size / 1024.0 / 1024.0,
@@ -857,7 +996,7 @@ public:
                 control_net_params_mem_size / 1024.0 / 1024.0,
                 ggml_backend_is_cpu(control_net_backend) ? "RAM" : "VRAM",
                 pmid_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(clip_backend) ? "RAM" : "VRAM");
+                ggml_backend_is_cpu(pmid_backend) ? "RAM" : "VRAM");
         }
 
         // init denoiser
@@ -1052,8 +1191,15 @@ public:
 
         for (auto& kv : lora_state_diff) {
             int64_t t0 = ggml_time_ms();
-
-            auto lora = load_lora_model_from_file(kv.first, kv.second, backend);
+            // TODO: Fix that
+            bool are_clip_backends_compatible = true;
+            for (auto backend: clip_backends){
+                are_clip_backends_compatible = are_clip_backends_compatible && (diffusion_backend==backend || ggml_backend_is_cpu(backend));
+            }
+            if(!are_clip_backends_compatible){
+                LOG_WARN("Diffusion models and text encoders are running on different backends. This may cause issues when immediately applying LoRAs.");
+            }
+            auto lora = load_lora_model_from_file(kv.first, kv.second, diffusion_backend);
             if (!lora || lora->lora_tensors.empty()) {
                 continue;
             }
@@ -1098,8 +1244,8 @@ public:
             for (auto& kv : lora_state_diff) {
                 const std::string& lora_id = kv.first;
                 float multiplier           = kv.second;
-
-                auto lora = load_lora_model_from_file(lora_id, multiplier, clip_backend, lora_tensor_filter);
+                //TODO: split by model
+                auto lora = load_lora_model_from_file(lora_id, multiplier, clip_backends[0], lora_tensor_filter);
                 if (lora && !lora->lora_tensors.empty()) {
                     lora->preprocess_lora_tensors(tensors);
                     cond_stage_lora_models.push_back(lora);
@@ -1131,7 +1277,7 @@ public:
                 const std::string& lora_name = kv.first;
                 float multiplier             = kv.second;
 
-                auto lora = load_lora_model_from_file(lora_name, multiplier, backend, lora_tensor_filter);
+                auto lora = load_lora_model_from_file(lora_name, multiplier, diffusion_backend, lora_tensor_filter);
                 if (lora && !lora->lora_tensors.empty()) {
                     lora->preprocess_lora_tensors(tensors);
                     diffusion_lora_models.push_back(lora);
@@ -2893,9 +3039,6 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->enable_mmap             = false;
-    sd_ctx_params->keep_clip_on_cpu        = false;
-    sd_ctx_params->keep_control_net_on_cpu = false;
-    sd_ctx_params->keep_vae_on_cpu         = false;
     sd_ctx_params->diffusion_flash_attn    = false;
     sd_ctx_params->circular_x              = false;
     sd_ctx_params->circular_y              = false;
@@ -2910,7 +3053,7 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
     if (!buf)
         return nullptr;
     buf[0] = '\0';
-
+    // TODO devices
     snprintf(buf + strlen(buf), 4096 - strlen(buf),
              "model_path: %s\n"
              "clip_l_path: %s\n"
@@ -2934,9 +3077,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              "sampler_rng_type: %s\n"
              "prediction: %s\n"
              "offload_params_to_cpu: %s\n"
-             "keep_clip_on_cpu: %s\n"
-             "keep_control_net_on_cpu: %s\n"
-             "keep_vae_on_cpu: %s\n"
              "diffusion_flash_attn: %s\n"
              "circular_x: %s\n"
              "circular_y: %s\n"
@@ -2965,9 +3105,6 @@ char* sd_ctx_params_to_str(const sd_ctx_params_t* sd_ctx_params) {
              sd_rng_type_name(sd_ctx_params->sampler_rng_type),
              sd_prediction_name(sd_ctx_params->prediction),
              BOOL_STR(sd_ctx_params->offload_params_to_cpu),
-             BOOL_STR(sd_ctx_params->keep_clip_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_control_net_on_cpu),
-             BOOL_STR(sd_ctx_params->keep_vae_on_cpu),
              BOOL_STR(sd_ctx_params->diffusion_flash_attn),
              BOOL_STR(sd_ctx_params->circular_x),
              BOOL_STR(sd_ctx_params->circular_y),

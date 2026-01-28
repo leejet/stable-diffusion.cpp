@@ -4,12 +4,12 @@
 usage: ./bin/sd-server  [options]
 
 Svr Options:
-  -l, --listen-ip <string>    server listen ip (default: 127.0.0.1)
-  --listen-port <int>         server listen port (default: 1234)
-  --serve-html-path <string>  path to HTML file to serve at root (optional)
-  -v, --verbose               print extra info
-  --color                     colors the logging tags according to level
-  -h, --help                  show this help message and exit
+  -l, --listen-ip <string>      server listen ip (default: 127.0.0.1)
+  --serve-html-path <string>    path to HTML file to serve at root (optional)
+  --listen-port <int>           server listen port (default: 1234)
+  -v, --verbose                 print extra info
+  --color                       colors the logging tags according to level
+  -h, --help                    show this help message and exit
 
 Context Options:
   -m, --model <string>                     path to full model
@@ -32,6 +32,17 @@ Context Options:
   --tensor-type-rules <string>             weight type per tensor pattern (example: "^vae\.=f16,model\.=q8_0")
   --photo-maker <string>                   path to PHOTOMAKER model
   --upscale-model <string>                 path to esrgan model.
+  --main-backend-device <string>           default device to use for all backends (defaults to main gpu device if hardware acceleration is available, otherwise
+                                           cpu)
+  --diffusion-backend-device <string>      device to use for diffusion (defaults to main-backend-device)
+  --clip-backend-device <string>           device to use for clip (defaults to main-backend-device). Can be a comma-separated list of devices for models with
+                                           multiple encoders
+  --vae-backend-device <string>            device to use for vae (defaults to main-backend-device). Also applies to tae, unless tae-backend-device is specified
+  --tae-backend-device <string>            device to use for tae (defaults to vae-backend-device)
+  --control-net-backend-device <string>    device to use for control net (defaults to main-backend-device)
+  --upscaler-backend-device <string>       device to use for upscaling models (defaults to main-backend-device)
+  --photomaker-backend-device <string>     device to use for photomaker (defaults to main-backend-device)
+  --vision-backend-device <string>         device to use for clip-vision model (defaults to main-backend-device)
   -t, --threads <int>                      number of threads to use during computation (default: -1). If threads <= 0, then threads will be set to the number of
                                            CPU physical cores
   --chroma-t5-mask-pad <int>               t5 mask pad size of chroma
@@ -40,9 +51,6 @@ Context Options:
   --vae-tiling                             process vae in tiles to reduce memory usage
   --force-sdxl-vae-conv-scale              force use of conv scale on sdxl vae
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM when needed
-  --control-net-cpu                        keep controlnet in cpu (for low vram)
-  --clip-on-cpu                            keep clip in cpu (for low vram)
-  --vae-on-cpu                             keep vae in cpu (for low vram)
   --mmap                                   whether to memory-map model
   --diffusion-fa                           use flash attention in the diffusion model
   --diffusion-conv-direct                  use ggml_conv2d_direct in the diffusion model
@@ -51,6 +59,7 @@ Context Options:
   --circularx                              enable circular RoPE wrapping on x-axis (width) only
   --circulary                              enable circular RoPE wrapping on y-axis (height) only
   --chroma-disable-dit-mask                disable dit mask for chroma
+  --qwen-image-zero-cond-t                 enable zero_cond_t for qwen image
   --chroma-enable-t5-mask                  enable t5 mask for chroma
   --type                                   weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). If not specified, the default is the
                                            type of the weight file
