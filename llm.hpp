@@ -195,14 +195,14 @@ namespace LLM {
                 tokens.insert(tokens.begin(), BOS_TOKEN_ID);
             }
             if (max_length > 0 && padding) {
-                size_t n = std::ceil(tokens.size() * 1.0 / max_length);
+                size_t n = static_cast<size_t>(std::ceil(tokens.size() * 1.f / max_length));
                 if (n == 0) {
                     n = 1;
                 }
                 size_t length = max_length * n;
                 LOG_DEBUG("token length: %llu", length);
                 tokens.insert(tokens.end(), length - tokens.size(), PAD_TOKEN_ID);
-                weights.insert(weights.end(), length - weights.size(), 1.0);
+                weights.insert(weights.end(), length - weights.size(), 1.f);
             }
         }
 
@@ -377,7 +377,7 @@ namespace LLM {
 
             try {
                 vocab = nlohmann::json::parse(vocab_utf8_str);
-            } catch (const nlohmann::json::parse_error& e) {
+            } catch (const nlohmann::json::parse_error&) {
                 GGML_ABORT("invalid vocab json str");
             }
             for (const auto& [key, value] : vocab.items()) {
@@ -386,7 +386,7 @@ namespace LLM {
                 encoder[token]       = i;
                 decoder[i]           = token;
             }
-            encoder_len = vocab.size();
+            encoder_len = static_cast<int>(vocab.size());
             LOG_DEBUG("vocab size: %d", encoder_len);
 
             auto byte_unicode_pairs = bytes_to_unicode();
@@ -485,16 +485,16 @@ namespace LLM {
     };
 
     struct LLMVisionParams {
-        int64_t num_layers                  = 32;
+        int num_layers                      = 32;
         int64_t hidden_size                 = 1280;
         int64_t intermediate_size           = 3420;
-        int64_t num_heads                   = 16;
+        int num_heads                       = 16;
         int64_t in_channels                 = 3;
         int64_t out_hidden_size             = 3584;
-        int64_t temporal_patch_size         = 2;
-        int64_t patch_size                  = 14;
-        int64_t spatial_merge_size          = 2;
-        int64_t window_size                 = 112;
+        int temporal_patch_size             = 2;
+        int patch_size                      = 14;
+        int spatial_merge_size              = 2;
+        int window_size                     = 112;
         std::set<int> fullatt_block_indexes = {7, 15, 23, 31};
     };
 
@@ -503,9 +503,9 @@ namespace LLM {
         int64_t num_layers        = 28;
         int64_t hidden_size       = 3584;
         int64_t intermediate_size = 18944;
-        int64_t num_heads         = 28;
-        int64_t num_kv_heads      = 4;
-        int64_t head_dim          = 128;
+        int num_heads             = 28;
+        int num_kv_heads          = 4;
+        int head_dim              = 128;
         bool qkv_bias             = true;
         bool qk_norm              = false;
         int64_t vocab_size        = 152064;
@@ -638,7 +638,7 @@ namespace LLM {
             x = ln_q->forward(ctx, x);
             x = ggml_reshape_2d(ctx->ggml_ctx, x, hidden_size, ggml_nelements(x) / hidden_size);
             x = mlp_0->forward(ctx, x);
-            x = ggml_gelu(ctx->ggml_ctx, x);
+            x = ggml_ext_gelu(ctx->ggml_ctx, x);
             x = mlp_2->forward(ctx, x);
             return x;
         }
@@ -647,15 +647,15 @@ namespace LLM {
     struct VisionAttention : public GGMLBlock {
     protected:
         bool llama_cpp_style;
-        int64_t head_dim;
-        int64_t num_heads;
+        int head_dim;
+        int num_heads;
 
     public:
         VisionAttention(bool llama_cpp_style,
                         int64_t hidden_size,
-                        int64_t num_heads)
+                        int num_heads)
             : llama_cpp_style(llama_cpp_style), num_heads(num_heads) {
-            head_dim = hidden_size / num_heads;
+            head_dim = static_cast<int>(hidden_size / num_heads);
             GGML_ASSERT(num_heads * head_dim == hidden_size);
             if (llama_cpp_style) {
                 blocks["q_proj"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
@@ -709,7 +709,7 @@ namespace LLM {
         VisionBlock(bool llama_cpp_style,
                     int64_t hidden_size,
                     int64_t intermediate_size,
-                    int64_t num_heads,
+                    int num_heads,
                     float eps = 1e-6f) {
             blocks["attn"]  = std::shared_ptr<GGMLBlock>(new VisionAttention(llama_cpp_style, hidden_size, num_heads));
             blocks["mlp"]   = std::shared_ptr<GGMLBlock>(new MLP(hidden_size, intermediate_size, true));
@@ -743,22 +743,22 @@ namespace LLM {
 
     struct VisionModel : public GGMLBlock {
     protected:
-        int64_t num_layers;
-        int64_t spatial_merge_size;
+        int num_layers;
+        int spatial_merge_size;
         std::set<int> fullatt_block_indexes;
 
     public:
         VisionModel(bool llama_cpp_style,
-                    int64_t num_layers,
+                    int num_layers,
                     int64_t in_channels,
                     int64_t hidden_size,
                     int64_t out_hidden_size,
                     int64_t intermediate_size,
-                    int64_t num_heads,
-                    int64_t spatial_merge_size,
-                    int64_t patch_size,
-                    int64_t temporal_patch_size,
-                    int64_t window_size,
+                    int num_heads,
+                    int spatial_merge_size,
+                    int patch_size,
+                    int temporal_patch_size,
+                    int window_size,
                     std::set<int> fullatt_block_indexes = {7, 15, 23, 31},
                     float eps                           = 1e-6f)
             : num_layers(num_layers), fullatt_block_indexes(std::move(fullatt_block_indexes)), spatial_merge_size(spatial_merge_size) {
@@ -817,7 +817,7 @@ namespace LLM {
     struct Attention : public GGMLBlock {
     protected:
         LLMArch arch;
-        int64_t head_dim;
+        int head_dim;
         int64_t num_heads;
         int64_t num_kv_heads;
         bool qk_norm;
@@ -837,7 +837,8 @@ namespace LLM {
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
-                                    struct ggml_tensor* input_pos) {
+                                    struct ggml_tensor* input_pos,
+                                    struct ggml_tensor* attention_mask = nullptr) {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
@@ -880,7 +881,7 @@ namespace LLM {
             k = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, k, 0, 2, 1, 3));  // [N, num_kv_heads, n_token, head_dim]
             k = ggml_reshape_3d(ctx->ggml_ctx, k, k->ne[0], k->ne[1], k->ne[2] * k->ne[3]);      // [N*num_kv_heads, n_token, head_dim]
 
-            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, nullptr, true, true, false);  // [N, n_token, hidden_size]
+            x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, num_heads, attention_mask, true, false);  // [N, n_token, hidden_size]
 
             x = out_proj->forward(ctx, x);  // [N, n_token, hidden_size]
             return x;
@@ -898,7 +899,8 @@ namespace LLM {
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
-                                    struct ggml_tensor* input_pos) {
+                                    struct ggml_tensor* input_pos,
+                                    struct ggml_tensor* attention_mask = nullptr) {
             // x: [N, n_token, hidden_size]
             auto self_attn                = std::dynamic_pointer_cast<Attention>(blocks["self_attn"]);
             auto mlp                      = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
@@ -907,7 +909,7 @@ namespace LLM {
 
             auto residual = x;
             x             = input_layernorm->forward(ctx, x);
-            x             = self_attn->forward(ctx, x, input_pos);
+            x             = self_attn->forward(ctx, x, input_pos, attention_mask);
             x             = ggml_add_inplace(ctx->ggml_ctx, x, residual);
 
             residual = x;
@@ -936,6 +938,7 @@ namespace LLM {
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
                                     struct ggml_tensor* input_pos,
+                                    struct ggml_tensor* attention_mask,
                                     std::vector<std::pair<int, ggml_tensor*>> image_embeds,
                                     std::set<int> out_layers) {
             // input_ids: [N, n_token]
@@ -990,7 +993,7 @@ namespace LLM {
             for (int i = 0; i < num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<TransformerBlock>(blocks["layers." + std::to_string(i)]);
 
-                x = block->forward(ctx, x, input_pos);
+                x = block->forward(ctx, x, input_pos, attention_mask);
                 if (out_layers.find(i + 1) != out_layers.end()) {
                     intermediate_outputs.push_back(x);
                 }
@@ -1036,12 +1039,13 @@ namespace LLM {
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
                                     struct ggml_tensor* input_pos,
+                                    struct ggml_tensor* attention_mask,
                                     std::vector<std::pair<int, ggml_tensor*>> image_embeds,
                                     std::set<int> out_layers) {
             // input_ids: [N, n_token]
             auto model = std::dynamic_pointer_cast<TextModel>(blocks["model"]);
 
-            auto x = model->forward(ctx, input_ids, input_pos, image_embeds, out_layers);
+            auto x = model->forward(ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);
             return x;
         }
 
@@ -1063,6 +1067,7 @@ namespace LLM {
         LLM model;
 
         std::vector<int> input_pos_vec;
+        std::vector<float> attention_mask_vec;
         std::vector<float> window_mask_vec;
         std::vector<int> window_index_vec;
         std::vector<int> window_inverse_index_vec;
@@ -1157,9 +1162,10 @@ namespace LLM {
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* input_ids,
                                     struct ggml_tensor* input_pos,
+                                    struct ggml_tensor* attention_mask,
                                     std::vector<std::pair<int, ggml_tensor*>> image_embeds,
                                     std::set<int> out_layers) {
-            auto hidden_states = model.forward(ctx, input_ids, input_pos, image_embeds, out_layers);  // [N, n_token, hidden_size]
+            auto hidden_states = model.forward(ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);  // [N, n_token, hidden_size]
             return hidden_states;
         }
 
@@ -1174,6 +1180,7 @@ namespace LLM {
         }
 
         struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
+                                        struct ggml_tensor* attention_mask,
                                         std::vector<std::pair<int, ggml_tensor*>> image_embeds,
                                         std::set<int> out_layers) {
             struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
@@ -1205,9 +1212,26 @@ namespace LLM {
                                                 input_pos_vec.size());
             set_backend_tensor_data(input_pos, input_pos_vec.data());
 
+            if (attention_mask != nullptr) {
+                attention_mask = to_backend(attention_mask);
+            } else {
+                attention_mask_vec.resize(n_tokens * n_tokens);
+                for (int i0 = 0; i0 < n_tokens; i0++) {
+                    for (int i1 = 0; i1 < n_tokens; i1++) {
+                        float value = 0.f;
+                        if (i0 > i1) {
+                            value = -INFINITY;
+                        }
+                        attention_mask_vec[i1 * n_tokens + i0] = value;
+                    }
+                }
+                attention_mask = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, n_tokens, n_tokens);
+                set_backend_tensor_data(attention_mask, attention_mask_vec.data());
+            }
+
             auto runner_ctx = get_context();
 
-            struct ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, input_pos, image_embeds, out_layers);
+            struct ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);
 
             ggml_build_forward_expand(gf, hidden_states);
 
@@ -1216,22 +1240,23 @@ namespace LLM {
 
         bool compute(const int n_threads,
                      struct ggml_tensor* input_ids,
+                     struct ggml_tensor* attention_mask,
                      std::vector<std::pair<int, ggml_tensor*>> image_embeds,
                      std::set<int> out_layers,
                      ggml_tensor** output,
                      ggml_context* output_ctx = nullptr) {
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(input_ids, image_embeds, out_layers);
+                return build_graph(input_ids, attention_mask, image_embeds, out_layers);
             };
             return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
         }
 
         int64_t get_num_image_tokens(int64_t t, int64_t h, int64_t w) {
-            int grid_t     = 1;
-            int grid_h     = h / params.vision.patch_size;
-            int grid_w     = w / params.vision.patch_size;
-            int llm_grid_h = grid_h / params.vision.spatial_merge_size;
-            int llm_grid_w = grid_w / params.vision.spatial_merge_size;
+            int64_t grid_t     = 1;
+            int64_t grid_h     = h / params.vision.patch_size;
+            int64_t grid_w     = w / params.vision.patch_size;
+            int64_t llm_grid_h = grid_h / params.vision.spatial_merge_size;
+            int64_t llm_grid_w = grid_w / params.vision.spatial_merge_size;
             return grid_t * grid_h * grid_w;
         }
 
@@ -1269,8 +1294,8 @@ namespace LLM {
             GGML_ASSERT(image->ne[0] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
 
             int grid_t                 = 1;
-            int grid_h                 = image->ne[1] / params.vision.patch_size;
-            int grid_w                 = image->ne[0] / params.vision.patch_size;
+            int grid_h                 = static_cast<int>(image->ne[1]) / params.vision.patch_size;
+            int grid_w                 = static_cast<int>(image->ne[0]) / params.vision.patch_size;
             int llm_grid_h             = grid_h / params.vision.spatial_merge_size;
             int llm_grid_w             = grid_w / params.vision.spatial_merge_size;
             int vit_merger_window_size = params.vision.window_size / params.vision.patch_size / params.vision.spatial_merge_size;
@@ -1358,14 +1383,14 @@ namespace LLM {
             set_backend_tensor_data(window_mask, window_mask_vec.data());
 
             // pe
-            int head_dim = params.vision.hidden_size / params.vision.num_heads;
+            int head_dim = static_cast<int>(params.vision.hidden_size / params.vision.num_heads);
             pe_vec       = Rope::gen_qwen2vl_pe(grid_h,
                                                 grid_w,
                                                 params.vision.spatial_merge_size,
                                                 window_inverse_index_vec,
-                                                10000.f,
+                                                10000,
                                                 {head_dim / 2, head_dim / 2});
-            int pos_len  = pe_vec.size() / head_dim / 2;
+            int pos_len  = static_cast<int>(pe_vec.size() / head_dim / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
             // pe->data = pe_vec.data();
@@ -1485,13 +1510,13 @@ namespace LLM {
                     print_ggml_tensor(image, false, "image");
                     struct ggml_tensor* out = nullptr;
 
-                    int t0 = ggml_time_ms();
+                    int64_t t0 = ggml_time_ms();
                     model.encode_image(8, image, &out, work_ctx);
-                    int t1 = ggml_time_ms();
+                    int64_t t1 = ggml_time_ms();
 
                     print_ggml_tensor(out, false, "image_embed");
                     image_embed = out;
-                    LOG_DEBUG("llm encode_image test done in %dms", t1 - t0);
+                    LOG_DEBUG("llm encode_image test done in %lldms", t1 - t0);
                 }
 
                 std::string placeholder  = "<|image_pad|>";
@@ -1524,12 +1549,12 @@ namespace LLM {
                 auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
                 struct ggml_tensor* out = nullptr;
 
-                int t0 = ggml_time_ms();
-                model.compute(8, input_ids, image_embeds, {}, &out, work_ctx);
-                int t1 = ggml_time_ms();
+                int64_t t0 = ggml_time_ms();
+                model.compute(8, input_ids, nullptr, image_embeds, {}, &out, work_ctx);
+                int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
-                LOG_DEBUG("llm test done in %dms", t1 - t0);
+                LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else if (test_vit) {
                 // auto image = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 280, 280, 3);
                 // ggml_set_f32(image, 0.f);
@@ -1537,16 +1562,16 @@ namespace LLM {
                 print_ggml_tensor(image, false, "image");
                 struct ggml_tensor* out = nullptr;
 
-                int t0 = ggml_time_ms();
+                int64_t t0 = ggml_time_ms();
                 model.encode_image(8, image, &out, work_ctx);
-                int t1 = ggml_time_ms();
+                int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out, false, "out");
 
                 // auto ref_out = load_tensor_from_file(work_ctx, "qwen2vl.bin");
                 // ggml_ext_tensor_diff(ref_out, out, 0.01f);
 
-                LOG_DEBUG("llm test done in %dms", t1 - t0);
+                LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else if (test_mistral) {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
@@ -1564,12 +1589,12 @@ namespace LLM {
                 auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
                 struct ggml_tensor* out = nullptr;
 
-                int t0 = ggml_time_ms();
-                model.compute(8, input_ids, {}, {10, 20, 30}, &out, work_ctx);
-                int t1 = ggml_time_ms();
+                int64_t t0 = ggml_time_ms();
+                model.compute(8, input_ids, nullptr, {}, {10, 20, 30}, &out, work_ctx);
+                int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
-                LOG_DEBUG("llm test done in %dms", t1 - t0);
+                LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else if (test_qwen3) {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "<|im_start|>user\n";
@@ -1587,12 +1612,12 @@ namespace LLM {
                 auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
                 struct ggml_tensor* out = nullptr;
 
-                int t0 = ggml_time_ms();
-                model.compute(8, input_ids, {}, {35}, &out, work_ctx);
-                int t1 = ggml_time_ms();
+                int64_t t0 = ggml_time_ms();
+                model.compute(8, input_ids, nullptr, {}, {35}, &out, work_ctx);
+                int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
-                LOG_DEBUG("llm test done in %dms", t1 - t0);
+                LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else {
                 std::pair<int, int> prompt_attn_range;
                 std::string text        = "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n";
@@ -1610,12 +1635,12 @@ namespace LLM {
                 auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
                 struct ggml_tensor* out = nullptr;
 
-                int t0 = ggml_time_ms();
-                model.compute(8, input_ids, {}, {}, &out, work_ctx);
-                int t1 = ggml_time_ms();
+                int64_t t0 = ggml_time_ms();
+                model.compute(8, input_ids, nullptr, {}, {}, &out, work_ctx);
+                int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);
-                LOG_DEBUG("llm test done in %dms", t1 - t0);
+                LOG_DEBUG("llm test done in %lldms", t1 - t0);
             }
         }
 

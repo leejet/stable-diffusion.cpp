@@ -15,6 +15,9 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/01/18** 🚀 stable-diffusion.cpp now supports **FLUX.2-klein**  
+  👉 Details: [PR #1193](https://github.com/leejet/stable-diffusion.cpp/pull/1193)
+
 * **2025/12/01** 🚀 stable-diffusion.cpp now supports **Z-Image**  
   👉 Details: [PR #1020](https://github.com/leejet/stable-diffusion.cpp/pull/1020)
 
@@ -43,8 +46,8 @@ API and command-line option may change frequently.***
     - SDXL, [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo)
     - [Some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
     - [SD3/SD3.5](./docs/sd3.md)
-    - [FlUX.1-dev/FlUX.1-schnell](./docs/flux.md)
-    - [FLUX.2-dev](./docs/flux2.md)
+    - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
+    - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
     - [Qwen Image](./docs/qwen_image.md)
@@ -70,7 +73,7 @@ API and command-line option may change frequently.***
   - SYCL
 - Supported weight formats
   - Pytorch checkpoint (`.ckpt` or `.pth`)
-  - Safetensors (`./safetensors`)
+  - Safetensors (`.safetensors`)
   - GGUF (`.gguf`)
 - Supported platforms
     - Linux
@@ -127,8 +130,8 @@ If you want to improve performance or reduce VRAM/RAM usage, please refer to [pe
 
 - [SD1.x/SD2.x/SDXL](./docs/sd.md)
 - [SD3/SD3.5](./docs/sd3.md)
-- [FlUX.1-dev/FlUX.1-schnell](./docs/flux.md)
-- [FLUX.2-dev](./docs/flux2.md)
+- [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
+- [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
 - [FLUX.1-Kontext-dev](./docs/kontext.md)
 - [Chroma](./docs/chroma.md)
 - [🔥Qwen Image](./docs/qwen_image.md)

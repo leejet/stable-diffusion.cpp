@@ -12,7 +12,7 @@
 class SpatialVideoTransformer : public SpatialTransformer {
 protected:
     int64_t time_depth;
-    int64_t max_time_embed_period;
+    int max_time_embed_period;
 
 public:
     SpatialVideoTransformer(int64_t in_channels,
@@ -21,8 +21,8 @@ public:
                             int64_t depth,
                             int64_t context_dim,
                             bool use_linear,
-                            int64_t time_depth            = 1,
-                            int64_t max_time_embed_period = 10000)
+                            int64_t time_depth        = 1,
+                            int max_time_embed_period = 10000)
         : SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear),
           max_time_embed_period(max_time_embed_period) {
         // We will convert unet transformer linear to conv2d 1x1 when loading the weights, so use_linear is always False
@@ -112,9 +112,9 @@ public:
         x = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));  // [N, h, w, inner_dim]
         x = ggml_reshape_3d(ctx->ggml_ctx, x, inner_dim, w * h, n);                // [N, h * w, inner_dim]
 
-        auto num_frames = ggml_arange(ctx->ggml_ctx, 0, timesteps, 1);
+        auto num_frames = ggml_arange(ctx->ggml_ctx, 0.f, static_cast<float>(timesteps), 1.f);
         // since b is 1, no need to do repeat
-        auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, num_frames, in_channels, max_time_embed_period);  // [N, in_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, num_frames, static_cast<int>(in_channels), max_time_embed_period);  // [N, in_channels]
 
         auto emb = time_pos_embed_0->forward(ctx, t_emb);
         emb      = ggml_silu_inplace(ctx->ggml_ctx, emb);
@@ -201,6 +201,9 @@ public:
             num_head_channels     = 64;
             num_heads             = -1;
             use_linear_projection = true;
+            if (version == VERSION_SDXL_VEGA) {
+                transformer_depth = {1, 1, 2};
+            }
         } else if (version == VERSION_SVD) {
             in_channels           = 8;
             out_channels          = 4;
@@ -215,10 +218,13 @@ public:
         } else if (sd_version_is_unet_edit(version)) {
             in_channels = 8;
         }
-        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET) {
+        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET || version == VERSION_SDXS) {
             num_res_blocks = 1;
             channel_mult   = {1, 2, 4};
             tiny_unet      = true;
+            if (version == VERSION_SDXS) {
+                attention_resolutions = {4, 2};  // here just like SDXL
+            }
         }
 
         // dims is always 2
@@ -316,7 +322,7 @@ public:
         }
         if (!tiny_unet) {
             blocks["middle_block.0"] = std::shared_ptr<GGMLBlock>(get_resblock(ch, time_embed_dim, ch));
-            if (version != VERSION_SDXL_SSD1B) {
+            if (version != VERSION_SDXL_SSD1B && version != VERSION_SDXL_VEGA) {
                 blocks["middle_block.1"] = std::shared_ptr<GGMLBlock>(get_attention_layer(ch,
                                                                                           n_head,
                                                                                           d_head,
@@ -517,16 +523,16 @@ public:
         // middle_block
         if (!tiny_unet) {
             h = resblock_forward("middle_block.0", ctx, h, emb, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
-            if (version != VERSION_SDXL_SSD1B) {
+            if (version != VERSION_SDXL_SSD1B && version != VERSION_SDXL_VEGA) {
                 h = attention_layer_forward("middle_block.1", ctx, h, context, num_video_frames);  // [N, 4*model_channels, h/8, w/8]
                 h = resblock_forward("middle_block.2", ctx, h, emb, num_video_frames);             // [N, 4*model_channels, h/8, w/8]
             }
         }
         if (controls.size() > 0) {
-            auto cs = ggml_scale_inplace(ctx->ggml_ctx, controls[controls.size() - 1], control_strength);
+            auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[controls.size() - 1], control_strength, true);
             h       = ggml_add(ctx->ggml_ctx, h, cs);  // middle control
         }
-        int control_offset = controls.size() - 2;
+        int control_offset = static_cast<int>(controls.size() - 2);
 
         // output_blocks
         int output_block_idx = 0;
@@ -536,7 +542,7 @@ public:
                 hs.pop_back();
 
                 if (controls.size() > 0) {
-                    auto cs = ggml_scale_inplace(ctx->ggml_ctx, controls[control_offset], control_strength);
+                    auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[control_offset], control_strength, true);
                     h_skip  = ggml_add(ctx->ggml_ctx, h_skip, cs);  // control net condition
                     control_offset--;
                 }
@@ -615,7 +621,7 @@ struct UNetModelRunner : public GGMLRunner {
         struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE);
 
         if (num_video_frames == -1) {
-            num_video_frames = x->ne[3];
+            num_video_frames = static_cast<int>(x->ne[3]);
         }
 
         x         = to_backend(x);
@@ -700,12 +706,12 @@ struct UNetModelRunner : public GGMLRunner {
 
             struct ggml_tensor* out = nullptr;
 
-            int t0 = ggml_time_ms();
+            int64_t t0 = ggml_time_ms();
             compute(8, x, timesteps, context, nullptr, y, num_video_frames, {}, 0.f, &out, work_ctx);
-            int t1 = ggml_time_ms();
+            int64_t t1 = ggml_time_ms();
 
             print_ggml_tensor(out);
-            LOG_DEBUG("unet test done in %dms", t1 - t0);
+            LOG_DEBUG("unet test done in %lldms", t1 - t0);
         }
     }
 };

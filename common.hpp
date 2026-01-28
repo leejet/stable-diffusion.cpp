@@ -80,7 +80,7 @@ protected:
                                        std::pair<int, int> padding) {
         GGML_ASSERT(dims == 2 || dims == 3);
         if (dims == 3) {
-            return std::shared_ptr<GGMLBlock>(new Conv3dnx1x1(in_channels, out_channels, kernel_size.first, 1, padding.first));
+            return std::shared_ptr<GGMLBlock>(new Conv3d(in_channels, out_channels, {kernel_size.first, 1, 1}, {1, 1, 1}, {padding.first, 0, 0}));
         } else {
             return std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, out_channels, kernel_size, {1, 1}, padding));
         }
@@ -200,7 +200,7 @@ public:
 
         gate = ggml_cont(ctx->ggml_ctx, gate);
 
-        gate = ggml_gelu_inplace(ctx->ggml_ctx, gate);
+        gate = ggml_ext_gelu(ctx->ggml_ctx, gate, true);
 
         x = ggml_mul(ctx->ggml_ctx, x, gate);  // [ne3, ne2, ne1, dim_out]
 
@@ -220,7 +220,7 @@ public:
         auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
         x = proj->forward(ctx, x);
-        x = ggml_gelu_inplace(ctx->ggml_ctx, x);
+        x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
         return x;
     }
 };
@@ -317,7 +317,7 @@ public:
         auto k = to_k->forward(ctx, context);  // [N, n_context, inner_dim]
         auto v = to_v->forward(ctx, context);  // [N, n_context, inner_dim]
 
-        x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, nullptr, false, false, ctx->flash_attn_enabled);  // [N, n_token, inner_dim]
+        x = ggml_ext_attention_ext(ctx->ggml_ctx, ctx->backend, q, k, v, n_head, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, inner_dim]
 
         x = to_out_0->forward(ctx, x);  // [N, n_token, query_dim]
         return x;
@@ -536,17 +536,17 @@ public:
         // image_only_indicator is always tensor([0.])
         float alpha = get_alpha();
         auto x      = ggml_add(ctx->ggml_ctx,
-                               ggml_scale(ctx->ggml_ctx, x_spatial, alpha),
-                               ggml_scale(ctx->ggml_ctx, x_temporal, 1.0f - alpha));
+                               ggml_ext_scale(ctx->ggml_ctx, x_spatial, alpha),
+                               ggml_ext_scale(ctx->ggml_ctx, x_temporal, 1.0f - alpha));
         return x;
     }
 };
 
 class VideoResBlock : public ResBlock {
 public:
-    VideoResBlock(int channels,
-                  int emb_channels,
-                  int out_channels,
+    VideoResBlock(int64_t channels,
+                  int64_t emb_channels,
+                  int64_t out_channels,
                   std::pair<int, int> kernel_size = {3, 3},
                   int64_t video_kernel_size       = 3,
                   int dims                        = 2)  // always 2
