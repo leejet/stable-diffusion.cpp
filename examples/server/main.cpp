@@ -805,6 +805,11 @@ int main(int argc, const char** argv) {
             gen_params.seed                       = seed;
             gen_params.sample_params.sample_steps = steps;
             gen_params.batch_count                = batch_size;
+            // Extract and process LoRA tags from the prompt
+            gen_params.lora_vec.clear();
+            gen_params.lora_map.clear();
+            gen_params.high_noise_lora_map.clear();
+            gen_params.extract_and_remove_lora(ctx_params.lora_model_dir);
 
             if (clip_skip > 0) {
                 gen_params.clip_skip = clip_skip;
