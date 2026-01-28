@@ -1,12 +1,13 @@
 # Building and Using the RPC Server with `stable-diffusion.cpp`
 
-This guide covers how to build a version of the RPC server from `llama.cpp` that is compatible with your version of `stable-diffusion.cpp` to manage multi-backends setups. RPC allows you to offload specific model components to a remote server.
+This guide covers how to build a version of [the RPC server from `llama.cpp`](https://github.com/ggml-org/llama.cpp/blob/master/tools/rpc/README.md) that is compatible with your version of `stable-diffusion.cpp` to manage multi-backends setups. RPC allows you to offload specific model components to a remote server.
 
 > **Note on Model Location:** The model files (e.g., `.safetensors` or `.gguf`) remain on the **Client** machine. The client parses the file and transmits the necessary tensor data and computational graphs to the server. The server does not need to store the model files locally.
 
 ## 1. Building `stable-diffusion.cpp` with RPC client
 
 First, you should build the client application from source. It requires `GGML_RPC=ON` to include the RPC backend to your client.
+
 ```bash
 mkdir build
 cd build
@@ -16,7 +17,7 @@ cmake .. \
 cmake --build . --config Release -j $(nproc)
 ```
 
-> **Note:** Ensure you add the other flags you would normally use (e.g., `-DSD_VULKAN=ON`, `-DSD_CUDA=ON`, `-DSD_HIPBLAS=ON`, or `-DGGML_METAL=ON`), for more information about building `stable-diffusion.cpp` from source, please refer to the `build.md` documentation.
+> **Note:** Ensure you add the other flags you would normally use (e.g., `-DSD_VULKAN=ON`, `-DSD_CUDA=ON`, `-DSD_HIPBLAS=ON`, or `-DGGML_METAL=ON`), for more information about building `stable-diffusion.cpp` from source, please refer to the [build.md](build.md) documentation.
 
 ## 2. Ensure `llama.cpp` is at the correct commit
 
@@ -25,6 +26,7 @@ cmake --build . --config Release -j $(nproc)
 > **Start from Root:** Perform these steps from the root of your `stable-diffusion.cpp` directory.
 
 1.  Read the target commit hash from the submodule tracker:
+
     ```bash
     # Linux / WSL / MacOS
     HASH=$(cat ggml/scripts/sync-llama.last)
@@ -39,8 +41,7 @@ cmake --build . --config Release -j $(nproc)
     cd llama.cpp
     git checkout $HASH
     ```
-
-To save on download time and storage, you can use a shallow clone to download only the target commit: 
+    To save on download time and storage, you can use a shallow clone to download only the target commit:
     ```bash
     mkdir -p llama.cpp
     cd llama.cpp
@@ -54,15 +55,16 @@ To save on download time and storage, you can use a shallow clone to download on
 
 The RPC server acts as the worker. You must explicitly enable the **backend** (the hardware interface, such as CUDA for Nvidia, Metal for Apple Silicon, or Vulkan) when building, otherwise the server will default to using only the CPU.
 
-To find the correct flags, refer to the official documentation for the `llama.cpp` repository.
+To find the correct flags for your system, refer to the official documentation for the [`llama.cpp`](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md) repository.
 
 > **Crucial:** You must include the compiler flags required to satisfy the API compatibility with `stable-diffusion.cpp` (`-DGGML_MAX_NAME=128`). Without this flag, `GGML_MAX_NAME` will default to `64` for the server, and data transfers between the client and server will fail. Of course, `-DGGML_RPC` must also be enabled.
 >
 > I recommend disabling the `LLAMA_CURL` flag to avoid unnecessary dependencies, and disabling shared library builds to avoid potential conflicts.
 
-> **Build Target:** We are specifically building the `rpc-server` target. This prevents the build system from compiling the entire `llama.cpp` suite (like `llama-cli`), making the build significantly faster.
+> **Build Target:** We are specifically building the `rpc-server` target. This prevents the build system from compiling the entire `llama.cpp` suite (like `llama-server`), making the build significantly faster.
 
 ### Linux / WSL (Vulkan)
+
 ```bash
 mkdir build
 cd build
@@ -76,6 +78,7 @@ cmake --build . --config Release --target rpc-server -j $(nproc)
 ```
 
 ### macOS (Metal)
+
 ```bash
 mkdir build
 cd build
@@ -89,6 +92,7 @@ cmake --build . --config Release --target rpc-server
 ```
 
 ### Windows (Visual Studio 2022, Vulkan)
+
 ```powershell
 mkdir build
 cd build
@@ -112,10 +116,13 @@ Start the server. It listens for connections on the default address (usually `lo
 
 **On the Server :**
 If running on the same machine, you can use the default address:
+
 ```bash
 ./rpc-server
 ```
+
 If you want to allow connections from other machines on the network:
+
 ```bash
 ./rpc-server --host 0.0.0.0
 ```
@@ -129,13 +136,16 @@ If you want to allow connections from other machines on the network:
 We're assuming the server is running on your local machine, and listening on the default port `50052`. If it's running on a different machine, you can replace `localhost` with the IP address of the server.
 
 **On the Client:**
+
 ```bash
 ./sd-cli --rpc localhost:50052 --list-devices
 ```
+
 If the server is running and the client is able to connect, you should see `RPC0    localhost:50052` in the list of devices.
 
-Example output: 
+Example output:
 (Client built without GPU acceleration, two GPUs available on the server)
+
 ```
 List of available GGML devices:
 Name    Description
@@ -166,23 +176,31 @@ Example: A main machine (192.168.1.10) with 3 GPUs, with one GPU running CUDA an
 **On the first machine (Running two server instances):**
 
 **Terminal 1 (CUDA):**
+
 ```bash
-# Linux / macOS / WSL
+# Linux / WSL
 export CUDA_VISIBLE_DEVICES=0
-./rpc-server-cuda --host 0.0.0.0
+cd ./build_cuda/bin/Release
+./rpc-server --host 0.0.0.0
 
 # Windows PowerShell
 $env:CUDA_VISIBLE_DEVICES="0"
-./rpc-server-cuda --host 0.0.0.0
+cd .\build_cuda\bin\Release
+./rpc-server --host 0.0.0.0
 ```
 
 **Terminal 2 (Vulkan):**
+
 ```bash
-./rpc-server-vulkan --host 0.0.0.0 --port 50053 -d Vulkan1,Vulkan2
+cd ./build_vulkan/bin/Release
+# ignore the first GPU (used by CUDA server)
+./rpc-server --host 0.0.0.0 --port 50053 -d Vulkan1,Vulkan2
 ```
 
 **On the second machine:**
+
 ```bash
+cd ./build/bin/Release
 ./rpc-server --host 0.0.0.0
 ```
 
