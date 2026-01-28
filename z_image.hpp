@@ -140,12 +140,35 @@ namespace ZImage {
 
     __STATIC_INLINE__ struct ggml_tensor* modulate(struct ggml_context* ctx,
                                                    struct ggml_tensor* x,
-                                                   struct ggml_tensor* scale) {
+                                                   struct ggml_tensor* scale,
+                                                   bool skip_reshape = false) {
         // x: [N, L, C]
-        // scale: [N, C]
-        scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
-        x     = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+        // scale: [N, C] or [N, L, C]
+        if (!skip_reshape) {
+            scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
+        }
+        x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
         return x;
+    }
+
+    __STATIC_INLINE__ struct ggml_tensor* select_per_token(struct ggml_context* ctx,
+                                                           struct ggml_tensor* index,
+                                                           struct ggml_tensor* mod_0,
+                                                           struct ggml_tensor* mod_1) {
+        // index: [N, L]
+        // mod_0/mod_1: [N, C]
+        // return: [N, L, C]
+        // mod_result = torch.where(index == 0, mod_0, mod_1)
+        // mod_result = (1 - index)*mod_0 + index*mod_1
+        index = ggml_reshape_3d(ctx, index, 1, index->ne[0], index->ne[1]);
+        index = ggml_repeat_4d(ctx, index, mod_0->ne[0], index->ne[1], index->ne[2], 1);  // [N, L, C]
+        mod_0 = ggml_reshape_3d(ctx, mod_0, mod_0->ne[0], 1, mod_0->ne[1]);               // [N, 1, C]
+        mod_1 = ggml_reshape_3d(ctx, mod_1, mod_1->ne[0], 1, mod_1->ne[1]);               // [N, 1, C]
+
+        mod_0           = ggml_sub(ctx, ggml_repeat(ctx, mod_0, index), ggml_mul(ctx, index, mod_0));  // [N, L, C]
+        mod_1           = ggml_mul(ctx, index, mod_1);                                                 // [N, L, C]
+        auto mod_result = ggml_add(ctx, mod_0, mod_1);
+        return mod_result;
     }
 
     struct JointTransformerBlock : public GGMLBlock {
@@ -179,7 +202,10 @@ namespace ZImage {
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* pe,
                                     struct ggml_tensor* mask        = nullptr,
-                                    struct ggml_tensor* adaln_input = nullptr) {
+                                    struct ggml_tensor* adaln_input = nullptr,
+                                    struct ggml_tensor* noise_mask  = nullptr,
+                                    struct ggml_tensor* adaln_noisy = nullptr,
+                                    struct ggml_tensor* adaln_clean = nullptr) {
             auto attention       = std::dynamic_pointer_cast<JointAttention>(blocks["attention"]);
             auto feed_forward    = std::dynamic_pointer_cast<FeedForward>(blocks["feed_forward"]);
             auto attention_norm1 = std::dynamic_pointer_cast<RMSNorm>(blocks["attention_norm1"]);
@@ -188,32 +214,55 @@ namespace ZImage {
             auto ffn_norm2       = std::dynamic_pointer_cast<RMSNorm>(blocks["ffn_norm2"]);
 
             if (modulation) {
-                GGML_ASSERT(adaln_input != nullptr);
                 auto adaLN_modulation_0 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.0"]);
 
-                auto m         = adaLN_modulation_0->forward(ctx, adaln_input);  // [N, 4 * hidden_size]
-                auto mods      = ggml_ext_chunk(ctx->ggml_ctx, m, 4, 0);
-                auto scale_msa = mods[0];
-                auto gate_msa  = mods[1];
-                auto scale_mlp = mods[2];
-                auto gate_mlp  = mods[3];
+                struct ggml_tensor* scale_msa = nullptr;
+                struct ggml_tensor* gate_msa  = nullptr;
+                struct ggml_tensor* scale_mlp = nullptr;
+                struct ggml_tensor* gate_mlp  = nullptr;
+                bool skip_reshape             = false;
+
+                if (noise_mask != nullptr) {
+                    GGML_ASSERT(adaln_noisy != nullptr);
+                    GGML_ASSERT(adaln_clean != nullptr);
+
+                    auto mod_noisy = adaLN_modulation_0->forward(ctx, adaln_noisy);  // [N, 4 * hidden_size]
+                    auto mod_clean = adaLN_modulation_0->forward(ctx, adaln_clean);  // [N, 4 * hidden_size]
+
+                    auto mod_noisy_vec = ggml_ext_chunk(ctx->ggml_ctx, mod_noisy, 4, 0);
+                    auto mod_clean_vec = ggml_ext_chunk(ctx->ggml_ctx, mod_clean, 4, 0);
+
+                    scale_msa = select_per_token(ctx->ggml_ctx, noise_mask, mod_clean_vec[0], mod_noisy_vec[0]);
+                    gate_msa  = select_per_token(ctx->ggml_ctx, noise_mask, mod_clean_vec[1], mod_noisy_vec[1]);
+                    scale_mlp = select_per_token(ctx->ggml_ctx, noise_mask, mod_clean_vec[2], mod_noisy_vec[2]);
+                    gate_mlp  = select_per_token(ctx->ggml_ctx, noise_mask, mod_clean_vec[3], mod_noisy_vec[3]);
+
+                    skip_reshape = true;
+                } else {
+                    GGML_ASSERT(adaln_input != nullptr);
+
+                    auto mod     = adaLN_modulation_0->forward(ctx, adaln_input);  // [N, 4 * hidden_size]
+                    auto mod_vec = ggml_ext_chunk(ctx->ggml_ctx, mod, 4, 0);
+                    scale_msa    = mod_vec[0];
+                    gate_msa     = mod_vec[1];
+                    scale_mlp    = mod_vec[2];
+                    gate_mlp     = mod_vec[3];
+                }
 
                 auto residual = x;
-                x             = modulate(ctx->ggml_ctx, attention_norm1->forward(ctx, x), scale_msa);
+                x             = modulate(ctx->ggml_ctx, attention_norm1->forward(ctx, x), scale_msa, skip_reshape);
                 x             = attention->forward(ctx, x, pe, mask);
                 x             = attention_norm2->forward(ctx, x);
                 x             = ggml_mul(ctx->ggml_ctx, x, ggml_tanh(ctx->ggml_ctx, gate_msa));
                 x             = ggml_add(ctx->ggml_ctx, x, residual);
 
                 residual = x;
-                x        = modulate(ctx->ggml_ctx, ffn_norm1->forward(ctx, x), scale_mlp);
+                x        = modulate(ctx->ggml_ctx, ffn_norm1->forward(ctx, x), scale_mlp, skip_reshape);
                 x        = feed_forward->forward(ctx, x);
                 x        = ffn_norm2->forward(ctx, x);
                 x        = ggml_mul(ctx->ggml_ctx, x, ggml_tanh(ctx->ggml_ctx, gate_mlp));
                 x        = ggml_add(ctx->ggml_ctx, x, residual);
             } else {
-                GGML_ASSERT(adaln_input == nullptr);
-
                 auto residual = x;
                 x             = attention_norm1->forward(ctx, x);
                 x             = attention->forward(ctx, x, pe, mask);
@@ -243,7 +292,10 @@ namespace ZImage {
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
-                                    struct ggml_tensor* c) {
+                                    struct ggml_tensor* c,
+                                    struct ggml_tensor* noise_mask = nullptr,
+                                    struct ggml_tensor* c_noisy    = nullptr,
+                                    struct ggml_tensor* c_clean    = nullptr) {
             // x: [N, n_token, hidden_size]
             // c: [N, hidden_size]
             // return: [N, n_token, patch_size * patch_size * out_channels]
@@ -251,10 +303,28 @@ namespace ZImage {
             auto linear             = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
             auto adaLN_modulation_1 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.1"]);
 
-            auto scale = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, hidden_size]
-            x          = norm_final->forward(ctx, x);
-            x          = modulate(ctx->ggml_ctx, x, scale);
-            x          = linear->forward(ctx, x);
+            struct ggml_tensor* scale = nullptr;
+            bool skip_reshape         = false;
+
+            if (noise_mask != nullptr) {
+                GGML_ASSERT(c_noisy != nullptr);
+                GGML_ASSERT(c_clean != nullptr);
+
+                auto scale_noisy = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c_noisy));  // [N, hidden_size]
+                auto scale_clean = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c_clean));  // [N, hidden_size]
+
+                scale = select_per_token(ctx->ggml_ctx, noise_mask, scale_clean, scale_noisy);
+
+                skip_reshape = true;
+            } else {
+                GGML_ASSERT(c != nullptr);
+
+                scale = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, hidden_size]
+            }
+
+            x = norm_final->forward(ctx, x);
+            x = modulate(ctx->ggml_ctx, x, scale, skip_reshape);
+            x = linear->forward(ctx, x);
 
             return x;
         }
@@ -275,6 +345,7 @@ namespace ZImage {
         float norm_eps             = 1e-5f;
         bool qk_norm               = true;
         int64_t cap_feat_dim       = 2560;
+        int64_t siglip_feat_dim    = 0;
         int theta                  = 256;
         std::vector<int> axes_dim  = {32, 48, 48};
         int64_t axes_dim_sum       = 128;
@@ -287,6 +358,10 @@ namespace ZImage {
         void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
             params["cap_pad_token"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, z_image_params.hidden_size);
             params["x_pad_token"]   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, z_image_params.hidden_size);
+
+            if (z_image_params.siglip_feat_dim > 0) {
+                params["siglip_pad_token"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, z_image_params.hidden_size);
+            }
         }
 
     public:
@@ -326,6 +401,26 @@ namespace ZImage {
                                                                      false);
 
                 blocks["context_refiner." + std::to_string(i)] = block;
+            }
+
+            if (z_image_params.siglip_feat_dim > 0) {
+                blocks["siglip_embedder.0"] = std::make_shared<RMSNorm>(z_image_params.siglip_feat_dim, z_image_params.norm_eps);
+                blocks["siglip_embedder.1"] = std::make_shared<Linear>(z_image_params.siglip_feat_dim, z_image_params.hidden_size);
+
+                for (int i = 0; i < z_image_params.num_refiner_layers; i++) {
+                    auto block = std::make_shared<JointTransformerBlock>(2000 + i,
+                                                                         z_image_params.hidden_size,
+                                                                         z_image_params.head_dim,
+                                                                         z_image_params.num_heads,
+                                                                         z_image_params.num_kv_heads,
+                                                                         z_image_params.multiple_of,
+                                                                         z_image_params.ffn_dim_multiplier,
+                                                                         z_image_params.norm_eps,
+                                                                         z_image_params.qk_norm,
+                                                                         false);
+
+                    blocks["siglip_refiner." + std::to_string(i)] = block;
+                }
             }
 
             for (int i = 0; i < z_image_params.num_layers; i++) {
@@ -409,11 +504,32 @@ namespace ZImage {
             return x;
         }
 
-        struct ggml_tensor* forward_core(GGMLRunnerContext* ctx,
-                                         struct ggml_tensor* x,
-                                         struct ggml_tensor* timestep,
-                                         struct ggml_tensor* context,
-                                         struct ggml_tensor* pe) {
+        std::pair<ggml_tensor*, ggml_tensor*> _pad_and_gen_noise_mask(GGMLRunnerContext* ctx,
+                                                                      ggml_tensor* x,
+                                                                      ggml_tensor* pad_token,
+                                                                      int N,
+                                                                      float noise_mask_value = 1.f) {
+            int64_t n_pad_token = Rope::bound_mod(static_cast<int>(x->ne[1]), SEQ_MULTI_OF);
+            if (n_pad_token > 0) {
+                auto pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, pad_token, pad_token->ne[0], n_pad_token, N, 1);
+                x               = ggml_concat(ctx->ggml_ctx, x, pad_tokens, 1);  // [N, n_token + n_pad_token, hidden_size]
+            }
+            ggml_tensor* noise_mask = nullptr;
+            if (noise_mask_value == 0.f) {
+                noise_mask = ggml_ext_zeros(ctx->ggml_ctx, x->ne[1], 1, 1, 1);
+            } else if (noise_mask_value == 1.f) {
+                noise_mask = ggml_ext_ones(ctx->ggml_ctx, x->ne[1], 1, 1, 1);
+            }
+            return {x, noise_mask};
+        }
+
+        struct ggml_tensor* forward_omni(GGMLRunnerContext* ctx,
+                                         ggml_tensor* x,
+                                         ggml_tensor* timestep,
+                                         std::vector<ggml_tensor*> contexts,
+                                         ggml_tensor* pe,
+                                         std::vector<ggml_tensor*> ref_latents,
+                                         std::vector<ggml_tensor*> siglip_feats) {
             auto x_embedder     = std::dynamic_pointer_cast<Linear>(blocks["x_embedder"]);
             auto t_embedder     = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"]);
             auto cap_embedder_0 = std::dynamic_pointer_cast<RMSNorm>(blocks["cap_embedder.0"]);
@@ -424,31 +540,145 @@ namespace ZImage {
             auto txt_pad_token = params["cap_pad_token"];
             auto img_pad_token = params["x_pad_token"];
 
-            int64_t N           = x->ne[2];
-            int64_t n_img_token = x->ne[1];
-            int64_t n_txt_token = context->ne[1];
+            bool omni_mode = ref_latents.size() > 0;
 
-            auto t_emb = t_embedder->forward(ctx, timestep);
+            int64_t N = x->ne[2];
 
-            auto txt = cap_embedder_1->forward(ctx, cap_embedder_0->forward(ctx, context));  // [N, n_txt_token, hidden_size]
-            auto img = x_embedder->forward(ctx, x);                                          // [N, n_img_token, hidden_size]
+            // noise mask of img: 0 for condition images (clean), 1 for target image (noisy)
+            // noise mask of txg/sig: same as the corresponding img. If there is no corresponding img, set to 1
 
-            int64_t n_txt_pad_token = Rope::bound_mod(static_cast<int>(n_txt_token), SEQ_MULTI_OF);
-            if (n_txt_pad_token > 0) {
-                auto txt_pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, txt_pad_token, txt_pad_token->ne[0], n_txt_pad_token, N, 1);
-                txt                 = ggml_concat(ctx->ggml_ctx, txt, txt_pad_tokens, 1);  // [N, n_txt_token + n_txt_pad_token, hidden_size]
+            ggml_tensor* txt            = nullptr;
+            ggml_tensor* txt_noise_mask = nullptr;
+            for (int i = 0; i < contexts.size(); i++) {
+                auto curr_txt_raw = cap_embedder_1->forward(ctx, cap_embedder_0->forward(ctx, contexts[i]));  // [N, n_txt_token, hidden_size]
+
+                float noise_mask_value = -1.f;  // empty noise mask
+                if (omni_mode) {
+                    noise_mask_value = (i < ref_latents.size() ? 0.f : 1.f);
+                }
+
+                auto [curr_txt, curr_txt_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_txt_raw, txt_pad_token, static_cast<int>(N), noise_mask_value);
+                if (txt == nullptr) {
+                    txt = curr_txt;
+                } else {
+                    txt = ggml_concat(ctx->ggml_ctx, txt, curr_txt, 1);
+                }
+
+                if (omni_mode) {
+                    if (txt_noise_mask == nullptr) {
+                        txt_noise_mask = curr_txt_noise_mask;
+                    } else {
+                        txt_noise_mask = ggml_concat(ctx->ggml_ctx, txt_noise_mask, curr_txt_noise_mask, 0);
+                    }
+                }
             }
 
-            int64_t n_img_pad_token = Rope::bound_mod(static_cast<int>(n_img_token), SEQ_MULTI_OF);
-            if (n_img_pad_token > 0) {
-                auto img_pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, img_pad_token, img_pad_token->ne[0], n_img_pad_token, N, 1);
-                img                 = ggml_concat(ctx->ggml_ctx, img, img_pad_tokens, 1);  // [N, n_img_token + n_img_pad_token, hidden_size]
+            ggml_tensor* img            = nullptr;
+            ggml_tensor* img_noise_mask = nullptr;
+            for (ggml_tensor* ref : ref_latents) {
+                auto curr_img_raw = x_embedder->forward(ctx, ref);  // [N, n_img_token, hidden_size]
+
+                float noise_mask_value = -1.f;  // empty noise mask
+                if (omni_mode) {
+                    noise_mask_value = 0.f;
+                }
+
+                auto [curr_img, curr_img_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_img_raw, img_pad_token, static_cast<int>(N), noise_mask_value);
+                if (img == nullptr) {
+                    img = curr_img;
+                } else {
+                    img = ggml_concat(ctx->ggml_ctx, img, curr_img, 1);
+                }
+
+                if (omni_mode) {
+                    if (img_noise_mask == nullptr) {
+                        img_noise_mask = curr_img_noise_mask;
+                    } else {
+                        img_noise_mask = ggml_concat(ctx->ggml_ctx, img_noise_mask, curr_img_noise_mask, 0);
+                    }
+                }
             }
 
-            GGML_ASSERT(txt->ne[1] + img->ne[1] == pe->ne[3]);
+            int64_t final_img_offset  = (img ? img->ne[1] : 0);
+            int64_t final_img_pad_len = 0;
+
+            {
+                auto curr_img_raw = x_embedder->forward(ctx, x);  // [N, n_img_token, hidden_size]
+
+                float noise_mask_value = -1.f;  // empty noise mask
+                if (omni_mode) {
+                    noise_mask_value = 0.f;
+                }
+
+                auto [curr_img, curr_img_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_img_raw, img_pad_token, static_cast<int>(N), noise_mask_value);
+                if (img == nullptr) {
+                    img = curr_img;
+                } else {
+                    img = ggml_concat(ctx->ggml_ctx, img, curr_img, 1);
+                }
+
+                if (omni_mode) {
+                    if (img_noise_mask == nullptr) {
+                        img_noise_mask = curr_img_noise_mask;
+                    } else {
+                        img_noise_mask = ggml_concat(ctx->ggml_ctx, img_noise_mask, curr_img_noise_mask, 0);
+                    }
+                }
+
+                final_img_pad_len = Rope::bound_mod(static_cast<int>(curr_img_raw->ne[1]), SEQ_MULTI_OF);
+            }
+
+            ggml_tensor* sig            = nullptr;
+            ggml_tensor* sig_noise_mask = nullptr;
+            for (int i = 0; i < siglip_feats.size(); i++) {
+                auto sig_pad_token     = params["siglip_pad_token"];
+                auto siglip_embedder_0 = std::dynamic_pointer_cast<RMSNorm>(blocks["siglip_embedder.0"]);
+                auto siglip_embedder_1 = std::dynamic_pointer_cast<Linear>(blocks["siglip_embedder.1"]);
+
+                auto curr_sig_raw = siglip_embedder_1->forward(ctx, siglip_embedder_0->forward(ctx, siglip_feats[i]));  // [N, n_sig_token, hidden_size]
+
+                float noise_mask_value = -1.f;  // empty noise mask
+                if (omni_mode) {
+                    noise_mask_value = (i < ref_latents.size() ? 0.f : 1.f);
+                }
+
+                auto [curr_sig, curr_sig_noise_mask] = _pad_and_gen_noise_mask(ctx, curr_sig_raw, sig_pad_token, static_cast<int>(N), noise_mask_value);
+                if (sig == nullptr) {
+                    sig = curr_sig;
+                } else {
+                    sig = ggml_concat(ctx->ggml_ctx, sig, curr_sig, 1);
+                }
+
+                if (omni_mode) {
+                    if (sig_noise_mask == nullptr) {
+                        sig_noise_mask = curr_sig_noise_mask;
+                    } else {
+                        sig_noise_mask = ggml_concat(ctx->ggml_ctx, sig_noise_mask, curr_sig_noise_mask, 0);
+                    }
+                }
+            }
+
+            ggml_tensor* t_emb   = nullptr;
+            ggml_tensor* t_noisy = nullptr;
+            ggml_tensor* t_clean = nullptr;
+            if (omni_mode) {
+                t_noisy = t_embedder->forward(ctx, timestep);
+                t_clean = t_embedder->forward(ctx,
+                                              ggml_scale(ctx->ggml_ctx,
+                                                         ggml_ext_ones(ctx->ggml_ctx, timestep->ne[0], timestep->ne[1], timestep->ne[2], timestep->ne[3]),
+                                                         1000.f));
+            } else {
+                t_emb = t_embedder->forward(ctx, timestep);
+            }
+
+            if (sig) {
+                GGML_ASSERT(txt->ne[1] + img->ne[1] + sig->ne[1] == pe->ne[3]);
+            } else {
+                GGML_ASSERT(txt->ne[1] + img->ne[1] == pe->ne[3]);
+            }
 
             auto txt_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, 0, txt->ne[1]);
-            auto img_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt->ne[1], pe->ne[3]);
+            auto img_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt->ne[1], txt->ne[1] + img->ne[1]);
 
             for (int i = 0; i < z_image_params.num_refiner_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["context_refiner." + std::to_string(i)]);
@@ -459,30 +689,50 @@ namespace ZImage {
             for (int i = 0; i < z_image_params.num_refiner_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["noise_refiner." + std::to_string(i)]);
 
-                img = block->forward(ctx, img, img_pe, nullptr, t_emb);
+                img = block->forward(ctx, img, img_pe, nullptr, t_emb, img_noise_mask, t_noisy, t_clean);
             }
 
-            auto txt_img = ggml_concat(ctx->ggml_ctx, txt, img, 1);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, hidden_size]
+            auto unified = ggml_concat(ctx->ggml_ctx, txt, img, 1);  // [N, n_txt_token + n_img_token, hidden_size]
+
+            ggml_tensor* noise_mask = nullptr;
+            if (omni_mode) {
+                noise_mask = ggml_concat(ctx->ggml_ctx, txt_noise_mask, img_noise_mask, 0);  // [N, n_txt_token + n_img_token]
+            }
+
+            ggml_tensor* sig_pe = nullptr;
+            if (sig) {
+                sig_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt->ne[1] + img->ne[1], pe->ne[3]);
+
+                for (int i = 0; i < z_image_params.num_refiner_layers; i++) {
+                    auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["siglip_refiner." + std::to_string(i)]);
+
+                    sig = block->forward(ctx, sig, sig_pe, nullptr, nullptr);
+                }
+
+                unified    = ggml_concat(ctx->ggml_ctx, unified, sig, 1);                // [N, n_txt_token + n_img_token + n_sig_token, hidden_size]
+                noise_mask = ggml_concat(ctx->ggml_ctx, noise_mask, sig_noise_mask, 0);  // [N, n_txt_token + n_img_token + n_sig_token]
+            }
 
             for (int i = 0; i < z_image_params.num_layers; i++) {
                 auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["layers." + std::to_string(i)]);
 
-                txt_img = block->forward(ctx, txt_img, pe, nullptr, t_emb);
+                unified = block->forward(ctx, unified, pe, nullptr, t_emb, noise_mask, t_noisy, t_clean);
             }
 
-            txt_img = final_layer->forward(ctx, txt_img, t_emb);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, ph*pw*C]
+            unified = final_layer->forward(ctx, unified, t_emb, noise_mask, t_noisy, t_clean);  // [N, n_txt_token + n_img_token + n_sig_token, ph*pw*C]
 
-            img = ggml_ext_slice(ctx->ggml_ctx, txt_img, 1, n_txt_token + n_txt_pad_token, n_txt_token + n_txt_pad_token + n_img_token);  // [N, n_img_token, ph*pw*C]
+            img = ggml_ext_slice(ctx->ggml_ctx, unified, 1, txt->ne[1] + final_img_offset, txt->ne[1] + img->ne[1] - final_img_pad_len);  // [N, n_final_img_token, ph*pw*C]
 
             return img;
         }
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* timestep,
-                                    struct ggml_tensor* context,
-                                    struct ggml_tensor* pe,
-                                    std::vector<ggml_tensor*> ref_latents = {}) {
+                                    ggml_tensor* x,
+                                    ggml_tensor* timestep,
+                                    std::vector<ggml_tensor*> contexts,
+                                    ggml_tensor* pe,
+                                    std::vector<ggml_tensor*> ref_latents  = {},
+                                    std::vector<ggml_tensor*> siglip_feats = {}) {
             // Forward pass of DiT.
             // x: [N, C, H, W]
             // timestep: [N,]
@@ -495,23 +745,20 @@ namespace ZImage {
             int64_t C = x->ne[2];
             int64_t N = x->ne[3];
 
-            auto img             = process_img(ctx, x);
-            uint64_t n_img_token = img->ne[1];
-
-            if (ref_latents.size() > 0) {
-                for (ggml_tensor* ref : ref_latents) {
-                    ref = process_img(ctx, ref);
-                    img = ggml_concat(ctx->ggml_ctx, img, ref, 1);
-                }
-            }
+            auto img = process_img(ctx, x);
 
             int64_t h_len = ((H + (z_image_params.patch_size / 2)) / z_image_params.patch_size);
             int64_t w_len = ((W + (z_image_params.patch_size / 2)) / z_image_params.patch_size);
 
-            auto out = forward_core(ctx, img, timestep, context, pe);
+            for (int i = 0; i < ref_latents.size(); i++) {
+                ref_latents[i] = process_img(ctx, ref_latents[i]);
+            }
 
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, n_img_token);  // [N, n_img_token, ph*pw*C]
-            out = unpatchify(ctx->ggml_ctx, out, h_len, w_len);           // [N, C, H + pad_h, W + pad_w]
+            auto out = forward_omni(ctx, img, timestep, contexts, pe, ref_latents, siglip_feats);  // [N, n_img_token, ph*pw*C]
+
+            // auto out = forward_basic(ctx, img, timestep, contexts[0], pe);  // [N, n_img_token, ph*pw*C]
+
+            out = unpatchify(ctx->ggml_ctx, out, h_len, w_len);  // [N, C, H + pad_h, W + pad_w]
 
             // slice
             out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N, C, H, W + pad_w]
@@ -549,34 +796,37 @@ namespace ZImage {
             z_image.get_param_tensors(tensors, prefix);
         }
 
-        struct ggml_cgraph* build_graph(struct ggml_tensor* x,
-                                        struct ggml_tensor* timesteps,
-                                        struct ggml_tensor* context,
-                                        std::vector<ggml_tensor*> ref_latents = {},
-                                        bool increase_ref_index               = false) {
+        struct ggml_cgraph* build_graph(ggml_tensor* x,
+                                        ggml_tensor* timesteps,
+                                        std::vector<ggml_tensor*> contexts,
+                                        std::vector<ggml_tensor*> ref_latents  = {},
+                                        std::vector<ggml_tensor*> siglip_feats = {}) {
             GGML_ASSERT(x->ne[3] == 1);
             struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE);
 
-            x         = to_backend(x);
-            context   = to_backend(context);
+            x = to_backend(x);
+
+            for (int i = 0; i < contexts.size(); i++) {
+                contexts[i] = to_backend(contexts[i]);
+            }
+
             timesteps = to_backend(timesteps);
 
             for (int i = 0; i < ref_latents.size(); i++) {
                 ref_latents[i] = to_backend(ref_latents[i]);
             }
 
-            pe_vec      = Rope::gen_z_image_pe(static_cast<int>(x->ne[1]),
-                                               static_cast<int>(x->ne[0]),
-                                               z_image_params.patch_size,
-                                               static_cast<int>(x->ne[3]),
-                                               static_cast<int>(context->ne[1]),
-                                               SEQ_MULTI_OF,
+            pe_vec      = Rope::gen_z_image_pe(x,
+                                               contexts,
                                                ref_latents,
-                                               increase_ref_index,
+                                               siglip_feats,
+                                               z_image_params.patch_size,
+                                               SEQ_MULTI_OF,
                                                z_image_params.theta,
+                                               z_image_params.axes_dim,
                                                circular_y_enabled,
                                                circular_x_enabled,
-                                               z_image_params.axes_dim);
+                                               static_cast<int>(x->ne[3]));
             int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
             // LOG_DEBUG("pos_len %d", pos_len);
             auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
@@ -589,7 +839,7 @@ namespace ZImage {
             struct ggml_tensor* out = z_image.forward(&runner_ctx,
                                                       x,
                                                       timesteps,
-                                                      context,
+                                                      contexts,
                                                       pe,
                                                       ref_latents);
 
@@ -601,16 +851,16 @@ namespace ZImage {
         bool compute(int n_threads,
                      struct ggml_tensor* x,
                      struct ggml_tensor* timesteps,
-                     struct ggml_tensor* context,
-                     std::vector<ggml_tensor*> ref_latents = {},
-                     bool increase_ref_index               = false,
-                     struct ggml_tensor** output           = nullptr,
-                     struct ggml_context* output_ctx       = nullptr) {
+                     std::vector<ggml_tensor*> contexts,
+                     std::vector<ggml_tensor*> ref_latents  = {},
+                     std::vector<ggml_tensor*> siglip_feats = {},
+                     struct ggml_tensor** output            = nullptr,
+                     struct ggml_context* output_ctx        = nullptr) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
             auto get_graph = [&]() -> struct ggml_cgraph* {
-                return build_graph(x, timesteps, context, ref_latents, increase_ref_index);
+                return build_graph(x, timesteps, contexts, ref_latents, siglip_feats);
             };
 
             return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -642,7 +892,7 @@ namespace ZImage {
                 struct ggml_tensor* out = nullptr;
 
                 int64_t t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, {}, false, &out, work_ctx);
+                compute(8, x, timesteps, {context}, {}, {}, &out, work_ctx);
                 int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

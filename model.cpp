@@ -1039,6 +1039,8 @@ SDVersion ModelLoader::get_sd_version() {
     bool is_xl                       = false;
     bool is_flux                     = false;
     bool is_flux2                    = false;
+    bool is_z_image                  = false;
+    bool is_z_image_omni             = false;
     bool has_single_block_47         = false;
     bool is_wan                      = false;
     int64_t patch_embedding_channels = 0;
@@ -1071,7 +1073,10 @@ SDVersion ModelLoader::get_sd_version() {
                 return VERSION_OVIS_IMAGE;
             }
             if (tensor_storage.name.find("model.diffusion_model.cap_embedder.0.weight") != std::string::npos) {
-                return VERSION_Z_IMAGE;
+                is_z_image = true;
+            }
+            if (tensor_storage.name.find("model.diffusion_model.siglip_embedder.0.weight") != std::string::npos) {
+                is_z_image_omni = true;
             }
             if (tensor_storage.name.find("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") != std::string::npos) {
                 is_wan = true;
@@ -1172,6 +1177,13 @@ SDVersion ModelLoader::get_sd_version() {
             return VERSION_FLUX2;
         }
         return VERSION_FLUX2_KLEIN;
+    }
+
+    if (is_z_image) {
+        if (is_z_image_omni) {
+            return VERSION_Z_IMAGE_OMNI;
+        }
+        return VERSION_Z_IMAGE;
     }
 
     if (token_embedding_weight.ne[0] == 768) {
