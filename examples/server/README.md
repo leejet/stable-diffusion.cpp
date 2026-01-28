@@ -121,6 +121,17 @@ Context Options:
   --tensor-type-rules <string>             weight type per tensor pattern (example: "^vae\.=f16,model\.=q8_0")
   --photo-maker <string>                   path to PHOTOMAKER model
   --upscale-model <string>                 path to esrgan model.
+  --main-backend-device <string>           default device to use for all backends (defaults to main gpu device if hardware acceleration is available, otherwise
+                                           cpu)
+  --diffusion-backend-device <string>      device to use for diffusion (defaults to main-backend-device)
+  --clip-backend-device <string>           device to use for clip (defaults to main-backend-device). Can be a comma-separated list of devices for models with
+                                           multiple encoders
+  --vae-backend-device <string>            device to use for vae (defaults to main-backend-device). Also applies to tae, unless tae-backend-device is specified
+  --tae-backend-device <string>            device to use for tae (defaults to vae-backend-device)
+  --control-net-backend-device <string>    device to use for control net (defaults to main-backend-device)
+  --upscaler-backend-device <string>       device to use for upscaling models (defaults to main-backend-device)
+  --photomaker-backend-device <string>     device to use for photomaker (defaults to main-backend-device)
+  --vision-backend-device <string>         device to use for clip-vision model (defaults to main-backend-device)
   -t, --threads <int>                      number of threads to use during computation (default: -1). If threads <= 0, then threads will be set to the number of
                                            CPU physical cores
   --chroma-t5-mask-pad <int>               t5 mask pad size of chroma
@@ -129,9 +140,6 @@ Context Options:
   --force-sdxl-vae-conv-scale              force use of conv scale on sdxl vae
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM when needed
   --mmap                                   whether to memory-map model
-  --control-net-cpu                        keep controlnet in cpu (for low vram)
-  --clip-on-cpu                            keep clip in cpu (for low vram)
-  --vae-on-cpu                             keep vae in cpu (for low vram)
   --fa                                     use flash attention
   --diffusion-fa                           use flash attention in the diffusion model only
   --diffusion-conv-direct                  use ggml_conv2d_direct in the diffusion model
