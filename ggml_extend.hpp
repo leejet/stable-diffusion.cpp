@@ -767,7 +767,7 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor*
     return x;
 }
 
-typedef std::function<void(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
+typedef std::function<bool(ggml_tensor*, ggml_tensor*, bool)> on_tile_process;
 
 __STATIC_INLINE__ void sd_tiling_calc_tiles(int& num_tiles_dim,
                                             float& tile_overlap_factor_dim,
@@ -918,12 +918,15 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
 
             int64_t t1 = ggml_time_ms();
             ggml_ext_tensor_split_2d(input, input_tile, x_in, y_in);
-            on_processing(input_tile, output_tile, false);
-            ggml_ext_tensor_merge_2d(output_tile, output, x_out, y_out, overlap_x_out, overlap_y_out, dx, dy);
+            if (on_processing(input_tile, output_tile, false)) {
+                ggml_ext_tensor_merge_2d(output_tile, output, x_out, y_out, overlap_x_out, overlap_y_out, dx, dy);
 
-            int64_t t2 = ggml_time_ms();
-            last_time  = (t2 - t1) / 1000.0f;
-            pretty_progress(tile_count, num_tiles, last_time);
+                int64_t t2 = ggml_time_ms();
+                last_time  = (t2 - t1) / 1000.0f;
+                pretty_progress(tile_count, num_tiles, last_time);
+            } else {
+                LOG_ERROR("Failed to process patch %d at (%d, %d)", tile_count, x, y);
+            }
             tile_count++;
         }
         last_x = false;
