@@ -114,6 +114,7 @@ Default Generation Options:
   --vace-strength <float>                  wan vace strength
   --increase-ref-index                     automatically increase the indices of references images based on the order they are listed (starting with 1).
   --disable-auto-resize-ref-image          disable auto resize of ref images
+  --disable-image-metadata                 do not embed generation metadata on image files
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
                                            tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)
