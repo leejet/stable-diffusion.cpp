@@ -591,7 +591,7 @@ struct SDContextParams {
              &diffusion_backend_device},
             {"",
              "--clip-backend-device",
-             "device to use for clip (defaults to main-backend-device)",
+             "device to use for clip (defaults to main-backend-device). Can be a comma-separated list of devices for models with multiple encoders",
              &clip_backend_device},
             {"",
              "--vae-backend-device",
