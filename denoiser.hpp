@@ -1742,6 +1742,108 @@ static bool sample_k_diffusion(sample_method_t method,
                 have_old_sigma = true;
             }
         } break;
+        case RES_2S_SAMPLE_METHOD:  // Res 2s sampler
+        {
+            struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+            struct ggml_tensor* x0    = ggml_dup_tensor(work_ctx, x);
+            struct ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
+
+            const float c2 = 0.5f;
+            auto t_fn = [](float sigma) -> float { return -logf(sigma); };
+            auto phi1_fn = [](float t) -> float {
+                if (fabsf(t) < 1e-6f) {
+                    return 1.0f + t * 0.5f + (t * t) / 6.0f;
+                }
+                return (expf(t) - 1.0f) / t;
+            };
+            auto phi2_fn = [&](float t) -> float {
+                if (fabsf(t) < 1e-6f) {
+                    return 0.5f + t / 6.0f + (t * t) / 24.0f;
+                }
+                float phi1_val = phi1_fn(t);
+                return (phi1_val - 1.0f) / t;
+            };
+
+            for (int i = 0; i < steps; i++) {
+                float sigma_from = sigmas[i];
+                float sigma_to   = sigmas[i + 1];
+
+                ggml_tensor* denoised = model(x, sigma_from, i + 1);
+                if (denoised == nullptr) {
+                    return false;
+                }
+
+                float sigma_up   = 0.0f;
+                float sigma_down = sigma_to;
+                if (eta > 0.0f) {
+                    float sigma_from_sq = sigma_from * sigma_from;
+                    float sigma_to_sq   = sigma_to * sigma_to;
+                    if (sigma_from_sq > 0.0f) {
+                        float term = sigma_to_sq * (sigma_from_sq - sigma_to_sq) / sigma_from_sq;
+                        if (term > 0.0f) {
+                            sigma_up = eta * std::sqrt(term);
+                        }
+                    }
+                    sigma_up = std::min(sigma_up, sigma_to);
+                    float sigma_down_sq = sigma_to_sq - sigma_up * sigma_up;
+                    sigma_down          = sigma_down_sq > 0.0f ? std::sqrt(sigma_down_sq) : 0.0f;
+                }
+
+                float* vec_x  = (float*)x->data;
+                float* vec_x0 = (float*)x0->data;
+                for (int j = 0; j < ggml_nelements(x); j++) {
+                    vec_x0[j] = vec_x[j];
+                }
+
+                if (sigma_down == 0.0f || sigma_from == 0.0f) {
+                    float* vec_denoised = (float*)denoised->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = vec_denoised[j];
+                    }
+                } else {
+                    float t      = t_fn(sigma_from);
+                    float t_next = t_fn(sigma_down);
+                    float h      = t_next - t;
+
+                    float a21 = c2 * phi1_fn(-h * c2);
+                    float phi1_val = phi1_fn(-h);
+                    float phi2_val = phi2_fn(-h);
+                    float b2 = phi2_val / c2;
+                    float b1 = phi1_val - b2;
+
+                    float sigma_c2 = expf(-(t + h * c2));
+
+                    float* vec_denoised = (float*)denoised->data;
+                    float* vec_x2       = (float*)x2->data;
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        float eps1 = vec_denoised[j] - vec_x0[j];
+                        vec_x2[j]  = vec_x0[j] + h * a21 * eps1;
+                    }
+
+                    ggml_tensor* denoised2 = model(x2, sigma_c2, i + 1);
+                    if (denoised2 == nullptr) {
+                        return false;
+                    }
+                    float* vec_denoised2 = (float*)denoised2->data;
+
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        float eps1 = vec_denoised[j] - vec_x0[j];
+                        float eps2 = vec_denoised2[j] - vec_x0[j];
+                        vec_x[j] = vec_x0[j] + h * (b1 * eps1 + b2 * eps2);
+                    }
+                }
+
+                if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
+                    ggml_ext_im_set_randn_f32(noise, rng);
+                    float* vec_x     = (float*)x->data;
+                    float* vec_noise = (float*)noise->data;
+
+                    for (int j = 0; j < ggml_nelements(x); j++) {
+                        vec_x[j] = vec_x[j] + vec_noise[j] * sigma_up;
+                    }
+                }
+            }
+        } break;
 
         default:
             LOG_ERROR("Attempting to sample with nonexisting sample method %i", method);

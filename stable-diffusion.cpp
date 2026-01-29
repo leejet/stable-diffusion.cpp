@@ -68,6 +68,7 @@ const char* sampling_methods_str[] = {
     "DDIM \"trailing\"",
     "TCD",
     "Res Multistep",
+    "Res 2s",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -2745,6 +2746,7 @@ const char* sample_method_to_str[] = {
     "ddim_trailing",
     "tcd",
     "res_multistep",
+    "res_2s",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {

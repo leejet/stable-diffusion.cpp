@@ -787,7 +787,9 @@ int main(int argc, const char** argv) {
                     {"dpm++ 2m", DPMPP2M_SAMPLE_METHOD},
                     {"k_dpmpp_2m", DPMPP2M_SAMPLE_METHOD},
                     {"res multistep", RES_MULTISTEP_SAMPLE_METHOD},
-                    {"k_res_multistep", RES_MULTISTEP_SAMPLE_METHOD}};
+                    {"k_res_multistep", RES_MULTISTEP_SAMPLE_METHOD},
+                    {"res 2s", RES_2S_SAMPLE_METHOD},
+                    {"k_res_2s", RES_2S_SAMPLE_METHOD}};
                 auto it            = hardcoded.find(name);
                 if (it != hardcoded.end()) return it->second;
                 return SAMPLE_METHOD_COUNT;
