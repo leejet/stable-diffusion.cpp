@@ -1,6 +1,8 @@
 #ifndef __DENOISER_HPP__
 #define __DENOISER_HPP__
 
+#include <cmath>
+
 #include "ggml_extend.hpp"
 #include "gits_noise.inl"
 
@@ -351,6 +353,95 @@ struct SmoothStepScheduler : SigmaScheduler {
     }
 };
 
+struct BongTangentScheduler : SigmaScheduler {
+    static constexpr float kPi = 3.14159265358979323846f;
+
+    static std::vector<float> get_bong_tangent_sigmas(int steps, float slope, float pivot, float start, float end) {
+        std::vector<float> sigmas;
+        if (steps <= 0) {
+            return sigmas;
+        }
+
+        float smax = ((2.0f / kPi) * atanf(-slope * (0.0f - pivot)) + 1.0f) * 0.5f;
+        float smin = ((2.0f / kPi) * atanf(-slope * ((float)(steps - 1) - pivot)) + 1.0f) * 0.5f;
+        float srange = smax - smin;
+        float sscale = start - end;
+
+        sigmas.reserve(steps);
+
+        if (fabsf(srange) < 1e-8f) {
+            if (steps == 1) {
+                sigmas.push_back(start);
+                return sigmas;
+            }
+            for (int i = 0; i < steps; ++i) {
+                float t = (float)i / (float)(steps - 1);
+                sigmas.push_back(start + (end - start) * t);
+            }
+            return sigmas;
+        }
+
+        float inv_srange = 1.0f / srange;
+        for (int x = 0; x < steps; ++x) {
+            float v = ((2.0f / kPi) * atanf(-slope * ((float)x - pivot)) + 1.0f) * 0.5f;
+            float sigma = ((v - smin) * inv_srange) * sscale + end;
+            sigmas.push_back(sigma);
+        }
+
+        return sigmas;
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t /*t_to_sigma*/) override {
+        std::vector<float> result;
+        if (n == 0) {
+            return result;
+        }
+
+        float start  = sigma_max;
+        float end    = sigma_min;
+        float middle = sigma_min + (sigma_max - sigma_min) * 0.5f;
+
+        float pivot_1 = 0.6f;
+        float pivot_2 = 0.6f;
+        float slope_1 = 0.2f;
+        float slope_2 = 0.2f;
+
+        int steps = static_cast<int>(n) + 2;
+        int midpoint = static_cast<int>(((float)steps * pivot_1 + (float)steps * pivot_2) * 0.5f);
+        int pivot_1_i = static_cast<int>((float)steps * pivot_1);
+        int pivot_2_i = static_cast<int>((float)steps * pivot_2);
+
+        float slope_scale = (float)steps / 40.0f;
+        slope_1 = slope_1 / slope_scale;
+        slope_2 = slope_2 / slope_scale;
+
+        int stage_2_len = steps - midpoint;
+        int stage_1_len = steps - stage_2_len;
+
+        std::vector<float> sigmas_1 = get_bong_tangent_sigmas(stage_1_len, slope_1, (float)pivot_1_i, start, middle);
+        std::vector<float> sigmas_2 = get_bong_tangent_sigmas(stage_2_len, slope_2, (float)(pivot_2_i - stage_1_len), middle, end);
+
+        if (!sigmas_1.empty()) {
+            sigmas_1.pop_back();
+        }
+
+        result.reserve(n + 1);
+        result.insert(result.end(), sigmas_1.begin(), sigmas_1.end());
+        result.insert(result.end(), sigmas_2.begin(), sigmas_2.end());
+
+        if (result.size() < n + 1) {
+            while (result.size() < n + 1) {
+                result.push_back(end);
+            }
+        } else if (result.size() > n + 1) {
+            result.resize(n + 1);
+        }
+
+        result[n] = 0.0f;
+        return result;
+    }
+};
+
 struct KLOptimalScheduler : SigmaScheduler {
     std::vector<float> get_sigmas(uint32_t n, float sigma_min, float sigma_max, t_to_sigma_t t_to_sigma) override {
         std::vector<float> sigmas;
@@ -430,6 +521,10 @@ struct Denoiser {
             case SMOOTHSTEP_SCHEDULER:
                 LOG_INFO("get_sigmas with SmoothStep scheduler");
                 scheduler = std::make_shared<SmoothStepScheduler>();
+                break;
+            case BONG_TANGENT_SCHEDULER:
+                LOG_INFO("get_sigmas with bong_tangent scheduler");
+                scheduler = std::make_shared<BongTangentScheduler>();
                 break;
             case KL_OPTIMAL_SCHEDULER:
                 LOG_INFO("get_sigmas with KL Optimal scheduler");
