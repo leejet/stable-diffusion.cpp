@@ -8,6 +8,11 @@ import sys
 import urllib.request
 import urllib.error
 
+try:
+    import openai
+except ImportError:
+    openai = None
+
 def parse_arguments():
     ap = argparse.ArgumentParser(
         description="Client for stable-diffusion.cpp sd-server",
@@ -113,7 +118,7 @@ def parse_arguments():
     return util_opts, gen_opts
 
 
-def build_openai_payload(gen_opts, util_opts):
+def build_openai_payload(gen_opts, util_opts, has_output_format=True):
     extension_data = {}
     api_data = {}
 
@@ -143,7 +148,10 @@ def build_openai_payload(gen_opts, util_opts):
         extension_data["height"] = height
 
     if gen_opts.get("output_format"):
-        api_data["output_format"] = gen_opts["output_format"]
+        if has_output_format:
+            api_data["output_format"] = gen_opts["output_format"]
+        else:
+            api_data['extra_body'] = {"output_format": gen_opts["output_format"]}
 
     if gen_opts.get("batch_count"):
         api_data["n"] = gen_opts["batch_count"]
@@ -232,36 +240,58 @@ def main():
 
     if not server_url.endswith('/'):
         server_url += '/'
-    endpoint = server_url + "v1/images/generations"
+    base_url = server_url + "v1"
 
-    api_payload = build_openai_payload(gen_opts, util_opts)
+    if openai:
 
-    if verbose:
-        print(f"Sending request to: {endpoint}")
-        print(f"Payload: {json.dumps(api_payload, indent=2)}")
+        openai_version = openai.version.VERSION
+        if verbose:
+            print(f"Using OpenAI module {openai_version}")
 
-    req_data = json.dumps(api_payload).encode('utf-8')
-    req = urllib.request.Request(endpoint, data=req_data, headers={'Content-Type': 'application/json'})
+        # the output_format parameter was added to the openai module only in version
+        # 1.76; for simplicity, always request it through the extra_body parameter
+        has_output_format = False
+        api_parameters = build_openai_payload(gen_opts, util_opts, has_output_format)
 
-    response_body = None
-    try:
-        with urllib.request.urlopen(req) as response:
-            response_body = response.read().decode('utf-8')
-    except urllib.error.HTTPError as e:
-        print(f"HTTP Error {e.code}: {e.reason}")
-        sys.exit(1)
-    except urllib.error.URLError as e:
-        print(f"URL Error: {e.reason}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Request Error: {e}")
-        sys.exit(1)
+        if verbose:
+            print(f"Base URL: {base_url}")
+            print(f"Parameters: {json.dumps(api_parameters, indent=2)}")
 
-    try:
-        images = decode_openai_response(response_body)
-    except ValueError as e:
-        print(f"Error decoding response: {e}")
-        sys.exit(1)
+        client = openai.OpenAI(api_key="local-api-key", base_url=base_url)
+        result = client.images.generate(**api_parameters)
+        images = [base64.b64decode(img.b64_json) for img in result.data]
+
+    else:
+
+        api_payload = build_openai_payload(gen_opts, util_opts)
+
+        endpoint = base_url + "/images/generations"
+        if verbose:
+            print(f"Sending request to: {endpoint}")
+            print(f"Payload: {json.dumps(api_payload, indent=2)}")
+
+        req_data = json.dumps(api_payload).encode('utf-8')
+        req = urllib.request.Request(endpoint, data=req_data, headers={'Content-Type': 'application/json'})
+
+        response_body = None
+        try:
+            with urllib.request.urlopen(req) as response:
+                response_body = response.read().decode('utf-8')
+        except urllib.error.HTTPError as e:
+            print(f"HTTP Error {e.code}: {e.reason}")
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f"URL Error: {e.reason}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Request Error: {e}")
+            sys.exit(1)
+
+        try:
+            images = decode_openai_response(response_body)
+        except ValueError as e:
+            print(f"Error decoding response: {e}")
+            sys.exit(1)
 
     save_images(images, util_opts)
 
