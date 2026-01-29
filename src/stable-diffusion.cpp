@@ -1206,22 +1206,60 @@ public:
         }
 
         for (auto& kv : lora_state_diff) {
+            bool applied = false;
             int64_t t0 = ggml_time_ms();
             // TODO: Fix that
-            bool are_clip_backends_compatible = true;
+            bool are_clip_backends_similar = true;
             for (auto backend: clip_backends){
-                are_clip_backends_compatible = are_clip_backends_compatible && (diffusion_backend==backend || ggml_backend_is_cpu(backend));
+                are_clip_backends_similar = are_clip_backends_similar && (clip_backends[0]==backend || ggml_backend_is_cpu(backend));
             }
-            if(!are_clip_backends_compatible){
-                LOG_WARN("Diffusion models and text encoders are running on different backends. This may cause issues when immediately applying LoRAs.");
+            if(!are_clip_backends_similar){
+                LOG_WARN("Text encoders are running on different backends. This may cause issues when immediately applying LoRAs.");
             }
-            auto lora = load_lora_model_from_file(kv.first, kv.second, diffusion_backend);
-            if (!lora || lora->lora_tensors.empty()) {
+            auto lora_tensor_filter_diff = [&](const std::string& tensor_name) {
+                if (is_diffusion_model_name(tensor_name)) {
+                    return true;
+                }
+                return false;
+            };
+            auto lora = load_lora_model_from_file(kv.first, kv.second, diffusion_backend, lora_tensor_filter_diff);
+            if (lora && !lora->lora_tensors.empty()) {
+                lora->apply(tensors, version, n_threads);
+                lora->free_params_buffer();
+                applied = true;
+            }
+
+            auto lora_tensor_filter_cond = [&](const std::string& tensor_name) {
+                if (is_cond_stage_model_name(tensor_name)) {
+                    return true;
+                }
+                return false;
+            };
+            // TODO: split by model
+            lora = load_lora_model_from_file(kv.first, kv.second, clip_backends[0], lora_tensor_filter_cond);
+            if (lora && !lora->lora_tensors.empty()) {
+                lora->apply(tensors, version, n_threads);
+                lora->free_params_buffer();
+                applied = true;
+            }
+
+            auto lora_tensor_filter_first = [&](const std::string& tensor_name) {
+                if (is_first_stage_model_name(tensor_name)) {
+                    return true;
+                }
+                return false;
+            };
+            auto first_stage_backend = use_tiny_autoencoder ? tae_backend : vae_backend;
+            lora                     = load_lora_model_from_file(kv.first, kv.second, first_stage_backend, lora_tensor_filter_first);
+            if (lora && !lora->lora_tensors.empty()) {
+                lora->apply(tensors, version, n_threads);
+                lora->free_params_buffer();
+                applied = true;
+            }
+
+            if (!applied) {
                 continue;
             }
-            lora->apply(tensors, version, n_threads);
-            lora->free_params_buffer();
-
             int64_t t1 = ggml_time_ms();
 
             LOG_INFO("lora '%s' applied, taking %.2fs", kv.first.c_str(), (t1 - t0) * 1.0f / 1000);
