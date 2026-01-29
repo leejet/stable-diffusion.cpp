@@ -1863,7 +1863,7 @@ static bool sample_k_diffusion(sample_method_t method,
                 float sigma_from = sigmas[i];
                 float sigma_to   = sigmas[i + 1];
 
-                ggml_tensor* denoised = model(x, sigma_from, i + 1);
+                ggml_tensor* denoised = model(x, sigma_from, -(i + 1));
                 if (denoised == nullptr) {
                     return false;
                 }
