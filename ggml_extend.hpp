@@ -2646,69 +2646,87 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
     GGML_ASSERT((w1 != NULL || (w1a != NULL && w1b != NULL)));
     GGML_ASSERT((w2 != NULL || (w2a != NULL && w2b != NULL)));
 
-    int vq = (w2 != NULL) ? w2->ne[0] : w2a->ne[0];
-    int vp = (w2 != NULL) ? w2->ne[1] : (is_conv ? w2b->ne[3] : w2b->ne[1]);
+    int uq = (w1 != NULL) ? (int)w1->ne[0] : (int)w1a->ne[0];
+    int up = (w1 != NULL) ? (int)w1->ne[1] : (int)w1b->ne[1];
 
-    int uq = (w1 != NULL) ? w1->ne[0] : w1a->ne[0];
-    int up = (w1 != NULL) ? w1->ne[1] : w1b->ne[1];
+    int q_actual = is_conv ? (int)h->ne[2] : (int)h->ne[0];
+    int vq       = q_actual / uq;
 
-    int q_expected = uq * vq;
-    int q_actual   = is_conv ? h->ne[2] : h->ne[0];
-    GGML_ASSERT(q_actual == q_expected && "Input dimension mismatch for LoKR split");
+    int vp = (w2 != NULL) ? (is_conv ? (int)w2->ne[3] : (int)w2->ne[1])
+                          : (int)w2a->ne[1];
+    GGML_ASSERT(q_actual == (uq * vq) && "Input dimension mismatch for LoKR split");
 
     struct ggml_tensor* hb;
 
     if (!is_conv) {
-        // Treat input as a grid: [vq, uq * batch]
-        struct ggml_tensor* h_mat = ggml_reshape_2d(ctx, h, vq, uq * h->ne[1]);
+        int batch                 = (int)h->ne[1];
+        struct ggml_tensor* h_mat = ggml_reshape_2d(ctx, h, vq, uq * batch);
 
         if (w2 != NULL) {
             hb = ggml_mul_mat(ctx, w2, h_mat);
         } else {
             hb = ggml_mul_mat(ctx, w2b, ggml_mul_mat(ctx, w2a, h_mat));
         }
+
+        struct ggml_tensor* hb_unbundled = ggml_reshape_3d(ctx, hb, vp, uq, batch);
+        struct ggml_tensor* hb_t         = ggml_transpose(ctx, hb_unbundled);
+
+        struct ggml_tensor* hc;
+        if (w1 != NULL) {
+            hc = ggml_mul_mat(ctx, w1, hb_t);
+        } else {
+            hc = ggml_mul_mat(ctx, w1b, ggml_mul_mat(ctx, w1a, hb_t));
+        }
+
+        struct ggml_tensor* hc_t = ggml_transpose(ctx, hc);
+        struct ggml_tensor* out  = ggml_reshape_2d(ctx, ggml_cont(ctx, hc_t), up * vp, batch);
+        return ggml_scale(ctx, out, scale);
+
     } else {
-        // Reshape so uq is in the batch dimension: [W, H, vq, uq * batch]
-        struct ggml_tensor* h_grouped = ggml_reshape_4d(ctx, h, h->ne[0], h->ne[1], vq, uq * h->ne[3]);
+        int batch = (int)h->ne[3];
+
+        // Reshape input: [W, H, vq*uq, batch] -> [W, H, vq, uq * batch]
+        struct ggml_tensor* h_grouped = ggml_reshape_4d(ctx, h, h->ne[0], h->ne[1], vq, uq * batch);
 
         if (w2 != NULL) {
-            hb = ggml_ext_conv_2d(ctx, w2, h_grouped,nullptr, conv_params.s0, conv_params.s1, conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1, conv_params.direct, conv_params.circular_x, conv_params.circular_y, conv_params.scale);
+            hb = ggml_conv_2d(ctx, w2, h_grouped, conv_params.s0, conv_params.s1,
+                              conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1);
         } else {
-            // w2a is [1, 1, vq, rank], w2b is [kw, kh, rank, vp]
-            struct ggml_tensor* tmp = ggml_conv_2d(ctx, w2a, h_grouped, 1, 1, 0, 0, 1, 1);
-            hb                      = ggml_ext_conv_2d(ctx, w2b, tmp, nullptr, conv_params.s0, conv_params.s1, conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1, conv_params.direct, conv_params.circular_x, conv_params.circular_y, conv_params.scale);
+            // Low-rank decomposition: w2b is the spatial kernel, w2a is the 1x1 projection
+            // Inner LoRA: w2b is the spatial/down-project, w2a is the 1x1 up-project
+            int rank = (int)w2b->ne[1];
+            int k    = (int)sqrt(w2b->ne[0] / vq);
+
+            struct ggml_tensor* w2b_4d = (ggml_n_dims(w2b) < 3) ? ggml_reshape_4d(ctx, w2b, k, k, vq, rank) : w2b;
+            struct ggml_tensor* w2a_4d = (ggml_n_dims(w2a) < 3) ? ggml_reshape_4d(ctx, w2a, 1, 1, rank, vp) : w2a;
+
+            struct ggml_tensor* ha = ggml_conv_2d(ctx, w2b_4d, h_grouped, conv_params.s0, conv_params.s1,
+                                                  conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1);
+            hb                     = ggml_conv_2d(ctx, w2a_4d, ha, 1, 1, 0, 0, 1, 1);
         }
+
+        int w_out = (int)hb->ne[0];
+        int h_out = (int)hb->ne[1];
+
+        struct ggml_tensor* hb_flat = ggml_reshape_3d(ctx, hb, w_out * h_out * vp, uq, batch);
+        struct ggml_tensor* hb_t    = ggml_transpose(ctx, hb_flat);  
+
+        struct ggml_tensor* hc;
+        struct ggml_tensor* w1_mat = (w1 != NULL) ? ggml_reshape_2d(ctx, w1, uq, up) : NULL;
+
+        if (w1_mat != NULL) {
+            hc = ggml_mul_mat(ctx, w1_mat, hb_t); 
+        } else {
+            hc = ggml_mul_mat(ctx, w1b, ggml_mul_mat(ctx, w1a, hb_t));
+        }
+
+        struct ggml_tensor* hc_t = ggml_transpose(ctx, hc);
+        struct ggml_tensor* hc_res = ggml_reshape_4d(ctx, ggml_cont(ctx, hc_t), vp, w_out * h_out, up, batch);
+        struct ggml_tensor* hc_perm = ggml_permute(ctx, hc_res, 1, 2, 0, 3);
+        struct ggml_tensor* out = ggml_reshape_4d(ctx, ggml_cont(ctx, hc_perm), w_out, h_out, up * vp, batch);
+
+        return ggml_scale(ctx, out, scale);
     }
-
-    // At this point hb is [W_out, H_out, vp, uq * batch]
-    // We reshape to isolate uq for matrix multiplication
-    int w_out = is_conv ? hb->ne[0] : 1;
-    int h_out = is_conv ? hb->ne[1] : 1;
-    int batch = is_conv ? h->ne[3] : h->ne[1];
-
-    // Rearrange to [vp, uq, spatial*batch]
-    struct ggml_tensor* hb_unbundled = ggml_reshape_3d(ctx, hb, vp, uq, w_out * h_out * batch);
-
-    // Transpose so uq is ne[0] for ggml_mul_mat
-    struct ggml_tensor* hb_t = ggml_transpose(ctx, hb_unbundled);
-
-    struct ggml_tensor* hc;
-    if (w1 != NULL) {
-        hc = ggml_mul_mat(ctx, w1, hb_t);
-    } else {
-        hc = ggml_mul_mat(ctx, w1b, ggml_mul_mat(ctx, w1a, hb_t));
-    }
-
-    struct ggml_tensor* hc_t = ggml_transpose(ctx, hc);
-    struct ggml_tensor* out;
-    if (is_conv) {
-        out = ggml_reshape_4d(ctx, hc_t, w_out, h_out, up * vp, batch);
-    } else {
-
-        out = ggml_reshape_2d(ctx, ggml_cont(ctx, hc_t), up * vp, batch);
-    }
-
-    return ggml_scale(ctx, out, scale);
 }
 
 #endif  // __GGML_EXTEND__HPP__
