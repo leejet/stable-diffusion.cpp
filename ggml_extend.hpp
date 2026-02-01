@@ -2669,7 +2669,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
         }
 
         struct ggml_tensor* hb_unbundled = ggml_reshape_3d(ctx, hb, vp, uq, batch);
-        struct ggml_tensor* hb_t         = ggml_transpose(ctx, hb_unbundled);
+        struct ggml_tensor* hb_t         = ggml_cont(ctx,ggml_transpose(ctx, hb_unbundled));
 
         struct ggml_tensor* hc;
         if (w1 != NULL) {
@@ -2683,47 +2683,66 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
         return ggml_scale(ctx, out, scale);
 
     } else {
+        // very slow implementation for now (can this be optimized?)
         int batch = (int)h->ne[3];
 
-        // Reshape input: [W, H, vq*uq, batch] -> [W, H, vq, uq * batch]
+        // 1. Reshape input: [W, H, vq*uq, batch] -> [W, H, vq, uq * batch]
+        // This is free (metadata only)
         struct ggml_tensor* h_grouped = ggml_reshape_4d(ctx, h, h->ne[0], h->ne[1], vq, uq * batch);
 
+        struct ggml_tensor* hb;
         if (w2 != NULL) {
             hb = ggml_conv_2d(ctx, w2, h_grouped, conv_params.s0, conv_params.s1,
                               conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1);
         } else {
-            // Low-rank decomposition: w2b is the spatial kernel, w2a is the 1x1 projection
-            // Inner LoRA: w2b is the spatial/down-project, w2a is the 1x1 up-project
             int rank = (int)w2b->ne[1];
             int k    = (int)sqrt(w2b->ne[0] / vq);
-
-            struct ggml_tensor* w2b_4d = (ggml_n_dims(w2b) < 3) ? ggml_reshape_4d(ctx, w2b, k, k, vq, rank) : w2b;
-            struct ggml_tensor* w2a_4d = (ggml_n_dims(w2a) < 3) ? ggml_reshape_4d(ctx, w2a, 1, 1, rank, vp) : w2a;
+            struct ggml_tensor* w2b_4d = (ggml_n_dims(w2b) < 4) ? ggml_reshape_4d(ctx, w2b, k, k, vq, rank) : w2b;
+            struct ggml_tensor* w2a_4d = (ggml_n_dims(w2a) < 4) ? ggml_reshape_4d(ctx, w2a, 1, 1, rank, vp) : w2a;
 
             struct ggml_tensor* ha = ggml_conv_2d(ctx, w2b_4d, h_grouped, conv_params.s0, conv_params.s1,
                                                   conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1);
-            hb                     = ggml_conv_2d(ctx, w2a_4d, ha, 1, 1, 0, 0, 1, 1);
+            hb = ggml_conv_2d(ctx, w2a_4d, ha, 1, 1, 0, 0, 1, 1);
         }
 
+        // Current hb shape: [W_out, H_out, vp, uq * batch]
         int w_out = (int)hb->ne[0];
         int h_out = (int)hb->ne[1];
 
+        // 2. Prepare for Matrix Multiplication
+        // Collapse spatial and 'vp' into one dimension to treat as 'M' in MatMul
+        // Shape: [W*H*vp, uq, batch]
         struct ggml_tensor* hb_flat = ggml_reshape_3d(ctx, hb, w_out * h_out * vp, uq, batch);
+        // Transpose to [uq, W*H*vp, batch] so that uq is ne[0] (the shared K dimension)
         struct ggml_tensor* hb_t    = ggml_transpose(ctx, hb_flat);  
 
         struct ggml_tensor* hc;
-        struct ggml_tensor* w1_mat = (w1 != NULL) ? ggml_reshape_2d(ctx, w1, uq, up) : NULL;
-
-        if (w1_mat != NULL) {
+        if (w1 != NULL) {
+            struct ggml_tensor* w1_mat = ggml_reshape_2d(ctx, w1, uq, up);
             hc = ggml_mul_mat(ctx, w1_mat, hb_t); 
         } else {
+            // Low-rank: (up x rank) * (rank x uq) * (uq x Spatial)
             hc = ggml_mul_mat(ctx, w1b, ggml_mul_mat(ctx, w1a, hb_t));
         }
 
-        struct ggml_tensor* hc_t = ggml_transpose(ctx, hc);
-        struct ggml_tensor* hc_res = ggml_reshape_4d(ctx, ggml_cont(ctx, hc_t), vp, w_out * h_out, up, batch);
-        struct ggml_tensor* hc_perm = ggml_permute(ctx, hc_res, 1, 2, 0, 3);
-        struct ggml_tensor* out = ggml_reshape_4d(ctx, ggml_cont(ctx, hc_perm), w_out, h_out, up * vp, batch);
+        // 3. Final Layout Transformation
+        // Current hc shape: [up, W*H*vp, batch]
+        // Logical dims in ne[1]: [W*H, vp]
+        // We want final shape: [W, H, up*vp, batch]
+        
+        // Split ne[1] back into spatial and vp
+        struct ggml_tensor* hc_split = ggml_reshape_4d(ctx, hc, up, w_out * h_out, vp, batch);
+        
+        // Permute to bring up and vp together: [spatial, up, vp, batch]
+        // This moves spatial to ne[0], which is necessary for the final W,H,C layout
+        struct ggml_tensor* hc_perm = ggml_permute(ctx, hc_split, 1, 0, 2, 3);
+        
+        // Resolve layout and scale in one go (if possible) or just cont
+        // This is the only mandatory copy
+        struct ggml_tensor* out_cont = ggml_cont(ctx, hc_perm);
+        
+        // Final reshape to merge up and vp into the channel dimension
+        struct ggml_tensor* out = ggml_reshape_4d(ctx, out_cont, w_out, h_out, up * vp, batch);
 
         return ggml_scale(ctx, out, scale);
     }
