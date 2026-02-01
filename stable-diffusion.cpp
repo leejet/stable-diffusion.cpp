@@ -67,6 +67,8 @@ const char* sampling_methods_str[] = {
     "LCM",
     "DDIM \"trailing\"",
     "TCD",
+    "Res Multistep",
+    "Res 2s",
 };
 
 /*================================================== Helper Functions ================================================*/
@@ -2743,6 +2745,8 @@ const char* sample_method_to_str[] = {
     "lcm",
     "ddim_trailing",
     "tcd",
+    "res_multistep",
+    "res_2s",
 };
 
 const char* sd_sample_method_name(enum sample_method_t sample_method) {
@@ -2772,6 +2776,7 @@ const char* scheduler_to_str[] = {
     "smoothstep",
     "kl_optimal",
     "lcm",
+    "bong_tangent",
 };
 
 const char* sd_scheduler_name(enum scheduler_t scheduler) {

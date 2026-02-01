@@ -107,14 +107,14 @@ Generation Options:
                                            medium
   --skip-layer-start <float>               SLG enabling point (default: 0.01)
   --skip-layer-end <float>                 SLG disabling point (default: 0.2)
-  --eta <float>                            eta in DDIM, only for DDIM and TCD (default: 0)
+  --eta <float>                            eta in DDIM, only for DDIM/TCD/res_multistep/res_2s (default: 0)
   --high-noise-cfg-scale <float>           (high noise) unconditional guidance scale: (default: 7.0)
   --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or instruct-pix2pix models (default: same as --cfg-scale)
   --high-noise-guidance <float>            (high noise) distilled guidance scale for models with guidance input (default: 3.5)
   --high-noise-slg-scale <float>           (high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)
   --high-noise-skip-layer-start <float>    (high noise) SLG enabling point (default: 0.01)
   --high-noise-skip-layer-end <float>      (high noise) SLG disabling point (default: 0.2)
-  --high-noise-eta <float>                 (high noise) eta in DDIM, only for DDIM and TCD (default: 0)
+  --high-noise-eta <float>                 (high noise) eta in DDIM, only for DDIM/TCD/res_multistep/res_2s (default: 0)
   --strength <float>                       strength for noising/unnoising (default: 0.75)
   --pm-style-strength <float>
   --control-strength <float>               strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image
@@ -123,12 +123,12 @@ Generation Options:
   --increase-ref-index                     automatically increase the indices of references images based on the order they are listed (starting with 1).
   --disable-auto-resize-ref-image          disable auto resize of ref images
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
-  --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
-                                           tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)
-  --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm,
-                                           ddim_trailing, tcd] default: euler for Flux/SD3/Wan, euler_a otherwise
+  --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd,
+                                           res_multistep, res_2s] (default: euler for Flux/SD3/Wan, euler_a otherwise)
+  --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
+                                           tcd, res_multistep, res_2s] default: euler for Flux/SD3/Wan, euler_a otherwise
   --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple,
-                                           kl_optimal, lcm], default: discrete
+                                           kl_optimal, lcm, bong_tangent], default: discrete
   --sigmas                                 custom sigma values for the sampler, comma-separated (e.g., "14.61,7.8,3.5,0.0").
   --skip-layers                            layers to skip for SLG steps (default: [7,8,9])
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
