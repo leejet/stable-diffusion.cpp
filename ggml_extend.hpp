@@ -2658,27 +2658,25 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
     struct ggml_tensor* hb;
 
     if (!is_conv) {
-        int batch                 = (int)h->ne[1];
-        struct ggml_tensor* h_split = ggml_reshape_2d(ctx, h, vq, uq * batch);
+        int batch                   = (int)h->ne[1];
+        struct ggml_tensor* h_split = ggml_reshape_3d(ctx, h, vq, uq, batch);
 
         if (w2 != NULL) {
             hb = ggml_mul_mat(ctx, w2, h_split);
         } else {
             hb = ggml_mul_mat(ctx, w2b, ggml_mul_mat(ctx, w2a, h_split));
         }
+        struct ggml_tensor* hb_t = ggml_cont(ctx, ggml_transpose(ctx, hb));
 
-        struct ggml_tensor* hb_cat = ggml_reshape_3d(ctx, hb, vp, uq, batch);
-        struct ggml_tensor* hb_t         = ggml_cont(ctx, ggml_transpose(ctx, hb_cat));
-
-        struct ggml_tensor* hc;
+        struct ggml_tensor* hc_t;
         if (w1 != NULL) {
-            hc = ggml_mul_mat(ctx, w1, hb_t);
+            hc_t = ggml_mul_mat(ctx, w1, hb_t);
         } else {
-            hc = ggml_mul_mat(ctx, w1b, ggml_mul_mat(ctx, w1a, hb_t));
+            hc_t = ggml_mul_mat(ctx, w1b, ggml_mul_mat(ctx, w1a, hb_t));
         }
 
-        struct ggml_tensor* hc_t = ggml_transpose(ctx, hc);
-        struct ggml_tensor* out  = ggml_reshape_2d(ctx, ggml_cont(ctx, hc_t), up * vp, batch);
+        struct ggml_tensor* hc = ggml_transpose(ctx, hc_t);
+        struct ggml_tensor* out  = ggml_reshape_2d(ctx, ggml_cont(ctx, hc), up * vp, batch);
         return ggml_scale(ctx, out, scale);
 
     } else {
