@@ -362,8 +362,8 @@ struct BongTangentScheduler : SigmaScheduler {
             return sigmas;
         }
 
-        float smax = ((2.0f / kPi) * atanf(-slope * (0.0f - pivot)) + 1.0f) * 0.5f;
-        float smin = ((2.0f / kPi) * atanf(-slope * ((float)(steps - 1) - pivot)) + 1.0f) * 0.5f;
+        float smax   = ((2.0f / kPi) * atanf(-slope * (0.0f - pivot)) + 1.0f) * 0.5f;
+        float smin   = ((2.0f / kPi) * atanf(-slope * ((float)(steps - 1) - pivot)) + 1.0f) * 0.5f;
         float srange = smax - smin;
         float sscale = start - end;
 
@@ -383,7 +383,7 @@ struct BongTangentScheduler : SigmaScheduler {
 
         float inv_srange = 1.0f / srange;
         for (int x = 0; x < steps; ++x) {
-            float v = ((2.0f / kPi) * atanf(-slope * ((float)x - pivot)) + 1.0f) * 0.5f;
+            float v     = ((2.0f / kPi) * atanf(-slope * ((float)x - pivot)) + 1.0f) * 0.5f;
             float sigma = ((v - smin) * inv_srange) * sscale + end;
             sigmas.push_back(sigma);
         }
@@ -406,14 +406,14 @@ struct BongTangentScheduler : SigmaScheduler {
         float slope_1 = 0.2f;
         float slope_2 = 0.2f;
 
-        int steps = static_cast<int>(n) + 2;
-        int midpoint = static_cast<int>(((float)steps * pivot_1 + (float)steps * pivot_2) * 0.5f);
+        int steps     = static_cast<int>(n) + 2;
+        int midpoint  = static_cast<int>(((float)steps * pivot_1 + (float)steps * pivot_2) * 0.5f);
         int pivot_1_i = static_cast<int>((float)steps * pivot_1);
         int pivot_2_i = static_cast<int>((float)steps * pivot_2);
 
         float slope_scale = (float)steps / 40.0f;
-        slope_1 = slope_1 / slope_scale;
-        slope_2 = slope_2 / slope_scale;
+        slope_1           = slope_1 / slope_scale;
+        slope_2           = slope_2 / slope_scale;
 
         int stage_2_len = steps - midpoint;
         int stage_1_len = steps - stage_2_len;
@@ -1734,12 +1734,12 @@ static bool sample_k_diffusion(sample_method_t method,
             struct ggml_tensor* noise        = ggml_dup_tensor(work_ctx, x);
             struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
-            bool have_old_sigma = false;
+            bool have_old_sigma  = false;
             float old_sigma_down = 0.0f;
 
-            auto t_fn = [](float sigma) -> float { return -logf(sigma); };
+            auto t_fn     = [](float sigma) -> float { return -logf(sigma); };
             auto sigma_fn = [](float t) -> float { return expf(-t); };
-            auto phi1_fn = [](float t) -> float {
+            auto phi1_fn  = [](float t) -> float {
                 if (fabsf(t) < 1e-6f) {
                     return 1.0f + t * 0.5f + (t * t) / 6.0f;
                 }
@@ -1773,18 +1773,18 @@ static bool sample_k_diffusion(sample_method_t method,
                             sigma_up = eta * std::sqrt(term);
                         }
                     }
-                    sigma_up = std::min(sigma_up, sigma_to);
+                    sigma_up            = std::min(sigma_up, sigma_to);
                     float sigma_down_sq = sigma_to_sq - sigma_up * sigma_up;
                     sigma_down          = sigma_down_sq > 0.0f ? std::sqrt(sigma_down_sq) : 0.0f;
                 }
 
                 if (sigma_down == 0.0f || !have_old_sigma) {
-                    float dt           = sigma_down - sigma_from;
-                    float* vec_x       = (float*)x->data;
+                    float dt            = sigma_down - sigma_from;
+                    float* vec_x        = (float*)x->data;
                     float* vec_denoised = (float*)denoised->data;
 
                     for (int j = 0; j < ggml_nelements(x); j++) {
-                        float d = (vec_x[j] - vec_denoised[j]) / sigma_from;
+                        float d  = (vec_x[j] - vec_denoised[j]) / sigma_from;
                         vec_x[j] = vec_x[j] + d * dt;
                     }
                 } else {
@@ -1807,9 +1807,9 @@ static bool sample_k_diffusion(sample_method_t method,
                         b2 = 0.0f;
                     }
 
-                    float sigma_h          = sigma_fn(h);
-                    float* vec_x           = (float*)x->data;
-                    float* vec_denoised    = (float*)denoised->data;
+                    float sigma_h           = sigma_fn(h);
+                    float* vec_x            = (float*)x->data;
+                    float* vec_denoised     = (float*)denoised->data;
                     float* vec_old_denoised = (float*)old_denoised->data;
 
                     for (int j = 0; j < ggml_nelements(x); j++) {
@@ -1844,8 +1844,8 @@ static bool sample_k_diffusion(sample_method_t method,
             struct ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
             const float c2 = 0.5f;
-            auto t_fn = [](float sigma) -> float { return -logf(sigma); };
-            auto phi1_fn = [](float t) -> float {
+            auto t_fn      = [](float sigma) -> float { return -logf(sigma); };
+            auto phi1_fn   = [](float t) -> float {
                 if (fabsf(t) < 1e-6f) {
                     return 1.0f + t * 0.5f + (t * t) / 6.0f;
                 }
@@ -1879,7 +1879,7 @@ static bool sample_k_diffusion(sample_method_t method,
                             sigma_up = eta * std::sqrt(term);
                         }
                     }
-                    sigma_up = std::min(sigma_up, sigma_to);
+                    sigma_up            = std::min(sigma_up, sigma_to);
                     float sigma_down_sq = sigma_to_sq - sigma_up * sigma_up;
                     sigma_down          = sigma_down_sq > 0.0f ? std::sqrt(sigma_down_sq) : 0.0f;
                 }
@@ -1900,11 +1900,11 @@ static bool sample_k_diffusion(sample_method_t method,
                     float t_next = t_fn(sigma_down);
                     float h      = t_next - t;
 
-                    float a21 = c2 * phi1_fn(-h * c2);
+                    float a21      = c2 * phi1_fn(-h * c2);
                     float phi1_val = phi1_fn(-h);
                     float phi2_val = phi2_fn(-h);
-                    float b2 = phi2_val / c2;
-                    float b1 = phi1_val - b2;
+                    float b2       = phi2_val / c2;
+                    float b1       = phi1_val - b2;
 
                     float sigma_c2 = expf(-(t + h * c2));
 
@@ -1924,7 +1924,7 @@ static bool sample_k_diffusion(sample_method_t method,
                     for (int j = 0; j < ggml_nelements(x); j++) {
                         float eps1 = vec_denoised[j] - vec_x0[j];
                         float eps2 = vec_denoised2[j] - vec_x0[j];
-                        vec_x[j] = vec_x0[j] + h * (b1 * eps1 + b2 * eps2);
+                        vec_x[j]   = vec_x0[j] + h * (b1 * eps1 + b2 * eps2);
                     }
                 }
 
