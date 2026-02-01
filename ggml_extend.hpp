@@ -2683,6 +2683,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
         return ggml_scale(ctx, out, scale);
 
     } else {
+#if 0
         // very slow implementation for now (can this be optimized?)
         int batch = (int)h->ne[3];
 
@@ -2745,6 +2746,32 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
         struct ggml_tensor* out = ggml_reshape_4d(ctx, out_cont, w_out, h_out, up * vp, batch);
 
         return ggml_scale(ctx, out, scale);
+#else
+        // compute the weight diff and do a single conv
+        if (w1 == NULL) {
+            w1 = ggml_ext_merge_lora(ctx, w1b, w1a);
+        }
+        if(ggml_n_dims(w1) < 4){
+            w1 = ggml_reshape_4d(ctx, w1, 1, 1, w1->ne[0], w1->ne[1]);
+        }
+        if (w2 == NULL) {
+            w2 = ggml_ext_merge_lora(ctx, w2b, w2a);
+        }
+        if(ggml_n_dims(w2) < 4){
+            w2 = ggml_reshape_4d(ctx, w2, 1, 1, w2->ne[0], w2->ne[1]);
+        }
+        if(w2->ne[2] * w1->ne[2] != h->ne[2]){
+            int k = sqrt(w2->ne[2] * w1->ne[2]/h->ne[2]);
+            GGML_ASSERT(k*k * h->ne[2] == w2->ne[2] * w1->ne[2]);
+            w2 = ggml_reshape_4d(ctx, w2, w2->ne[0]*k, w2->ne[1]*k, w2->ne[2]/(k*k), w2->ne[3]);
+        }
+        w1 = ggml_ext_cast_f32(ctx, w1);
+        w2 = ggml_ext_cast_f32(ctx, w2);
+        struct ggml_tensor* w = ggml_ext_kronecker(ctx, w1, w2);
+        struct ggml_tensor* out = ggml_conv_2d(ctx, w, h, conv_params.s0, conv_params.s1, conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1);
+
+        return ggml_scale(ctx, out, scale);
+#endif
     }
 }
 
