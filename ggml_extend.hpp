@@ -1577,7 +1577,7 @@ struct WeightAdapter {
             bool force_prec_f32 = false;
             float scale         = 1.f;
         } linear;
-        struct conv2d_params_t{
+        struct conv2d_params_t {
             int s0          = 1;
             int s1          = 1;
             int p0          = 0;
@@ -2642,7 +2642,6 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
     bool is_conv,
     WeightAdapter::ForwardParams::conv2d_params_t conv_params,
     float scale) {
-
     GGML_ASSERT((w1 != NULL || (w1a != NULL && w1b != NULL)));
     GGML_ASSERT((w2 != NULL || (w2a != NULL && w2b != NULL)));
 
@@ -2660,16 +2659,16 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
 
     if (!is_conv) {
         int batch                 = (int)h->ne[1];
-        struct ggml_tensor* h_mat = ggml_reshape_2d(ctx, h, vq, uq * batch);
+        struct ggml_tensor* h_split = ggml_reshape_2d(ctx, h, vq, uq * batch);
 
         if (w2 != NULL) {
-            hb = ggml_mul_mat(ctx, w2, h_mat);
+            hb = ggml_mul_mat(ctx, w2, h_split);
         } else {
-            hb = ggml_mul_mat(ctx, w2b, ggml_mul_mat(ctx, w2a, h_mat));
+            hb = ggml_mul_mat(ctx, w2b, ggml_mul_mat(ctx, w2a, h_split));
         }
 
-        struct ggml_tensor* hb_unbundled = ggml_reshape_3d(ctx, hb, vp, uq, batch);
-        struct ggml_tensor* hb_t         = ggml_cont(ctx,ggml_transpose(ctx, hb_unbundled));
+        struct ggml_tensor* hb_cat = ggml_reshape_3d(ctx, hb, vp, uq, batch);
+        struct ggml_tensor* hb_t         = ggml_cont(ctx, ggml_transpose(ctx, hb_cat));
 
         struct ggml_tensor* hc;
         if (w1 != NULL) {
@@ -2683,92 +2682,127 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
         return ggml_scale(ctx, out, scale);
 
     } else {
-#if 0
+#if 1
         // very slow implementation for now (can this be optimized?)
         int batch = (int)h->ne[3];
 
         // 1. Reshape input: [W, H, vq*uq, batch] -> [W, H, vq, uq * batch]
         // This is free (metadata only)
-        struct ggml_tensor* h_grouped = ggml_reshape_4d(ctx, h, h->ne[0], h->ne[1], vq, uq * batch);
+        // print_ggml_tensor(h, true, "\nh");
+        struct ggml_tensor* h_split = ggml_reshape_4d(ctx, h, h->ne[0], h->ne[1], vq, uq * batch);
+        // print_ggml_tensor(h_split, true, "h_split");
 
         struct ggml_tensor* hb;
         if (w2 != NULL) {
-            hb = ggml_conv_2d(ctx, w2, h_grouped, conv_params.s0, conv_params.s1,
-                              conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1);
-        } else {
-            int rank = (int)w2b->ne[1];
-            int k    = (int)sqrt(w2b->ne[0] / vq);
-            struct ggml_tensor* w2b_4d = (ggml_n_dims(w2b) < 4) ? ggml_reshape_4d(ctx, w2b, k, k, vq, rank) : w2b;
-            struct ggml_tensor* w2a_4d = (ggml_n_dims(w2a) < 4) ? ggml_reshape_4d(ctx, w2a, 1, 1, rank, vp) : w2a;
+            // no LoRA
+            // print_ggml_tensor(w2, true, "w2");
+            hb = ggml_ext_conv_2d(ctx, h_split, w2, nullptr,
+                                  conv_params.s0,
+                                  conv_params.s1,
+                                  conv_params.p0,
+                                  conv_params.p1,
+                                  conv_params.d0,
+                                  conv_params.d1,
+                                  conv_params.direct,
+                                  conv_params.circular_x,
+                                  conv_params.circular_y,
+                                  conv_params.scale);
 
-            struct ggml_tensor* ha = ggml_conv_2d(ctx, w2b_4d, h_grouped, conv_params.s0, conv_params.s1,
-                                                  conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1);
-            hb = ggml_conv_2d(ctx, w2a_4d, ha, 1, 1, 0, 0, 1, 1);
+        } else {
+            // TODO: do not merge (loCon forward)
+            // w2a could be 2d
+            w2 = ggml_ext_merge_lora(ctx, w2b, w2a);
+            if (ggml_n_dims(w2) < 4) {
+                w2 = ggml_reshape_4d(ctx, w2, 1, 1, w2->ne[0], w2->ne[1]);
+            }
+            if (w2->ne[2] != h_split->ne[2]) {
+                int k = sqrt(w2->ne[2] / h_split->ne[2]);
+                GGML_ASSERT(k * k * h_split->ne[2] == w2->ne[2]);
+                w2 = ggml_reshape_4d(ctx, w2, w2->ne[0] * k, w2->ne[1] * k, w2->ne[2] / (k * k), w2->ne[3]);
+            }
+            hb = ggml_ext_conv_2d(ctx, h_split, w2, nullptr,
+                                            conv_params.s0,
+                                            conv_params.s1,
+                                            conv_params.p0,
+                                            conv_params.p1,
+                                            conv_params.d0,
+                                            conv_params.d1,
+                                            conv_params.direct,
+                                            conv_params.circular_x,
+                                            conv_params.circular_y,
+                                            conv_params.scale);
+
+        
+            // TODO: figure out why this is not working:
+            // struct ggml_tensor* ha = ggml_ext_conv_2d(ctx, h_split, w2a, nullptr,
+            //                                           conv_params.s0,
+            //                                           conv_params.s1,
+            //                                           conv_params.p0,
+            //                                           conv_params.p1,
+            //                                           conv_params.d0,
+            //                                           conv_params.d1);
+            // // not supporting lora_mid here
+            // hb = ggml_ext_conv_2d(ctx,
+            //                       ha,
+            //                       w2b,
+            //                       nullptr,
+            //                       1,
+            //                       1,
+            //                       0,
+            //                       0,
+            //                       1,
+            //                       1,
+            //                       conv_params.direct,
+            //                       conv_params.circular_x,
+            //                       conv_params.circular_y,
+            //                       conv_params.scale);
         }
 
         // Current hb shape: [W_out, H_out, vp, uq * batch]
         int w_out = (int)hb->ne[0];
         int h_out = (int)hb->ne[1];
 
-        // 2. Prepare for Matrix Multiplication
-        // Collapse spatial and 'vp' into one dimension to treat as 'M' in MatMul
-        // Shape: [W*H*vp, uq, batch]
-        struct ggml_tensor* hb_flat = ggml_reshape_3d(ctx, hb, w_out * h_out * vp, uq, batch);
-        // Transpose to [uq, W*H*vp, batch] so that uq is ne[0] (the shared K dimension)
-        struct ggml_tensor* hb_t    = ggml_transpose(ctx, hb_flat);  
+        // struct ggml_tensor* hb_cat = ggml_reshape_4d(ctx, hb, w_out , h_out , vp * uq, batch);
+        // [W_out, H_out, vp * uq,  batch]
+        // Now left to compute (W1 kr Id) * hb_cat == (W1 kr W2) * h
 
-        struct ggml_tensor* hc;
+        // merge the uq groups of size vp*w_out*h_out
+        struct ggml_tensor* hb_merged = ggml_reshape_2d(ctx, hb, w_out * h_out * vp, uq * batch);
+        struct ggml_tensor* hc_t;
+        struct ggml_tensor* hb_merged_t = ggml_cont(ctx, ggml_transpose(ctx, hb_merged));
         if (w1 != NULL) {
-            struct ggml_tensor* w1_mat = ggml_reshape_2d(ctx, w1, uq, up);
-            hc = ggml_mul_mat(ctx, w1_mat, hb_t); 
+            // Would be great to be able to transpose w1 instead to avoid transposing both hb and hc
+            hc_t = ggml_mul_mat(ctx, w1, hb_merged_t);
         } else {
-            // Low-rank: (up x rank) * (rank x uq) * (uq x Spatial)
-            hc = ggml_mul_mat(ctx, w1b, ggml_mul_mat(ctx, w1a, hb_t));
+            hc_t = ggml_mul_mat(ctx, w1b, ggml_mul_mat(ctx, w1a, hb_merged_t));
         }
-
-        // 3. Final Layout Transformation
-        // Current hc shape: [up, W*H*vp, batch]
-        // Logical dims in ne[1]: [W*H, vp]
-        // We want final shape: [W, H, up*vp, batch]
-        
-        // Split ne[1] back into spatial and vp
-        struct ggml_tensor* hc_split = ggml_reshape_4d(ctx, hc, up, w_out * h_out, vp, batch);
-        
-        // Permute to bring up and vp together: [spatial, up, vp, batch]
-        // This moves spatial to ne[0], which is necessary for the final W,H,C layout
-        struct ggml_tensor* hc_perm = ggml_permute(ctx, hc_split, 1, 0, 2, 3);
-        
-        // Resolve layout and scale in one go (if possible) or just cont
-        // This is the only mandatory copy
-        struct ggml_tensor* out_cont = ggml_cont(ctx, hc_perm);
-        
-        // Final reshape to merge up and vp into the channel dimension
-        struct ggml_tensor* out = ggml_reshape_4d(ctx, out_cont, w_out, h_out, up * vp, batch);
-
+        struct ggml_tensor* hc = ggml_transpose(ctx, hc_t);
+        hc                     = ggml_cont(ctx, hc);
+        struct ggml_tensor* out = ggml_reshape_4d(ctx, hc, w_out, h_out, up * vp, batch);
         return ggml_scale(ctx, out, scale);
 #else
         // compute the weight diff and do a single conv
         if (w1 == NULL) {
             w1 = ggml_ext_merge_lora(ctx, w1b, w1a);
         }
-        if(ggml_n_dims(w1) < 4){
+        if (ggml_n_dims(w1) < 4) {
             w1 = ggml_reshape_4d(ctx, w1, 1, 1, w1->ne[0], w1->ne[1]);
         }
         if (w2 == NULL) {
             w2 = ggml_ext_merge_lora(ctx, w2b, w2a);
         }
-        if(ggml_n_dims(w2) < 4){
+        if (ggml_n_dims(w2) < 4) {
             w2 = ggml_reshape_4d(ctx, w2, 1, 1, w2->ne[0], w2->ne[1]);
         }
-        if(w2->ne[2] * w1->ne[2] != h->ne[2]){
-            int k = sqrt(w2->ne[2] * w1->ne[2]/h->ne[2]);
-            GGML_ASSERT(k*k * h->ne[2] == w2->ne[2] * w1->ne[2]);
-            w2 = ggml_reshape_4d(ctx, w2, w2->ne[0]*k, w2->ne[1]*k, w2->ne[2]/(k*k), w2->ne[3]);
+        if (w2->ne[2] * w1->ne[2] != h->ne[2]) {
+            int k = sqrt(w2->ne[2] * w1->ne[2] / h->ne[2]);
+            GGML_ASSERT(k * k * h->ne[2] == w2->ne[2] * w1->ne[2]);
+            w2 = ggml_reshape_4d(ctx, w2, w2->ne[0] * k, w2->ne[1] * k, w2->ne[2] / (k * k), w2->ne[3]);
         }
-        w1 = ggml_ext_cast_f32(ctx, w1);
-        w2 = ggml_ext_cast_f32(ctx, w2);
-        struct ggml_tensor* w = ggml_ext_kronecker(ctx, w1, w2);
-        struct ggml_tensor* out = ggml_conv_2d(ctx, w, h, conv_params.s0, conv_params.s1, conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1);
+        w1                      = ggml_ext_cast_f32(ctx, w1);
+        w2                      = ggml_ext_cast_f32(ctx, w2);
+        struct ggml_tensor* w   = ggml_ext_kronecker(ctx, w1, w2);
+        struct ggml_tensor* out = ggml_ext_conv_2d(ctx, h, w, nullptr, conv_params.s0, conv_params.s1, conv_params.p0, conv_params.p1, conv_params.d0, conv_params.d1, conv_params.direct, conv_params.circular_x, conv_params.circular_y, conv_params.scale);
 
         return ggml_scale(ctx, out, scale);
 #endif
