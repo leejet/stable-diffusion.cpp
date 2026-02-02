@@ -2662,24 +2662,26 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
         int merge_batch_uq = batch;
         int merge_batch_vp = batch;
 
-#if SD_VULKAN
-    // no access to backend here, worst case is slightly worse perfs for other backends when built alongside Vulkan backend
-        int max_batch    = 65535;
-        int max_batch_uq = max_batch / uq;
-        merge_batch_uq   = 1;
-        for (int i = max_batch_uq; i > 0; i--) {
-            if (batch % i == 0) {
-                merge_batch_uq = i;
-                break;
+#if SD_USE_VULKAN
+        if (batch > 1) {
+            // no access to backend here, worst case is slightly worse perfs for other backends when built alongside Vulkan backend
+            int max_batch    = 65535;
+            int max_batch_uq = max_batch / uq;
+            merge_batch_uq   = 1;
+            for (int i = max_batch_uq; i > 0; i--) {
+                if (batch % i == 0) {
+                    merge_batch_uq = i;
+                    break;
+                }
             }
-        }
 
-        int max_batch_vp = max_batch / vp;
-        merge_batch_vp   = 1;
-        for (int i = max_batch_vp; i > 0; i--) {
-            if (batch % i == 0) {
-                merge_batch_vp = i;
-                break;
+            int max_batch_vp = max_batch / vp;
+            merge_batch_vp   = 1;
+            for (int i = max_batch_vp; i > 0; i--) {
+                if (batch % i == 0) {
+                    merge_batch_vp = i;
+                    break;
+                }
             }
         }
 #endif
