@@ -2658,10 +2658,15 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
     struct ggml_tensor* hb;
 
     if (!is_conv) {
-        int max_batch      = 65535;
         int batch          = (int)h->ne[1];
-        int max_batch_uq   = max_batch / uq;
-        int merge_batch_uq = 1;
+        int merge_batch_uq = batch;
+        int merge_batch_vp = batch;
+
+#if SD_VULKAN
+    // no access to backend here, worst case is slightly worse perfs for other backends when built alongside Vulkan backend
+        int max_batch    = 65535;
+        int max_batch_uq = max_batch / uq;
+        merge_batch_uq   = 1;
         for (int i = max_batch_uq; i > 0; i--) {
             if (batch % i == 0) {
                 merge_batch_uq = i;
@@ -2669,14 +2674,15 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
             }
         }
 
-        int max_batch_vp   = max_batch / vp;
-        int merge_batch_vp = 1;
+        int max_batch_vp = max_batch / vp;
+        merge_batch_vp   = 1;
         for (int i = max_batch_vp; i > 0; i--) {
             if (batch % i == 0) {
                 merge_batch_vp = i;
                 break;
             }
         }
+#endif
 
         struct ggml_tensor* h_split = ggml_reshape_3d(ctx, h, vq, uq * merge_batch_uq, batch / merge_batch_uq);
         if (w2 != NULL) {
@@ -2705,7 +2711,6 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
         struct ggml_tensor* hc  = ggml_transpose(ctx, hc_t);
         struct ggml_tensor* out = ggml_reshape_2d(ctx, ggml_cont(ctx, hc), up * vp, batch);
         return ggml_scale(ctx, out, scale);
-
     } else {
         int batch = (int)h->ne[3];
         // 1. Reshape input: [W, H, vq*uq, batch] -> [W, H, vq, uq * batch]
@@ -2723,7 +2728,6 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
                                   conv_params.circular_x,
                                   conv_params.circular_y,
                                   conv_params.scale);
-
         } else {
             // swap a and b order for conv lora
             struct ggml_tensor* a = w2b;
