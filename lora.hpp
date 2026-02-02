@@ -540,23 +540,14 @@ struct LoraModel : public GGMLRunner {
 
                 if (iter != lora_tensors.end()) {
                     lokr_w1 = iter->second;
-                    if (is_conv2d && lokr_w1->type != GGML_TYPE_F16) {
-                        lokr_w1 = ggml_cast(ctx, lokr_w1, GGML_TYPE_F16);
-                    }
                 }
                 iter = iter_a;
                 if (iter != lora_tensors.end()) {
                     lokr_w1_a = iter->second;
-                    if (is_conv2d && lokr_w1_a->type != GGML_TYPE_F16) {
-                        lokr_w1_a = ggml_cast(ctx, lokr_w1_a, GGML_TYPE_F16);
-                    }
                 }
                 iter = lora_tensors.find(lokr_w1_b_name);
                 if (iter != lora_tensors.end()) {
                     lokr_w1_b = iter->second;
-                    if (is_conv2d && lokr_w1_b->type != GGML_TYPE_F16) {
-                        lokr_w1_b = ggml_cast(ctx, lokr_w1_b, GGML_TYPE_F16);
-                    }
                 }
 
                 iter = lora_tensors.find(lokr_w2_name);
