@@ -399,6 +399,9 @@ int main(int argc, const char** argv) {
             gen_params.height             = height;
             gen_params.batch_count        = n;
 
+            // Correctly set cfg_scale in the guidance parameters
+            gen_params.sample_params.guidance.txt_cfg = j.value("cfg_scale", gen_params.sample_params.guidance.txt_cfg);
+
             if (!sd_cpp_extra_args_str.empty() && !gen_params.from_json_str(sd_cpp_extra_args_str)) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid sd_cpp_extra_args"})", "application/json");
@@ -809,6 +812,9 @@ int main(int argc, const char** argv) {
             gen_params.seed                       = seed;
             gen_params.sample_params.sample_steps = steps;
             gen_params.batch_count                = batch_size;
+
+            // set cfg_scale in the guidance parameters
+            gen_params.sample_params.guidance.txt_cfg = cfg_scale;
 
             if (clip_skip > 0) {
                 gen_params.clip_skip = clip_skip;

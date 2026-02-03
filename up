@@ -1,0 +1,32 @@
+#!/bin/bash
+#echo export CUDAHOSTCXX=g++-13 #>> .bashrc
+#!/bin/bash
+
+# 1. Store the current commit hash
+OLD_COMMIT=$(git rev-parse HEAD)
+
+echo "Current commit: $OLD_COMMIT"
+
+# 2. Perform the git pull
+# Using '|| exit' ensures the script stops if the pull command itself fails
+git pull || { echo "git pull failed"; exit 1; }
+
+# 3. Store the new commit hash
+NEW_COMMIT=$(git rev-parse HEAD)
+
+echo "New commit: $NEW_COMMIT"
+
+# 4. Compare the hashes
+if [ "$OLD_COMMIT" != "$NEW_COMMIT" ]; then
+  echo "Repository updated with new commits."
+  # --- PLACE YOUR COMMANDS HERE ---
+
+cmake -B build -DSD_CUDA=ON -DCMAKE_CXX_FLAGS="-w"
+cmake --build . --config Release
+cmake --install build --prefix $HOME/.local
+
+#cmake -B build -DGGML_BLAS=1 -DGGML_BLAS_VENDOR=OpenBLAS -j8
+
+else
+  echo "Repository was already up-to-date."
+fi
