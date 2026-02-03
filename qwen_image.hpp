@@ -194,11 +194,14 @@ namespace Qwen {
         bool zero_cond_t;
 
     public:
-        QwenImageTransformerBlock(int64_t dim,
-                                  int64_t num_attention_heads,
-                                  int64_t attention_head_dim,
-                                  float eps        = 1e-6,
-                                  bool zero_cond_t = false)
+        QwenImageTransformerBlock(
+            int64_t dim,
+            int64_t num_attention_heads,
+            int64_t attention_head_dim,
+            float eps        = 1e-6,
+            bool zero_cond_t = false,
+            int layer_index = 0
+        )
             : zero_cond_t(zero_cond_t) {
             // img_mod.0 is nn.SiLU()
             blocks["img_mod.1"] = std::shared_ptr<GGMLBlock>(new Linear(dim, 6 * dim, true));
@@ -212,7 +215,7 @@ namespace Qwen {
 
             blocks["txt_norm1"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim, eps, false));
             blocks["txt_norm2"] = std::shared_ptr<GGMLBlock>(new LayerNorm(dim, eps, false));
-            blocks["txt_mlp"]   = std::shared_ptr<GGMLBlock>(new FeedForward(dim, dim, 4, FeedForward::Activation::GELU));
+            blocks["txt_mlp"]   = std::shared_ptr<GGMLBlock>(new FeedForward(dim, dim, 4, FeedForward::Activation::GELU, true));
 
             blocks["attn"] = std::shared_ptr<GGMLBlock>(new QwenImageAttention(dim,
                                                                                attention_head_dim,
@@ -378,11 +381,14 @@ namespace Qwen {
 
             // blocks
             for (int i = 0; i < params.num_layers; i++) {
-                auto block                                        = std::shared_ptr<GGMLBlock>(new QwenImageTransformerBlock(inner_dim,
-                                                                                                                             params.num_attention_heads,
-                                                                                                                             params.attention_head_dim,
-                                                                                                                             1e-6f,
-                                                                                                                             params.zero_cond_t));
+                auto block = std::shared_ptr<GGMLBlock>(new QwenImageTransformerBlock(
+                    inner_dim,
+                    params.num_attention_heads,
+                    params.attention_head_dim,
+                    1e-6f,
+                    params.zero_cond_t,
+                    i
+                ));
                 blocks["transformer_blocks." + std::to_string(i)] = block;
             }
 
