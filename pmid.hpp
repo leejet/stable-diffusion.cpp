@@ -33,7 +33,7 @@ public:
         x = layer_norm->forward(ctx, x);
         // x = ggml_add(ctx, ggml_mul_mat(ctx, fc1_w, x),  fc1_b);
         x = fc1->forward(ctx, x);
-        x = ggml_gelu_inplace(ctx->ggml_ctx, x);
+        x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
         x = fc2->forward(ctx, x);
         // x = ggml_add(ctx, ggml_mul_mat(ctx, fc2_w, x),  fc2_b);
         if (use_residue)
@@ -72,7 +72,7 @@ struct PerceiverAttention : public GGMLBlock {
     int heads;     // = heads
 public:
     PerceiverAttention(int dim, int dim_h = 64, int h = 8)
-        : scale(powf(dim_h, -0.5)), dim_head(dim_h), heads(h) {
+        : scale(powf(static_cast<float>(dim_h), -0.5f)), dim_head(dim_h), heads(h) {
         int inner_dim    = dim_head * heads;
         blocks["norm1"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
         blocks["norm2"]  = std::shared_ptr<GGMLBlock>(new LayerNorm(dim));
@@ -129,8 +129,8 @@ public:
         k             = reshape_tensor(ctx->ggml_ctx, k, heads);
         v             = reshape_tensor(ctx->ggml_ctx, v, heads);
         scale         = 1.f / sqrt(sqrt((float)dim_head));
-        k             = ggml_scale_inplace(ctx->ggml_ctx, k, scale);
-        q             = ggml_scale_inplace(ctx->ggml_ctx, q, scale);
+        k             = ggml_ext_scale(ctx->ggml_ctx, k, scale, true);
+        q             = ggml_ext_scale(ctx->ggml_ctx, q, scale, true);
         // auto weight = ggml_mul_mat(ctx, q, k);
         auto weight = ggml_mul_mat(ctx->ggml_ctx, k, q);  // NOTE order of mul is opposite to pytorch
 

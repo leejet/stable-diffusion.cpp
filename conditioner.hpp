@@ -34,6 +34,7 @@ struct Conditioner {
     virtual void free_params_buffer()                                                      = 0;
     virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors)    = 0;
     virtual size_t get_params_buffer_size()                                                = 0;
+    virtual void set_flash_attention_enabled(bool enabled)                                 = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
     virtual std::tuple<SDCondition, std::vector<bool>> get_learned_condition_with_trigger(ggml_context* work_ctx,
                                                                                           int n_threads,
@@ -113,6 +114,13 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             buffer_size += text_model2->get_params_buffer_size();
         }
         return buffer_size;
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        text_model->set_flash_attention_enabled(enabled);
+        if (sd_version_is_sdxl(version)) {
+            text_model2->set_flash_attention_enabled(enabled);
+        }
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
@@ -303,11 +311,11 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                 int class_token = clean_input_ids[class_token_index[0]];
                 class_idx       = tokens_acc + class_token_index[0];
                 std::vector<int> clean_input_ids_tmp;
-                for (uint32_t i = 0; i < class_token_index[0]; i++)
+                for (int i = 0; i < class_token_index[0]; i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
-                for (uint32_t i = 0; i < (pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs); i++)
+                for (int i = 0; i < (pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs); i++)
                     clean_input_ids_tmp.push_back(class_token);
-                for (uint32_t i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
+                for (int i = class_token_index[0] + 1; i < clean_input_ids.size(); i++)
                     clean_input_ids_tmp.push_back(clean_input_ids[i]);
                 clean_input_ids.clear();
                 clean_input_ids = clean_input_ids_tmp;
@@ -322,7 +330,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
 
         tokenizer.pad_tokens(tokens, weights, max_length, padding);
         int offset = pm_version == PM_VERSION_2 ? 2 * num_input_imgs : num_input_imgs;
-        for (uint32_t i = 0; i < tokens.size(); i++) {
+        for (int i = 0; i < tokens.size(); i++) {
             // if (class_idx + 1 <= i && i < class_idx + 1 + 2*num_input_imgs) // photomaker V2 has num_tokens(=2)*num_input_imgs
             if (class_idx + 1 <= i && i < class_idx + 1 + offset)  // photomaker V2 has num_tokens(=2)*num_input_imgs
                                                                    // hardcode for now
@@ -783,6 +791,18 @@ struct SD3CLIPEmbedder : public Conditioner {
         return buffer_size;
     }
 
+    void set_flash_attention_enabled(bool enabled) override {
+        if (clip_l) {
+            clip_l->set_flash_attention_enabled(enabled);
+        }
+        if (clip_g) {
+            clip_g->set_flash_attention_enabled(enabled);
+        }
+        if (t5) {
+            t5->set_flash_attention_enabled(enabled);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (clip_l) {
             clip_l->set_weight_adapter(adapter);
@@ -1191,6 +1211,15 @@ struct FluxCLIPEmbedder : public Conditioner {
         return buffer_size;
     }
 
+    void set_flash_attention_enabled(bool enabled) override {
+        if (clip_l) {
+            clip_l->set_flash_attention_enabled(enabled);
+        }
+        if (t5) {
+            t5->set_flash_attention_enabled(enabled);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {
         if (clip_l) {
             clip_l->set_weight_adapter(adapter);
@@ -1440,6 +1469,12 @@ struct T5CLIPEmbedder : public Conditioner {
         return buffer_size;
     }
 
+    void set_flash_attention_enabled(bool enabled) override {
+        if (t5) {
+            t5->set_flash_attention_enabled(enabled);
+        }
+    }
+
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
         if (t5) {
             t5->set_weight_adapter(adapter);
@@ -1584,7 +1619,7 @@ struct T5CLIPEmbedder : public Conditioner {
                                         chunk_hidden_states->ne[0],
                                         ggml_nelements(hidden_states) / chunk_hidden_states->ne[0]);
 
-        modify_mask_to_attend_padding(t5_attn_mask, ggml_nelements(t5_attn_mask), mask_pad);
+        modify_mask_to_attend_padding(t5_attn_mask, static_cast<int>(ggml_nelements(t5_attn_mask)), mask_pad);
 
         return {hidden_states, t5_attn_mask, nullptr};
     }
@@ -1614,9 +1649,9 @@ struct LLMEmbedder : public Conditioner {
                 bool enable_vision                             = false)
         : version(version) {
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
-        if (sd_version_is_flux2(version)) {
+        if (version == VERSION_FLUX2) {
             arch = LLM::LLMArch::MISTRAL_SMALL_3_2;
-        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE) {
+        } else if (sd_version_is_z_image(version) || version == VERSION_OVIS_IMAGE || version == VERSION_FLUX2_KLEIN) {
             arch = LLM::LLMArch::QWEN3;
         }
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2) {
@@ -1648,6 +1683,10 @@ struct LLMEmbedder : public Conditioner {
         size_t buffer_size = 0;
         buffer_size += llm->get_params_buffer_size();
         return buffer_size;
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        llm->set_flash_attention_enabled(enabled);
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
@@ -1708,6 +1747,9 @@ struct LLMEmbedder : public Conditioner {
         int prompt_template_encode_start_idx = 34;
         int max_length                       = 0;
         std::set<int> out_layers;
+        std::vector<int> tokens;
+        std::vector<float> weights;
+        std::vector<float> mask;
         if (llm->enable_vision && conditioner_params.ref_images.size() > 0) {
             LOG_INFO("QwenImageEditPlusPipeline");
             prompt_template_encode_start_idx = 64;
@@ -1723,8 +1765,8 @@ struct LLMEmbedder : public Conditioner {
                 double factor        = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
                 int height           = image.height;
                 int width            = image.width;
-                int h_bar            = static_cast<int>(std::round(height / factor)) * factor;
-                int w_bar            = static_cast<int>(std::round(width / factor)) * factor;
+                int h_bar            = static_cast<int>(std::round(height / factor) * factor);
+                int w_bar            = static_cast<int>(std::round(width / factor) * factor);
 
                 if (static_cast<double>(h_bar) * w_bar > max_pixels) {
                     double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
@@ -1752,7 +1794,7 @@ struct LLMEmbedder : public Conditioner {
                 ggml_tensor* image_embed = nullptr;
                 llm->encode_image(n_threads, image_tensor, &image_embed, work_ctx);
                 image_embeds.emplace_back(image_embed_idx, image_embed);
-                image_embed_idx += 1 + image_embed->ne[1] + 6;
+                image_embed_idx += 1 + static_cast<int>(image_embed->ne[1]) + 6;
 
                 img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";  // [24669, 220, index, 25, 220, 151652]
                 int64_t num_image_tokens = image_embed->ne[1];
@@ -1771,7 +1813,7 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
-        } else if (sd_version_is_flux2(version)) {
+        } else if (version == VERSION_FLUX2) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {10, 20, 30};
 
@@ -1793,17 +1835,28 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
-        } else if (sd_version_is_flux2(version)) {
+        } else if (version == VERSION_FLUX2_KLEIN) {
             prompt_template_encode_start_idx = 0;
-            out_layers                       = {10, 20, 30};
+            max_length                       = 512;
+            out_layers                       = {9, 18, 27};
 
-            prompt = "[SYSTEM_PROMPT]You are an AI that reasons about image descriptions. You give structured responses focusing on object relationships, object\nattribution and actions without speculation.[/SYSTEM_PROMPT][INST]";
+            prompt = "<|im_start|>user\n";
 
-            prompt_attn_range.first = prompt.size();
+            prompt_attn_range.first = static_cast<int>(prompt.size());
             prompt += conditioner_params.text;
-            prompt_attn_range.second = prompt.size();
+            prompt_attn_range.second = static_cast<int>(prompt.size());
 
-            prompt += "[/INST]";
+            prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+
+            auto tokens_and_weights = tokenize(prompt, prompt_attn_range, 0, false);
+            tokens                  = std::get<0>(tokens_and_weights);
+            weights                 = std::get<1>(tokens_and_weights);
+
+            mask.insert(mask.end(), tokens.size(), 1.f);
+            if (tokens.size() < max_length) {
+                mask.insert(mask.end(), max_length - tokens.size(), 0.f);
+                tokenizer->pad_tokens(tokens, weights, max_length, true);
+            }
         } else if (version == VERSION_OVIS_IMAGE) {
             prompt_template_encode_start_idx = 28;
             max_length                       = prompt_template_encode_start_idx + 256;
@@ -1827,17 +1880,34 @@ struct LLMEmbedder : public Conditioner {
             prompt += "<|im_end|>\n<|im_start|>assistant\n";
         }
 
-        auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0);
-        auto& tokens            = std::get<0>(tokens_and_weights);
-        auto& weights           = std::get<1>(tokens_and_weights);
+        if (tokens.empty()) {
+            auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0);
+            tokens                  = std::get<0>(tokens_and_weights);
+            weights                 = std::get<1>(tokens_and_weights);
+        }
 
         int64_t t0                        = ggml_time_ms();
         struct ggml_tensor* hidden_states = nullptr;  // [N, n_token, 3584]
 
         auto input_ids = vector_to_ggml_tensor_i32(work_ctx, tokens);
 
+        ggml_tensor* attention_mask = nullptr;
+        if (!mask.empty()) {
+            attention_mask = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, mask.size(), mask.size());
+            ggml_ext_tensor_iter(attention_mask, [&](ggml_tensor* attention_mask, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+                float value = 0.f;
+                if (mask[i0] == 0.f) {
+                    value = -INFINITY;
+                } else if (i0 > i1) {
+                    value = -INFINITY;
+                }
+                ggml_ext_tensor_set_f32(attention_mask, value, i0, i1, i2, i3);
+            });
+        }
+
         llm->compute(n_threads,
                      input_ids,
+                     attention_mask,
                      image_embeds,
                      out_layers,
                      &hidden_states,
@@ -1861,7 +1931,7 @@ struct LLMEmbedder : public Conditioner {
         GGML_ASSERT(hidden_states->ne[1] > prompt_template_encode_start_idx);
 
         int64_t min_length = 0;
-        if (sd_version_is_flux2(version)) {
+        if (version == VERSION_FLUX2) {
             min_length = 512;
         }
 
