@@ -934,7 +934,7 @@ struct SDContextParams {
         return oss.str();
     }
 
-    sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview) {
+    sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview, bool is_server = false) {
         embedding_vec.clear();
         embedding_vec.reserve(embedding_map.size());
         for (const auto& kv : embedding_map) {
@@ -942,6 +942,11 @@ struct SDContextParams {
             item.name = kv.first.c_str();
             item.path = kv.second.c_str();
             embedding_vec.emplace_back(item);
+        }
+
+        if(is_server && lora_apply_mode == LORA_APPLY_AUTO)
+        {
+            lora_apply_mode = LORA_APPLY_AT_RUNTIME;
         }
 
         sd_ctx_params_t sd_ctx_params = {
@@ -1631,48 +1636,17 @@ struct SDGenerationParams {
     static bool sanitize_lora_path(const std::string& lora_model_dir,
                                    const std::string& raw_path_str,
                                    fs::path& full_path) {
-        if (lora_model_dir.empty()) {
+        if (lora_model_dir.empty())
+            return false;
+
+        fs::path raw_p(raw_path_str);
+
+        if (raw_p.is_absolute() ||
+            !raw_p.root_name().empty() ||
+            raw_path_str.find("..") != std::string::npos) {
             return false;
         }
-
-        fs::path raw_path(raw_path_str);
-
-        // Disallow absolute paths and '..' components
-        if (raw_path.is_absolute()) {
-            LOG_WARN("lora path must be relative: %s", raw_path_str.c_str());
-            return false;
-        }
-
-        for (const auto& part : raw_path) {
-            if (part == "..") {
-                LOG_WARN("lora path cannot contain '..': %s", raw_path_str.c_str());
-                return false;
-            }
-        }
-
-        // Construct and canonicalize paths
-        fs::path lora_dir(lora_model_dir);
-        full_path = lora_dir / raw_path;
-
-        auto canonical_lora_dir  = fs::weakly_canonical(lora_dir);
-        auto canonical_full_path = fs::weakly_canonical(full_path);
-
-        // Check if path is a directory
-        if (fs::is_directory(canonical_full_path)) {
-            LOG_WARN("lora path resolved to a directory, not a file: %s", raw_path_str.c_str());
-            return false;
-        }
-
-        // Verify path stays within lora directory
-        auto [root_end, nothing] = std::mismatch(
-            canonical_lora_dir.begin(), canonical_lora_dir.end(),
-            canonical_full_path.begin(), canonical_full_path.end());
-
-        if (root_end != canonical_lora_dir.end()) {
-            LOG_WARN("lora path is outside of the lora model directory: %s", raw_path_str.c_str());
-            return false;
-        }
-
+        full_path = fs::path(lora_model_dir) / raw_p;
         return true;
     }
 
