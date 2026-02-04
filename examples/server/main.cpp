@@ -408,7 +408,7 @@ int main(int argc, const char** argv) {
             if (gen_params.sample_params.sample_steps > 100)
                 gen_params.sample_params.sample_steps = 100;
 
-            if (!gen_params.process_and_check(IMG_GEN, "")) {
+            if (!gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
                 return;
@@ -589,7 +589,7 @@ int main(int argc, const char** argv) {
             if (gen_params.sample_params.sample_steps > 100)
                 gen_params.sample_params.sample_steps = 100;
 
-            if (!gen_params.process_and_check(IMG_GEN, "")) {
+            if (!gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
                 return;
