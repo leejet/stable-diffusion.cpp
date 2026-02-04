@@ -179,6 +179,18 @@ void print_usage(int argc, const char* argv[], const std::vector<ArgOptions>& op
     options_list[2].print();
 }
 
+std::string extract_and_remove_sd_cpp_extra_args(std::string& text) {
+    std::regex re("<sd_cpp_extra_args>(.*?)</sd_cpp_extra_args>");
+    std::smatch match;
+
+    std::string extracted;
+    if (std::regex_search(text, match, re)) {
+        extracted = match[1].str();
+        text      = std::regex_replace(text, re, "");
+    }
+    return extracted;
+}
+
 void parse_args(int argc, const char** argv, SDSvrParams& svr_params, SDContextParams& ctx_params, SDGenerationParams& default_gen_params) {
     std::vector<ArgOptions> options_vec = {svr_params.get_options(), ctx_params.get_options(), default_gen_params.get_options()};
 
@@ -199,18 +211,8 @@ void parse_args(int argc, const char** argv, SDSvrParams& svr_params, SDContextP
     if (random_seed_requested) {
         default_gen_params.seed = -1;
     }
-}
 
-std::string extract_and_remove_sd_cpp_extra_args(std::string& text) {
-    std::regex re("<sd_cpp_extra_args>(.*?)</sd_cpp_extra_args>");
-    std::smatch match;
-
-    std::string extracted;
-    if (std::regex_search(text, match, re)) {
-        extracted = match[1].str();
-        text      = std::regex_replace(text, re, "");
-    }
-    return extracted;
+    default_gen_params.prompt = extract_and_remove_sd_cpp_extra_args(default_gen_params.prompt);
 }
 
 enum class ImageFormat { JPEG,
