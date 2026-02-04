@@ -194,14 +194,11 @@ namespace Qwen {
         bool zero_cond_t;
 
     public:
-        QwenImageTransformerBlock(
-            int64_t dim,
-            int64_t num_attention_heads,
-            int64_t attention_head_dim,
-            float eps        = 1e-6,
-            bool zero_cond_t = false,
-            int layer_index = 0
-        )
+        QwenImageTransformerBlock(int64_t dim,
+                                  int64_t num_attention_heads,
+                                  int64_t attention_head_dim,
+                                  float eps        = 1e-6,
+                                  bool zero_cond_t = false)
             : zero_cond_t(zero_cond_t) {
             // img_mod.0 is nn.SiLU()
             blocks["img_mod.1"] = std::shared_ptr<GGMLBlock>(new Linear(dim, 6 * dim, true));
@@ -381,14 +378,11 @@ namespace Qwen {
 
             // blocks
             for (int i = 0; i < params.num_layers; i++) {
-                auto block = std::shared_ptr<GGMLBlock>(new QwenImageTransformerBlock(
-                    inner_dim,
-                    params.num_attention_heads,
-                    params.attention_head_dim,
-                    1e-6f,
-                    params.zero_cond_t,
-                    i
-                ));
+                auto block                                        = std::shared_ptr<GGMLBlock>(new QwenImageTransformerBlock(inner_dim,
+                                                                                                                             params.num_attention_heads,
+                                                                                                                             params.attention_head_dim,
+                                                                                                                             1e-6f,
+                                                                                                                             params.zero_cond_t));
                 blocks["transformer_blocks." + std::to_string(i)] = block;
             }
 
