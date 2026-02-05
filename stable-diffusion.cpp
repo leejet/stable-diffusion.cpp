@@ -31,7 +31,8 @@ const char* model_version_to_str[] = {
     "SD 2.x",
     "SD 2.x Inpaint",
     "SD 2.x Tiny UNet",
-    "SDXS",
+    "SDXS (DS)",
+    "SDXS (0.9)",
     "SDXL",
     "SDXL Inpaint",
     "SDXL Instruct-Pix2Pix",
@@ -413,7 +414,7 @@ public:
         }
 
         bool tae_preview_only = sd_ctx_params->tae_preview_only;
-        if (version == VERSION_SDXS) {
+        if (version == VERSION_SDXS || version == VERSION_SDXS_09) {
             tae_preview_only = false;
         }
 
@@ -593,7 +594,7 @@ public:
                 vae_backend = backend;
             }
 
-            if (!(use_tiny_autoencoder || version == VERSION_SDXS) || tae_preview_only) {
+            if (!(use_tiny_autoencoder || version == VERSION_SDXS || version == VERSION_SDXS_09) || tae_preview_only) {
                 if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
                     first_stage_model = std::make_shared<WAN::WanVAERunner>(vae_backend,
                                                                             offload_params_to_cpu,
@@ -631,7 +632,7 @@ public:
                     first_stage_model->get_param_tensors(tensors, "first_stage_model");
                 }
             }
-            if (use_tiny_autoencoder || version == VERSION_SDXS) {
+            if (use_tiny_autoencoder || version == VERSION_SDXS || version == VERSION_SDXS_09) {
                 if (sd_version_is_wan(version) || sd_version_is_qwen_image(version)) {
                     tae_first_stage = std::make_shared<TinyVideoAutoEncoder>(vae_backend,
                                                                              offload_params_to_cpu,
@@ -646,7 +647,7 @@ public:
                                                                              "decoder.layers",
                                                                              vae_decode_only,
                                                                              version);
-                    if (version == VERSION_SDXS) {
+                    if (version == VERSION_SDXS || version == VERSION_SDXS_09) {
                         tae_first_stage->alloc_params_buffer();
                         tae_first_stage->get_param_tensors(tensors, "first_stage_model");
                     }
@@ -809,10 +810,10 @@ public:
                 unet_params_mem_size += high_noise_diffusion_model->get_params_buffer_size();
             }
             size_t vae_params_mem_size = 0;
-            if (!(use_tiny_autoencoder || version == VERSION_SDXS) || tae_preview_only) {
+            if (!(use_tiny_autoencoder || version == VERSION_SDXS || version == VERSION_SDXS_09) || tae_preview_only) {
                 vae_params_mem_size = first_stage_model->get_params_buffer_size();
             }
-            if (use_tiny_autoencoder || version == VERSION_SDXS) {
+            if (use_tiny_autoencoder || version == VERSION_SDXS || version == VERSION_SDXS_09) {
                 if (use_tiny_autoencoder && !tae_first_stage->load_from_file(taesd_path, n_threads)) {
                     return false;
                 }
