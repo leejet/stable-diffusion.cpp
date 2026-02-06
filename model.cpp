@@ -1113,8 +1113,8 @@ SDVersion ModelLoader::get_sd_version() {
             has_output_block_71 = true;
         }
         if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1.transformer_blocks.0.attn1.to_k.weight") != std::string::npos) {
-              if (tensor_storage.ne[0] == 1024)
-                  has_attn_1024 = true;
+            if (tensor_storage.ne[0] == 1024)
+                has_attn_1024 = true;
         }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
             tensor_storage.name == "cond_stage_model.model.token_embedding.weight" ||

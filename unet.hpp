@@ -266,8 +266,8 @@ public:
                 return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
             } else {
                 if (version == VERSION_SDXS_09 && n_head == 5) {
-                    n_head = 1;     // to carry a special case of sdxs_09 into CrossAttentionLayer,
-                    d_head = 320;   // works as long the product remains equal (5*64 == 1*320)
+                    n_head = 1;    // to carry a special case of sdxs_09 into CrossAttentionLayer,
+                    d_head = 320;  // works as long the product remains equal (5*64 == 1*320)
                 }
                 return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
             }
