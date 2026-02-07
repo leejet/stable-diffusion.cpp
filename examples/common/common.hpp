@@ -1042,6 +1042,7 @@ struct SDGenerationParams {
     std::string control_video_path;
     bool auto_resize_ref_image = true;
     bool increase_ref_index    = false;
+    bool embed_image_metadata  = true;
 
     std::vector<int> skip_layers = {7, 8, 9};
     sd_sample_params_t sample_params;
@@ -1267,6 +1268,11 @@ struct SDGenerationParams {
              "disable auto resize of ref images",
              false,
              &auto_resize_ref_image},
+            {"",
+             "--disable-image-metadata",
+             "do not embed generation metadata on image files",
+             false,
+             &embed_image_metadata},
         };
 
         auto on_seed_arg = [&](int argc, const char** argv, int index) {
@@ -1597,6 +1603,7 @@ struct SDGenerationParams {
 
         load_if_exists("auto_resize_ref_image", auto_resize_ref_image);
         load_if_exists("increase_ref_index", increase_ref_index);
+        load_if_exists("embed_image_metadata", embed_image_metadata);
 
         load_if_exists("skip_layers", skip_layers);
         load_if_exists("high_noise_skip_layers", high_noise_skip_layers);
@@ -2122,3 +2129,66 @@ uint8_t* load_image_from_memory(const char* image_bytes,
                                 int expected_channel = 3) {
     return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
 }
+
+std::string get_image_params(const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed) {
+    std::string parameter_string;
+    if (gen_params.prompt_with_lora.size() != 0) {
+        parameter_string += gen_params.prompt_with_lora + "\n";
+    } else {
+        parameter_string += gen_params.prompt + "\n";
+    }
+    if (gen_params.negative_prompt.size() != 0) {
+        parameter_string += "Negative prompt: " + gen_params.negative_prompt + "\n";
+    }
+    parameter_string += "Steps: " + std::to_string(gen_params.sample_params.sample_steps) + ", ";
+    parameter_string += "CFG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
+    if (gen_params.sample_params.guidance.slg.scale != 0 && gen_params.skip_layers.size() != 0) {
+        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
+        parameter_string += "Skip layers: [";
+        for (const auto& layer : gen_params.skip_layers) {
+            parameter_string += std::to_string(layer) + ", ";
+        }
+        parameter_string += "], ";
+        parameter_string += "Skip layer start: " + std::to_string(gen_params.sample_params.guidance.slg.layer_start) + ", ";
+        parameter_string += "Skip layer end: " + std::to_string(gen_params.sample_params.guidance.slg.layer_end) + ", ";
+    }
+    parameter_string += "Guidance: " + std::to_string(gen_params.sample_params.guidance.distilled_guidance) + ", ";
+    parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
+    parameter_string += "Seed: " + std::to_string(seed) + ", ";
+    parameter_string += "Size: " + std::to_string(gen_params.width) + "x" + std::to_string(gen_params.height) + ", ";
+    parameter_string += "Model: " + sd_basename(ctx_params.model_path) + ", ";
+    parameter_string += "RNG: " + std::string(sd_rng_type_name(ctx_params.rng_type)) + ", ";
+    if (ctx_params.sampler_rng_type != RNG_TYPE_COUNT) {
+        parameter_string += "Sampler RNG: " + std::string(sd_rng_type_name(ctx_params.sampler_rng_type)) + ", ";
+    }
+    parameter_string += "Sampler: " + std::string(sd_sample_method_name(gen_params.sample_params.sample_method));
+    if (!gen_params.custom_sigmas.empty()) {
+        parameter_string += ", Custom Sigmas: [";
+        for (size_t i = 0; i < gen_params.custom_sigmas.size(); ++i) {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(4) << gen_params.custom_sigmas[i];
+            parameter_string += oss.str() + (i == gen_params.custom_sigmas.size() - 1 ? "" : ", ");
+        }
+        parameter_string += "]";
+    } else if (gen_params.sample_params.scheduler != SCHEDULER_COUNT) {  // Only show schedule if not using custom sigmas
+        parameter_string += " " + std::string(sd_scheduler_name(gen_params.sample_params.scheduler));
+    }
+    parameter_string += ", ";
+    for (const auto& te : {ctx_params.clip_l_path, ctx_params.clip_g_path, ctx_params.t5xxl_path, ctx_params.llm_path, ctx_params.llm_vision_path}) {
+        if (!te.empty()) {
+            parameter_string += "TE: " + sd_basename(te) + ", ";
+        }
+    }
+    if (!ctx_params.diffusion_model_path.empty()) {
+        parameter_string += "Unet: " + sd_basename(ctx_params.diffusion_model_path) + ", ";
+    }
+    if (!ctx_params.vae_path.empty()) {
+        parameter_string += "VAE: " + sd_basename(ctx_params.vae_path) + ", ";
+    }
+    if (gen_params.clip_skip != -1) {
+        parameter_string += "Clip skip: " + std::to_string(gen_params.clip_skip) + ", ";
+    }
+    parameter_string += "Version: stable-diffusion.cpp";
+    return parameter_string;
+}
+
