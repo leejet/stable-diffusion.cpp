@@ -400,6 +400,7 @@ bool save_results(const SDCliParams& cli_params,
     std::string ext_lower = ext.string();
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
     bool is_jpg = (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".jpe");
+    bool is_qoi = (ext_lower == ".qoi");
 
     int output_begin_idx = cli_params.output_begin_idx;
     if (output_begin_idx < 0) {
@@ -415,6 +416,8 @@ bool save_results(const SDCliParams& cli_params,
         int ok             = 0;
         if (is_jpg) {
             ok = stbi_write_jpg(path.string().c_str(), img.width, img.height, img.channel, img.data, 90, params.c_str());
+        } else if (is_qoi) {
+            ok = save_image_as_qoi(path.string().c_str(), img.width, img.height, img.channel, img.data) ? 1 : 0;
         } else {
             ok = stbi_write_png(path.string().c_str(), img.width, img.height, img.channel, img.data, 0, params.c_str());
         }
@@ -422,7 +425,7 @@ bool save_results(const SDCliParams& cli_params,
     };
 
     if (std::regex_search(cli_params.output_path, format_specifier_regex)) {
-        if (!is_jpg && ext_lower != ".png")
+        if (!is_qoi && !is_jpg && ext_lower != ".png")
             ext = ".png";
         fs::path pattern = base_path;
         pattern += ext;
@@ -444,7 +447,7 @@ bool save_results(const SDCliParams& cli_params,
         return true;
     }
 
-    if (!is_jpg && ext_lower != ".png")
+    if (!is_qoi && !is_jpg && ext_lower != ".png")
         ext = ".png";
 
     for (int i = 0; i < num_results; ++i) {
