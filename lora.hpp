@@ -468,10 +468,10 @@ struct LoraModel : public GGMLRunner {
         return updown;
     }
 
-    ggml_tensor* get_weight_diff(const std::string& model_tensor_name, ggml_context* ctx, ggml_tensor* model_tensor, bool with_lora = true) {
+    ggml_tensor* get_weight_diff(const std::string& model_tensor_name, ggml_context* ctx, ggml_tensor* model_tensor, bool with_lora_and_lokr = true) {
         // lora
         ggml_tensor* diff = nullptr;
-        if (with_lora) {
+        if (with_lora_and_lokr) {
             diff = get_lora_weight_diff(model_tensor_name, ctx);
         }
         // diff
@@ -483,7 +483,7 @@ struct LoraModel : public GGMLRunner {
             diff = get_loha_weight_diff(model_tensor_name, ctx);
         }
         // lokr
-        if (diff == nullptr && with_lora) {
+        if (diff == nullptr && with_lora_and_lokr) {
             diff = get_lokr_weight_diff(model_tensor_name, ctx);
         }
         if (diff != nullptr) {
@@ -841,9 +841,9 @@ public:
         : lora_models(lora_models) {
     }
 
-    ggml_tensor* patch_weight(ggml_context* ctx, ggml_tensor* weight, const std::string& weight_name, bool with_lora) {
+    ggml_tensor* patch_weight(ggml_context* ctx, ggml_tensor* weight, const std::string& weight_name, bool with_lora_and_lokr) {
         for (auto& lora_model : lora_models) {
-            ggml_tensor* diff = lora_model->get_weight_diff(weight_name, ctx, weight, with_lora);
+            ggml_tensor* diff = lora_model->get_weight_diff(weight_name, ctx, weight, with_lora_and_lokr);
             if (diff == nullptr) {
                 continue;
             }
