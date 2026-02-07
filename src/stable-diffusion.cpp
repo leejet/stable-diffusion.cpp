@@ -326,7 +326,13 @@ public:
 
         model_loader.convert_tensors_name();
 
-        version = model_loader.get_sd_version();
+        // SDXL_FIX: Don't overwrite if already detected as SDXL in earlier component
+        SDVersion detected_version = model_loader.get_sd_version();
+        if (version != VERSION_SDXL && version != VERSION_SDXL_INPAINT && version != VERSION_SDXL_PIX2PIX) {
+            version = detected_version;
+        } else {
+            LOG_INFO("Keeping previous SDXL version, detected version: %s", model_version_to_str[detected_version]);
+        }
         if (version == VERSION_COUNT) {
             LOG_ERROR("get sd version from file failed: '%s'", SAFE_STR(sd_ctx_params->model_path));
             return false;
@@ -335,6 +341,7 @@ public:
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
 
         LOG_INFO("Version: %s ", model_version_to_str[version]);
+        
         ggml_type wtype               = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
                                             ? (ggml_type)sd_ctx_params->wtype
                                             : GGML_TYPE_COUNT;
