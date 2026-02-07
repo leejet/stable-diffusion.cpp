@@ -487,15 +487,17 @@ jobs:
 
   ubuntu-latest-rocm:
     runs-on: ubuntu-latest
+    container: rocm/dev-ubuntu-24.04:7.2
 
     env:
       ROCM_VERSION: "7.2"
       GPU_TARGETS: "gfx1151;gfx1150;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201"
 
     steps:
+      - run: apt-get update && apt-get install -y git
       - name: Clone
         id: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -512,45 +514,16 @@ jobs:
           sudo rm -rf /var/lib/apt/lists/* || true
           sudo apt clean
 
-      - name: Setup ROCm Repository
+      - name: Dependencies
+        id: depends
         run: |
-          # Always setup ROCm repository (needed even when cache hits)
-          sudo apt update
-          sudo apt install -y wget gnupg2
-
-          # Add ROCm repository using modern GPG key handling
-          wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/rocm-archive-keyring.gpg
-          echo "deb [arch=amd64] https://repo.radeon.com/rocm/apt/${{ env.ROCM_VERSION }}/ noble main" | sudo tee /etc/apt/sources.list.d/rocm.list
-
-          # Set ROCm repository to highest priority to avoid conflicts with Ubuntu packages
-          echo "Package: *" | sudo tee /etc/apt/preferences.d/rocm-pin
-          echo "Pin: origin repo.radeon.com" | sudo tee -a /etc/apt/preferences.d/rocm-pin
-          echo "Pin-Priority: 1001" | sudo tee -a /etc/apt/preferences.d/rocm-pin
-
-          sudo apt update
-
-      - name: Install ROCm
-        run: |
-          # Check if ROCm packages are available
-          echo "Checking ROCm package availability..."
-          apt-cache show rocm-dev hip-dev hipblas-dev || {
-            echo "ROCm packages not found, listing available packages:"
-            apt-cache search rocm | head -10
-            apt-cache search hip | head -10
-          }
-
-          # Check repository priorities
-          echo "Checking repository priorities..."
-          apt-cache policy hipcc rocm-cmake rocm-utils
-
-          # Install ROCm packages (APT preferences will ensure ROCm repo versions are used)
-          echo "Installing ROCm packages..."
+          sudo apt-get update
           sudo apt install -y \
             rocm-dev \
             hip-dev \
             hipblas-dev \
+            cmake \
             ninja-build
-
           # Clean apt caches to recover disk space
           sudo apt clean
           sudo rm -rf /var/lib/apt/lists/* || true
@@ -560,21 +533,31 @@ jobs:
           # Add ROCm to PATH for current session
           echo "/opt/rocm/bin" >> $GITHUB_PATH
 
+          # Build case pattern from GPU_TARGETS
+          PATTERN=$(printf '%s' "$GPU_TARGETS" | sed 's/;/\*|\*/g')
+          PATTERN="*${PATTERN}*"
+
           # Remove library files for architectures we're not building for to save disk space
           echo "Cleaning up unneeded architecture files..."
           cd /opt/rocm/lib/rocblas/library
           # Keep only our target architectures
           for file in *; do
-            if [[ ! "$file" =~ (gfx1151|gfx1150|gfx1100|gfx1101|gfx1102|gfx1200|gfx1201) ]]; then
-              sudo rm -f "$file"
-            fi
+            case "$file" in
+            $PATTERN)
+              ;;
+            *)
+              sudo rm -f "$file" ;;
+            esac;
           done
 
           cd /opt/rocm/lib/hipblaslt/library
           for file in *; do
-            if [[ ! "$file" =~ (gfx1151|gfx1150|gfx1100|gfx1101|gfx1102|gfx1200|gfx1201) ]]; then
-              sudo rm -f "$file"
-            fi
+            case "$file" in
+              $PATTERN)
+                ;;
+              *)
+                sudo rm -f "$file" ;;
+            esac;
           done
 
       - name: Build
