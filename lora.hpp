@@ -571,10 +571,10 @@ struct LoraModel : public GGMLRunner {
 
                 int rank = 1;
                 if (lokr_w1_b) {
-                    rank = lokr_w1_b->ne[ggml_n_dims(lokr_w1_b) - 1];
+                    rank = (int)lokr_w1_b->ne[ggml_n_dims(lokr_w1_b) - 1];
                 }
                 if (lokr_w2_b) {
-                    rank = lokr_w2_b->ne[ggml_n_dims(lokr_w2_b) - 1];
+                    rank = (int)lokr_w2_b->ne[ggml_n_dims(lokr_w2_b) - 1];
                 }
 
                 float scale_value = 1.0f;
@@ -615,7 +615,7 @@ struct LoraModel : public GGMLRunner {
                 continue;
             }
 
-            // not a lork, normal lora path
+            // not a lokr, normal lora path
 
             std::string lora_down_name = "lora." + key + ".lora_down";
             std::string lora_up_name   = "lora." + key + ".lora_up";

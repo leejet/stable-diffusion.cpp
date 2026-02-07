@@ -2737,11 +2737,11 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_lokr_forward(
 
             // unpack conv2d weights if needed
             if (ggml_n_dims(a) < 4) {
-                int k = sqrt(a->ne[0] / h_split->ne[2]);
+                int k = (int)sqrt(a->ne[0] / h_split->ne[2]);
                 GGML_ASSERT(k * k * h_split->ne[2] == a->ne[0]);
                 a = ggml_reshape_4d(ctx, a, k, k, a->ne[0] / (k * k), a->ne[1]);
             } else if (a->ne[2] != h_split->ne[2]) {
-                int k = sqrt(a->ne[2] / h_split->ne[2]);
+                int k = (int)sqrt(a->ne[2] / h_split->ne[2]);
                 GGML_ASSERT(k * k * h_split->ne[2] == a->ne[2]);
                 a = ggml_reshape_4d(ctx, a, a->ne[0] * k, a->ne[1] * k, a->ne[2] / (k * k), a->ne[3]);
             }
