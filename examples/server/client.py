@@ -21,6 +21,8 @@ def parse_arguments():
 
     ap.add_argument("--server-url", default=os.environ.get("SD_SERVER_URL"),
         help="URL of the sd-server OpenAI-compatible endpoint. Defaults to SD_SERVER_URL env var.")
+    ap.add_argument("--api", choices=["openai", "sdapi"], default="openai",
+        help="Select API backend, one of ['openai', 'sdapi'] (default: openai)")
 
     ap.add_argument("-o", "--output", default="./output.png",
         help="path to write result image to. You can use printf-style %%d format specifiers for image sequences (default: ./output.png) (e.g., output_%%03d.png).")
@@ -110,7 +112,7 @@ def parse_arguments():
             output_format = 'jpeg'
         args_dict["output_format"] = output_format
 
-    util_keys = {'verbose', 'server_url', 'output', 'output_begin_idx'}
+    util_keys = {'verbose', 'server_url', 'output', 'output_begin_idx', 'api'}
 
     util_opts = {k: v for k, v in args_dict.items() if k in util_keys and v is not None}
     gen_opts = {k: v for k, v in args_dict.items() if k not in util_keys and v is not None}
@@ -187,6 +189,56 @@ def decode_openai_response(response_body):
     return decoded_images
 
 
+def build_sdapi_payload(gen_opts, util_opts):
+
+    same_keys = ["prompt", "negative_prompt", "width", "height",
+        "steps", "cfg_scale", "seed", "scheduler", "clip_skip"]
+    translated_keys = [
+        ("batch_size", "batch_count"),
+        ("sampler_name", "sample_method"),
+        ("denoising_strength", "strength"),
+    ]
+    params = {}
+    for key in same_keys:
+        params[key] = gen_opts.get(key)
+    for dkey, okey in translated_keys:
+        params[dkey] = gen_opts.get(okey)
+
+    payload = {k: v for k, v in params.items() if v is not None}
+
+    # use server defaults
+    if 'seed' in payload and payload["seed"] < 0:
+        del payload["seed"]
+    if 'steps' not in payload:
+        # XXX steps is currently mandatory
+        payload['steps'] = 20
+
+    return payload
+
+
+def decode_sdapi_response(response_body):
+    try:
+        data = json.loads(response_body)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON response: {e}")
+
+    if 'images' not in data:
+        raise ValueError(f"Unexpected response format (no 'images' key)")
+
+    images = data['images']
+    decoded_images = []
+
+    for i, b64_data in enumerate(images):
+        if not b64_data:
+            raise ValueError(f"No image data found for item {i}")
+        try:
+            decoded_images.append(base64.b64decode(b64_data))
+        except base64.binascii.Error as e:
+            raise ValueError(f"Failed to decode base64 data for item {i}: {e}")
+
+    return decoded_images
+
+
 def save_images(image_list, util_opts):
     verbose = util_opts.get("verbose", False)
     output = util_opts.get("output", "./output.png")
@@ -232,6 +284,7 @@ def main():
     util_opts, gen_opts = parse_arguments()
 
     verbose = bool(util_opts.get("verbose"))
+    use_sdapi = util_opts.get("api") == 'sdapi'
 
     server_url = util_opts.get("server_url")
     if not server_url:
@@ -240,9 +293,50 @@ def main():
 
     if not server_url.endswith('/'):
         server_url += '/'
-    base_url = server_url + "v1"
 
-    if openai:
+    if use_sdapi:
+        # Use sdapi
+        endpoint = server_url + "sdapi/v1/txt2img"
+        api_payload = build_sdapi_payload(gen_opts, util_opts)
+
+        if verbose:
+            print(f"Using sdapi")
+            print(f"Sending request to: {endpoint}")
+            print(f"Payload: {json.dumps(api_payload, indent=2)}")
+
+        req_data = json.dumps(api_payload).encode('utf-8')
+        req = urllib.request.Request(endpoint, data=req_data, headers={'Content-Type': 'application/json'})
+
+        response_body = None
+        try:
+            with urllib.request.urlopen(req) as response:
+                response_body = response.read().decode('utf-8')
+        except urllib.error.HTTPError as e:
+            print(f"HTTP Error {e.code}: {e.reason}")
+            try:
+                error_body = e.read().decode('utf-8')
+                if error_body:
+                    print(f"Server error details: {error_body}")
+            except:
+                pass
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f"URL Error: {e.reason}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Request Error: {e}")
+            sys.exit(1)
+
+        try:
+            images = decode_sdapi_response(response_body)
+        except ValueError as e:
+            print(f"Error decoding response: {e}")
+            sys.exit(1)
+
+    elif openai:
+        # Use openai python module
+
+        base_url = server_url + "v1"
 
         openai_version = openai.version.VERSION
         if verbose:
@@ -262,11 +356,13 @@ def main():
         images = [base64.b64decode(img.b64_json) for img in result.data]
 
     else:
+        # Use OpenAI-compatible endpoint
 
         api_payload = build_openai_payload(gen_opts, util_opts)
 
-        endpoint = base_url + "/images/generations"
+        endpoint = server_url + "v1/images/generations"
         if verbose:
+            print(f"Using OpenAI API")
             print(f"Sending request to: {endpoint}")
             print(f"Payload: {json.dumps(api_payload, indent=2)}")
 
@@ -279,6 +375,12 @@ def main():
                 response_body = response.read().decode('utf-8')
         except urllib.error.HTTPError as e:
             print(f"HTTP Error {e.code}: {e.reason}")
+            try:
+                error_body = e.read().decode('utf-8')
+                if error_body:
+                    print(f"Server error details: {error_body}")
+            except:
+                pass
             sys.exit(1)
         except urllib.error.URLError as e:
             print(f"URL Error: {e.reason}")
