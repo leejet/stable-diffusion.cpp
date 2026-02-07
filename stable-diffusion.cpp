@@ -161,63 +161,6 @@ public:
         ggml_backend_free(backend);
     }
 
-    void init_backend() {
-#ifdef SD_USE_CUDA
-        LOG_DEBUG("Using CUDA backend");
-        backend = ggml_backend_cuda_init(0);
-#endif
-#ifdef SD_USE_METAL
-        LOG_DEBUG("Using Metal backend");
-        backend = ggml_backend_metal_init();
-#endif
-#ifdef SD_USE_VULKAN
-        LOG_DEBUG("Using Vulkan backend");
-        size_t device          = 0;
-        const int device_count = ggml_backend_vk_get_device_count();
-        if (device_count) {
-            const char* SD_VK_DEVICE = getenv("SD_VK_DEVICE");
-            if (SD_VK_DEVICE != nullptr) {
-                std::string sd_vk_device_str = SD_VK_DEVICE;
-                try {
-                    device = std::stoull(sd_vk_device_str);
-                } catch (const std::invalid_argument&) {
-                    LOG_WARN("SD_VK_DEVICE environment variable is not a valid integer (%s). Falling back to device 0.", SD_VK_DEVICE);
-                    device = 0;
-                } catch (const std::out_of_range&) {
-                    LOG_WARN("SD_VK_DEVICE environment variable value is out of range for `unsigned long long` type (%s). Falling back to device 0.", SD_VK_DEVICE);
-                    device = 0;
-                }
-                if (device >= device_count) {
-                    LOG_WARN("Cannot find targeted vulkan device (%llu). Falling back to device 0.", device);
-                    device = 0;
-                }
-            }
-            LOG_INFO("Vulkan: Using device %llu", device);
-            backend = ggml_backend_vk_init(device);
-        }
-        if (!backend) {
-            LOG_WARN("Failed to initialize Vulkan backend");
-        }
-#endif
-#ifdef SD_USE_OPENCL
-        LOG_DEBUG("Using OpenCL backend");
-        // ggml_log_set(ggml_log_callback_default, nullptr); // Optional ggml logs
-        backend = ggml_backend_opencl_init();
-        if (!backend) {
-            LOG_WARN("Failed to initialize OpenCL backend");
-        }
-#endif
-#ifdef SD_USE_SYCL
-        LOG_DEBUG("Using SYCL backend");
-        backend = ggml_backend_sycl_init(0);
-#endif
-
-        if (!backend) {
-            LOG_DEBUG("Using CPU backend");
-            backend = ggml_backend_cpu_init();
-        }
-    }
-
     std::shared_ptr<RNG> get_rng(rng_type_t rng_type) {
         if (rng_type == STD_DEFAULT_RNG) {
             return std::make_shared<STDDefaultRNG>();
@@ -245,7 +188,8 @@ public:
 
         ggml_log_set(ggml_log_callback_default, nullptr);
 
-        init_backend();
+        ggml_backend_load_all();
+        backend = ggml_backend_init_best();
 
         ModelLoader model_loader;
 
