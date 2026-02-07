@@ -34,6 +34,11 @@ def parse_arguments():
     ap.add_argument("-p", "--prompt", required=True,
         help="the prompt to render")
 
+    ap.add_argument("-i", "--init-img", dest="init_img", default=None,
+        help="path to the init image")
+    ap.add_argument("--mask", default=None,
+        help="path to the mask image")
+
     ap.add_argument("-n", "--negative-prompt", dest="negative_prompt", default=None,
         help="the negative prompt (default: \"\")")
     ap.add_argument("-H", "--height", type=int,
@@ -116,7 +121,7 @@ def parse_arguments():
     if not args_dict["prompt"].strip():
         ap.error("argument -p/--prompt must be non‑empty")
 
-    util_keys = {'verbose', 'server_url', 'output', 'output_begin_idx', 'api'}
+    util_keys = {'verbose', 'server_url', 'output', 'output_begin_idx', 'api', 'init_img', 'mask'}
 
     util_opts = {k: v for k, v in args_dict.items() if k in util_keys and v is not None}
     gen_opts = {k: v for k, v in args_dict.items() if k not in util_keys and v is not None}
@@ -193,8 +198,34 @@ def decode_openai_response(response_body):
     return decoded_images
 
 
-def build_sdapi_payload(gen_opts, util_opts):
+def encode_image_to_base64(image_path):
+    """Encode an image file to base64 string"""
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
 
+def load_images(util_opts):
+    image_opts = {}
+    init_img_path = util_opts.get("init_img")
+    if init_img_path:
+        try:
+            image_opts["init_img"] = encode_image_to_base64(init_img_path)
+        except FileNotFoundError:
+            raise ValueError(f"Init image file not found: {init_img_path}")
+        except Exception as e:
+            raise ValueError(f"Failed to encode init image: {e}")
+
+    mask_path = util_opts.get("mask")
+    if mask_path:
+        try:
+            image_opts["mask"] = encode_image_to_base64(mask_path)
+        except FileNotFoundError:
+            raise ValueError(f"Mask image file not found: {mask_path}")
+        except Exception as e:
+            raise ValueError(f"Failed to encode mask image: {e}")
+
+    return image_opts
+
+def build_sdapi_payload(gen_opts, util_opts, image_opts={}):
     same_keys = ["prompt", "negative_prompt", "width", "height",
         "steps", "cfg_scale", "seed", "scheduler", "clip_skip"]
     translated_keys = [
@@ -209,6 +240,14 @@ def build_sdapi_payload(gen_opts, util_opts):
         params[dkey] = gen_opts.get(okey)
 
     payload = {k: v for k, v in params.items() if v is not None}
+
+    init_img = image_opts.get('init_img')
+    if init_img:
+        payload["init_images"] = [init_img]
+
+    mask = util_opts.get("mask")
+    if mask:
+        payload["mask"] = mask
 
     # use server defaults
     if 'seed' in payload and payload["seed"] < 0:
@@ -284,11 +323,22 @@ def save_images(image_list, util_opts):
             print(f"Saved image to {filepath}")
 
 
+def truncate_for_debug(obj, max_length=512):
+    if isinstance(obj, dict):
+        return {k: truncate_for_debug(v, max_length) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [truncate_for_debug(item, max_length) for item in obj]
+    elif isinstance(obj, str) and len(obj) > max_length:
+        return f"{obj[:max_length]}... ({len(obj)} chars total)"
+    else:
+        return obj
+
 def main():
     util_opts, gen_opts = parse_arguments()
 
     verbose = bool(util_opts.get("verbose"))
     use_sdapi = util_opts.get("api") == 'sdapi'
+    init_img_path = util_opts.get("init_img")
 
     server_url = util_opts.get("server_url")
     if not server_url:
@@ -300,13 +350,19 @@ def main():
 
     if use_sdapi:
         # Use sdapi
-        endpoint = server_url + "sdapi/v1/txt2img"
-        api_payload = build_sdapi_payload(gen_opts, util_opts)
+        if init_img_path:
+            endpoint = server_url + "sdapi/v1/img2img"
+            image_opts = load_images(util_opts)
+        else:
+            endpoint = server_url + "sdapi/v1/txt2img"
+            image_opts = {}
+
+        api_payload = build_sdapi_payload(gen_opts, util_opts, image_opts)
 
         if verbose:
             print(f"Using sdapi")
             print(f"Sending request to: {endpoint}")
-            print(f"Payload: {json.dumps(api_payload, indent=2)}")
+            print(f"Payload: {json.dumps(truncate_for_debug(api_payload), indent=2)}")
 
         req_data = json.dumps(api_payload).encode('utf-8')
         req = urllib.request.Request(endpoint, data=req_data, headers={'Content-Type': 'application/json'})
