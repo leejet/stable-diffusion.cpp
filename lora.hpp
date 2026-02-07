@@ -501,8 +501,6 @@ struct LoraModel : public GGMLRunner {
         return diff;
     }
 
-
-    
     ggml_tensor* get_out_diff(ggml_context* ctx,
                               ggml_tensor* x,
                               WeightAdapter::ForwardParams forward_params,
@@ -518,11 +516,10 @@ struct LoraModel : public GGMLRunner {
             }
             bool is_conv2d = forward_params.op_type == WeightAdapter::ForwardParams::op_type_t::OP_CONV2D;
 
-
             std::string lokr_w1_name   = "lora." + key + ".lokr_w1";
             std::string lokr_w1_a_name = "lora." + key + ".lokr_w1_a";
             // if either of these is found, then we have a lokr lora
-            auto iter = lora_tensors.find(lokr_w1_name);
+            auto iter   = lora_tensors.find(lokr_w1_name);
             auto iter_a = lora_tensors.find(lokr_w1_a_name);
             if (iter != lora_tensors.end() || iter_a != lora_tensors.end()) {
                 std::string lokr_w1_b_name = "lora." + key + ".lokr_w1_b";
@@ -600,22 +597,25 @@ struct LoraModel : public GGMLRunner {
                     out_diff = ggml_concat(ctx, out_diff, curr_out_diff, 0);
                 }
 
-                if(lokr_w1) applied_lora_tensors.insert(lokr_w1_name);
-                if(lokr_w1_a) applied_lora_tensors.insert(lokr_w1_a_name);
-                if(lokr_w1_b) applied_lora_tensors.insert(lokr_w1_b_name);
-                if(lokr_w2) applied_lora_tensors.insert(lokr_w2_name);
-                if(lokr_w2_a) applied_lora_tensors.insert(lokr_w2_name);
-                if(lokr_w2_b) applied_lora_tensors.insert(lokr_w2_b_name);
+                if (lokr_w1)
+                    applied_lora_tensors.insert(lokr_w1_name);
+                if (lokr_w1_a)
+                    applied_lora_tensors.insert(lokr_w1_a_name);
+                if (lokr_w1_b)
+                    applied_lora_tensors.insert(lokr_w1_b_name);
+                if (lokr_w2)
+                    applied_lora_tensors.insert(lokr_w2_name);
+                if (lokr_w2_a)
+                    applied_lora_tensors.insert(lokr_w2_name);
+                if (lokr_w2_b)
+                    applied_lora_tensors.insert(lokr_w2_b_name);
                 applied_lora_tensors.insert(alpha_name);
-
 
                 index++;
                 continue;
             }
-            
+
             // not a lork, normal lora path
-
-
 
             std::string lora_down_name = "lora." + key + ".lora_down";
             std::string lora_up_name   = "lora." + key + ".lora_up";
@@ -626,7 +626,6 @@ struct LoraModel : public GGMLRunner {
             ggml_tensor* lora_up   = nullptr;
             ggml_tensor* lora_mid  = nullptr;
             ggml_tensor* lora_down = nullptr;
-
 
             iter = lora_tensors.find(lora_up_name);
             if (iter != lora_tensors.end()) {
