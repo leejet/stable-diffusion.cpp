@@ -1695,46 +1695,95 @@ struct LLMEmbedder : public Conditioner {
         }
     }
 
-    std::tuple<std::vector<int>, std::vector<float>> tokenize(std::string text,
-                                                              std::pair<int, int> attn_range,
-                                                              size_t max_length = 0,
-                                                              bool padding      = false) {
+    size_t get_utf8_char_len(char c) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if ((uc & 0x80) == 0)
+            return 1;  // ASCII (1 byte)
+        if ((uc & 0xE0) == 0xC0)
+            return 2;  // 2-byte char
+        if ((uc & 0xF0) == 0xE0)
+            return 3;  // 3-byte char (Common for Chinese/Japanese)
+        if ((uc & 0xF8) == 0xF0)
+            return 4;  // 4-byte char (Emojis, etc.)
+        return 1;      // Fallback (should not happen in valid UTF-8)
+    }
+
+    std::tuple<std::vector<int>, std::vector<float>> tokenize(
+        std::string text,
+        std::pair<int, int> attn_range,
+        size_t max_length = 0,
+        bool padding      = false,
+        bool spell_quotes = false) {
         std::vector<std::pair<std::string, float>> parsed_attention;
         parsed_attention.emplace_back(text.substr(0, attn_range.first), 1.f);
+
         if (attn_range.second - attn_range.first > 0) {
-            auto new_parsed_attention = parse_prompt_attention(text.substr(attn_range.first, attn_range.second - attn_range.first));
-            parsed_attention.insert(parsed_attention.end(),
-                                    new_parsed_attention.begin(),
-                                    new_parsed_attention.end());
+            auto new_parsed_attention = parse_prompt_attention(
+                text.substr(attn_range.first, attn_range.second - attn_range.first));
+            parsed_attention.insert(
+                parsed_attention.end(),
+                new_parsed_attention.begin(),
+                new_parsed_attention.end());
         }
         parsed_attention.emplace_back(text.substr(attn_range.second), 1.f);
-        {
-            std::stringstream ss;
-            ss << "[";
-            for (const auto& item : parsed_attention) {
-                ss << "['" << item.first << "', " << item.second << "], ";
-            }
-            ss << "]";
-            LOG_DEBUG("parse '%s' to %s", text.c_str(), ss.str().c_str());
-        }
 
         std::vector<int> tokens;
         std::vector<float> weights;
+
         for (const auto& item : parsed_attention) {
             const std::string& curr_text = item.first;
             float curr_weight            = item.second;
-            std::vector<int> curr_tokens = tokenizer->tokenize(curr_text, nullptr);
-            tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
-            weights.insert(weights.end(), curr_tokens.size(), curr_weight);
+
+            if (spell_quotes) {
+                std::string buffer;
+                bool in_quote = false;
+
+                size_t i = 0;
+                while (i < curr_text.size()) {
+                    // utf8 character can be 1-4 char
+                    size_t char_len = get_utf8_char_len(curr_text[i]);
+
+                    // Safety check to prevent reading past end of string
+                    if (i + char_len > curr_text.size()) {
+                        char_len = curr_text.size() - i;
+                    }
+                    std::string uchar = curr_text.substr(i, char_len);
+                    i += char_len;
+
+                    if (uchar == "\"") {
+                        buffer += uchar;
+                        // If we were accumulating normal text, flush it now
+                        if (!in_quote) {
+                            std::vector<int> part_tokens = tokenizer->tokenize(buffer, nullptr);
+                            tokens.insert(tokens.end(), part_tokens.begin(), part_tokens.end());
+                            weights.insert(weights.end(), part_tokens.size(), curr_weight);
+                            buffer.clear();
+                        }
+                        in_quote = !in_quote;
+                    } else {
+                        if (in_quote) {
+                            std::vector<int> char_tokens = tokenizer->tokenize(uchar, nullptr);
+                            tokens.insert(tokens.end(), char_tokens.begin(), char_tokens.end());
+                            weights.insert(weights.end(), char_tokens.size(), curr_weight);
+                        } else {
+                            buffer += uchar;
+                        }
+                    }
+                }
+
+                if (!buffer.empty()) {
+                    std::vector<int> part_tokens = tokenizer->tokenize(buffer, nullptr);
+                    tokens.insert(tokens.end(), part_tokens.begin(), part_tokens.end());
+                    weights.insert(weights.end(), part_tokens.size(), curr_weight);
+                }
+            } else {
+                std::vector<int> curr_tokens = tokenizer->tokenize(curr_text, nullptr);
+                tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
+                weights.insert(weights.end(), curr_tokens.size(), curr_weight);
+            }
         }
 
         tokenizer->pad_tokens(tokens, weights, max_length, padding);
-
-        // for (int i = 0; i < tokens.size(); i++) {
-        //     std::cout << tokens[i] << ":" << weights[i] << ", " << i << std::endl;
-        // }
-        // std::cout << std::endl;
-
         return {tokens, weights};
     }
 
@@ -1745,74 +1794,163 @@ struct LLMEmbedder : public Conditioner {
         std::vector<std::pair<int, ggml_tensor*>> image_embeds;
         std::pair<int, int> prompt_attn_range;
         int prompt_template_encode_start_idx = 34;
+        int prompt_template_encode_end_idx   = 0;
         int max_length                       = 0;
+        bool spell_quotes                    = false;
         std::set<int> out_layers;
         std::vector<int> tokens;
         std::vector<float> weights;
         std::vector<float> mask;
         if (llm->enable_vision && conditioner_params.ref_images.size() > 0) {
-            LOG_INFO("QwenImageEditPlusPipeline");
-            prompt_template_encode_start_idx = 64;
-            int image_embed_idx              = 64 + 6;
+            if (sd_version_is_longcat(version)) {
+                LOG_INFO("LongCatEditPipeline");
+                prompt_template_encode_start_idx = 67;
+                prompt_template_encode_end_idx = 5;
+                int image_embed_idx = 36 + 6;
 
-            int min_pixels          = 384 * 384;
-            int max_pixels          = 560 * 560;
-            std::string placeholder = "<|image_pad|>";
-            std::string img_prompt;
+                int min_pixels          = 384 * 384;
+                int max_pixels          = 560 * 560;
+                std::string placeholder = "<|image_pad|>";
+                std::string img_prompt;
 
-            for (int i = 0; i < conditioner_params.ref_images.size(); i++) {
-                sd_image_f32_t image = sd_image_t_to_sd_image_f32_t(*conditioner_params.ref_images[i]);
-                double factor        = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
-                int height           = image.height;
-                int width            = image.width;
-                int h_bar            = static_cast<int>(std::round(height / factor) * factor);
-                int w_bar            = static_cast<int>(std::round(width / factor) * factor);
+                // Only one image is officicially supported by the model, not sure how it handles multiple images
+                for (int i = 0; i < conditioner_params.ref_images.size(); i++) {
+                    sd_image_f32_t image = sd_image_t_to_sd_image_f32_t(*conditioner_params.ref_images[i]);
+                    double factor        = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
+                    int height           = image.height;
+                    int width            = image.width;
+                    int h_bar            = static_cast<int>(std::round(height / factor)) * factor;
+                    int w_bar            = static_cast<int>(std::round(width / factor)) * factor;
 
-                if (static_cast<double>(h_bar) * w_bar > max_pixels) {
-                    double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
-                    h_bar       = std::max(static_cast<int>(factor),
-                                           static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
-                    w_bar       = std::max(static_cast<int>(factor),
-                                           static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
-                } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
-                    double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
-                    h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
-                    w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                    if (static_cast<double>(h_bar) * w_bar > max_pixels) {
+                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
+                        h_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                        w_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+                    } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
+                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
+                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                    }
+
+                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, image.height, image.width, h_bar, w_bar);
+
+                    sd_image_f32_t resized_image = clip_preprocess(image, w_bar, h_bar);
+                    free(image.data);
+                    image.data = nullptr;
+
+                    ggml_tensor* image_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
+                    sd_image_f32_to_ggml_tensor(resized_image, image_tensor, false);
+                    free(resized_image.data);
+                    resized_image.data = nullptr;
+
+                    ggml_tensor* image_embed = nullptr;
+                    llm->encode_image(n_threads, image_tensor, &image_embed, work_ctx);
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+                    image_embed_idx += 1 + image_embed->ne[1] + 6;
+
+                    img_prompt += "<|vision_start|>";
+                    int64_t num_image_tokens = image_embed->ne[1];
+                    img_prompt.reserve(num_image_tokens * placeholder.size());
+                    for (int j = 0; j < num_image_tokens; j++) {
+                        img_prompt += placeholder;
+                    }
+                    img_prompt += "<|vision_end|>";
                 }
 
-                LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, image.height, image.width, h_bar, w_bar);
+                max_length = 512 + prompt_template_encode_start_idx;
+                spell_quotes            = true;
+                prompt                  = "<|im_start|>system\nAs an image editing expert, first analyze the content and attributes of the input image(s). Then, based on the user's editing instructions, clearly and precisely determine how to modify the given image(s), ensuring that only the specified parts are altered and all other aspects remain consistent with the original(s).<|im_end|>\n<|im_start|>user\n";
+                prompt += img_prompt;
 
-                sd_image_f32_t resized_image = clip_preprocess(image, w_bar, h_bar);
-                free(image.data);
-                image.data = nullptr;
+                prompt_attn_range.first = static_cast<int>(prompt.size());
+                prompt += conditioner_params.text;
+                prompt_attn_range.second = static_cast<int>(prompt.size());
 
-                ggml_tensor* image_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
-                sd_image_f32_to_ggml_tensor(resized_image, image_tensor, false);
-                free(resized_image.data);
-                resized_image.data = nullptr;
+                auto tokens_and_weights = tokenize(prompt, prompt_attn_range, 0, false, spell_quotes);
+                tokens                  = std::get<0>(tokens_and_weights);
+                weights                 = std::get<1>(tokens_and_weights);
 
-                ggml_tensor* image_embed = nullptr;
-                llm->encode_image(n_threads, image_tensor, &image_embed, work_ctx);
-                image_embeds.emplace_back(image_embed_idx, image_embed);
-                image_embed_idx += 1 + static_cast<int>(image_embed->ne[1]) + 6;
-
-                img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";  // [24669, 220, index, 25, 220, 151652]
-                int64_t num_image_tokens = image_embed->ne[1];
-                img_prompt.reserve(num_image_tokens * placeholder.size());
-                for (int j = 0; j < num_image_tokens; j++) {
-                    img_prompt += placeholder;
+                mask.insert(mask.end(), tokens.size(), 1.f);
+                if (tokens.size() < max_length) {
+                    mask.insert(mask.end(), max_length - tokens.size(), 0.f);
+                    tokenizer->pad_tokens(tokens, weights, max_length, true);
                 }
-                img_prompt += "<|vision_end|>";
+
+                std::string prompt_template_suffix = "<|im_end|>\n<|im_start|>assistant\n";
+                auto suffix_tokens                 = tokenizer->tokenize(prompt_template_suffix, nullptr);
+
+                LOG_DEBUG("%zd", tokens.size());
+
+                tokens.insert(tokens.end(), suffix_tokens.begin(), suffix_tokens.end());
+                weights.insert(weights.end(), suffix_tokens.size(), 1.f);
+                mask.insert(mask.end(), suffix_tokens.size(), 1.f);
+
+            } else {
+                LOG_INFO("QwenImageEditPlusPipeline");
+                prompt_template_encode_start_idx = 64;
+                int image_embed_idx              = 64 + 6;
+
+                int min_pixels          = 384 * 384;
+                int max_pixels          = 560 * 560;
+                std::string placeholder = "<|image_pad|>";
+                std::string img_prompt;
+
+                for (int i = 0; i < conditioner_params.ref_images.size(); i++) {
+                    sd_image_f32_t image = sd_image_t_to_sd_image_f32_t(*conditioner_params.ref_images[i]);
+                    double factor        = llm->params.vision.patch_size * llm->params.vision.spatial_merge_size;
+                    int height           = image.height;
+                    int width            = image.width;
+                    int h_bar            = static_cast<int>(std::round(height / factor) * factor);
+                    int w_bar            = static_cast<int>(std::round(width / factor) * factor);
+
+                    if (static_cast<double>(h_bar) * w_bar > max_pixels) {
+                        double beta = std::sqrt((height * width) / static_cast<double>(max_pixels));
+                        h_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(height / beta / factor)) * static_cast<int>(factor));
+                        w_bar       = std::max(static_cast<int>(factor),
+                                               static_cast<int>(std::floor(width / beta / factor)) * static_cast<int>(factor));
+                    } else if (static_cast<double>(h_bar) * w_bar < min_pixels) {
+                        double beta = std::sqrt(static_cast<double>(min_pixels) / (height * width));
+                        h_bar       = static_cast<int>(std::ceil(height * beta / factor)) * static_cast<int>(factor);
+                        w_bar       = static_cast<int>(std::ceil(width * beta / factor)) * static_cast<int>(factor);
+                    }
+
+                    LOG_DEBUG("resize conditioner ref image %d from %dx%d to %dx%d", i, image.height, image.width, h_bar, w_bar);
+
+                    sd_image_f32_t resized_image = clip_preprocess(image, w_bar, h_bar);
+                    free(image.data);
+                    image.data = nullptr;
+
+                    ggml_tensor* image_tensor = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, resized_image.width, resized_image.height, 3, 1);
+                    sd_image_f32_to_ggml_tensor(resized_image, image_tensor, false);
+                    free(resized_image.data);
+                    resized_image.data = nullptr;
+
+                    ggml_tensor* image_embed = nullptr;
+                    llm->encode_image(n_threads, image_tensor, &image_embed, work_ctx);
+                    image_embeds.emplace_back(image_embed_idx, image_embed);
+                    image_embed_idx += 1 + static_cast<int>(image_embed->ne[1]) + 6;
+
+                    img_prompt += "Picture " + std::to_string(i + 1) + ": <|vision_start|>";  // [24669, 220, index, 25, 220, 151652]
+                    int64_t num_image_tokens = image_embed->ne[1];
+                    img_prompt.reserve(num_image_tokens * placeholder.size());
+                    for (int j = 0; j < num_image_tokens; j++) {
+                        img_prompt += placeholder;
+                    }
+                    img_prompt += "<|vision_end|>";
+                }
+
+                prompt = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n";
+                prompt += img_prompt;
+
+                prompt_attn_range.first = static_cast<int>(prompt.size());
+                prompt += conditioner_params.text;
+                prompt_attn_range.second = static_cast<int>(prompt.size());
+
+                prompt += "<|im_end|>\n<|im_start|>assistant\n";
             }
-
-            prompt = "<|im_start|>system\nDescribe the key features of the input image (color, shape, size, texture, objects, background), then explain how the user's text instruction should alter or modify the image. Generate a new image that meets the user's requirements while maintaining consistency with the original input where appropriate.<|im_end|>\n<|im_start|>user\n";
-            prompt += img_prompt;
-
-            prompt_attn_range.first = static_cast<int>(prompt.size());
-            prompt += conditioner_params.text;
-            prompt_attn_range.second = static_cast<int>(prompt.size());
-
-            prompt += "<|im_end|>\n<|im_start|>assistant\n";
         } else if (version == VERSION_FLUX2) {
             prompt_template_encode_start_idx = 0;
             out_layers                       = {10, 20, 30};
@@ -1868,6 +2006,36 @@ struct LLMEmbedder : public Conditioner {
             prompt_attn_range.second = static_cast<int>(prompt.size());
 
             prompt += "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+        } else if (sd_version_is_longcat(version)) {
+            prompt_template_encode_start_idx = 36;
+            max_length   = 512 + prompt_template_encode_start_idx;
+            prompt_template_encode_end_idx = 5;
+            spell_quotes = true;
+
+            prompt = "<|im_start|>system\nAs an image captioning expert, generate a descriptive text prompt based on an image content, suitable for input to a text-to-image model.<|im_end|>\n<|im_start|>user\n";
+
+            prompt_attn_range.first = static_cast<int>(prompt.size());
+            prompt += conditioner_params.text;
+            prompt_attn_range.second = static_cast<int>(prompt.size());
+
+            auto tokens_and_weights = tokenize(prompt, prompt_attn_range, 0, false, spell_quotes);
+            tokens            = std::get<0>(tokens_and_weights);
+            weights           = std::get<1>(tokens_and_weights);
+
+            mask.insert(mask.end(), tokens.size(), 1.f);
+            if (tokens.size() < max_length) {
+                mask.insert(mask.end(), max_length - tokens.size(), 0.f);
+                tokenizer->pad_tokens(tokens, weights, max_length, true);
+            }
+    
+            std::string prompt_template_suffix = "<|im_end|>\n<|im_start|>assistant\n";
+            auto suffix_tokens = tokenizer->tokenize(prompt_template_suffix, nullptr);
+
+            LOG_DEBUG("%zd", tokens.size());
+
+            tokens.insert(tokens.end(), suffix_tokens.begin(), suffix_tokens.end());
+            weights.insert(weights.end(), suffix_tokens.size(), 1.f);
+            mask.insert(mask.end(), suffix_tokens.size(), 1.f);
         } else {
             prompt_template_encode_start_idx = 34;
 
@@ -1881,7 +2049,7 @@ struct LLMEmbedder : public Conditioner {
         }
 
         if (tokens.empty()) {
-            auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0);
+            auto tokens_and_weights = tokenize(prompt, prompt_attn_range, max_length, max_length > 0, spell_quotes);
             tokens                  = std::get<0>(tokens_and_weights);
             weights                 = std::get<1>(tokens_and_weights);
         }
@@ -1945,18 +2113,18 @@ struct LLMEmbedder : public Conditioner {
         ggml_tensor* new_hidden_states = ggml_new_tensor_3d(work_ctx,
                                                             GGML_TYPE_F32,
                                                             hidden_states->ne[0],
-                                                            hidden_states->ne[1] - prompt_template_encode_start_idx + zero_pad_len,
+                                                            hidden_states->ne[1] - prompt_template_encode_start_idx + zero_pad_len - prompt_template_encode_end_idx,
                                                             hidden_states->ne[2]);
 
         ggml_ext_tensor_iter(new_hidden_states, [&](ggml_tensor* new_hidden_states, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
             float value = 0.f;
-            if (i1 + prompt_template_encode_start_idx < hidden_states->ne[1]) {
+            if (i1 + prompt_template_encode_start_idx < hidden_states->ne[1] - prompt_template_encode_end_idx) {
                 value = ggml_ext_tensor_get_f32(hidden_states, i0, i1 + prompt_template_encode_start_idx, i2, i3);
             }
             ggml_ext_tensor_set_f32(new_hidden_states, value, i0, i1, i2, i3);
         });
 
-        // print_ggml_tensor(new_hidden_states);
+        print_ggml_tensor(new_hidden_states, true);
 
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);

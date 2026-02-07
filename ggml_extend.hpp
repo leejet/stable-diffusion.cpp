@@ -2212,7 +2212,7 @@ public:
            bool bias           = true,
            bool force_f32      = false,
            bool force_prec_f32 = false,
-           float scale         = 1.f)
+           float scale         = 1.f / 128.f)
         : in_features(in_features),
           out_features(out_features),
           bias(bias),
@@ -2234,6 +2234,83 @@ public:
             return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
         }
         return ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
+    }
+};
+
+class SplitLinear : public Linear {
+protected:
+    int64_t in_features;
+    std::vector<int64_t> out_features_vec;
+    bool bias;
+    bool force_f32;
+    bool force_prec_f32;
+    float scale;
+    std::string prefix;
+
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        this->prefix         = prefix;
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
+        if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
+            wtype = GGML_TYPE_F32;
+        }
+        params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features_vec[0]);
+        for (int i = 1; i < out_features_vec.size(); i++) {
+            // most likely same type as the first weight
+            params["weight." + std::to_string(i)] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features_vec[i]);
+        }
+        if (bias) {
+            enum ggml_type wtype = GGML_TYPE_F32;
+            params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_features_vec[0]);
+            for (int i = 1; i < out_features_vec.size(); i++) {
+                params["bias." + std::to_string(i)] = ggml_new_tensor_1d(ctx, wtype, out_features_vec[i]);
+            }
+        }
+    }
+
+public:
+    SplitLinear(int64_t in_features,
+                std::vector<int64_t> out_features_vec,
+                bool bias           = true,
+                bool force_f32      = false,
+                bool force_prec_f32 = false,
+                float scale         = 1.f)
+        : Linear(in_features, out_features_vec[0], bias, force_f32, force_prec_f32, scale),
+          in_features(in_features),
+          out_features_vec(out_features_vec),
+          bias(bias),
+          force_f32(force_f32),
+          force_prec_f32(force_prec_f32),
+          scale(scale) {}
+
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        struct ggml_tensor* w = params["weight"];
+        struct ggml_tensor* b = nullptr;
+        if (bias) {
+            b = params["bias"];
+        }
+        if (ctx->weight_adapter) {
+            // concat all weights and biases together so it runs in one linear layer
+            for (int i = 1; i < out_features_vec.size(); i++) {
+                w = ggml_concat(ctx->ggml_ctx, w, params["weight." + std::to_string(i)], 1);
+                if (bias) {
+                    b = ggml_concat(ctx->ggml_ctx, b, params["bias." + std::to_string(i)], 0);
+                }
+            }
+            WeightAdapter::ForwardParams forward_params;
+            forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
+            forward_params.linear.force_prec_f32 = force_prec_f32;
+            forward_params.linear.scale          = scale;
+            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
+        }
+        auto out = ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
+        for (int i = 1; i < out_features_vec.size(); i++) {
+            auto wi       = params["weight." + std::to_string(i)];
+            auto bi       = bias ? params["bias." + std::to_string(i)] : nullptr;
+            auto curr_out = ggml_ext_linear(ctx->ggml_ctx, x, wi, bi, force_prec_f32, scale);
+            out           = ggml_concat(ctx->ggml_ctx, out, curr_out, 0);
+        }
+
+        return out;
     }
 };
 
