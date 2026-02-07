@@ -7,6 +7,10 @@
 #include "flux.hpp"
 #include "ggml_extend.hpp"
 
+#ifdef SD_USE_VULKAN
+#include "ggml-vulkan.h"
+#endif
+
 namespace Qwen {
     constexpr int QWEN_IMAGE_GRAPH_SIZE = 20480;
 
@@ -96,9 +100,7 @@ namespace Qwen {
 
             float scale         = 1.f / 32.f;
             bool force_prec_f32 = false;
-#ifdef SD_USE_VULKAN
-            force_prec_f32 = true;
-#endif
+
             // The purpose of the scale here is to prevent NaN issues in certain situations.
             // For example when using CUDA but the weights are k-quants (not all prompts).
             blocks["to_out.0"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, out_dim, out_bias, false, force_prec_f32, scale));
@@ -124,6 +126,11 @@ namespace Qwen {
             auto to_k     = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
             auto to_v     = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
             auto to_out_0 = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
+#ifdef SD_USE_VULKAN
+            if(ggml_backend_is_vk(ctx->backend)){
+                to_out_0->set_force_prec_f32(true);
+            }
+#endif
 
             auto norm_added_q = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_q"]);
             auto norm_added_k = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_k"]);
