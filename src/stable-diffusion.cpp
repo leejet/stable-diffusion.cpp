@@ -326,16 +326,22 @@ public:
 
         model_loader.convert_tensors_name();
 
-        // SDXL_FIX: Don't overwrite if already detected as SDXL in earlier component
-        SDVersion detected_version = model_loader.get_sd_version();
-        if (version != VERSION_SDXL && version != VERSION_SDXL_INPAINT && version != VERSION_SDXL_PIX2PIX) {
-            version = detected_version;
+        // Check for manual version override first
+        if (sd_ctx_params->version_override != VERSION_COUNT) {
+            version = (SDVersion)sd_ctx_params->version_override;
+            LOG_INFO("Version overridden to: %s", model_version_to_str[version]);
         } else {
-            LOG_INFO("Keeping previous SDXL version, detected version: %s", model_version_to_str[detected_version]);
-        }
-        if (version == VERSION_COUNT) {
-            LOG_ERROR("get sd version from file failed: '%s'", SAFE_STR(sd_ctx_params->model_path));
-            return false;
+            // Auto-detect version - don't overwrite if already detected as SDXL in earlier component
+            SDVersion detected_version = model_loader.get_sd_version();
+            if (version != VERSION_SDXL && version != VERSION_SDXL_INPAINT && version != VERSION_SDXL_PIX2PIX) {
+                version = detected_version;
+            } else {
+                LOG_INFO("Keeping previous SDXL version, detected version: %s", model_version_to_str[detected_version]);
+            }
+            if (version == VERSION_COUNT) {
+                LOG_ERROR("get sd version from file failed: '%s'", SAFE_STR(sd_ctx_params->model_path));
+                return false;
+            }
         }
 
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
@@ -2925,6 +2931,7 @@ void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_params->sampler_rng_type        = RNG_TYPE_COUNT;
     sd_ctx_params->prediction              = PREDICTION_COUNT;
     sd_ctx_params->lora_apply_mode         = LORA_APPLY_AUTO;
+    sd_ctx_params->version_override        = VERSION_COUNT;  // Auto-detect
     sd_ctx_params->offload_params_to_cpu   = false;
     sd_ctx_params->enable_mmap             = false;
     sd_ctx_params->keep_clip_on_cpu        = false;
