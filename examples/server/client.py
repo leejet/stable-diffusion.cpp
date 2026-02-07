@@ -31,8 +31,9 @@ def parse_arguments():
     ap.add_argument("-v", "--verbose", action="store_true",
         help="print extra info.")
 
-    ap.add_argument("-p", "--prompt", default="",
+    ap.add_argument("-p", "--prompt", required=True,
         help="the prompt to render")
+
     ap.add_argument("-n", "--negative-prompt", dest="negative_prompt", default=None,
         help="the negative prompt (default: \"\")")
     ap.add_argument("-H", "--height", type=int,
@@ -111,6 +112,9 @@ def parse_arguments():
         if output_ext in ['.jpg', '.jpeg', '.jpe']:
             output_format = 'jpeg'
         args_dict["output_format"] = output_format
+
+    if not args_dict["prompt"].strip():
+        ap.error("argument -p/--prompt must be non‑empty")
 
     util_keys = {'verbose', 'server_url', 'output', 'output_begin_idx', 'api'}
 
