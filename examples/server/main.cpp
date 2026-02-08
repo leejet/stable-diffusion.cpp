@@ -351,8 +351,8 @@ int main(int argc, const char** argv) {
             std::string size          = j.value("size", "");
             std::string output_format = j.value("output_format", "png");
             int output_compression    = j.value("output_compression", 100);
-            int width                 = 512;
-            int height                = 512;
+            int width                 = default_gen_params.width > 0 ? default_gen_params.width : 512;
+            int height                = default_gen_params.height > 0 ? default_gen_params.height : 512;
             if (!size.empty()) {
                 auto pos = size.find('x');
                 if (pos != std::string::npos) {
@@ -540,7 +540,8 @@ int main(int argc, const char** argv) {
             n = std::clamp(n, 1, 8);
 
             std::string size = req.form.get_field("size");
-            int width = 512, height = 512;
+            int width = default_gen_params.width > 0 ? default_gen_params.width : 512;
+            int height = default_gen_params.height > 0 ? default_gen_params.height : 512;
             if (!size.empty()) {
                 auto pos = size.find('x');
                 if (pos != std::string::npos) {
@@ -731,8 +732,8 @@ int main(int argc, const char** argv) {
 
             std::string prompt          = j.value("prompt", "");
             std::string negative_prompt = j.value("negative_prompt", "");
-            int width                   = j.value("width", 512);
-            int height                  = j.value("height", 512);
+            int width                   = j.value("width", default_gen_params.width > 0 ? default_gen_params.width : 512);
+            int height                  = j.value("height", default_gen_params.height > 0 ? default_gen_params.height :  512);
             int steps                   = j.value("steps", -1);
             float cfg_scale             = j.value("cfg_scale", 7.f);
             int64_t seed                = j.value("seed", -1);
