@@ -475,8 +475,7 @@ struct SDContextParams {
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
-    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
-    bool force_sdxl_vae_conv_scale       = false;
+    bool force_sdxl_vae_conv_scale    = false;
 
     float flow_shift = INFINITY;
 
@@ -578,20 +577,12 @@ struct SDContextParams {
 
         options.float_options = {
             {"",
-             "--vae-tile-overlap",
-             "tile overlap for vae tiling, in fraction of tile size (default: 0.5)",
-             &vae_tiling_params.target_overlap},
-            {"",
              "--flow-shift",
              "shift value for Flow models like SD3.x or WAN (default: auto)",
              &flow_shift},
         };
 
         options.bool_options = {
-            {"",
-             "--vae-tiling",
-             "process vae in tiles to reduce memory usage",
-             true, &vae_tiling_params.enabled},
             {"",
              "--force-sdxl-vae-conv-scale",
              "force use of conv scale on sdxl vae",
@@ -728,52 +719,6 @@ struct SDContextParams {
             return 1;
         };
 
-        auto on_tile_size_arg = [&](int argc, const char** argv, int index) {
-            if (++index >= argc) {
-                return -1;
-            }
-            std::string tile_size_str = argv[index];
-            size_t x_pos              = tile_size_str.find('x');
-            try {
-                if (x_pos != std::string::npos) {
-                    std::string tile_x_str        = tile_size_str.substr(0, x_pos);
-                    std::string tile_y_str        = tile_size_str.substr(x_pos + 1);
-                    vae_tiling_params.tile_size_x = std::stoi(tile_x_str);
-                    vae_tiling_params.tile_size_y = std::stoi(tile_y_str);
-                } else {
-                    vae_tiling_params.tile_size_x = vae_tiling_params.tile_size_y = std::stoi(tile_size_str);
-                }
-            } catch (const std::invalid_argument&) {
-                return -1;
-            } catch (const std::out_of_range&) {
-                return -1;
-            }
-            return 1;
-        };
-
-        auto on_relative_tile_size_arg = [&](int argc, const char** argv, int index) {
-            if (++index >= argc) {
-                return -1;
-            }
-            std::string rel_size_str = argv[index];
-            size_t x_pos             = rel_size_str.find('x');
-            try {
-                if (x_pos != std::string::npos) {
-                    std::string rel_x_str        = rel_size_str.substr(0, x_pos);
-                    std::string rel_y_str        = rel_size_str.substr(x_pos + 1);
-                    vae_tiling_params.rel_size_x = std::stof(rel_x_str);
-                    vae_tiling_params.rel_size_y = std::stof(rel_y_str);
-                } else {
-                    vae_tiling_params.rel_size_x = vae_tiling_params.rel_size_y = std::stof(rel_size_str);
-                }
-            } catch (const std::invalid_argument&) {
-                return -1;
-            } catch (const std::out_of_range&) {
-                return -1;
-            }
-            return 1;
-        };
-
         options.manual_options = {
             {"",
              "--type",
@@ -800,14 +745,6 @@ struct SDContextParams {
              "but it usually offers faster inference speed and, in some cases, lower memory usage. "
              "The at_runtime mode, on the other hand, is exactly the opposite.",
              on_lora_apply_mode_arg},
-            {"",
-             "--vae-tile-size",
-             "tile size for vae tiling, format [X]x[Y] (default: 32x32)",
-             on_tile_size_arg},
-            {"",
-             "--vae-relative-tile-size",
-             "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
-             on_relative_tile_size_arg},
         };
 
         return options;
@@ -922,13 +859,6 @@ struct SDContextParams {
             << "  chroma_t5_mask_pad: " << chroma_t5_mask_pad << ",\n"
             << "  prediction: " << sd_prediction_name(prediction) << ",\n"
             << "  lora_apply_mode: " << sd_lora_apply_mode_name(lora_apply_mode) << ",\n"
-            << "  vae_tiling_params: { "
-            << vae_tiling_params.enabled << ", "
-            << vae_tiling_params.tile_size_x << ", "
-            << vae_tiling_params.tile_size_y << ", "
-            << vae_tiling_params.target_overlap << ", "
-            << vae_tiling_params.rel_size_x << ", "
-            << vae_tiling_params.rel_size_y << " },\n"
             << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << "\n"
             << "}";
         return oss.str();
@@ -1067,6 +997,8 @@ struct SDGenerationParams {
     float control_strength = 0.9f;
 
     int64_t seed = 42;
+
+    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 
     // Photo Maker
     std::string pm_id_images_dir;
@@ -1254,6 +1186,10 @@ struct SDGenerationParams {
              "--vace-strength",
              "wan vace strength",
              &vace_strength},
+            {"",
+             "--vae-tile-overlap",
+             "tile overlap for vae tiling, in fraction of tile size (default: 0.5)",
+             &vae_tiling_params.target_overlap},
         };
 
         options.bool_options = {
@@ -1267,6 +1203,10 @@ struct SDGenerationParams {
              "disable auto resize of ref images",
              false,
              &auto_resize_ref_image},
+            {"",
+             "--vae-tiling",
+             "process vae in tiles to reduce memory usage",
+             true, &vae_tiling_params.enabled},
         };
 
         auto on_seed_arg = [&](int argc, const char** argv, int index) {
@@ -1478,6 +1418,52 @@ struct SDGenerationParams {
             return 1;
         };
 
+        auto on_tile_size_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            std::string tile_size_str = argv[index];
+            size_t x_pos              = tile_size_str.find('x');
+            try {
+                if (x_pos != std::string::npos) {
+                    std::string tile_x_str        = tile_size_str.substr(0, x_pos);
+                    std::string tile_y_str        = tile_size_str.substr(x_pos + 1);
+                    vae_tiling_params.tile_size_x = std::stoi(tile_x_str);
+                    vae_tiling_params.tile_size_y = std::stoi(tile_y_str);
+                } else {
+                    vae_tiling_params.tile_size_x = vae_tiling_params.tile_size_y = std::stoi(tile_size_str);
+                }
+            } catch (const std::invalid_argument&) {
+                return -1;
+            } catch (const std::out_of_range&) {
+                return -1;
+            }
+            return 1;
+        };
+
+        auto on_relative_tile_size_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            std::string rel_size_str = argv[index];
+            size_t x_pos             = rel_size_str.find('x');
+            try {
+                if (x_pos != std::string::npos) {
+                    std::string rel_x_str        = rel_size_str.substr(0, x_pos);
+                    std::string rel_y_str        = rel_size_str.substr(x_pos + 1);
+                    vae_tiling_params.rel_size_x = std::stof(rel_x_str);
+                    vae_tiling_params.rel_size_y = std::stof(rel_y_str);
+                } else {
+                    vae_tiling_params.rel_size_x = vae_tiling_params.rel_size_y = std::stof(rel_size_str);
+                }
+            } catch (const std::invalid_argument&) {
+                return -1;
+            } catch (const std::out_of_range&) {
+                return -1;
+            }
+            return 1;
+        };
+
         options.manual_options = {
             {"-s",
              "--seed",
@@ -1533,6 +1519,14 @@ struct SDGenerationParams {
              "--scm-policy",
              "SCM policy: 'dynamic' (default) or 'static'",
              on_scm_policy_arg},
+            {"",
+             "--vae-tile-size",
+             "tile size for vae tiling, format [X]x[Y] (default: 32x32)",
+             on_tile_size_arg},
+            {"",
+             "--vae-relative-tile-size",
+             "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
+             on_relative_tile_size_arg},
 
         };
 
@@ -1974,6 +1968,13 @@ struct SDGenerationParams {
             << "  seed: " << seed << ",\n"
             << "  upscale_repeats: " << upscale_repeats << ",\n"
             << "  upscale_tile_size: " << upscale_tile_size << ",\n"
+            << "  vae_tiling_params: { "
+            << vae_tiling_params.enabled << ", "
+            << vae_tiling_params.tile_size_x << ", "
+            << vae_tiling_params.tile_size_y << ", "
+            << vae_tiling_params.target_overlap << ", "
+            << vae_tiling_params.rel_size_x << ", "
+            << vae_tiling_params.rel_size_y << " },\n"
             << "}";
         free(sample_params_str);
         free(high_noise_sample_params_str);
