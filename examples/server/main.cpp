@@ -786,8 +786,8 @@ int main(int argc, const char** argv) {
             std::string negative_prompt = j.value("negative_prompt", "");
             int width                   = j.value("width", 512);
             int height                  = j.value("height", 512);
-            int steps                   = j.value("steps", -1);
-            float cfg_scale             = j.value("cfg_scale", 7.f);
+            int steps                   = j.value("steps", default_gen_params.sample_params.sample_steps);
+            float cfg_scale             = j.value("cfg_scale", default_gen_params.sample_params.guidance.txt_cfg);
             int64_t seed                = j.value("seed", -1);
             int batch_size              = j.value("batch_size", 1);
             int clip_skip               = j.value("clip_skip", -1);
@@ -883,16 +883,15 @@ int main(int argc, const char** argv) {
 
             enum scheduler_t scheduler = str_to_scheduler(scheduler_name.c_str());
 
-            // avoid excessive resource usage
-
-            SDGenerationParams gen_params         = default_gen_params;
-            gen_params.prompt                     = prompt;
-            gen_params.negative_prompt            = negative_prompt;
-            gen_params.width                      = width;
-            gen_params.height                     = height;
-            gen_params.seed                       = seed;
-            gen_params.sample_params.sample_steps = steps;
-            gen_params.batch_count                = batch_size;
+            SDGenerationParams gen_params             = default_gen_params;
+            gen_params.prompt                         = prompt;
+            gen_params.negative_prompt                = negative_prompt;
+            gen_params.width                          = width;
+            gen_params.height                         = height;
+            gen_params.seed                           = seed;
+            gen_params.sample_params.sample_steps     = steps;
+            gen_params.batch_count                    = batch_size;
+            gen_params.sample_params.guidance.txt_cfg = cfg_scale;
 
             if (clip_skip > 0) {
                 gen_params.clip_skip = clip_skip;
