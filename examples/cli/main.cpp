@@ -394,12 +394,15 @@ bool save_results(const SDCliParams& cli_params,
 
     fs::path base_path = out_path;
     fs::path ext       = out_path.has_extension() ? out_path.extension() : fs::path{};
-    if (!ext.empty())
-        base_path.replace_extension();
 
     std::string ext_lower = ext.string();
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
     bool is_jpg = (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".jpe");
+    if (!ext.empty()) {
+        if (is_jpg || ext_lower == ".png") {
+            base_path.replace_extension();
+        }
+    }
 
     int output_begin_idx = cli_params.output_begin_idx;
     if (output_begin_idx < 0) {
