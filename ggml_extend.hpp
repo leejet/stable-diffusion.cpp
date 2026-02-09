@@ -28,26 +28,6 @@
 
 #include "model.h"
 
-#ifdef SD_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef SD_USE_METAL
-#include "ggml-metal.h"
-#endif
-
-#ifdef SD_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-
-#ifdef SD_USE_OPENCL
-#include "ggml-opencl.h"
-#endif
-
-#ifdef SD_USE_SYCL
-#include "ggml-sycl.h"
-#endif
-
 #include "rng.hpp"
 #include "util.h"
 
@@ -85,6 +65,42 @@ __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const cha
             break;
         default:
             LOG_DEBUG(text);
+    }
+}
+
+__STATIC_INLINE__ bool backend_name_exists(std::string name) {
+    const int device_count = ggml_backend_dev_count();
+    for (int i = 0; i < device_count; i++) {
+        if (name == ggml_backend_dev_name(ggml_backend_dev_get(i))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+__STATIC_INLINE__ std::string sanitize_backend_name(std::string name) {
+    if (name == "" || backend_name_exists(name)) {
+        return name;
+    } else {
+        LOG_WARN("Backend %s not found, using default backend", name.c_str());
+        return "";
+    }
+}
+
+__STATIC_INLINE__ std::string get_default_backend_name() {
+    // should pick the same backend as ggml_backend_init_best
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
+    dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    return ggml_backend_dev_name(dev);
+}
+
+__STATIC_INLINE__ ggml_backend_t init_named_backend(std::string name = "") {
+    LOG_DEBUG("Initializing backend: %s", name.c_str());
+    if (name.empty()) {
+        return ggml_backend_init_best();
+    } else {
+        return ggml_backend_init_by_name(name.c_str(), nullptr);
     }
 }
 
@@ -2222,6 +2238,14 @@ public:
           force_f32(force_f32),
           force_prec_f32(force_prec_f32),
           scale(scale) {}
+
+    void set_scale(float scale_){
+        scale = scale_;
+    }
+
+    void set_force_prec_f32(bool force_prec_f32_){
+        force_prec_f32 = force_prec_f32_;
+    }
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
