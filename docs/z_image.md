@@ -7,6 +7,9 @@ You can run Z-Image with stable-diffusion.cpp on GPUs with 4GB of VRAM — or ev
 - Download Z-Image-Turbo
     - safetensors: https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/diffusion_models
     - gguf: https://huggingface.co/leejet/Z-Image-Turbo-GGUF/tree/main
+- Download Z-Image
+    - safetensors: https://huggingface.co/Comfy-Org/z_image/tree/main/split_files/diffusion_models
+    - gguf: https://huggingface.co/unsloth/Z-Image-GGUF/tree/main
 - Download vae
     - safetensors: https://huggingface.co/black-forest-labs/FLUX.1-schnell/tree/main
 - Download Qwen3 4b
@@ -15,11 +18,21 @@ You can run Z-Image with stable-diffusion.cpp on GPUs with 4GB of VRAM — or ev
 
 ## Examples
 
+### Z-Image-Turbo
+
 ```
 .\bin\Release\sd-cli.exe --diffusion-model  z_image_turbo-Q3_K.gguf --vae ..\..\ComfyUI\models\vae\ae.sft  --llm ..\..\ComfyUI\models\text_encoders\Qwen3-4B-Instruct-2507-Q4_K_M.gguf -p "A cinematic, melancholic photograph of a solitary hooded figure walking through a sprawling, rain-slicked metropolis at night. The city lights are a chaotic blur of neon orange and cool blue, reflecting on the wet asphalt. The scene evokes a sense of being a single component in a vast machine. Superimposed over the image in a sleek, modern, slightly glitched font is the philosophical quote: 'THE CITY IS A CIRCUIT BOARD, AND I AM A BROKEN TRANSISTOR.' -- moody, atmospheric, profound, dark academic" --cfg-scale 1.0 -v --offload-to-cpu --diffusion-fa -H 1024 -W 512
 ```
 
 <img width="256" alt="z-image example" src="../assets/z_image/q3_K.png" />
+
+### Z-Image-Base
+
+```
+.\bin\Release\sd-cli.exe --diffusion-model  ..\..\ComfyUI\models\diffusion_models\z_image_bf16.safetensors --vae ..\..\ComfyUI\models\vae\ae.sft  --llm ..\..\ComfyUI\models\text_encoders\qwen_3_4b.safetensors -p "A cinematic, melancholic photograph of a solitary hooded figure walking through a sprawling, rain-slicked metropolis at night. The city lights are a chaotic blur of neon orange and cool blue, reflecting on the wet asphalt. The scene evokes a sense of being a single component in a vast machine. Superimposed over the image in a sleek, modern, slightly glitched font is the philosophical quote: 'THE CITY IS A CIRCUIT BOARD, AND I AM A BROKEN TRANSISTOR.' -- moody, atmospheric, profound, dark academic" --cfg-scale 5.0 -v --offload-to-cpu --diffusion-fa -H 1024 -W 512
+```
+
+<img width="256" alt="z-image example" src="../assets/z_image/base_bf16.png" />
 
 ## Comparison of Different Quantization Types
 
