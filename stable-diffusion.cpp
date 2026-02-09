@@ -3977,6 +3977,23 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             }
         });
 
+        if (sd_vid_gen_params->end_image.data) {
+            LOG_INFO("FLF2V");
+            ggml_tensor* end_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+            sd_image_to_ggml_tensor(sd_vid_gen_params->end_image, end_img);
+            end_img = ggml_reshape_4d(work_ctx, end_img, width, height, 1, 3);
+
+            auto end_image_latent = sd_ctx->sd->vae_encode(work_ctx, end_img);  // [b*c, 1, h/16, w/16]
+
+            ggml_ext_tensor_iter(end_image_latent, [&](ggml_tensor* t, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+                float value = ggml_ext_tensor_get_f32(t, i0, i1, i2, i3);
+                ggml_ext_tensor_set_f32(init_latent, value, i0, i1, init_latent->ne[2] - 1, i3);
+                if (i3 == 0) {
+                    ggml_ext_tensor_set_f32(denoise_mask, 0.f, i0, i1, denoise_mask->ne[2] - 1, i3);
+                }
+            });
+        }
+
         if (!sd_ctx->sd->use_tiny_autoencoder)
             sd_ctx->sd->process_latent_in(init_latent);
 
