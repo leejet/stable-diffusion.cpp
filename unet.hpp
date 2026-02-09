@@ -218,7 +218,7 @@ public:
         } else if (sd_version_is_unet_edit(version)) {
             in_channels = 8;
         }
-        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET || version == VERSION_SDXS) {
+        if (version == VERSION_SD1_TINY_UNET || version == VERSION_SD2_TINY_UNET || version == VERSION_SDXS || version == VERSION_SDXS_09) {
             num_res_blocks = 1;
             channel_mult   = {1, 2, 4};
             tiny_unet      = true;
@@ -265,6 +265,10 @@ public:
             if (version == VERSION_SVD) {
                 return new SpatialVideoTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
             } else {
+                if (version == VERSION_SDXS_09 && n_head == 5) {
+                    n_head = 1;    // to carry a special case of sdxs_09 into CrossAttentionLayer,
+                    d_head = 320;  // works as long the product remains equal (5*64 == 1*320)
+                }
                 return new SpatialTransformer(in_channels, n_head, d_head, depth, context_dim, use_linear_projection);
             }
         };
