@@ -601,6 +601,9 @@ jobs:
           sudo mv /opt/rocm/lib/rocblas/ ./build/bin/
           sudo mv /opt/rocm/lib/hipblaslt/ ./build/bin/
 
+          # Move LLVM OpenMP library
+          sudo mv /opt/rocm/lib/llvm/lib/libomp.so* ./build/bin/
+
       - name: Fetch system info
         id: system-info
         run: |
