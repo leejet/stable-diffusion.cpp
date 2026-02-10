@@ -11,6 +11,24 @@ endif()
 if (MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
+
+    message(STATUS "MSVC detected, polyfilling #embed via Python...")
+
+    set(VOCAB_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/vocab.hpp")
+    set(GENERATED_VOCAB_HPP "${CMAKE_CURRENT_SOURCE_DIR}/vocab_generated.hpp")
+    execute_process(
+        COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/embed/embed_fix.py 
+                ${VOCAB_HEADER} 
+                ${GENERATED_VOCAB_HPP}
+        RESULT_VARIABLE result
+    )
+
+    if (NOT result EQUAL 0)
+        message(FATAL_ERROR "Failed to run embed_fix.py")
+    endif()
+
+    add_definitions(-DUSE_GENERATED_VOCAB)
+
 endif()
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
