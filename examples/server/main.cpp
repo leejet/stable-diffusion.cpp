@@ -914,28 +914,29 @@ int main(int argc, const char** argv) {
             std::vector<sd_image_t> pmid_images;
             std::vector<sd_image_t> ref_images;
 
+            auto decode_image = [](sd_image_t& image, std::string encoded) -> bool {
+                // remove data URI prefix if present ("data:image/png;base64,")
+                auto comma_pos = encoded.find(',');
+                if (comma_pos != std::string::npos) {
+                    encoded = encoded.substr(comma_pos + 1);
+                }
+                std::vector<uint8_t> img_data = base64_decode(encoded);
+                if (!img_data.empty()) {
+                    int img_w         = image.width;
+                    int img_h         = image.height;
+                    uint8_t* raw_data = load_image_from_memory(
+                        (const char*)img_data.data(), (int)img_data.size(),
+                        img_w, img_h,
+                        image.width, image.height, image.channel);
+                    if (raw_data) {
+                        image = {(uint32_t)img_w, (uint32_t)img_h, image.channel, raw_data};
+                        return true;
+                    }
+                }
+                return false;
+            };
+
             if (img2img) {
-                auto decode_image = [](sd_image_t& image, std::string encoded) -> bool {
-                    // remove data URI prefix if present ("data:image/png;base64,")
-                    auto comma_pos = encoded.find(',');
-                    if (comma_pos != std::string::npos) {
-                        encoded = encoded.substr(comma_pos + 1);
-                    }
-                    std::vector<uint8_t> img_data = base64_decode(encoded);
-                    if (!img_data.empty()) {
-                        int img_w         = image.width;
-                        int img_h         = image.height;
-                        uint8_t* raw_data = load_image_from_memory(
-                            (const char*)img_data.data(), (int)img_data.size(),
-                            img_w, img_h,
-                            image.width, image.height, image.channel);
-                        if (raw_data) {
-                            image = {(uint32_t)img_w, (uint32_t)img_h, image.channel, raw_data};
-                            return true;
-                        }
-                    }
-                    return false;
-                };
 
                 if (j.contains("init_images") && j["init_images"].is_array() && !j["init_images"].empty()) {
                     std::string encoded = j["init_images"][0].get<std::string>();
@@ -959,20 +960,20 @@ int main(int argc, const char** argv) {
                     mask_image.data    = mask_data.data();
                 }
 
-                if (j.contains("extra_images") && j["extra_images"].is_array()) {
-                    for (auto extra_image : j["extra_images"]) {
-                        std::string encoded  = extra_image.get<std::string>();
-                        sd_image_t tmp_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-                        if (decode_image(tmp_image, encoded)) {
-                            ref_images.push_back(tmp_image);
-                        }
-                    }
-                }
-
                 float denoising_strength = j.value("denoising_strength", -1.f);
                 if (denoising_strength >= 0.f) {
                     denoising_strength  = std::min(denoising_strength, 1.0f);
                     gen_params.strength = denoising_strength;
+                }
+            }
+
+            if (j.contains("extra_images") && j["extra_images"].is_array()) {
+                for (auto extra_image : j["extra_images"]) {
+                    std::string encoded  = extra_image.get<std::string>();
+                    sd_image_t tmp_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
+                    if (decode_image(tmp_image, encoded)) {
+                        ref_images.push_back(tmp_image);
+                    }
                 }
             }
 
