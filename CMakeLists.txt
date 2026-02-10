@@ -90,6 +90,8 @@ file(GLOB SD_LIB_SOURCES
     "src/*.h"
     "src/*.cpp"
     "src/*.hpp"
+    "src/vocab/*.h"
+    "src/vocab/*.cpp"
 )
 
 find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)

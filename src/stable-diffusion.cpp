@@ -2679,7 +2679,7 @@ public:
                 };
                 sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, on_tiling);
             } else {
-                if(!first_stage_model->compute(n_threads, x, true, &result, work_ctx)){
+                if (!first_stage_model->compute(n_threads, x, true, &result, work_ctx)) {
                     LOG_ERROR("Failed to decode latetnts");
                     first_stage_model->free_compute_buffer();
                     return nullptr;
@@ -2695,7 +2695,7 @@ public:
                 };
                 sd_tiling(x, result, vae_scale_factor, 64, 0.5f, on_tiling);
             } else {
-                if(!tae_first_stage->compute(n_threads, x, true, &result)){
+                if (!tae_first_stage->compute(n_threads, x, true, &result)) {
                     LOG_ERROR("Failed to decode latetnts");
                     tae_first_stage->free_compute_buffer();
                     return nullptr;
