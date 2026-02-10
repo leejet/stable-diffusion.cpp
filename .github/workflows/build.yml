@@ -535,9 +535,8 @@ jobs:
           # Add ROCm to PATH for current session
           echo "/opt/rocm/bin" >> $GITHUB_PATH
 
-          # Build case pattern from GPU_TARGETS
-          PATTERN=$(printf '%s' "$GPU_TARGETS" | sed 's/;/\*|\*/g')
-          PATTERN="*${PATTERN}*"
+          # Build case pattern from ${{ env.GPU_TARGETS }}
+          PATTERN=$(printf '%s' "${{ env.GPU_TARGETS }}" | sed 's/;/\*|\*/g')
 
           # Remove library files for architectures we're not building for to save disk space
           echo "Cleaning up unneeded architecture files..."
