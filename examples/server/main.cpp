@@ -565,7 +565,8 @@ int main(int argc, const char** argv) {
             std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(prompt);
 
             size_t image_count = req.form.get_file_count("image[]");
-            if (image_count == 0) {
+            bool has_legacy_image = req.form.has_file("image");
+            if (image_count == 0 && !has_legacy_image) {
                 res.status = 400;
                 res.set_content(R"({"error":"at least one image[] required"})", "application/json");
                 return;
@@ -574,6 +575,10 @@ int main(int argc, const char** argv) {
             std::vector<std::vector<uint8_t>> images_bytes;
             for (size_t i = 0; i < image_count; i++) {
                 auto file = req.form.get_file("image[]", i);
+                images_bytes.emplace_back(file.content.begin(), file.content.end());
+            }
+            if (image_count == 0 && has_legacy_image) {
+                auto file = req.form.get_file("image");
                 images_bytes.emplace_back(file.content.begin(), file.content.end());
             }
 
