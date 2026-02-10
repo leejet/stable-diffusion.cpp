@@ -535,31 +535,30 @@ jobs:
           # Add ROCm to PATH for current session
           echo "/opt/rocm/bin" >> $GITHUB_PATH
 
-          # Build case pattern from GPU_TARGETS
-          PATTERN=$(printf '%s' "$GPU_TARGETS" | sed 's/;/\*|\*/g')
-          PATTERN="*${PATTERN}*"
+          # Build regex pattern from ${{ env.GPU_TARGETS }} (match target as substring)
+          TARGET_REGEX="($(printf '%s' "${{ env.GPU_TARGETS }}" | sed 's/;/|/g'))"
 
           # Remove library files for architectures we're not building for to save disk space
           echo "Cleaning up unneeded architecture files..."
           cd /opt/rocm/lib/rocblas/library
           # Keep only our target architectures
           for file in *; do
-            case "$file" in
-            $PATTERN)
-              ;;
-            *)
-              sudo rm -f "$file" ;;
-            esac;
+            if printf '%s' "$file" | grep -q 'gfx'; then
+              if ! printf '%s' "$file" | grep -Eq "$TARGET_REGEX"; then
+                echo "Removing $file" &&
+                sudo rm -f "$file";
+              fi
+            fi
           done
 
           cd /opt/rocm/lib/hipblaslt/library
           for file in *; do
-            case "$file" in
-              $PATTERN)
-                ;;
-              *)
-                sudo rm -f "$file" ;;
-            esac;
+            if printf '%s' "$file" | grep -q 'gfx'; then
+              if ! printf '%s' "$file" | grep -Eq "$TARGET_REGEX"; then
+                echo "Removing $file" &&
+                sudo rm -f "$file";
+              fi
+            fi
           done
 
       - name: Build
@@ -592,21 +591,15 @@ jobs:
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
 
-          # Create directories for ROCm libraries
-          mkdir -p ./build/bin/rocblas/library
-          mkdir -p ./build/bin/hipblaslt/library
-
-          # Copy ROCm runtime libraries (use || true to continue if files don't exist)
-          cp /opt/rocm/lib/librocsparse.so* ./build/bin/ || true
-          cp /opt/rocm/lib/libhsa-runtime64.so* ./build/bin/ || true
-          cp /opt/rocm/lib/libamdhip64.so* ./build/bin/ || true
-          cp /opt/rocm/lib/libhipblas.so* ./build/bin/ || true
-          cp /opt/rocm/lib/libhipblaslt.so* ./build/bin/ || true
-          cp /opt/rocm/lib/librocblas.so* ./build/bin/ || true
-
-          # Copy library files (already filtered to target architectures)
-          cp /opt/rocm/lib/rocblas/library/* ./build/bin/rocblas/library/ || true
-          cp /opt/rocm/lib/hipblaslt/library/* ./build/bin/hipblaslt/library/ || true
+          # Move ROCm runtime libraries (to avoid double space consumption)
+          sudo mv /opt/rocm/lib/librocsparse.so* ./build/bin/
+          sudo mv /opt/rocm/lib/libhsa-runtime64.so* ./build/bin/
+          sudo mv /opt/rocm/lib/libamdhip64.so* ./build/bin/
+          sudo mv /opt/rocm/lib/libhipblas.so* ./build/bin/
+          sudo mv /opt/rocm/lib/libhipblaslt.so* ./build/bin/
+          sudo mv /opt/rocm/lib/librocblas.so* ./build/bin/
+          sudo mv /opt/rocm/lib/rocblas/ ./build/bin/
+          sudo mv /opt/rocm/lib/hipblaslt/ ./build/bin/
 
       - name: Fetch system info
         id: system-info
@@ -622,7 +615,7 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm.zip ./build/bin/*
+          zip -y -r sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm.zip ./build/bin
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
