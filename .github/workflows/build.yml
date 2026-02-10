@@ -535,30 +535,30 @@ jobs:
           # Add ROCm to PATH for current session
           echo "/opt/rocm/bin" >> $GITHUB_PATH
 
-          # Build case pattern from ${{ env.GPU_TARGETS }}
-          PATTERN=$(printf '%s' "${{ env.GPU_TARGETS }}" | sed 's/;/\*|\*/g')
+          # Build regex pattern from ${{ env.GPU_TARGETS }} (match target as substring)
+          TARGET_REGEX="($(printf '%s' "${{ env.GPU_TARGETS }}" | sed 's/;/|/g'))"
 
           # Remove library files for architectures we're not building for to save disk space
           echo "Cleaning up unneeded architecture files..."
           cd /opt/rocm/lib/rocblas/library
           # Keep only our target architectures
           for file in *; do
-            case "$file" in
-            $PATTERN)
-              ;;
-            *)
-              sudo rm -f "$file" ;;
-            esac;
+            if printf '%s' "$file" | grep -q 'gfx'; then
+              if ! printf '%s' "$file" | grep -Eq "$TARGET_REGEX"; then
+                echo "Removing $file" &&
+                sudo rm -f "$file";
+              fi
+            fi
           done
 
           cd /opt/rocm/lib/hipblaslt/library
           for file in *; do
-            case "$file" in
-              $PATTERN)
-                ;;
-              *)
-                sudo rm -f "$file" ;;
-            esac;
+            if printf '%s' "$file" | grep -q 'gfx'; then
+              if ! printf '%s' "$file" | grep -Eq "$TARGET_REGEX"; then
+                echo "Removing $file" &&
+                sudo rm -f "$file";
+              fi
+            fi
           done
 
       - name: Build
