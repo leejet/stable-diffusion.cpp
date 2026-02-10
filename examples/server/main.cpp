@@ -672,15 +672,8 @@ int main(int argc, const char** argv) {
             std::vector<sd_image_t> ref_images;
             ref_images.reserve(images_bytes.size());
             for (auto& bytes : images_bytes) {
-
-                int expected_width  = 0;
-                int expected_height = 0;
-                if (gen_params.width_and_height_are_set()) {
-                    expected_width  = gen_params.width;
-                    expected_height = gen_params.height;
-                }
-                int img_w           = expected_width;
-                int img_h           = expected_height;
+                int img_w;
+                int img_h;
 
                 uint8_t* raw_pixels = load_image_from_memory(
                     reinterpret_cast<const char*>(bytes.data()),
@@ -705,8 +698,8 @@ int main(int argc, const char** argv) {
                     expected_width  = gen_params.width;
                     expected_height = gen_params.height;
                 }
-                int mask_w          = expected_width;
-                int mask_h          = expected_height;
+                int mask_w;
+                int mask_h;
 
                 uint8_t* mask_raw = load_image_from_memory(
                     reinterpret_cast<const char*>(mask_bytes.data()),
@@ -978,8 +971,8 @@ int main(int argc, const char** argv) {
                         expected_width  = gen_params.width;
                         expected_height = gen_params.height;
                     }
-                    int img_w           = expected_width;
-                    int img_h           = expected_height;
+                    int img_w;
+                    int img_h;
 
                     uint8_t* raw_data = load_image_from_memory(
                         (const char*)img_data.data(), (int)img_data.size(),
