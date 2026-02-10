@@ -216,12 +216,23 @@ std::string extract_and_remove_sd_cpp_extra_args(std::string& text) {
 enum class ImageFormat { JPEG,
                          PNG };
 
+static int stbi_ext_write_png_to_func(stbi_write_func *func, void *context, int x, int y, int comp, const void *data, int stride_bytes, const char* parameters)
+{
+   int len;
+   unsigned char *png = stbi_write_png_to_mem((const unsigned char *) data, stride_bytes, x, y, comp, &len, parameters);
+   if (png == NULL) return 0;
+   func(context, png, len);
+   STBIW_FREE(png);
+   return 1;
+}
+
 std::vector<uint8_t> write_image_to_vector(
     ImageFormat format,
     const uint8_t* image,
     int width,
     int height,
     int channels,
+    std::string params = "",
     int quality = 90) {
     std::vector<uint8_t> buffer;
 
@@ -245,7 +256,7 @@ std::vector<uint8_t> write_image_to_vector(
             result = stbi_write_jpg_to_func(c_func, &ctx, width, height, channels, image, quality);
             break;
         case ImageFormat::PNG:
-            result = stbi_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels);
+            result = stbi_ext_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels, params.size() > 0 ? params.c_str() : nullptr);
             break;
         default:
             throw std::runtime_error("invalid image format");
@@ -517,11 +528,15 @@ int main(int argc, const char** argv) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
+                std::string params = gen_params.embed_image_metadata
+                    ? get_image_params(ctx_params, gen_params, gen_params.seed + i)
+                    : "";
                 auto image_bytes = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
                                                          results[i].data,
                                                          results[i].width,
                                                          results[i].height,
                                                          results[i].channel,
+                                                         params,
                                                          output_compression);
                 if (image_bytes.empty()) {
                     LOG_ERROR("write image to mem failed");
@@ -762,11 +777,15 @@ int main(int argc, const char** argv) {
             for (int i = 0; i < num_results; i++) {
                 if (results[i].data == nullptr)
                     continue;
+                std::string params = gen_params.embed_image_metadata
+                    ? get_image_params(ctx_params, gen_params, gen_params.seed + i)
+                    : "";
                 auto image_bytes = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
                                                          results[i].data,
                                                          results[i].width,
                                                          results[i].height,
                                                          results[i].channel,
+                                                         params,
                                                          output_compression);
                 std::string b64 = base64_encode(image_bytes);
                 json item;
@@ -1078,11 +1097,15 @@ int main(int argc, const char** argv) {
                     continue;
                 }
 
+                std::string params = gen_params.embed_image_metadata
+                    ? get_image_params(ctx_params, gen_params, gen_params.seed + i)
+                    : "";
                 auto image_bytes = write_image_to_vector(ImageFormat::PNG,
                                                          results[i].data,
                                                          results[i].width,
                                                          results[i].height,
-                                                         results[i].channel);
+                                                         results[i].channel,
+                                                         params);
 
                 if (image_bytes.empty()) {
                     LOG_ERROR("write image to mem failed");
