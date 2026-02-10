@@ -405,7 +405,7 @@ int main(int argc, const char** argv) {
             std::string output_format = j.value("output_format", "png");
             int output_compression    = j.value("output_compression", 100);
             int width                 = default_gen_params.width > 0 ? default_gen_params.width : 512;
-            int height                = default_gen_params.width > 0 ? default_gen_params.height: 512;
+            int height                = default_gen_params.width > 0 ? default_gen_params.height : 512;
             if (!size.empty()) {
                 auto pos = size.find('x');
                 if (pos != std::string::npos) {
@@ -988,7 +988,6 @@ int main(int argc, const char** argv) {
             };
 
             if (img2img) {
-
                 if (j.contains("init_images") && j["init_images"].is_array() && !j["init_images"].empty()) {
                     std::string encoded = j["init_images"][0].get<std::string>();
                     decode_image(init_image, encoded);
