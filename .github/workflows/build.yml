@@ -592,12 +592,7 @@ jobs:
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
 
           # Move ROCm runtime libraries (to avoid double space consumption)
-          sudo mv /opt/rocm/lib/librocsparse.so* ./build/bin/
-          sudo mv /opt/rocm/lib/libhsa-runtime64.so* ./build/bin/
-          sudo mv /opt/rocm/lib/libamdhip64.so* ./build/bin/
-          sudo mv /opt/rocm/lib/libhipblas.so* ./build/bin/
-          sudo mv /opt/rocm/lib/libhipblaslt.so* ./build/bin/
-          sudo mv /opt/rocm/lib/librocblas.so* ./build/bin/
+          sudo mv /opt/rocm/lib/lib*.so* ./build/bin/
           sudo mv /opt/rocm/lib/rocblas/ ./build/bin/
           sudo mv /opt/rocm/lib/hipblaslt/ ./build/bin/
 
