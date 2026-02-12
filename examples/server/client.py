@@ -22,6 +22,37 @@ except ImportError:
 
 apis = ['sdapi', 'openai', 'openai-module']
 
+def extract_lora_tags(prompt):
+
+    pattern = r'<lora:([^:>]+):([^>]+)>'
+    lora_data = []
+
+    matches = list(re.finditer(pattern, prompt))
+
+    for match in matches:
+        raw_path = match.group(1)
+        raw_mul = match.group(2)
+        try:
+            mul = float(raw_mul)
+        except ValueError:
+            continue
+
+        is_high_noise = False
+        prefix = "|high_noise|"
+        if raw_path.startswith(prefix):
+            raw_path = raw_path[len(prefix):]
+            is_high_noise = True
+
+        lora_data.append({
+            'name': raw_path,
+            'multiplier': mul,
+            'is_high_noise': is_high_noise,
+            })
+
+        prompt = prompt.replace(match.group(0), "", 1)
+
+    return prompt, lora_data
+
 
 def parse_arguments():
     ap = argparse.ArgumentParser(
@@ -137,8 +168,13 @@ def parse_arguments():
     if not args_dict.get("server_url", "").strip():
         ap.error("--server-url not provided and SD_SERVER_URL env var not found")
 
-    if not args_dict.get("prompt", "").strip():
+    prompt = args_dict.get("prompt", "").strip()
+    prompt, lora = extract_lora_tags(prompt)
+    if not prompt:
         ap.error("argument -p/--prompt must be non‑empty")
+    args_dict["prompt"] = prompt
+    if lora:
+        args_dict["lora"] = lora
 
     util_keys = {'verbose', 'server_url', 'output', 'output_begin_idx', 'api', 'init_img', 'mask', 'ref_image', 'output_format'}
 
@@ -352,7 +388,10 @@ def truncate_for_debug(obj, max_length=512):
 def do_request(url, data, headers):
 
     if HAS_REQUESTS:
-        response = requests.post(url, headers=headers, data=data, timeout=30)
+        response = requests.post(url, headers=headers, data=data, timeout=600)
+        if response.status_code != 200:
+            print(f"HTTP {response.status_code}: {response.reason}")
+            print(f"     {response.text}")
         response.raise_for_status()
         return response.text
 
@@ -396,6 +435,27 @@ def main_sdapi(util_opts, gen_opts, verbose=False):
         endpoint = urllib.parse.urljoin(server_url, "sdapi/v1/txt2img")
 
     api_parameters = build_sdapi_parameters(gen_opts, util_opts, image_opts)
+    lora = gen_opts.get('lora')
+    if lora:
+        # TODO: refactor, error handling, is_high_noise
+        lora_list = json.loads(requests.get(urllib.parse.urljoin(server_url, "sdapi/v1/loras")).text)
+        #print(f"remote lora list: {json.dumps(lora_list, indent=2)}")
+        lora_map = {l.get("name"): l.get("path") for l in lora_list}
+        req_lora = []
+        print(f"requesting LoRAs")
+        for llora in lora:
+            name = llora['name']
+            rlora = lora_map.get(name)
+            if rlora:
+                entry = {'path': rlora, 'multiplier': llora["multiplier"]}
+                if verbose:
+                    print(f"  lora '{name}' mapped to '{rlora}'")
+                req_lora.append(entry)
+            else:
+                if verbose:
+                    print(f"  warning: lora '{name}' not found on remote")
+        if req_lora:
+            api_parameters["lora"] = req_lora
 
     if verbose:
         print(f"Using sdapi")
