@@ -266,6 +266,7 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 struct LoraEntry {
     std::string name;
     std::string path;
+    std::string fullpath;
 };
 
 int main(int argc, const char** argv) {
@@ -321,7 +322,8 @@ int main(int argc, const char** argv) {
 
                 LoraEntry e;
                 e.name          = p.stem().u8string();
-                std::string rel = fs::relative(p, lora_dir).u8string();
+                e.fullpath      = p.u8string();
+                std::string rel = p.lexically_relative(lora_dir).u8string();
                 std::replace(rel.begin(), rel.end(), '\\', '/');
                 e.path = rel;
 
@@ -340,10 +342,11 @@ int main(int argc, const char** argv) {
         }
     };
 
-    auto is_valid_lora_path = [&](const std::string& path) -> bool {
+    auto get_lora_full_path = [&](const std::string& path) -> std::string {
         std::lock_guard<std::mutex> lock(lora_mutex);
-        return std::any_of(lora_cache.begin(), lora_cache.end(),
+        auto it = std::find_if(lora_cache.begin(), lora_cache.end(),
                            [&](const LoraEntry& e) { return e.path == path; });
+        return (it != lora_cache.end()) ? it->fullpath : "";
     };
 
     httplib::Server svr;
@@ -862,11 +865,12 @@ int main(int argc, const char** argv) {
                         return bad("lora.path required");
                     }
 
-                    if (!is_valid_lora_path(path)) {
+                    std::string fullpath = get_lora_full_path(path);
+                    if (fullpath.empty()) {
                         return bad("invalid lora path: " + path);
                     }
 
-                    lora_path_storage.push_back(path);
+                    lora_path_storage.push_back(fullpath);
                     sd_lora_t l;
                     l.is_high_noise = is_high_noise;
                     l.multiplier    = multiplier;
