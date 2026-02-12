@@ -2,6 +2,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -365,6 +366,18 @@ int main(int argc, const char** argv) {
         return httplib::Server::HandlerResponse::Unhandled;
     });
 
+    auto wait_for_generation = [](std::future<void>& ft, sd_ctx_t* sd_ctx, const httplib::Request& req) {
+        std::future_status ft_status;
+        do {
+            if (!ft.valid())
+                break;
+            ft_status = ft.wait_for(std::chrono::milliseconds(1000));
+            if (req.is_connection_closed()) {
+                sd_cancel_generation(sd_ctx, SD_CANCEL_ALL);
+            }
+        } while (ft_status != std::future_status::ready);
+    };
+
     // root
     svr.Get("/", [&](const httplib::Request&, httplib::Response& res) {
         if (!svr_params.serve_html_path.empty()) {
@@ -507,11 +520,13 @@ int main(int argc, const char** argv) {
             sd_image_t* results = nullptr;
             int num_results     = 0;
 
-            {
+            std::future<void> ft = std::async(std::launch::async, [&]() {
                 std::lock_guard<std::mutex> lock(sd_ctx_mutex);
                 results     = generate_image(sd_ctx, &img_gen_params);
                 num_results = gen_params.batch_count;
-            }
+            });
+
+            wait_for_generation(ft, sd_ctx, req);
 
             for (int i = 0; i < num_results; i++) {
                 if (results[i].data == nullptr) {
@@ -748,11 +763,13 @@ int main(int argc, const char** argv) {
             sd_image_t* results = nullptr;
             int num_results     = 0;
 
-            {
+            std::future<void> ft = std::async(std::launch::async, [&]() {
                 std::lock_guard<std::mutex> lock(sd_ctx_mutex);
                 results     = generate_image(sd_ctx, &img_gen_params);
                 num_results = gen_params.batch_count;
-            }
+            });
+
+            wait_for_generation(ft, sd_ctx, req);
 
             json out;
             out["created"]       = static_cast<long long>(std::time(nullptr));
@@ -1062,11 +1079,13 @@ int main(int argc, const char** argv) {
             sd_image_t* results = nullptr;
             int num_results     = 0;
 
-            {
+            std::future<void> ft = std::async(std::launch::async, [&]() {
                 std::lock_guard<std::mutex> lock(sd_ctx_mutex);
                 results     = generate_image(sd_ctx, &img_gen_params);
                 num_results = gen_params.batch_count;
-            }
+            });
+
+            wait_for_generation(ft, sd_ctx, req);
 
             json out;
             out["images"]     = json::array();
