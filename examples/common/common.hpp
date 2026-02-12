@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 #include <json.hpp>
 using json   = nlohmann::json;
@@ -205,11 +206,51 @@ static void log_printf(sd_log_level_t level, const char* file, int line, const c
 #define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
 #define LOG_ERROR(format, ...) log_printf(SD_LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
 
+class OptionFlags {
+    using value_t = uint8_t;
+public:
+    enum type : value_t {
+        assigned    = 0x1,  // runtime flag; is set when an option is assigned a value from command line
+        no_network  = 0x2   // options with this flag are not encoded for transfer in json (sd-client/sd-server)
+    };
+
+    void set(OptionFlags::type flag) {
+        vflags |= static_cast<value_t>(flag);
+    }
+
+    void set(std::initializer_list<OptionFlags::type> flags) {
+        for (OptionFlags::type f : flags)
+            vflags |= static_cast<value_t>(f);
+    };
+
+    bool has(OptionFlags::type flag) const {
+        return vflags & static_cast<value_t>(flag);
+    }
+
+    bool has(std::initializer_list<OptionFlags::type> flags) const {
+        for (OptionFlags::type f : flags)
+            if (!(vflags & static_cast<value_t>(f)))
+                return false;
+        return true;
+    };
+
+    OptionFlags() : vflags(0) {}
+    OptionFlags(OptionFlags::type flags) : vflags(0) {
+        set(flags);
+    }
+    OptionFlags(std::initializer_list<OptionFlags::type> flags) : vflags(0) {
+        set(flags);
+    }
+private:
+    value_t vflags;
+};
+
 struct StringOption {
     std::string short_name;
     std::string long_name;
     std::string desc;
     std::string* target;
+    OptionFlags flags;
 };
 
 struct IntOption {
@@ -217,6 +258,7 @@ struct IntOption {
     std::string long_name;
     std::string desc;
     int* target;
+    OptionFlags flags;
 };
 
 struct FloatOption {
@@ -224,6 +266,7 @@ struct FloatOption {
     std::string long_name;
     std::string desc;
     float* target;
+    OptionFlags flags;
 };
 
 struct BoolOption {
@@ -232,6 +275,7 @@ struct BoolOption {
     std::string desc;
     bool keep_true;
     bool* target;
+    OptionFlags flags;
 };
 
 struct ManualOption {
@@ -239,6 +283,7 @@ struct ManualOption {
     std::string long_name;
     std::string desc;
     std::function<int(int argc, const char** argv, int index)> cb;
+    OptionFlags flags;
 };
 
 struct ArgOptions {
@@ -345,7 +390,69 @@ struct ArgOptions {
     }
 };
 
-static bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& options_list) {
+/** given a params object and the parsed ArgOptions, convert to json for network send **/
+template<typename PARAMS>
+json options_to_json(PARAMS const& params, ArgOptions const& options) {
+    json opt_json = json::object();
+
+    auto get_opts = [&opt_json](std::vector<auto> const& v) {
+        for (auto const& opt : v) {
+            if (!opt.flags.has(OptionFlags::assigned) || opt.flags.has(OptionFlags::no_network))
+                continue;  // skip unassigned or no network options
+            std::string node = opt.long_name.substr(2);
+            std::replace(node.begin(), node.end(), '-', '_');
+            opt_json[node] = *opt.target;
+        }
+    };
+
+    // automate transfer of simple types
+    get_opts(options.string_options);
+    get_opts(options.int_options);
+    get_opts(options.float_options);
+    get_opts(options.bool_options);
+    // manual options conversion hook
+    params.manual_options_to_json(options.manual_options, opt_json);
+
+    return opt_json;
+}
+
+/** given a params object and a json object, convert from json for network receive **/
+template<typename PARAMS>
+bool options_from_json(PARAMS& params, json const& opt_json) {
+    ArgOptions options = params.get_options();  // instantiate parameters for speculation
+
+    auto set_opts = [&opt_json](std::vector<auto>& v) -> bool {
+        for (auto const& opt : v) {
+            if (opt.flags.has(OptionFlags::no_network))
+                continue;  // skip no network options
+            std::string node = opt.long_name.substr(2);
+            std::replace(node.begin(), node.end(), '-', '_');
+            using T = std::decay_t<decltype(*opt.target)>;
+            if (opt_json.contains(node)) {
+                try {
+                    *opt.target = opt_json[node].get<T>();
+                    // probably only need this if want to rebuild json again
+                    //opt.flags.set(OptionFlags::assigned);
+                } catch (...) {
+                    LOG_ERROR("options_from_json: error: processing argument `%s`", node.c_str());
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+
+    // automate transfer of simple types
+    if (!set_opts(options.string_options) ||
+        !set_opts(options.int_options)    ||
+        !set_opts(options.float_options)  ||
+        !set_opts(options.bool_options)   ||
+        !params.manual_options_from_json(options.manual_options, opt_json))
+        return false;
+    return true;
+}
+
+static bool parse_options(int argc, const char** argv, std::vector<ArgOptions>& options_list) {
     bool invalid_arg = false;
     std::string arg;
 
@@ -354,6 +461,7 @@ static bool parse_options(int argc, const char** argv, const std::vector<ArgOpti
             if ((option.short_name.size() > 0 && arg == option.short_name) ||
                 (option.long_name.size() > 0 && arg == option.long_name)) {
                 apply_fn(option);
+                option.flags.set(OptionFlags::assigned);  // mark option as assigned for options_to_json()
                 return true;
             }
         }
@@ -1099,33 +1207,33 @@ struct SDGenerationParams {
             {"-i",
              "--init-img",
              "path to the init image",
-             &init_image_path},
+             &init_image_path, OptionFlags::no_network},
             {"",
              "--end-img",
              "path to the end image, required by flf2v",
-             &end_image_path},
+             &end_image_path, OptionFlags::no_network},
             {"",
              "--mask",
              "path to the mask image",
-             &mask_image_path},
+             &mask_image_path, OptionFlags::no_network},
             {"",
              "--control-image",
              "path to control image, control net",
-             &control_image_path},
+             &control_image_path, OptionFlags::no_network},
             {"",
              "--control-video",
              "path to control video frames, It must be a directory path. The video frames inside should be stored as images in "
              "lexicographical (character) order. For example, if the control video path is `frames`, the directory contain images "
              "such as 00.png, 01.png, ... etc.",
-             &control_video_path},
+             &control_video_path, OptionFlags::no_network},
             {"",
              "--pm-id-images-dir",
              "path to PHOTOMAKER input id images dir",
-             &pm_id_images_dir},
+             &pm_id_images_dir, OptionFlags::no_network},
             {"",
              "--pm-id-embed-path",
              "path to PHOTOMAKER v2 id embed",
-             &pm_id_embed_path},
+             &pm_id_embed_path, OptionFlags::no_network},
         };
 
         options.int_options = {
@@ -1512,7 +1620,7 @@ struct SDGenerationParams {
             {"-r",
              "--ref-image",
              "reference image for Flux Kontext models (can be used multiple times)",
-             on_ref_image_arg},
+             on_ref_image_arg, OptionFlags::no_network},
             {"",
              "--cache-mode",
              "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)",
@@ -1539,7 +1647,135 @@ struct SDGenerationParams {
         return options;
     }
 
+
+private:
+    /** build a set assigned options so we can check for availablity faster **/
+    template<typename OPTION>
+    static std::unordered_set<std::string> build_optlist(std::vector<OPTION> const& options) {
+        std::unordered_set<std::string> optlist;
+
+        for (auto const& opt : options) {
+            if (opt.flags.has(OptionFlags::no_network))
+                continue;  // skip options that aren't used over the network
+            if (opt.flags.has(OptionFlags::assigned)) {
+                std::string node = opt.long_name.substr(2);
+                std::replace(node.begin(), node.end(), '-', '_');
+                optlist.insert(node);
+            }
+        }
+        return optlist;
+    }
+
+public:
+    /** convert manual options to json **/
+    void manual_options_to_json(std::vector<ManualOption> const& options, json& j) const {
+        auto o = build_optlist(options);
+
+        auto maybe_set = [o,&j](const char* key, auto const& in) {
+            if (o.find(key) != o.end()) {
+                j[key] = in;
+            }
+        };
+
+        auto maybe_set_enum = [o,&j](const char* key, auto in, std::function<const char*(auto)> enum_to_str_cb, auto notfound) {
+            if (in != notfound && o.find(key) != o.end()) {
+                j[key] = enum_to_str_cb(in);
+            }
+        };
+
+        // this is required as we cannot use auto as a function parameter with old-school C function pointers
+        std::function<const char*(sample_method_t)>  sample_method_name_cb  = sd_sample_method_name;
+        std::function<const char*(scheduler_t)>      scheduler_name_cb      = sd_scheduler_name;
+      //std::function<const char*(cache_mode_t)>     cache_mode_cb          = sd_cache_mode_name;  // no sd_cache_mode_name function
+
+        maybe_set("seed", seed);
+        maybe_set_enum("sampling_method", sample_params.sample_method, sample_method_name_cb, SAMPLE_METHOD_COUNT);
+        maybe_set_enum("high_noise_sampling_method", high_noise_sample_params.sample_method, sample_method_name_cb, SAMPLE_METHOD_COUNT);
+        maybe_set_enum("scheduler", sample_params.scheduler, scheduler_name_cb, SCHEDULER_COUNT);
+        maybe_set("sigmas", custom_sigmas);
+        maybe_set("skip_layers", skip_layers);
+        maybe_set("high_noise_skip_layers", high_noise_skip_layers);
+        //maybe_set_enum("cache_mode", cache_mode, &cache_mode_name_cb, CACHE_MODE_COUNT);
+        maybe_set("cache_mode", cache_mode);
+        maybe_set("cache_option", cache_option);
+        maybe_set("cache_preset", cache_preset);
+    }
+
+    /** convert manual options from json **/
+    bool manual_options_from_json(std::vector<ManualOption>& options, json const& j) {
+
+        auto maybe_set = [j](const char* key, auto& out) {
+            if (!j.contains(key))
+                return true;  // allowed to be unavailable
+            using T = std::decay_t<decltype(out)>;
+
+            if constexpr (std::is_same_v<T, std::string>) {
+                if (j[key].is_string()) {
+                    out = j[key];  return true;
+                }
+            } else if constexpr (std::is_same_v<T, int> || std::is_same_v<T, int64_t>) {
+                if (j[key].is_number_integer()) {
+                    out = j[key];  return true;
+                }
+            } else if constexpr (std::is_same_v<T, float>) {
+                if (j[key].is_number()) {
+                    out = j[key];  return true;
+                }
+            } else if constexpr (std::is_same_v<T, bool>) {
+                if (j[key].is_boolean()) {
+                    out = j[key];  return true;
+                }
+            } else if constexpr (std::is_same_v<T, std::vector<int>>) {
+                if (j[key].is_array()) {
+                    out = j[key].get<std::vector<int>>();  return true;
+                }
+            } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+                if (j[key].is_array()) {
+                    out = j[key].get<std::vector<std::string>>();  return true;
+                }
+            }
+            return false;
+        };
+
+        auto maybe_set_enum = [&](const char* key, auto& out, auto(*str_to_enum_cb)(const char*), auto notfound) {
+            if (j.contains(key) && j[key].is_string()) {
+                auto tmp = str_to_enum_cb(j[key].get<std::string>().c_str());
+                if (tmp != notfound) {
+                    out = tmp;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        maybe_set("seed", seed);
+        maybe_set_enum("sampling_method", sample_params.sample_method, &str_to_sample_method, SAMPLE_METHOD_COUNT);
+        maybe_set_enum("high_noise_sampling_method", high_noise_sample_params.sample_method, &str_to_sample_method, SAMPLE_METHOD_COUNT);
+        maybe_set_enum("scheduler", sample_params.scheduler, &str_to_scheduler, SCHEDULER_COUNT);
+        maybe_set("sigmas", custom_sigmas);
+        maybe_set("skip_layers", skip_layers);
+        maybe_set("high_noise_skip_layers", high_noise_skip_layers);
+        //maybe_set_enum("cache_mode", cache_mode, &str_to_cache_mode, CACHE_MODE_COUNT);  // no str_to_cache_mode function
+        maybe_set("cache_mode", cache_mode);
+        maybe_set("cache_option", cache_option);
+        maybe_set("cache_preset", cache_preset);
+        return true;
+    }
+
+    json to_json(ArgOptions const& options) {
+        return options_to_json(*this, options);
+    }
+
+    bool from_json(const json& j) {
+        if (!options_from_json(*this, j))
+            return false;
+
+        return true;
+    }
+
     bool from_json_str(const std::string& json_str) {
+        if (json_str.empty())
+            return true;  // don't error on empty string
         json j;
         try {
             j = json::parse(json_str);
@@ -1547,85 +1783,7 @@ struct SDGenerationParams {
             LOG_ERROR("json parse failed %s", json_str.c_str());
             return false;
         }
-
-        auto load_if_exists = [&](const char* key, auto& out) {
-            if (j.contains(key)) {
-                using T = std::decay_t<decltype(out)>;
-                if constexpr (std::is_same_v<T, std::string>) {
-                    if (j[key].is_string())
-                        out = j[key];
-                } else if constexpr (std::is_same_v<T, int> || std::is_same_v<T, int64_t>) {
-                    if (j[key].is_number_integer())
-                        out = j[key];
-                } else if constexpr (std::is_same_v<T, float>) {
-                    if (j[key].is_number())
-                        out = j[key];
-                } else if constexpr (std::is_same_v<T, bool>) {
-                    if (j[key].is_boolean())
-                        out = j[key];
-                } else if constexpr (std::is_same_v<T, std::vector<int>>) {
-                    if (j[key].is_array())
-                        out = j[key].get<std::vector<int>>();
-                } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
-                    if (j[key].is_array())
-                        out = j[key].get<std::vector<std::string>>();
-                }
-            }
-        };
-
-        load_if_exists("prompt", prompt);
-        load_if_exists("negative_prompt", negative_prompt);
-        load_if_exists("cache_mode", cache_mode);
-        load_if_exists("cache_option", cache_option);
-        load_if_exists("cache_preset", cache_preset);
-        load_if_exists("scm_mask", scm_mask);
-
-        load_if_exists("clip_skip", clip_skip);
-        load_if_exists("width", width);
-        load_if_exists("height", height);
-        load_if_exists("batch_count", batch_count);
-        load_if_exists("video_frames", video_frames);
-        load_if_exists("fps", fps);
-        load_if_exists("upscale_repeats", upscale_repeats);
-        load_if_exists("seed", seed);
-
-        load_if_exists("strength", strength);
-        load_if_exists("control_strength", control_strength);
-        load_if_exists("pm_style_strength", pm_style_strength);
-        load_if_exists("moe_boundary", moe_boundary);
-        load_if_exists("vace_strength", vace_strength);
-
-        load_if_exists("auto_resize_ref_image", auto_resize_ref_image);
-        load_if_exists("increase_ref_index", increase_ref_index);
-
-        load_if_exists("skip_layers", skip_layers);
-        load_if_exists("high_noise_skip_layers", high_noise_skip_layers);
-
-        load_if_exists("steps", sample_params.sample_steps);
-        load_if_exists("high_noise_steps", high_noise_sample_params.sample_steps);
-        load_if_exists("cfg_scale", sample_params.guidance.txt_cfg);
-        load_if_exists("img_cfg_scale", sample_params.guidance.img_cfg);
-        load_if_exists("guidance", sample_params.guidance.distilled_guidance);
-
-        auto load_sampler_if_exists = [&](const char* key, enum sample_method_t& out) {
-            if (j.contains(key) && j[key].is_string()) {
-                enum sample_method_t tmp = str_to_sample_method(j[key].get<std::string>().c_str());
-                if (tmp != SAMPLE_METHOD_COUNT) {
-                    out = tmp;
-                }
-            }
-        };
-        load_sampler_if_exists("sample_method", sample_params.sample_method);
-        load_sampler_if_exists("high_noise_sample_method", high_noise_sample_params.sample_method);
-
-        if (j.contains("scheduler") && j["scheduler"].is_string()) {
-            enum scheduler_t tmp = str_to_scheduler(j["scheduler"].get<std::string>().c_str());
-            if (tmp != SCHEDULER_COUNT) {
-                sample_params.scheduler = tmp;
-            }
-        }
-
-        return true;
+        return options_from_json(*this, j);
     }
 
     void extract_and_remove_lora(const std::string& lora_model_dir) {
