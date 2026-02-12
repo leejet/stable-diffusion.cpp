@@ -23,6 +23,8 @@
 #include "latent-preview.h"
 #include "name_conversion.h"
 
+#include <atomic>
+
 const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
@@ -98,6 +100,9 @@ void suppress_pp(int step, int steps, float time, void* data) {
 
 /*=============================================== StableDiffusionGGML ================================================*/
 
+static_assert(std::atomic<sd_cancel_mode_t>::is_always_lock_free,
+              "sd_cancel_mode_t must be lock-free");
+
 class StableDiffusionGGML {
 public:
     ggml_backend_t backend             = nullptr;  // general backend
@@ -146,6 +151,8 @@ public:
 
     std::shared_ptr<Denoiser> denoiser = std::make_shared<CompVisDenoiser>();
 
+    std::atomic<sd_cancel_mode_t> cancellation_flag;
+
     StableDiffusionGGML() = default;
 
     ~StableDiffusionGGML() {
@@ -159,6 +166,18 @@ public:
             ggml_backend_free(vae_backend);
         }
         ggml_backend_free(backend);
+    }
+
+    void set_cancel_flag(enum sd_cancel_mode_t flag) {
+        cancellation_flag.store(flag, std::memory_order_release);
+    }
+
+    void reset_cancel_flag() {
+        set_cancel_flag(SD_CANCEL_RESET);
+    }
+
+    enum sd_cancel_mode_t get_cancel_flag() {
+        return cancellation_flag.load(std::memory_order_acquire);
     }
 
     void init_backend() {
@@ -1847,6 +1866,12 @@ public:
         }
 
         auto denoise = [&](ggml_tensor* input, float sigma, int step) -> ggml_tensor* {
+            enum sd_cancel_mode_t cancel_flag = get_cancel_flag();
+            if (cancel_flag != SD_CANCEL_RESET) {
+                LOG_DEBUG("cancelling latent decodings");
+                return nullptr;
+            }
+
             auto sd_preview_cb      = sd_get_preview_callback();
             auto sd_preview_cb_data = sd_get_preview_callback_data();
             auto sd_preview_mode    = sd_get_preview_mode();
@@ -3385,6 +3410,12 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         img_cond = SDCondition(uncond.c_crossattn, uncond.c_vector, cond.c_concat);
     }
     for (int b = 0; b < batch_count; b++) {
+
+        if (sd_ctx->sd->get_cancel_flag() != SD_CANCEL_RESET) {
+            LOG_ERROR("cancelling generation");
+            break;
+        }
+
         int64_t sampling_start = ggml_time_ms();
         int64_t cur_seed       = seed + b;
         LOG_INFO("generating image: %i/%i - seed %" PRId64, b + 1, batch_count, cur_seed);
@@ -3446,6 +3477,12 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     LOG_INFO("decoding %zu latents", final_latents.size());
     std::vector<struct ggml_tensor*> decoded_images;  // collect decoded images
     for (size_t i = 0; i < final_latents.size(); i++) {
+
+        if (sd_ctx->sd->get_cancel_flag() == SD_CANCEL_ALL) {
+            LOG_ERROR("cancelling latent decodings");
+            break;
+        }
+
         t1                      = ggml_time_ms();
         struct ggml_tensor* img = sd_ctx->sd->decode_first_stage(work_ctx, final_latents[i] /* x_0 */);
         // print_ggml_tensor(img);
@@ -3482,6 +3519,16 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     return result_images;
 }
 
+void sd_cancel_generation(sd_ctx_t* sd_ctx, enum sd_cancel_mode_t mode)
+{
+    if (sd_ctx && sd_ctx->sd) {
+        if (mode < SD_CANCEL_ALL || mode > SD_CANCEL_RESET) {
+            mode = SD_CANCEL_ALL;
+        }
+        sd_ctx->sd->set_cancel_flag(mode);
+    }
+}
+
 sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
     int width                     = sd_img_gen_params->width;
@@ -3503,6 +3550,8 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     if (sd_ctx == nullptr || sd_img_gen_params == nullptr) {
         return nullptr;
     }
+
+    sd_ctx->sd->reset_cancel_flag();
 
     struct ggml_init_params params;
     params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
