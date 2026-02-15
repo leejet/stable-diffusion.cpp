@@ -245,7 +245,7 @@ std::string get_image_params(const SDCliParams& cli_params, const SDContextParam
     parameter_string += "Guidance: " + std::to_string(gen_params.sample_params.guidance.distilled_guidance) + ", ";
     parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
     parameter_string += "Seed: " + std::to_string(seed) + ", ";
-    parameter_string += "Size: " + std::to_string(gen_params.width) + "x" + std::to_string(gen_params.height) + ", ";
+    parameter_string += "Size: " + std::to_string(gen_params.get_resolved_width()) + "x" + std::to_string(gen_params.get_resolved_height()) + ", ";
     parameter_string += "Model: " + sd_basename(ctx_params.model_path) + ", ";
     parameter_string += "RNG: " + std::string(sd_rng_type_name(ctx_params.rng_type)) + ", ";
     if (ctx_params.sampler_rng_type != RNG_TYPE_COUNT) {
@@ -394,13 +394,16 @@ bool save_results(const SDCliParams& cli_params,
 
     fs::path base_path = out_path;
     fs::path ext       = out_path.has_extension() ? out_path.extension() : fs::path{};
-    if (!ext.empty())
-        base_path.replace_extension();
 
     std::string ext_lower = ext.string();
     std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
     bool is_jpg = (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".jpe");
     bool is_qoi = (ext_lower == ".qoi");
+    if (!ext.empty()) {
+        if (is_qoi || is_jpg || ext_lower == ".png") {
+            base_path.replace_extension();
+        }
+    }
 
     int output_begin_idx = cli_params.output_begin_idx;
     if (output_begin_idx < 0) {
@@ -410,7 +413,7 @@ bool save_results(const SDCliParams& cli_params,
     auto write_image = [&](const fs::path& path, int idx) {
         const sd_image_t& img = results[idx];
         if (!img.data)
-            return;
+            return false;
 
         std::string params = get_image_params(cli_params, ctx_params, gen_params, gen_params.seed + idx);
         int ok             = 0;
@@ -422,7 +425,10 @@ bool save_results(const SDCliParams& cli_params,
             ok = stbi_write_png(path.string().c_str(), img.width, img.height, img.channel, img.data, 0, params.c_str());
         }
         LOG_INFO("save result image %d to '%s' (%s)", idx, path.string().c_str(), ok ? "success" : "failure");
+        return ok != 0;
     };
+
+    int sucessful_reults = 0;
 
     if (std::regex_search(cli_params.output_path, format_specifier_regex)) {
         if (!is_qoi && !is_jpg && ext_lower != ".png")
@@ -432,9 +438,12 @@ bool save_results(const SDCliParams& cli_params,
 
         for (int i = 0; i < num_results; ++i) {
             fs::path img_path = format_frame_idx(pattern.string(), output_begin_idx + i);
-            write_image(img_path, i);
+            if (write_image(img_path, i)) {
+                sucessful_reults++;
+            }
         }
-        return true;
+        LOG_INFO("%d/%d images saved", sucessful_reults, num_results);
+        return sucessful_reults != 0;
     }
 
     if (cli_params.mode == VID_GEN && num_results > 1) {
@@ -442,9 +451,13 @@ bool save_results(const SDCliParams& cli_params,
             ext = ".avi";
         fs::path video_path = base_path;
         video_path += ext;
-        create_mjpg_avi_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps);
-        LOG_INFO("save result MJPG AVI video to '%s'", video_path.string().c_str());
-        return true;
+        if (create_mjpg_avi_from_sd_images(video_path.string().c_str(), results, num_results, gen_params.fps) == 0) {
+            LOG_INFO("save result MJPG AVI video to '%s'", video_path.string().c_str());
+            return true;
+        } else {
+            LOG_ERROR("Failed to save result MPG AVI video to '%s'", video_path.string().c_str());
+            return false;
+        }
     }
 
     if (!is_qoi && !is_jpg && ext_lower != ".png")
@@ -456,10 +469,12 @@ bool save_results(const SDCliParams& cli_params,
             img_path += "_" + std::to_string(output_begin_idx + i);
         }
         img_path += ext;
-        write_image(img_path, i);
+        if (write_image(img_path, i)) {
+            sucessful_reults++;
+        }
     }
-
-    return true;
+    LOG_INFO("%d/%d images saved", sucessful_reults, num_results);
+    return sucessful_reults != 0;
 }
 
 int main(int argc, const char* argv[]) {
@@ -529,10 +544,10 @@ int main(int argc, const char* argv[]) {
     }
 
     bool vae_decode_only     = true;
-    sd_image_t init_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-    sd_image_t end_image     = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-    sd_image_t control_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-    sd_image_t mask_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 1, nullptr};
+    sd_image_t init_image    = {0, 0, 3, nullptr};
+    sd_image_t end_image     = {0, 0, 3, nullptr};
+    sd_image_t control_image = {0, 0, 3, nullptr};
+    sd_image_t mask_image    = {0, 0, 1, nullptr};
     std::vector<sd_image_t> ref_images;
     std::vector<sd_image_t> pmid_images;
     std::vector<sd_image_t> control_frames;
@@ -559,57 +574,79 @@ int main(int argc, const char* argv[]) {
         control_frames.clear();
     };
 
+    auto load_image_and_update_size = [&](const std::string& path,
+                                          sd_image_t& image,
+                                          bool resize_image    = true,
+                                          int expected_channel = 3) -> bool {
+        int expected_width  = 0;
+        int expected_height = 0;
+        if (resize_image && gen_params.width_and_height_are_set()) {
+            expected_width  = gen_params.width;
+            expected_height = gen_params.height;
+        }
+
+        if (!load_sd_image_from_file(&image, path.c_str(), expected_width, expected_height, expected_channel)) {
+            LOG_ERROR("load image from '%s' failed", path.c_str());
+            release_all_resources();
+            return false;
+        }
+
+        gen_params.set_width_and_height_if_unset(image.width, image.height);
+        return true;
+    };
+
     if (gen_params.init_image_path.size() > 0) {
         vae_decode_only = false;
-
-        int width       = 0;
-        int height      = 0;
-        init_image.data = load_image_from_file(gen_params.init_image_path.c_str(), width, height, gen_params.width, gen_params.height);
-        if (init_image.data == nullptr) {
-            LOG_ERROR("load image from '%s' failed", gen_params.init_image_path.c_str());
-            release_all_resources();
+        if (!load_image_and_update_size(gen_params.init_image_path, init_image)) {
             return 1;
         }
     }
 
     if (gen_params.end_image_path.size() > 0) {
         vae_decode_only = false;
-
-        int width      = 0;
-        int height     = 0;
-        end_image.data = load_image_from_file(gen_params.end_image_path.c_str(), width, height, gen_params.width, gen_params.height);
-        if (end_image.data == nullptr) {
-            LOG_ERROR("load image from '%s' failed", gen_params.end_image_path.c_str());
-            release_all_resources();
+        if (!load_image_and_update_size(gen_params.init_image_path, end_image)) {
             return 1;
         }
     }
 
+    if (gen_params.ref_image_paths.size() > 0) {
+        vae_decode_only = false;
+        for (auto& path : gen_params.ref_image_paths) {
+            sd_image_t ref_image = {0, 0, 3, nullptr};
+            if (!load_image_and_update_size(path, ref_image, false)) {
+                return 1;
+            }
+            ref_images.push_back(ref_image);
+        }
+    }
+
     if (gen_params.mask_image_path.size() > 0) {
-        int c           = 0;
-        int width       = 0;
-        int height      = 0;
-        mask_image.data = load_image_from_file(gen_params.mask_image_path.c_str(), width, height, gen_params.width, gen_params.height, 1);
-        if (mask_image.data == nullptr) {
+        if (!load_sd_image_from_file(&mask_image,
+                                     gen_params.mask_image_path.c_str(),
+                                     gen_params.get_resolved_width(),
+                                     gen_params.get_resolved_height(),
+                                     1)) {
             LOG_ERROR("load image from '%s' failed", gen_params.mask_image_path.c_str());
             release_all_resources();
             return 1;
         }
     } else {
-        mask_image.data = (uint8_t*)malloc(gen_params.width * gen_params.height);
+        mask_image.data = (uint8_t*)malloc(gen_params.get_resolved_width() * gen_params.get_resolved_height());
         if (mask_image.data == nullptr) {
             LOG_ERROR("malloc mask image failed");
             release_all_resources();
             return 1;
         }
-        memset(mask_image.data, 255, gen_params.width * gen_params.height);
+        mask_image.width  = gen_params.get_resolved_width();
+        mask_image.height = gen_params.get_resolved_height();
+        memset(mask_image.data, 255, gen_params.get_resolved_width() * gen_params.get_resolved_height());
     }
 
     if (gen_params.control_image_path.size() > 0) {
-        int width          = 0;
-        int height         = 0;
-        control_image.data = load_image_from_file(gen_params.control_image_path.c_str(), width, height, gen_params.width, gen_params.height);
-        if (control_image.data == nullptr) {
+        if (!load_sd_image_from_file(&control_image,
+                                     gen_params.control_image_path.c_str(),
+                                     gen_params.get_resolved_width(),
+                                     gen_params.get_resolved_height())) {
             LOG_ERROR("load image from '%s' failed", gen_params.control_image_path.c_str());
             release_all_resources();
             return 1;
@@ -624,29 +661,11 @@ int main(int argc, const char* argv[]) {
         }
     }
 
-    if (gen_params.ref_image_paths.size() > 0) {
-        vae_decode_only = false;
-        for (auto& path : gen_params.ref_image_paths) {
-            int width             = 0;
-            int height            = 0;
-            uint8_t* image_buffer = load_image_from_file(path.c_str(), width, height);
-            if (image_buffer == nullptr) {
-                LOG_ERROR("load image from '%s' failed", path.c_str());
-                release_all_resources();
-                return 1;
-            }
-            ref_images.push_back({(uint32_t)width,
-                                  (uint32_t)height,
-                                  3,
-                                  image_buffer});
-        }
-    }
-
     if (!gen_params.control_video_path.empty()) {
         if (!load_images_from_dir(gen_params.control_video_path,
                                   control_frames,
-                                  gen_params.width,
-                                  gen_params.height,
+                                  gen_params.get_resolved_width(),
+                                  gen_params.get_resolved_height(),
                                   gen_params.video_frames,
                                   cli_params.verbose)) {
             release_all_resources();
@@ -720,8 +739,8 @@ int main(int argc, const char* argv[]) {
                 gen_params.auto_resize_ref_image,
                 gen_params.increase_ref_index,
                 mask_image,
-                gen_params.width,
-                gen_params.height,
+                gen_params.get_resolved_width(),
+                gen_params.get_resolved_height(),
                 gen_params.sample_params,
                 gen_params.strength,
                 gen_params.seed,
@@ -751,8 +770,8 @@ int main(int argc, const char* argv[]) {
                 end_image,
                 control_frames.data(),
                 (int)control_frames.size(),
-                gen_params.width,
-                gen_params.height,
+                gen_params.get_resolved_width(),
+                gen_params.get_resolved_height(),
                 gen_params.sample_params,
                 gen_params.high_noise_sample_params,
                 gen_params.moe_boundary,
