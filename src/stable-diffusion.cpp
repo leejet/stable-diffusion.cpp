@@ -25,6 +25,10 @@
 #include "latent-preview.h"
 #include "name_conversion.h"
 
+#if SD_USE_RPC
+#include "ggml-rpc.h"
+#endif
+
 const char* model_version_to_str[] = {
     "SD 1.x",
     "SD 1.x Inpaint",
@@ -834,7 +838,13 @@ public:
                     }
                     return false;
                 };
-                if (!pmid_lora->load_from_file(n_threads, lora_tensor_filter)) {
+                int n_th = n_threads;
+#ifdef SD_USE_RPC
+                if (ggml_backend_is_rpc(diffusion_backend)) {
+                    n_th = 1;  // avoid multi-thread for loading to remote
+                }
+#endif
+                if (!pmid_lora->load_from_file(n_th, lora_tensor_filter)) {
                     LOG_WARN("load photomaker lora tensors from %s failed", sd_ctx_params->photo_maker_path);
                     return false;
                 }
@@ -929,7 +939,22 @@ public:
         if (version == VERSION_SVD) {
             ignore_tensors.insert("conditioner.embedders.3");
         }
-        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
+        int n_th = n_threads;
+#ifdef SD_USE_RPC
+        // TODO: maybe set it to 1 threads only for model parts that are on remote?
+        bool is_any_clip_rpc = false;
+        for (auto& backend : clip_backends) {
+            if (ggml_backend_is_rpc(backend)) {
+                is_any_clip_rpc = true;
+            }
+        }
+        // I think those are all the backends that should get sent data to when calling model_loader.load_tensors()
+        if (is_any_clip_rpc || ggml_backend_is_rpc(diffusion_backend) || ggml_backend_is_rpc(vae_backend) || ggml_backend_is_rpc(vision_backend) || ggml_backend_is_rpc(pmid_backend)) {
+            LOG_DEBUG("Using single-thread for tensor loading because RPC backend is used");
+            n_th = 1;  // avoid multi-thread for loading to remote
+        }
+#endif
+        bool success = model_loader.load_tensors(tensors, ignore_tensors, n_th, sd_ctx_params->enable_mmap);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
             ggml_free(ctx);
@@ -949,7 +974,13 @@ public:
                 vae_params_mem_size = first_stage_model->get_params_buffer_size();
             }
             if (use_tiny_autoencoder || version == VERSION_SDXS) {
-                if (use_tiny_autoencoder && !tae_first_stage->load_from_file(taesd_path, n_threads)) {
+                int n_th = n_threads;
+#ifdef SD_USE_RPC
+                if (ggml_backend_is_rpc(tae_backend)) {
+                    n_th = 1;  // avoid multi-thread for loading to remote
+                }
+#endif
+                if (use_tiny_autoencoder && !tae_first_stage->load_from_file(taesd_path, n_th)) {
                     return false;
                 }
                 use_tiny_autoencoder = true;  // now the processing is identical for VERSION_SDXS
@@ -957,7 +988,13 @@ public:
             }
             size_t control_net_params_mem_size = 0;
             if (control_net) {
-                if (!control_net->load_from_file(SAFE_STR(sd_ctx_params->control_net_path), n_threads)) {
+                int n_th = n_threads;
+#ifdef SD_USE_RPC
+                if (ggml_backend_is_rpc(control_net_backend)) {
+                    n_th = 1;  // avoid multi-thread for loading to remote
+                }
+#endif
+                if (!control_net->load_from_file(SAFE_STR(sd_ctx_params->control_net_path), n_th)) {
                     return false;
                 }
                 control_net_params_mem_size = control_net->get_params_buffer_size();
@@ -1170,7 +1207,13 @@ public:
             LOG_DEBUG("high noise lora: %s", lora_path.c_str());
         }
         auto lora = std::make_shared<LoraModel>(lora_id, backend, lora_path, is_high_noise ? "model.high_noise_" : "", version);
-        if (!lora->load_from_file(n_threads, lora_tensor_filter)) {
+        int n_th  = n_threads;
+#ifdef SD_USE_RPC
+        if (ggml_backend_is_rpc(backend)) {
+            n_th = 1;  // avoid multi-thread for loading to remote
+        }
+#endif
+        if (!lora->load_from_file(n_th, lora_tensor_filter)) {
             LOG_WARN("load lora tensors from %s failed", lora_path.c_str());
             return nullptr;
         }

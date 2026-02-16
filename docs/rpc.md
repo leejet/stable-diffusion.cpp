@@ -6,13 +6,13 @@ This guide covers how to build a version of [the RPC server from `llama.cpp`](ht
 
 ## 1. Building `stable-diffusion.cpp` with RPC client
 
-First, you should build the client application from source. It requires `GGML_RPC=ON` to include the RPC backend to your client.
+First, you should build the client application from source. It requires `SD_RPC=ON` to include the RPC backend to your client.
 
 ```bash
 mkdir build
 cd build
 cmake .. \
-    -DGGML_RPC=ON \
+    -DSD_RPC=ON \
     # Add other build flags here (e.g., -DSD_VULKAN=ON)
 cmake --build . --config Release -j $(nproc)
 ```
