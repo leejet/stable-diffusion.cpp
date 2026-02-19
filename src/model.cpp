@@ -655,11 +655,11 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
         LOG_WARN("Couldn't find working VAE in %s", file_path.c_str());
         // return false;
     }
-    if (!init_from_safetensors_file(clip_path, "te.")) {
+    if (!init_from_safetensors_file(clip_path, "cond_stage_model.transformer.")) {
         LOG_WARN("Couldn't find working text encoder in %s", file_path.c_str());
         // return false;
     }
-    if (!init_from_safetensors_file(clip_g_path, "te.1.")) {
+    if (!init_from_safetensors_file(clip_g_path, "cond_stage_model.1.transformer.")) {
         LOG_DEBUG("Couldn't find working second text encoder in %s", file_path.c_str());
     }
     return true;
@@ -1028,6 +1028,11 @@ bool ModelLoader::init_from_ckpt_file(const std::string& file_path, const std::s
 
 SDVersion ModelLoader::get_sd_version() {
     TensorStorage token_embedding_weight, input_block_weight;
+    // Return cached version if already detected as SDXL in earlier component
+    if (version_ == VERSION_SDXL || version_ == VERSION_SDXL_INPAINT || version_ == VERSION_SDXL_PIX2PIX) {
+        LOG_DEBUG("Returning cached SDXL version");
+        return version_;
+    }
 
     bool has_multiple_encoders = false;
     bool is_unet               = false;
@@ -1089,8 +1094,10 @@ SDVersion ModelLoader::get_sd_version() {
                 tensor_storage.name.find("cond_stage_model.1") != std::string::npos ||
                 tensor_storage.name.find("te.1") != std::string::npos) {
                 has_multiple_encoders = true;
+                // Return SDXL immediately to prevent later components from overriding
                 if (is_unet) {
-                    is_xl = true;
+                    LOG_DEBUG("Detected SDXL (multiple text encoders in UNET model)");
+                    return VERSION_SDXL;
                 }
             }
             if (tensor_storage.name.find("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") != std::string::npos) {
@@ -1121,6 +1128,11 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage.name == "unet.conv_in.weight") {
             input_block_weight = tensor_storage;
         }
+    }
+    
+    // Ensure SDXL is detected even if early return was not reached
+    if (has_multiple_encoders && is_unet) {
+        is_xl = true;
     }
     if (is_wan) {
         LOG_DEBUG("patch_embedding_channels %d", patch_embedding_channels);

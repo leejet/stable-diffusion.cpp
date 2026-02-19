@@ -1,4 +1,5 @@
 
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -18,6 +19,7 @@ namespace fs = std::filesystem;
 #endif  // _WIN32
 
 #include "stable-diffusion.h"
+#include "model.h"  // For SDVersion enum
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
@@ -443,6 +445,7 @@ struct SDContextParams {
     std::string control_net_path;
     std::string embedding_dir;
     std::string photo_maker_path;
+    std::string model_type;  // Manual model version override (sd1, sd2, sdxl, flux, etc.)
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
     std::string lora_model_dir = ".";
@@ -487,6 +490,10 @@ struct SDContextParams {
              "--model",
              "path to full model",
              &model_path},
+            {"",
+             "--model-type",
+             "force model type (sd1, sd2, sdxl, flux, sdxl_inpaint, etc). Auto-detect if not specified.",
+             &model_type},
             {"",
              "--clip_l",
              "path to the clip-l text encoder", &clip_l_path},
@@ -944,6 +951,38 @@ struct SDContextParams {
             embedding_vec.emplace_back(item);
         }
 
+        // Parse model_type string to SDVersion enum
+        int version_override = VERSION_COUNT;  // Auto-detect by default
+        if (!model_type.empty()) {
+            std::string mt = model_type;
+            // Convert to lowercase for case-insensitive matching
+            std::transform(mt.begin(), mt.end(), mt.begin(), ::tolower);
+            
+            if (mt == "sd1" || mt == "sd1.5" || mt == "sd1.x") {
+                version_override = VERSION_SD1;
+            } else if (mt == "sd1_inpaint") {
+                version_override = VERSION_SD1_INPAINT;
+            } else if (mt == "sd2" || mt == "sd2.0" || mt == "sd2.1" || mt == "sd2.x") {
+                version_override = VERSION_SD2;
+            } else if (mt == "sd2_inpaint") {
+                version_override = VERSION_SD2_INPAINT;
+            } else if (mt == "sdxl" || mt == "sdxl1.0") {
+                version_override = VERSION_SDXL;
+            } else if (mt == "sdxl_inpaint") {
+                version_override = VERSION_SDXL_INPAINT;
+            } else if (mt == "sdxl_pix2pix") {
+                version_override = VERSION_SDXL_PIX2PIX;
+            } else if (mt == "flux" || mt == "flux1") {
+                version_override = VERSION_FLUX;
+            } else if (mt == "sd3" || mt == "sd3.5") {
+                version_override = VERSION_SD3;
+            } else if (mt == "svd") {
+                version_override = VERSION_SVD;
+            } else {
+                fprintf(stderr, "Warning: Unknown model type '%s', using auto-detect\n", model_type.c_str());
+            }
+        }
+
         sd_ctx_params_t sd_ctx_params = {
             model_path.c_str(),
             clip_l_path.c_str(),
@@ -969,6 +1008,7 @@ struct SDContextParams {
             sampler_rng_type,
             prediction,
             lora_apply_mode,
+            version_override,  // Add version_override parameter
             offload_params_to_cpu,
             enable_mmap,
             clip_on_cpu,

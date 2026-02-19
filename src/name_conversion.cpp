@@ -920,6 +920,8 @@ std::vector<std::string> cond_stage_model_prefix_vec = {
     "cond_stage_model.",
     "conditioner.embedders.",
     "text_encoders.",
+    "te.1.",  // diffusers SDXL text_encoder_2 (clip_g)
+    "te.",    // diffusers text_encoder (clip_l)
 };
 
 std::vector<std::string> diffuison_model_prefix_vec = {
