@@ -84,6 +84,12 @@ if(SD_MUSA)
     endif()
 endif()
 
+if (SD_RPC)
+    message("-- Use RPC as backend stable-diffusion")
+    set(GGML_RPC ON)
+    add_definitions(-DSD_USE_RPC)
+endif ()
+
 set(SD_LIB stable-diffusion)
 
 file(GLOB SD_LIB_SOURCES

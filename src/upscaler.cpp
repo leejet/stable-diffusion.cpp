@@ -22,37 +22,20 @@ struct UpscalerGGML {
 
     bool load_from_file(const std::string& esrgan_path,
                         bool offload_params_to_cpu,
-                        int n_threads) {
+                        int n_threads,
+                        std::string device = "") {
         ggml_log_set(ggml_log_callback_default, nullptr);
-#ifdef SD_USE_CUDA
-        LOG_DEBUG("Using CUDA backend");
-        backend = ggml_backend_cuda_init(0);
-#endif
-#ifdef SD_USE_METAL
-        LOG_DEBUG("Using Metal backend");
-        backend = ggml_backend_metal_init();
-#endif
-#ifdef SD_USE_VULKAN
-        LOG_DEBUG("Using Vulkan backend");
-        backend = ggml_backend_vk_init(0);
-#endif
-#ifdef SD_USE_OPENCL
-        LOG_DEBUG("Using OpenCL backend");
-        backend = ggml_backend_opencl_init();
-#endif
-#ifdef SD_USE_SYCL
-        LOG_DEBUG("Using SYCL backend");
-        backend = ggml_backend_sycl_init(0);
-#endif
+        device = sanitize_backend_name(device);
+        backend = init_named_backend(device);
         ModelLoader model_loader;
         if (!model_loader.init_from_file_and_convert_name(esrgan_path)) {
             LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
         }
         model_loader.set_wtype_override(model_data_type);
-        if (!backend) {
-            LOG_DEBUG("Using CPU backend");
-            backend = ggml_backend_cpu_init();
-        }
+        // if (!backend) {
+        //     LOG_DEBUG("Using CPU backend");
+        //     backend = ggml_backend_cpu_init();
+        // }
         LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
         esrgan_upscaler = std::make_shared<ESRGAN>(backend, offload_params_to_cpu, tile_size, model_loader.get_tensor_storage_map());
         if (direct) {
@@ -117,7 +100,8 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
                                  bool offload_params_to_cpu,
                                  bool direct,
                                  int n_threads,
-                                 int tile_size) {
+                                 int tile_size,
+                                 const char* device) {
     upscaler_ctx_t* upscaler_ctx = (upscaler_ctx_t*)malloc(sizeof(upscaler_ctx_t));
     if (upscaler_ctx == nullptr) {
         return nullptr;
@@ -129,7 +113,7 @@ upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
         return nullptr;
     }
 
-    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu, n_threads)) {
+    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, offload_params_to_cpu, n_threads, SAFE_STR(device))) {
         delete upscaler_ctx->upscaler;
         upscaler_ctx->upscaler = nullptr;
         free(upscaler_ctx);
