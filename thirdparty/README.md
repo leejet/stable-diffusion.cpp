@@ -8,3 +8,5 @@
     - LICENSE: https://github.com/yhirose/cpp-httplib/blob/master/LICENSE
 - stb_image.h/stb_image_resize.h/stb_image_write.h from: https://github.com/nothings/stb
     - LICENSE: https://github.com/nothings/stb/blob/master/LICENSE
+- qoi.h library from: https://github.com/phoboslab/qoi
+    - https://github.com/phoboslab/qoi/blob/master/LICENSE

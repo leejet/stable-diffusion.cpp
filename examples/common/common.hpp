@@ -31,6 +31,9 @@ namespace fs = std::filesystem;
 #define STB_IMAGE_RESIZE_STATIC
 #include "stb_image_resize.h"
 
+#define QOI_IMPLEMENTATION
+#include "qoi.h"
+
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
@@ -1996,13 +1999,47 @@ uint8_t* load_image_common(bool from_memory,
     int c = 0;
     const char* image_path;
     uint8_t* image_buffer = nullptr;
+    
+    bool is_qoi = false;
     if (from_memory) {
-        image_path   = "memory";
-        image_buffer = (uint8_t*)stbi_load_from_memory((const stbi_uc*)image_path_or_bytes, len, &width, &height, &c, expected_channel);
-    } else {
-        image_path   = image_path_or_bytes;
-        image_buffer = (uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel);
+        // magic bytes
+        is_qoi = len >= 4 &&
+                 reinterpret_cast<const unsigned char*>(image_path_or_bytes)[0] == 'q' &&
+                 reinterpret_cast<const unsigned char*>(image_path_or_bytes)[1] == 'o' &&
+                 reinterpret_cast<const unsigned char*>(image_path_or_bytes)[2] == 'i' &&
+                 reinterpret_cast<const unsigned char*>(image_path_or_bytes)[3] == 'f';
+    } else if (image_path_or_bytes) {
+        const char* ext = strrchr(image_path_or_bytes, '.');
+        is_qoi = ext && (_stricmp(ext, ".qoi") == 0);
     }
+
+    if (is_qoi) {
+        // Use QOI.h
+        qoi_desc desc;
+        if (from_memory) {
+            image_buffer = (uint8_t*)qoi_decode(image_path_or_bytes, len, &desc, expected_channel);
+        } else {
+            image_buffer = (uint8_t*)qoi_read(image_path_or_bytes, &desc, expected_channel);
+        }
+        if (image_buffer) {
+            width = desc.width;
+            height = desc.height;
+            c = desc.channels;
+        }
+        image_path = from_memory ? "memory" : image_path_or_bytes;
+    } else {
+        // Use stb_image
+        if (from_memory) {
+            image_path = "memory";
+            image_buffer = (uint8_t*)stbi_load_from_memory(
+                (const stbi_uc*)image_path_or_bytes, len, &width, &height, &c, expected_channel);
+        } else {
+            image_path = image_path_or_bytes;
+            image_buffer = (uint8_t*)stbi_load(
+                image_path_or_bytes, &width, &height, &c, expected_channel);
+        }
+    }
+    
     if (image_buffer == nullptr) {
         LOG_ERROR("load image from '%s' failed", image_path);
         return nullptr;
@@ -2121,4 +2158,28 @@ uint8_t* load_image_from_memory(const char* image_bytes,
                                 int expected_height  = 0,
                                 int expected_channel = 3) {
     return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
+}
+
+uint8_t* load_qoi_from_memory(const char* qoi_data,
+                              int len,
+                              int& width,
+                              int& height,
+                              int expected_channel = 3) {
+    qoi_desc desc;
+    uint8_t* image_buffer = (uint8_t*)qoi_decode(qoi_data, len, &desc, expected_channel);
+    if (image_buffer) {
+        width = desc.width;
+        height = desc.height;
+    }
+    return image_buffer;
+}
+
+bool save_image_as_qoi(const char* filename, int width, int height, int channels, const void* data) {
+    qoi_desc desc;
+    desc.width = width;
+    desc.height = height;
+    desc.channels = channels;
+    desc.colorspace = QOI_SRGB;
+    
+    return qoi_write(filename, data, &desc) > 0;
 }
