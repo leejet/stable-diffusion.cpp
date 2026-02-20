@@ -26,12 +26,12 @@ Fortunately, `AMD` provides complete help documentation, you can use the help do
 
 Then we must set `ROCM` as environment variables before running cmake.
 
-Usually if you install according to the official tutorial and do not modify the ROCM path, then there is a high probability that it is here `C:\Program Files\AMD\ROCm\5.5\bin`
+Usually if you install according to the official tutorial and do not modify the ROCM path, then there is a high probability that it is here `C:\Program Files\AMD\ROCm\7.1.1\bin`
 
 This is what I use to set the clang:
 ```Commandline
-set CC=C:\Program Files\AMD\ROCm\5.5\bin\clang.exe
-set CXX=C:\Program Files\AMD\ROCm\5.5\bin\clang++.exe
+set CC=C:\Program Files\AMD\ROCm\7.1.1\bin\clang.exe
+set CXX=C:\Program Files\AMD\ROCm\7.1.1\bin\clang++.exe
 ```
 
 ## Ninja
@@ -46,7 +46,7 @@ set ninja=C:\Program Files\ninja\ninja.exe
 ## Building stable-diffusion.cpp
 
 The thing different from the regular CPU build is `-DSD_HIPBLAS=ON` ,
-`-G "Ninja"`, `-DCMAKE_C_COMPILER=clang`, `-DCMAKE_CXX_COMPILER=clang++`, `-DAMDGPU_TARGETS=gfx1100`
+`-G "Ninja"`, `-DCMAKE_C_COMPILER=clang`, `-DCMAKE_CXX_COMPILER=clang++`, `-DAMDGPU_TARGETS=gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032`
 
 >**Notice**: check the `clang` and `clang++` information:
 ```Commandline
@@ -59,26 +59,29 @@ If you see like this, we can continue:
 clang version 17.0.0 (git@github.amd.com:Compute-Mirrors/llvm-project e3201662d21c48894f2156d302276eb1cf47c7be)
 Target: x86_64-pc-windows-msvc
 Thread model: posix
-InstalledDir: C:\Program Files\AMD\ROCm\5.5\bin
+InstalledDir: C:\Program Files\AMD\ROCm\7.1.1\bin
 ```
 
 ```
 clang version 17.0.0 (git@github.amd.com:Compute-Mirrors/llvm-project e3201662d21c48894f2156d302276eb1cf47c7be)
 Target: x86_64-pc-windows-msvc
 Thread model: posix
-InstalledDir: C:\Program Files\AMD\ROCm\5.5\bin
+InstalledDir: C:\Program Files\AMD\ROCm\7.1.1\bin
 ```
 
->**Notice** that the `gfx1100` is the GPU architecture of my GPU, you can change it to your GPU architecture. Click here to see your architecture [LLVM Target](https://rocm.docs.amd.com/en/latest/release/windows_support.html#windows-supported-gpus)
+>**Notice** that the GPU targets are now compatible with multiple GPU architectures (ROCm 7.1.1 targets). You can change them to match your GPU architecture. Click here to see your architecture [LLVM Target](https://rocm.docs.amd.com/en/latest/release/windows_support.html#windows-supported-gpus)
 
-My GPU is AMD Radeon™ RX 7900 XTX Graphics, so I set it to `gfx1100`.
+Examples:
+- AMD Radeon™ RX 7900 XTX Graphics: `gfx1100`
+- AMD Radeon™ RX 7900 XT Graphics: `gfx1101`
+- AMD Radeon™ RX 7900 GRE Graphics: `gfx1102`
 
 option:
 
 ```commandline
 mkdir build
 cd build
-cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS=gfx1100
+cmake .. -G "Ninja" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DSD_HIPBLAS=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS="gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 cmake --build . --config Release
 ```
 

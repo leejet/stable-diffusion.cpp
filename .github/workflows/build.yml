@@ -387,12 +387,98 @@ jobs:
           path: |
             sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip
 
+  windows-latest-rocm:
+    runs-on: windows-2022
+
+    env:
+      ROCM_VERSION: "7.11.0"
+      GPU_TARGETS: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Cache ROCm Installation
+        id: cache-rocm
+        uses: actions/cache@v4
+        with:
+          path: C:\TheRock\build
+          key: rocm-${{ env.ROCM_VERSION }}-gfx1151-${{ runner.os }}
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: windows-latest-rocm-${{ env.ROCM_VERSION }}-x64
+          evict-old-files: 1d
+
+      - name: Install ROCm
+        if: steps.cache-rocm.outputs.cache-hit != 'true'
+        run: |
+          $ErrorActionPreference = "Stop"
+          write-host "Downloading AMD ROCm ${{ env.ROCM_VERSION }} tarball"
+          Invoke-WebRequest -Uri "https://repo.amd.com/rocm/tarball/therock-dist-windows-gfx1151-${{ env.ROCM_VERSION }}.tar.gz" -OutFile "${env:RUNNER_TEMP}\rocm.tar.gz"
+          write-host "Extracting ROCm tarball"
+          mkdir C:\TheRock\build -Force
+          tar -xzf "${env:RUNNER_TEMP}\rocm.tar.gz" -C C:\TheRock\build --strip-components=1
+          write-host "Completed ROCm extraction"
+
+      - name: Setup ROCm Environment
+        run: |
+          $rocmPath = "C:\TheRock\build"
+          echo "HIP_PATH=$rocmPath" >> $env:GITHUB_ENV
+          echo "HIP_DEVICE_LIB_PATH=$rocmPath\lib\llvm\amdgcn\bitcode" >> $env:GITHUB_ENV
+          echo "HIP_PLATFORM=amd" >> $env:GITHUB_ENV
+          echo "LLVM_PATH=$rocmPath\lib\llvm" >> $env:GITHUB_ENV
+          echo "$rocmPath\bin" >> $env:GITHUB_PATH
+          echo "$rocmPath\lib\llvm\bin" >> $env:GITHUB_PATH
+
+      - name: Build
+        run: |
+          mkdir build
+          cd build
+          cmake .. `
+            -G "Unix Makefiles" `
+            -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
+            -DSD_HIPBLAS=ON `
+            -DSD_BUILD_SHARED_LIBS=ON `
+            -DGGML_NATIVE=OFF `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
+            -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
+            -DHIP_PATH="${env:HIP_PATH}" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
+          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
+
+      - name: Get commit hash
+        id: commit
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: pr-mpt/actions-commit-hash@v2
+
+      - name: Pack artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\libhipblaslt.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
+          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
+          path: |
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
+
   windows-latest-cmake-hip:
     runs-on: windows-2022
 
     env:
-      HIPSDK_INSTALLER_VERSION: "25.Q3"
-      GPU_TARGETS: "gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
+      HIPSDK_INSTALLER_VERSION: "26.Q1"
+      ROCM_VERSION: "7.1.1"
+      GPU_TARGETS: "gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 
     steps:
       - uses: actions/checkout@v3
@@ -417,7 +503,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
+          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-Win11-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
           write-host "Installing AMD HIP SDK"
           $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
           $completed = $proc.WaitForExit(600000)
@@ -470,20 +556,20 @@ jobs:
         run: |
           md "build\bin\rocblas\library\"
           md "build\bin\hipblaslt\library"
-          cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\hipblaslt.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\libhipblas.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\libhipblaslt.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
           cp "${env:HIP_PATH}\bin\hipblaslt\library\*" "build\bin\hipblaslt\library\"
-          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-x64.zip .\build\bin\*
+          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-x64.zip
+          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
           path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-x64.zip
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
 
   ubuntu-latest-rocm:
     runs-on: ubuntu-latest
@@ -638,6 +724,7 @@ jobs:
       - macOS-latest-cmake
       - windows-latest-cmake
       - windows-latest-cmake-hip
+      - windows-latest-rocm
 
     steps:
       - name: Clone
