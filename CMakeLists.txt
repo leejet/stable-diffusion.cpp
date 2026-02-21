@@ -8,6 +8,25 @@ if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
+
+    message(STATUS "polyfilling #embed via Python...")
+
+    set(VOCAB_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/vocab/vocab.cpp")
+    set(GENERATED_VOCAB_HPP "${CMAKE_CURRENT_SOURCE_DIR}/src/vocab/vocab_generated.h")
+    execute_process(
+        COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/script/generate_vocab.py
+                ${VOCAB_HEADER}
+                ${GENERATED_VOCAB_HPP}
+        RESULT_VARIABLE result
+    )
+
+    if (NOT result EQUAL 0)
+        message(FATAL_ERROR "Failed to run generate_vocab.py")
+    endif()
+
+    add_definitions(-DUSE_GENERATED_VOCAB)
+
+
 if (MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
