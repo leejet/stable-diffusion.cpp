@@ -288,7 +288,7 @@ int main(int argc, const char** argv) {
     LOG_DEBUG("%s", ctx_params.to_string().c_str());
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false, false, false);
+    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false, false, false, true);
     sd_ctx_t* sd_ctx              = new_sd_ctx(&sd_ctx_params);
 
     if (sd_ctx == nullptr) {
@@ -461,7 +461,7 @@ int main(int argc, const char** argv) {
             if (gen_params.sample_params.sample_steps > 100)
                 gen_params.sample_params.sample_steps = 100;
 
-            if (!gen_params.process_and_check(IMG_GEN, "")) {
+            if (!gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
                 return;
@@ -642,7 +642,7 @@ int main(int argc, const char** argv) {
             if (gen_params.sample_params.sample_steps > 100)
                 gen_params.sample_params.sample_steps = 100;
 
-            if (!gen_params.process_and_check(IMG_GEN, "")) {
+            if (!gen_params.process_and_check(IMG_GEN, ctx_params.lora_model_dir)) {
                 res.status = 400;
                 res.set_content(R"({"error":"invalid params"})", "application/json");
                 return;

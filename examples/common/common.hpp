@@ -934,7 +934,7 @@ struct SDContextParams {
         return oss.str();
     }
 
-    sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview) {
+    sd_ctx_params_t to_sd_ctx_params_t(bool vae_decode_only, bool free_params_immediately, bool taesd_preview, bool is_server = false) {
         embedding_vec.clear();
         embedding_vec.reserve(embedding_map.size());
         for (const auto& kv : embedding_map) {
@@ -942,6 +942,11 @@ struct SDContextParams {
             item.name = kv.first.c_str();
             item.path = kv.second.c_str();
             embedding_vec.emplace_back(item);
+        }
+
+        if(is_server && lora_apply_mode == LORA_APPLY_AUTO)
+        {
+            lora_apply_mode = LORA_APPLY_AT_RUNTIME;
         }
 
         sd_ctx_params_t sd_ctx_params = {
@@ -1628,6 +1633,23 @@ struct SDGenerationParams {
         return true;
     }
 
+    static bool sanitize_lora_path(const std::string& lora_model_dir,
+                                   const std::string& raw_path_str,
+                                   fs::path& full_path) {
+        if (lora_model_dir.empty())
+            return false;
+
+        fs::path raw_p(raw_path_str);
+
+        if (raw_p.is_absolute() ||
+            !raw_p.root_name().empty() ||
+            raw_path_str.find("..") != std::string::npos) {
+            return false;
+        }
+        full_path = fs::path(lora_model_dir) / raw_p;
+        return true;
+    }
+
     void extract_and_remove_lora(const std::string& lora_model_dir) {
         if (lora_model_dir.empty()) {
             return;
@@ -1659,10 +1681,10 @@ struct SDGenerationParams {
             }
 
             fs::path final_path;
-            if (is_absolute_path(raw_path)) {
-                final_path = raw_path;
-            } else {
-                final_path = fs::path(lora_model_dir) / raw_path;
+            if (!sanitize_lora_path(lora_model_dir, raw_path, final_path)) {
+                tmp    = m.suffix().str();
+                prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                continue;
             }
             if (!fs::exists(final_path)) {
                 bool found = false;
