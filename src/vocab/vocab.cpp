@@ -1,5 +1,8 @@
 #include "vocab.h"
 
+#ifdef USE_GENERATED_VOCAB
+#include "vocab_generated.h"
+#else
 static unsigned char clip_merges_utf8_c_str[] = {
     #embed "embed/merges.txt"
 };
@@ -18,6 +21,7 @@ static unsigned char qwen2_merges_utf8_c_str[] = {
 static unsigned char umt5_tokenizer_json_str[] = {
     #embed "embed/umt5_tokenizer.json"
 };
+#endif
 
 std::string load_clip_merges() {
     std::string merges_utf8_str(reinterpret_cast<const char*>(clip_merges_utf8_c_str), sizeof(clip_merges_utf8_c_str));
