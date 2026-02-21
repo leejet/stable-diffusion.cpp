@@ -1,0 +1,745 @@
+#include "util.h"
+#include <algorithm>
+#include <cmath>
+#include <codecvt>
+#include <cstdarg>
+#include <fstream>
+#include <locale>
+#include <regex>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <vector>
+#include "preprocessing.hpp"
+
+#if defined(__APPLE__) && defined(__MACH__)
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#endif
+
+#if !defined(_WIN32)
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
+
+#include "ggml-cpu.h"
+#include "ggml.h"
+#include "stable-diffusion.h"
+
+bool ends_with(const std::string& str, const std::string& ending) {
+    if (str.length() >= ending.length()) {
+        return (str.compare(str.length() - ending.length(), ending.length(), ending) == 0);
+    } else {
+        return false;
+    }
+}
+
+bool starts_with(const std::string& str, const std::string& start) {
+    if (str.find(start) == 0) {
+        return true;
+    }
+    return false;
+}
+
+bool contains(const std::string& str, const std::string& substr) {
+    if (str.find(substr) != std::string::npos) {
+        return true;
+    }
+    return false;
+}
+
+void replace_all_chars(std::string& str, char target, char replacement) {
+    for (size_t i = 0; i < str.length(); ++i) {
+        if (str[i] == target) {
+            str[i] = replacement;
+        }
+    }
+}
+
+std::string sd_format(const char* fmt, ...) {
+    va_list ap;
+    va_list ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int size = vsnprintf(nullptr, 0, fmt, ap);
+    std::vector<char> buf(size + 1);
+    int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
+    va_end(ap2);
+    va_end(ap);
+    return std::string(buf.data(), size);
+}
+
+int round_up_to(int value, int base) {
+    if (base <= 0) {
+        return value;
+    }
+    if (value % base == 0) {
+        return value;
+    } else {
+        return ((value / base) + 1) * base;
+    }
+}
+
+#ifdef _WIN32  // code for windows
+#define NOMINMAX
+#include <windows.h>
+
+bool file_exists(const std::string& filename) {
+    DWORD attributes = GetFileAttributesA(filename.c_str());
+    return (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+bool is_directory(const std::string& path) {
+    DWORD attributes = GetFileAttributesA(path.c_str());
+    return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size, HANDLE hfile, HANDLE hmapping)
+        : MmapWrapper(data, size), hfile_(hfile), hmapping_(hmapping) {}
+
+    ~MmapWrapperImpl() override {
+        UnmapViewOfFile(data_);
+        CloseHandle(hmapping_);
+        CloseHandle(hfile_);
+    }
+
+private:
+    HANDLE hfile_;
+    HANDLE hmapping_;
+};
+
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+    void* mapped_data = nullptr;
+    size_t file_size  = 0;
+
+    HANDLE file_handle = CreateFileA(
+        filename.c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL);
+
+    if (file_handle == INVALID_HANDLE_VALUE) {
+        return nullptr;
+    }
+
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(file_handle, &size)) {
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    file_size = static_cast<size_t>(size.QuadPart);
+
+    HANDLE mapping_handle = CreateFileMapping(file_handle, NULL, PAGE_READONLY, 0, 0, NULL);
+
+    if (mapping_handle == NULL) {
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    mapped_data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, file_size);
+
+    if (mapped_data == NULL) {
+        CloseHandle(mapping_handle);
+        CloseHandle(file_handle);
+        return nullptr;
+    }
+
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size, file_handle, mapping_handle);
+}
+
+#else  // Unix
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+bool file_exists(const std::string& filename) {
+    struct stat buffer;
+    return (stat(filename.c_str(), &buffer) == 0 && S_ISREG(buffer.st_mode));
+}
+
+bool is_directory(const std::string& path) {
+    struct stat buffer;
+    return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
+}
+
+class MmapWrapperImpl : public MmapWrapper {
+public:
+    MmapWrapperImpl(void* data, size_t size)
+        : MmapWrapper(data, size) {}
+
+    ~MmapWrapperImpl() override {
+        munmap(data_, size_);
+    }
+};
+
+std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename) {
+    int file_descriptor = open(filename.c_str(), O_RDONLY);
+    if (file_descriptor == -1) {
+        return nullptr;
+    }
+
+    int mmap_flags = MAP_PRIVATE;
+
+#ifdef __linux__
+    // performance flags used by llama.cpp
+    // posix_fadvise(file_descriptor, 0, 0, POSIX_FADV_SEQUENTIAL);
+    // mmap_flags |= MAP_POPULATE;
+#endif
+
+    struct stat sb;
+    if (fstat(file_descriptor, &sb) == -1) {
+        close(file_descriptor);
+        return nullptr;
+    }
+
+    size_t file_size = sb.st_size;
+
+    void* mapped_data = mmap(NULL, file_size, PROT_READ, mmap_flags, file_descriptor, 0);
+
+    close(file_descriptor);
+
+    if (mapped_data == MAP_FAILED) {
+        return nullptr;
+    }
+
+#ifdef __linux__
+    // performance flags used by llama.cpp
+    // posix_madvise(mapped_data, file_size, POSIX_MADV_WILLNEED);
+#endif
+
+    return std::make_unique<MmapWrapperImpl>(mapped_data, file_size);
+}
+
+#endif
+
+bool MmapWrapper::copy_data(void* buf, size_t n, size_t offset) const {
+    if (offset >= size_ || n > (size_ - offset)) {
+        return false;
+    }
+    std::memcpy(buf, data() + offset, n);
+    return true;
+}
+
+// get_num_physical_cores is copy from
+// https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
+// LICENSE: https://github.com/ggerganov/llama.cpp/blob/master/LICENSE
+int32_t sd_get_num_physical_cores() {
+#ifdef __linux__
+    // enumerate the set of thread siblings, num entries is num cores
+    std::unordered_set<std::string> siblings;
+    for (uint32_t cpu = 0; cpu < UINT32_MAX; ++cpu) {
+        std::ifstream thread_siblings("/sys/devices/system/cpu" + std::to_string(cpu) + "/topology/thread_siblings");
+        if (!thread_siblings.is_open()) {
+            break;  // no more cpus
+        }
+        std::string line;
+        if (std::getline(thread_siblings, line)) {
+            siblings.insert(line);
+        }
+    }
+    if (siblings.size() > 0) {
+        return static_cast<int32_t>(siblings.size());
+    }
+#elif defined(__APPLE__) && defined(__MACH__)
+    int32_t num_physical_cores;
+    size_t len = sizeof(num_physical_cores);
+    int result = sysctlbyname("hw.perflevel0.physicalcpu", &num_physical_cores, &len, nullptr, 0);
+    if (result == 0) {
+        return num_physical_cores;
+    }
+    result = sysctlbyname("hw.physicalcpu", &num_physical_cores, &len, nullptr, 0);
+    if (result == 0) {
+        return num_physical_cores;
+    }
+#elif defined(_WIN32)
+    // TODO: Implement
+#endif
+    unsigned int n_threads = std::thread::hardware_concurrency();
+    return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
+}
+
+static sd_progress_cb_t sd_progress_cb = nullptr;
+void* sd_progress_cb_data              = nullptr;
+
+static sd_preview_cb_t sd_preview_cb = nullptr;
+static void* sd_preview_cb_data      = nullptr;
+preview_t sd_preview_mode            = PREVIEW_NONE;
+int sd_preview_interval              = 1;
+bool sd_preview_denoised             = true;
+bool sd_preview_noisy                = false;
+
+std::u32string utf8_to_utf32(const std::string& utf8_str) {
+    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
+    return converter.from_bytes(utf8_str);
+}
+
+std::string utf32_to_utf8(const std::u32string& utf32_str) {
+    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
+    return converter.to_bytes(utf32_str);
+}
+
+std::u32string unicode_value_to_utf32(int unicode_value) {
+    std::u32string utf32_string = {static_cast<char32_t>(unicode_value)};
+    return utf32_string;
+}
+
+static std::string sd_basename(const std::string& path) {
+    size_t pos = path.find_last_of('/');
+    if (pos != std::string::npos) {
+        return path.substr(pos + 1);
+    }
+    pos = path.find_last_of('\\');
+    if (pos != std::string::npos) {
+        return path.substr(pos + 1);
+    }
+    return path;
+}
+
+std::string path_join(const std::string& p1, const std::string& p2) {
+    if (p1.empty()) {
+        return p2;
+    }
+
+    if (p2.empty()) {
+        return p1;
+    }
+
+    if (p1[p1.length() - 1] == '/' || p1[p1.length() - 1] == '\\') {
+        return p1 + p2;
+    }
+
+    return p1 + "/" + p2;
+}
+
+std::vector<std::string> split_string(const std::string& str, char delimiter) {
+    std::vector<std::string> result;
+    size_t start = 0;
+    size_t end   = str.find(delimiter);
+
+    while (end != std::string::npos) {
+        result.push_back(str.substr(start, end - start));
+        start = end + 1;
+        end   = str.find(delimiter, start);
+    }
+
+    // Add the last segment after the last delimiter
+    result.push_back(str.substr(start));
+
+    return result;
+}
+
+void pretty_progress(int step, int steps, float time) {
+    if (sd_progress_cb) {
+        sd_progress_cb(step, steps, time, sd_progress_cb_data);
+        return;
+    }
+    if (step == 0) {
+        return;
+    }
+    std::string progress = "  |";
+    int max_progress     = 50;
+    int32_t current      = (int32_t)(step * 1.f * max_progress / steps);
+    for (int i = 0; i < 50; i++) {
+        if (i > current) {
+            progress += " ";
+        } else if (i == current && i != max_progress - 1) {
+            progress += ">";
+        } else {
+            progress += "=";
+        }
+    }
+    progress += "|";
+
+    const char* lf   = (step == steps ? "\n" : "");
+    const char* unit = "s/it";
+    float speed      = time;
+    if (speed < 1.0f && speed > 0.f) {
+        speed = 1.0f / speed;
+        unit  = "it/s";
+    }
+    printf("\r%s %i/%i - %.2f%s\033[K%s", progress.c_str(), step, steps, speed, unit, lf);
+    fflush(stdout);  // for linux
+}
+
+std::string ltrim(const std::string& s) {
+    auto it = std::find_if(s.begin(), s.end(), [](int ch) {
+        return !std::isspace(ch);
+    });
+    return std::string(it, s.end());
+}
+
+std::string rtrim(const std::string& s) {
+    auto it = std::find_if(s.rbegin(), s.rend(), [](int ch) {
+        return !std::isspace(ch);
+    });
+    return std::string(s.begin(), it.base());
+}
+
+std::string trim(const std::string& s) {
+    return rtrim(ltrim(s));
+}
+
+static sd_log_cb_t sd_log_cb = nullptr;
+void* sd_log_cb_data         = nullptr;
+
+#define LOG_BUFFER_SIZE 4096
+
+void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    static char log_buffer[LOG_BUFFER_SIZE + 1];
+    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "%s:%-4d - ", sd_basename(file).c_str(), line);
+
+    if (written >= 0 && written < LOG_BUFFER_SIZE) {
+        vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
+    }
+    size_t len = strlen(log_buffer);
+    if (log_buffer[len - 1] != '\n') {
+        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - len);
+    }
+
+    if (sd_log_cb) {
+        sd_log_cb(level, log_buffer, sd_log_cb_data);
+    }
+
+    va_end(args);
+}
+
+void sd_set_log_callback(sd_log_cb_t cb, void* data) {
+    sd_log_cb      = cb;
+    sd_log_cb_data = data;
+}
+void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
+    sd_progress_cb      = cb;
+    sd_progress_cb_data = data;
+}
+void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data) {
+    sd_preview_cb       = cb;
+    sd_preview_cb_data  = data;
+    sd_preview_mode     = mode;
+    sd_preview_interval = interval;
+    sd_preview_denoised = denoised;
+    sd_preview_noisy    = noisy;
+}
+
+sd_preview_cb_t sd_get_preview_callback() {
+    return sd_preview_cb;
+}
+void* sd_get_preview_callback_data() {
+    return sd_preview_cb_data;
+}
+
+preview_t sd_get_preview_mode() {
+    return sd_preview_mode;
+}
+int sd_get_preview_interval() {
+    return sd_preview_interval;
+}
+bool sd_should_preview_denoised() {
+    return sd_preview_denoised;
+}
+bool sd_should_preview_noisy() {
+    return sd_preview_noisy;
+}
+
+sd_progress_cb_t sd_get_progress_callback() {
+    return sd_progress_cb;
+}
+void* sd_get_progress_callback_data() {
+    return sd_progress_cb_data;
+}
+const char* sd_get_system_info() {
+    static char buffer[1024];
+    std::stringstream ss;
+    ss << "System Info: \n";
+    ss << "    SSE3 = " << ggml_cpu_has_sse3() << " | ";
+    ss << "    AVX = " << ggml_cpu_has_avx() << " | ";
+    ss << "    AVX2 = " << ggml_cpu_has_avx2() << " | ";
+    ss << "    AVX512 = " << ggml_cpu_has_avx512() << " | ";
+    ss << "    AVX512_VBMI = " << ggml_cpu_has_avx512_vbmi() << " | ";
+    ss << "    AVX512_VNNI = " << ggml_cpu_has_avx512_vnni() << " | ";
+    ss << "    FMA = " << ggml_cpu_has_fma() << " | ";
+    ss << "    NEON = " << ggml_cpu_has_neon() << " | ";
+    ss << "    ARM_FMA = " << ggml_cpu_has_arm_fma() << " | ";
+    ss << "    F16C = " << ggml_cpu_has_f16c() << " | ";
+    ss << "    FP16_VA = " << ggml_cpu_has_fp16_va() << " | ";
+    ss << "    WASM_SIMD = " << ggml_cpu_has_wasm_simd() << " | ";
+    ss << "    VSX = " << ggml_cpu_has_vsx() << " | ";
+    snprintf(buffer, sizeof(buffer), "%s", ss.str().c_str());
+    return buffer;
+}
+
+sd_image_f32_t sd_image_t_to_sd_image_f32_t(sd_image_t image) {
+    sd_image_f32_t converted_image;
+    converted_image.width   = image.width;
+    converted_image.height  = image.height;
+    converted_image.channel = image.channel;
+
+    // Allocate memory for float data
+    converted_image.data = (float*)malloc(image.width * image.height * image.channel * sizeof(float));
+
+    for (uint32_t i = 0; i < image.width * image.height * image.channel; i++) {
+        // Convert uint8_t to float
+        converted_image.data[i] = (float)image.data[i];
+    }
+
+    return converted_image;
+}
+
+// Function to perform double linear interpolation
+float interpolate(float v1, float v2, float v3, float v4, float x_ratio, float y_ratio) {
+    return v1 * (1 - x_ratio) * (1 - y_ratio) + v2 * x_ratio * (1 - y_ratio) + v3 * (1 - x_ratio) * y_ratio + v4 * x_ratio * y_ratio;
+}
+
+sd_image_f32_t resize_sd_image_f32_t(sd_image_f32_t image, int target_width, int target_height) {
+    sd_image_f32_t resized_image;
+    resized_image.width   = target_width;
+    resized_image.height  = target_height;
+    resized_image.channel = image.channel;
+
+    // Allocate memory for resized float data
+    resized_image.data = (float*)malloc(target_width * target_height * image.channel * sizeof(float));
+
+    for (int y = 0; y < target_height; y++) {
+        for (int x = 0; x < target_width; x++) {
+            float original_x = (float)x * image.width / target_width;
+            float original_y = (float)y * image.height / target_height;
+
+            uint32_t x1 = (uint32_t)original_x;
+            uint32_t y1 = (uint32_t)original_y;
+            uint32_t x2 = std::min(x1 + 1, image.width - 1);
+            uint32_t y2 = std::min(y1 + 1, image.height - 1);
+
+            for (uint32_t k = 0; k < image.channel; k++) {
+                float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
+                float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
+                float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
+                float v4 = *(image.data + y2 * image.width * image.channel + x2 * image.channel + k);
+
+                float x_ratio = original_x - x1;
+                float y_ratio = original_y - y1;
+
+                float value = interpolate(v1, v2, v3, v4, x_ratio, y_ratio);
+
+                *(resized_image.data + y * target_width * image.channel + x * image.channel + k) = value;
+            }
+        }
+    }
+
+    return resized_image;
+}
+
+void normalize_sd_image_f32_t(sd_image_f32_t image, float means[3], float stds[3]) {
+    for (uint32_t y = 0; y < image.height; y++) {
+        for (uint32_t x = 0; x < image.width; x++) {
+            for (uint32_t k = 0; k < image.channel; k++) {
+                int index         = (y * image.width + x) * image.channel + k;
+                image.data[index] = (image.data[index] - means[k]) / stds[k];
+            }
+        }
+    }
+}
+
+// Constants for means and std
+float means[3] = {0.48145466f, 0.4578275f, 0.40821073f};
+float stds[3]  = {0.26862954f, 0.26130258f, 0.27577711f};
+
+// Function to clip and preprocess sd_image_f32_t
+sd_image_f32_t clip_preprocess(sd_image_f32_t image, int target_width, int target_height) {
+    float width_scale  = (float)target_width / image.width;
+    float height_scale = (float)target_height / image.height;
+
+    float scale = std::fmax(width_scale, height_scale);
+
+    // Interpolation
+    int resized_width   = (int)(scale * image.width);
+    int resized_height  = (int)(scale * image.height);
+    float* resized_data = (float*)malloc(resized_width * resized_height * image.channel * sizeof(float));
+
+    for (int y = 0; y < resized_height; y++) {
+        for (int x = 0; x < resized_width; x++) {
+            float original_x = (float)x * image.width / resized_width;
+            float original_y = (float)y * image.height / resized_height;
+
+            uint32_t x1 = (uint32_t)original_x;
+            uint32_t y1 = (uint32_t)original_y;
+            uint32_t x2 = std::min(x1 + 1, image.width - 1);
+            uint32_t y2 = std::min(y1 + 1, image.height - 1);
+
+            for (uint32_t k = 0; k < image.channel; k++) {
+                float v1 = *(image.data + y1 * image.width * image.channel + x1 * image.channel + k);
+                float v2 = *(image.data + y1 * image.width * image.channel + x2 * image.channel + k);
+                float v3 = *(image.data + y2 * image.width * image.channel + x1 * image.channel + k);
+                float v4 = *(image.data + y2 * image.width * image.channel + x2 * image.channel + k);
+
+                float x_ratio = original_x - x1;
+                float y_ratio = original_y - y1;
+
+                float value = interpolate(v1, v2, v3, v4, x_ratio, y_ratio);
+
+                *(resized_data + y * resized_width * image.channel + x * image.channel + k) = value;
+            }
+        }
+    }
+
+    // Clip and preprocess
+    int h_offset = std::max((int)(resized_height - target_height) / 2, 0);
+    int w_offset = std::max((int)(resized_width - target_width) / 2, 0);
+
+    sd_image_f32_t result;
+    result.width   = target_width;
+    result.height  = target_height;
+    result.channel = image.channel;
+    result.data    = (float*)malloc(target_height * target_width * image.channel * sizeof(float));
+
+    for (uint32_t k = 0; k < image.channel; k++) {
+        for (uint32_t i = 0; i < result.height; i++) {
+            for (uint32_t j = 0; j < result.width; j++) {
+                int src_y = std::min(static_cast<int>(i + h_offset), resized_height - 1);
+                int src_x = std::min(static_cast<int>(j + w_offset), resized_width - 1);
+                *(result.data + i * result.width * image.channel + j * image.channel + k) =
+                    fmin(fmax(*(resized_data + src_y * resized_width * image.channel + src_x * image.channel + k), 0.0f), 255.0f) / 255.0f;
+            }
+        }
+    }
+
+    // Free allocated memory
+    free(resized_data);
+
+    // Normalize
+    for (uint32_t k = 0; k < image.channel; k++) {
+        for (uint32_t i = 0; i < result.height; i++) {
+            for (uint32_t j = 0; j < result.width; j++) {
+                // *(result.data + i * size * image.channel + j * image.channel + k) = 0.5f;
+                int offset  = i * result.width * image.channel + j * image.channel + k;
+                float value = *(result.data + offset);
+                value       = (value - means[k]) / stds[k];
+                // value = 0.5f;
+                *(result.data + offset) = value;
+            }
+        }
+    }
+
+    return result;
+}
+
+// Ref: https://github.com/AUTOMATIC1111/stable-diffusion-webui/blob/cad87bf4e3e0b0a759afa94e933527c3123d59bc/modules/prompt_parser.py#L345
+//
+// Parses a string with attention tokens and returns a list of pairs: text and its associated weight.
+// Accepted tokens are:
+//   (abc) - increases attention to abc by a multiplier of 1.1
+//   (abc:3.12) - increases attention to abc by a multiplier of 3.12
+//   [abc] - decreases attention to abc by a multiplier of 1.1
+//   BREAK - separates the prompt into conceptually distinct parts for sequential processing
+//   B - internal helper pattern; prevents 'B' in 'BREAK' from being consumed as normal text
+//   \( - literal character '('
+//   \[ - literal character '['
+//   \) - literal character ')'
+//   \] - literal character ']'
+//   \\ - literal character '\'
+//   anything else - just text
+//
+// >>> parse_prompt_attention('normal text')
+// [['normal text', 1.0]]
+// >>> parse_prompt_attention('an (important) word')
+// [['an ', 1.0], ['important', 1.1], [' word', 1.0]]
+// >>> parse_prompt_attention('(unbalanced')
+// [['unbalanced', 1.1]]
+// >>> parse_prompt_attention('\(literal\]')
+// [['(literal]', 1.0]]
+// >>> parse_prompt_attention('(unnecessary)(parens)')
+// [['unnecessaryparens', 1.1]]
+// >>> parse_prompt_attention('a (((house:1.3)) [on] a (hill:0.5), sun, (((sky))).')
+// [['a ', 1.0],
+//  ['house', 1.5730000000000004],
+//  [' ', 1.1],
+//  ['on', 1.0],
+//  [' a ', 1.1],
+//  ['hill', 0.55],
+//  [', sun, ', 1.1],
+//  ['sky', 1.4641000000000006],
+//  ['.', 1.1]]
+std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::string& text) {
+    std::vector<std::pair<std::string, float>> res;
+    std::vector<int> round_brackets;
+    std::vector<int> square_brackets;
+
+    float round_bracket_multiplier  = 1.1f;
+    float square_bracket_multiplier = 1 / 1.1f;
+
+    std::regex re_attention(R"(\\\(|\\\)|\\\[|\\\]|\\\\|\\|\(|\[|:([+-]?[.\d]+)\)|\)|\]|\bBREAK\b|[^\\()\[\]:B]+|:|\bB)");
+    std::regex re_break(R"(\s*\bBREAK\b\s*)");
+
+    auto multiply_range = [&](int start_position, float multiplier) {
+        for (int p = start_position; p < res.size(); ++p) {
+            res[p].second *= multiplier;
+        }
+    };
+
+    std::smatch m, m2;
+    std::string remaining_text = text;
+
+    while (std::regex_search(remaining_text, m, re_attention)) {
+        std::string text   = m[0];
+        std::string weight = m[1];
+
+        if (text == "(") {
+            round_brackets.push_back((int)res.size());
+        } else if (text == "[") {
+            square_brackets.push_back((int)res.size());
+        } else if (!weight.empty()) {
+            if (!round_brackets.empty()) {
+                multiply_range(round_brackets.back(), std::stof(weight));
+                round_brackets.pop_back();
+            }
+        } else if (text == ")" && !round_brackets.empty()) {
+            multiply_range(round_brackets.back(), round_bracket_multiplier);
+            round_brackets.pop_back();
+        } else if (text == "]" && !square_brackets.empty()) {
+            multiply_range(square_brackets.back(), square_bracket_multiplier);
+            square_brackets.pop_back();
+        } else if (text == "\\(") {
+            res.push_back({text.substr(1), 1.0f});
+        } else if (std::regex_search(text, m2, re_break)) {
+            res.push_back({"BREAK", -1.0f});
+        } else {
+            res.push_back({text, 1.0f});
+        }
+
+        remaining_text = m.suffix();
+    }
+
+    for (int pos : round_brackets) {
+        multiply_range(pos, round_bracket_multiplier);
+    }
+
+    for (int pos : square_brackets) {
+        multiply_range(pos, square_bracket_multiplier);
+    }
+
+    if (res.empty()) {
+        res.push_back({"", 1.0f});
+    }
+
+    int i = 0;
+    while (i + 1 < res.size()) {
+        if (res[i].second == res[i + 1].second) {
+            res[i].first += res[i + 1].first;
+            res.erase(res.begin() + i + 1);
+        } else {
+            ++i;
+        }
+    }
+
+    return res;
+}
