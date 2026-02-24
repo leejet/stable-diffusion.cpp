@@ -41,6 +41,12 @@ struct DiffusionModel {
     virtual int64_t get_adm_in_channels()                            = 0;
     virtual void set_flash_attention_enabled(bool enabled)           = 0;
     virtual void set_circular_axes(bool circular_x, bool circular_y) = 0;
+
+    // Dynamic tensor offloading interface
+    virtual bool is_params_on_gpu() const { return false; }
+    virtual bool move_params_to_cpu() { return false; }
+    virtual bool move_params_to_gpu() { return false; }
+    virtual size_t get_params_vram_size() const { return 0; }
 };
 
 struct UNetModel : public DiffusionModel {
@@ -107,6 +113,12 @@ struct UNetModel : public DiffusionModel {
                             diffusion_params.controls,
                             diffusion_params.control_strength, output, output_ctx);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return unet.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return unet.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return unet.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return unet.get_params_vram_size(); }
 };
 
 struct MMDiTModel : public DiffusionModel {
@@ -171,6 +183,12 @@ struct MMDiTModel : public DiffusionModel {
                              output_ctx,
                              diffusion_params.skip_layers);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return mmdit.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return mmdit.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return mmdit.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return mmdit.get_params_vram_size(); }
 };
 
 struct FluxModel : public DiffusionModel {
@@ -241,6 +259,12 @@ struct FluxModel : public DiffusionModel {
                             output_ctx,
                             diffusion_params.skip_layers);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return flux.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return flux.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return flux.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return flux.get_params_vram_size(); }
 };
 
 struct AnimaModel : public DiffusionModel {
@@ -377,6 +401,12 @@ struct WanModel : public DiffusionModel {
                            output,
                            output_ctx);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return wan.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return wan.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return wan.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return wan.get_params_vram_size(); }
 };
 
 struct QwenImageModel : public DiffusionModel {
@@ -445,6 +475,12 @@ struct QwenImageModel : public DiffusionModel {
                                   output,
                                   output_ctx);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return qwen_image.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return qwen_image.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return qwen_image.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return qwen_image.get_params_vram_size(); }
 };
 
 struct ZImageModel : public DiffusionModel {
@@ -512,6 +548,12 @@ struct ZImageModel : public DiffusionModel {
                                output,
                                output_ctx);
     }
+
+    // Dynamic tensor offloading
+    bool is_params_on_gpu() const override { return z_image.is_params_on_gpu(); }
+    bool move_params_to_cpu() override { return z_image.move_params_to_cpu(); }
+    bool move_params_to_gpu() override { return z_image.move_params_to_gpu(); }
+    size_t get_params_vram_size() const override { return z_image.get_params_vram_size(); }
 };
 
 #endif

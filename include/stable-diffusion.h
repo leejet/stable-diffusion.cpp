@@ -145,6 +145,37 @@ enum lora_apply_mode_t {
     LORA_APPLY_MODE_COUNT,
 };
 
+// Component identifiers for dynamic tensor offloading
+enum sd_component_t {
+    SD_COMPONENT_COND_STAGE,   // LLM/CLIP text embedder
+    SD_COMPONENT_CLIP_VISION,  // CLIP vision encoder (for SVD/Wan i2v)
+    SD_COMPONENT_DIFFUSION,    // UNet/DiT/Flux diffusion model
+    SD_COMPONENT_VAE,          // VAE encoder/decoder
+    SD_COMPONENT_CONTROL_NET,  // ControlNet (if loaded)
+    SD_COMPONENT_PMID,         // PhotoMaker ID encoder (if loaded)
+    SD_COMPONENT_COUNT
+};
+
+// Offload mode for automatic GPU memory management
+enum sd_offload_mode_t {
+    SD_OFFLOAD_NONE,           // Keep all components on GPU (default, fastest)
+    SD_OFFLOAD_COND_ONLY,      // Offload only conditioning (LLM/CLIP) after use
+    SD_OFFLOAD_COND_DIFFUSION, // Offload conditioning + diffusion, keep VAE
+    SD_OFFLOAD_AGGRESSIVE,     // Offload each component after use (saves most VRAM)
+    SD_OFFLOAD_MODE_COUNT
+};
+
+// Offload configuration for fine-grained control
+typedef struct {
+    enum sd_offload_mode_t mode;          // Offload mode
+    bool offload_cond_stage;              // Offload LLM/CLIP after conditioning
+    bool offload_diffusion;               // Offload diffusion model after sampling
+    bool reload_cond_stage;               // Reload LLM/CLIP for next generation
+    bool log_offload_events;              // Log offload/reload events
+    size_t min_offload_size;              // Minimum component size to offload (bytes), 0 = no minimum
+    size_t target_free_vram;              // Target free VRAM before VAE decode (bytes), 0 = always offload when mode is set
+} sd_offload_config_t;
+
 typedef struct {
     bool enabled;
     int tile_size_x;
@@ -201,6 +232,8 @@ typedef struct {
     bool chroma_use_t5_mask;
     int chroma_t5_mask_pad;
     bool qwen_image_zero_cond_t;
+    float flow_shift;
+    sd_offload_config_t offload_config;  // Dynamic tensor offloading configuration
 } sd_ctx_params_t;
 
 typedef struct {
@@ -368,6 +401,9 @@ SD_API char* sd_sample_params_to_str(const sd_sample_params_t* sample_params);
 SD_API enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx);
 SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method);
 
+// Get the model architecture/version name (e.g., "SD 1.x", "SDXL", "Flux", "Z-Image", etc.)
+SD_API const char* sd_get_model_version_name(const sd_ctx_t* sd_ctx);
+
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
@@ -406,6 +442,30 @@ SD_API bool preprocess_canny(sd_image_t image,
 
 SD_API const char* sd_commit(void);
 SD_API const char* sd_version(void);
+
+// Dynamic tensor offloading API
+// These functions allow runtime GPU memory management by moving model components
+// between CPU and GPU. This enables running larger models on limited VRAM by
+// keeping only the currently-active component on GPU.
+
+// Offload component from GPU to CPU (frees GPU memory)
+// Returns true on success, false if component doesn't exist or is already on CPU
+SD_API bool sd_offload_to_cpu(sd_ctx_t* sd_ctx, enum sd_component_t component);
+
+// Reload component from CPU to GPU (allocates GPU memory)
+// Returns true on success, false if component doesn't exist or allocation failed
+SD_API bool sd_reload_to_gpu(sd_ctx_t* sd_ctx, enum sd_component_t component);
+
+// Query whether component is currently on GPU
+// Returns true if on GPU, false if on CPU or component doesn't exist
+SD_API bool sd_is_on_gpu(sd_ctx_t* sd_ctx, enum sd_component_t component);
+
+// Get component's current memory usage in bytes
+// Returns the buffer size if component exists, 0 otherwise
+SD_API size_t sd_get_component_vram(sd_ctx_t* sd_ctx, enum sd_component_t component);
+
+// Get human-readable name for a component
+SD_API const char* sd_component_name(enum sd_component_t component);
 
 #ifdef __cplusplus
 }

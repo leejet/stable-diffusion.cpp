@@ -1635,6 +1635,7 @@ protected:
     struct ggml_context* offload_ctx            = nullptr;
     ggml_backend_buffer_t runtime_params_buffer = nullptr;
     bool params_on_runtime_backend              = false;
+    bool auto_offload_after_compute             = true;  // If false, don't auto-offload in free_compute_buffer
 
     struct ggml_context* cache_ctx     = nullptr;
     ggml_backend_buffer_t cache_buffer = nullptr;
@@ -1978,6 +1979,65 @@ public:
         return 0;
     }
 
+    // Dynamic tensor offloading API
+    // Returns true if params are currently on the runtime (GPU) backend
+    bool is_params_on_gpu() const {
+        // If params_backend == runtime_backend, params are always "on GPU"
+        // (or always on CPU if CPU-only mode)
+        if (params_backend == runtime_backend) {
+            return !ggml_backend_is_cpu(runtime_backend);
+        }
+        // Otherwise check the offload state
+        return params_on_runtime_backend;
+    }
+
+    // Move params from GPU to CPU (params_backend), freeing GPU memory
+    // Returns true on success, false if already on CPU or not applicable
+    bool move_params_to_cpu() {
+        if (params_backend == runtime_backend) {
+            // No separate CPU backend configured, can't offload
+            return false;
+        }
+        if (!params_on_runtime_backend) {
+            // Already on CPU
+            return true;
+        }
+        offload_params_to_params_backend();
+        return true;
+    }
+
+    // Move params from CPU to GPU (runtime_backend), allocating GPU memory
+    // Returns true on success, false if already on GPU or allocation failed
+    bool move_params_to_gpu() {
+        if (params_backend == runtime_backend) {
+            // No separate CPU backend, params are always on runtime backend
+            return true;
+        }
+        if (params_on_runtime_backend) {
+            // Already on GPU
+            return true;
+        }
+        return offload_params_to_runtime_backend();
+    }
+
+    // Get the size of params buffer (VRAM usage when on GPU)
+    size_t get_params_vram_size() const {
+        if (params_buffer != nullptr) {
+            return ggml_backend_buffer_get_size(params_buffer);
+        }
+        return 0;
+    }
+
+    // Control automatic offloading after compute operations
+    // When disabled, params stay on GPU until explicitly moved via move_params_to_cpu()
+    void set_auto_offload(bool enabled) {
+        auto_offload_after_compute = enabled;
+    }
+
+    bool get_auto_offload() const {
+        return auto_offload_after_compute;
+    }
+
     void free_cache_ctx_and_buffer() {
         free_cache_buffer();
         free_cache_ctx();
@@ -1988,7 +2048,10 @@ public:
             ggml_gallocr_free(compute_allocr);
             compute_allocr = nullptr;
         }
-        offload_params_to_params_backend();
+        // Only auto-offload if enabled (explicit offload mode disables this)
+        if (auto_offload_after_compute) {
+            offload_params_to_params_backend();
+        }
     }
 
     // do copy after alloc graph
