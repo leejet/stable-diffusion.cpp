@@ -480,6 +480,9 @@ struct SDContextParams {
 
     float flow_shift = INFINITY;
 
+    // Dynamic tensor offloading configuration
+    sd_offload_config_t offload_config = {SD_OFFLOAD_NONE, true, false, false, true, 0, 2ULL * 1024 * 1024 * 1024};
+
     ArgOptions get_options() {
         ArgOptions options;
         options.string_options = {
@@ -652,6 +655,14 @@ struct SDContextParams {
              "--chroma-enable-t5-mask",
              "enable t5 mask for chroma",
              true, &chroma_use_t5_mask},
+            {"",
+             "--offload-log",
+             "log offload/reload events when using dynamic offloading (default: true when offload mode is set)",
+             true, &offload_config.log_offload_events},
+            {"",
+             "--no-offload-log",
+             "disable offload/reload event logging",
+             false, &offload_config.log_offload_events},
         };
 
         auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -770,6 +781,19 @@ struct SDContextParams {
             return 1;
         };
 
+        auto on_offload_mode_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            const char* arg     = argv[index];
+            offload_config.mode = str_to_offload_mode(arg);
+            if (offload_config.mode == SD_OFFLOAD_MODE_COUNT) {
+                LOG_ERROR("error: invalid offload mode %s", arg);
+                return -1;
+            }
+            return 1;
+        };
+
         options.manual_options = {
             {"",
              "--type",
@@ -804,6 +828,12 @@ struct SDContextParams {
              "--vae-relative-tile-size",
              "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
              on_relative_tile_size_arg},
+            {"",
+             "--offload-mode",
+             "dynamic VRAM offloading mode, one of [none, cond_only, cond_diffusion, aggressive] (default: none). "
+             "Use 'cond_only' to offload the LLM/CLIP model to CPU after conditioning, freeing VRAM for diffusion. "
+             "This enables generation with large models that would otherwise cause OOM.",
+             on_offload_mode_arg},
         };
 
         return options;
@@ -924,7 +954,9 @@ struct SDContextParams {
             << vae_tiling_params.target_overlap << ", "
             << vae_tiling_params.rel_size_x << ", "
             << vae_tiling_params.rel_size_y << " },\n"
-            << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << "\n"
+            << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << ",\n"
+            << "  offload_config: { mode=" << sd_offload_mode_name(offload_config.mode)
+            << ", log=" << (offload_config.log_offload_events ? "true" : "false") << " }\n"
             << "}";
         return oss.str();
     }
@@ -981,6 +1013,8 @@ struct SDContextParams {
             chroma_use_t5_mask,
             chroma_t5_mask_pad,
             qwen_image_zero_cond_t,
+            flow_shift,
+            offload_config,
         };
         return sd_ctx_params;
     }

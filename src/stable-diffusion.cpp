@@ -2956,6 +2956,39 @@ enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
     return LORA_APPLY_MODE_COUNT;
 }
 
+const char* offload_mode_to_str[] = {
+    "none",
+    "cond_only",
+    "cond_diffusion",
+    "aggressive",
+};
+
+const char* sd_offload_mode_name(enum sd_offload_mode_t mode) {
+    if (mode < SD_OFFLOAD_MODE_COUNT) {
+        return offload_mode_to_str[mode];
+    }
+    return NONE_STR;
+}
+
+enum sd_offload_mode_t str_to_offload_mode(const char* str) {
+    for (int i = 0; i < SD_OFFLOAD_MODE_COUNT; i++) {
+        if (!strcmp(str, offload_mode_to_str[i])) {
+            return (enum sd_offload_mode_t)i;
+        }
+    }
+    return SD_OFFLOAD_MODE_COUNT;
+}
+
+void sd_offload_config_init(sd_offload_config_t* config) {
+    config->mode               = SD_OFFLOAD_NONE;
+    config->offload_cond_stage = true;
+    config->offload_diffusion  = false;
+    config->reload_cond_stage  = false;
+    config->log_offload_events = true;
+    config->min_offload_size   = 0;
+    config->target_free_vram   = 2ULL * 1024 * 1024 * 1024;  // 2 GB
+}
+
 void sd_cache_params_init(sd_cache_params_t* cache_params) {
     *cache_params                             = {};
     cache_params->mode                        = SD_CACHE_DISABLED;
