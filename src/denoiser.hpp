@@ -651,12 +651,26 @@ float time_snr_shift(float alpha, float t) {
     return alpha * t / (1 + (alpha - 1) * t);
 }
 
-struct FlowDenoiser : public Denoiser {
+struct DiscreteFlowDenoiser : public Denoiser {
     float sigmas[TIMESTEPS];
-    float shift      = INFINITY;
+    float shift = 3.0f;
+
     float sigma_data = 1.0f;
 
-    virtual void set_parameters(float shift) = 0;
+    DiscreteFlowDenoiser(float shift = 3.0f) {
+        set_shift(shift);
+    }
+
+    void set_parameters() {
+        for (int i = 1; i < TIMESTEPS + 1; i++) {
+            sigmas[i - 1] = t_to_sigma(static_cast<float>(i));
+        }
+    }
+
+    void set_shift(float shift) {
+        this->shift = shift;
+        set_parameters();
+    }
 
     float sigma_min() override {
         return sigmas[0];
@@ -664,6 +678,15 @@ struct FlowDenoiser : public Denoiser {
 
     float sigma_max() override {
         return sigmas[TIMESTEPS - 1];
+    }
+
+    float sigma_to_t(float sigma) override {
+        return sigma * 1000.f;
+    }
+
+    float t_to_sigma(float t) override {
+        t = t + 1;
+        return time_snr_shift(shift, t / 1000.f);
     }
 
     std::vector<float> get_scalings(float sigma) override {
@@ -687,50 +710,14 @@ struct FlowDenoiser : public Denoiser {
     }
 };
 
-struct DiscreteFlowDenoiser : public FlowDenoiser {
-    DiscreteFlowDenoiser() = default;
-
-    void set_parameters(float shift) override {
-        if (shift != this->shift) {
-            this->shift = shift;
-            for (int i = 0; i < TIMESTEPS; i++) {
-                sigmas[i] = t_to_sigma(static_cast<float>(i));
-            }
-        }
-    }
-
-    float sigma_to_t(float sigma) override {
-        return sigma * 1000.f;
-    }
-
-    float t_to_sigma(float t) override {
-        t = t + 1;
-        return time_snr_shift(shift, t / 1000.f);
-    }
-};
-
 float flux_time_shift(float mu, float sigma, float t) {
     return ::expf(mu) / (::expf(mu) + ::powf((1.0f / t - 1.0f), sigma));
 }
 
-struct FluxFlowDenoiser : public FlowDenoiser {
+struct FluxFlowDenoiser : public DiscreteFlowDenoiser {
     float shift_sigmas = INFINITY;
 
     FluxFlowDenoiser() = default;
-
-    void set_shift(float shift) {
-        this->shift = shift;
-    }
-
-    void set_parameters(float shift) override {
-        set_shift(shift);
-        if (shift != shift_sigmas) {
-            shift_sigmas = shift;
-            for (int i = 0; i < TIMESTEPS; i++) {
-                sigmas[i] = t_to_sigma(static_cast<float>(i));
-            }
-        }
-    }
 
     float sigma_to_t(float sigma) override {
         return sigma;

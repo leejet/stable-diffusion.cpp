@@ -2710,12 +2710,12 @@ public:
     }
 
     void set_flow_shift(float flow_shift = INFINITY) {
-        auto flow_denoiser = std::dynamic_pointer_cast<FlowDenoiser>(denoiser);
+        auto flow_denoiser = std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser);
         if (flow_denoiser) {
             if (flow_shift == INFINITY) {
                 flow_shift = default_flow_shift;
             }
-            flow_denoiser->set_parameters(flow_shift);
+            flow_denoiser->set_shift(flow_shift);
         }
     }
 };
