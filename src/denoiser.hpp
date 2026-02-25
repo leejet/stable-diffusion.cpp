@@ -653,7 +653,7 @@ float time_snr_shift(float alpha, float t) {
 
 struct FlowDenoiser : public Denoiser {
     float sigmas[TIMESTEPS];
-    float shift = INFINITY;
+    float shift      = INFINITY;
     float sigma_data = 1.0f;
 
     virtual void set_parameters(float shift) = 0;
@@ -663,7 +663,7 @@ struct FlowDenoiser : public Denoiser {
     }
 
     float sigma_max() override {
-        return sigmas[TIMESTEPS-1];
+        return sigmas[TIMESTEPS - 1];
     }
 
     std::vector<float> get_scalings(float sigma) override {
@@ -688,7 +688,6 @@ struct FlowDenoiser : public Denoiser {
 };
 
 struct DiscreteFlowDenoiser : public FlowDenoiser {
-
     DiscreteFlowDenoiser() = default;
 
     void set_parameters(float shift) override {
@@ -708,7 +707,6 @@ struct DiscreteFlowDenoiser : public FlowDenoiser {
         t = t + 1;
         return time_snr_shift(shift, t / 1000.f);
     }
-
 };
 
 float flux_time_shift(float mu, float sigma, float t) {
@@ -716,7 +714,6 @@ float flux_time_shift(float mu, float sigma, float t) {
 }
 
 struct FluxFlowDenoiser : public FlowDenoiser {
-
     float shift_sigmas = INFINITY;
 
     FluxFlowDenoiser() = default;
@@ -743,7 +740,6 @@ struct FluxFlowDenoiser : public FlowDenoiser {
         t = t + 1;
         return flux_time_shift(shift, 1.0f, t / TIMESTEPS);
     }
-
 };
 
 struct Flux2FlowDenoiser : public FluxFlowDenoiser {
