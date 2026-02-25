@@ -1074,7 +1074,11 @@ public:
             is_high_noise = true;
             LOG_DEBUG("high noise lora: %s", lora_path.c_str());
         }
-        auto lora = std::make_shared<LoraModel>(lora_id, backend, lora_path, is_high_noise ? "model.high_noise_" : "", version);
+        // Enable CPU offload for LoRA when dynamic offloading is active
+        bool enable_lora_offload = (offload_config.mode != SD_OFFLOAD_NONE);
+        auto lora = std::make_shared<LoraModel>(lora_id, backend, lora_path,
+                                                is_high_noise ? "model.high_noise_" : "",
+                                                version, enable_lora_offload);
         if (!lora->load_from_file(n_threads, lora_tensor_filter)) {
             LOG_WARN("load lora tensors from %s failed", lora_path.c_str());
             return nullptr;
@@ -3382,26 +3386,26 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                          sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
                          reload_end - reload_start);
             } else {
-                // GPU reload failed - try freeing LoRA buffers if any, then retry
+                // GPU reload failed - try offloading LoRA to CPU if any, then retry
                 bool have_lora = !sd_ctx->sd->cond_stage_lora_models.empty();
                 if (have_lora) {
-                    LOG_WARN("[Offload] Reload failed - temporarily freeing LoRA buffers to make room");
+                    LOG_WARN("[Offload] Reload failed - offloading LoRA to CPU to make room");
                     for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
-                        lora->free_params_buffer();
+                        lora->move_params_to_cpu();
                     }
                     // Retry reload
                     if (sd_ctx->sd->cond_stage_model->move_params_to_gpu()) {
                         int64_t reload_end = ggml_time_ms();
-                        LOG_WARN("[Offload] Reload succeeded after freeing LoRA (%.2f MB) in %" PRId64 " ms",
+                        LOG_WARN("[Offload] Reload succeeded after offloading LoRA (%.2f MB) in %" PRId64 " ms",
                                  sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
                                  reload_end - reload_start);
-                        // Reload LoRA params from disk now that cond_stage is loaded
-                        LOG_WARN("[Offload] Reloading LoRA weights from disk...");
+                        // Move LoRA back to GPU from CPU memory
+                        LOG_WARN("[Offload] Moving LoRA back to GPU from memory...");
                         for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
-                            lora->reload_params(sd_ctx->sd->n_threads);
+                            lora->move_params_to_gpu();
                         }
                     } else {
-                        LOG_ERROR("[Offload] Failed to reload cond_stage to GPU even after freeing LoRA. "
+                        LOG_ERROR("[Offload] Failed to reload cond_stage to GPU even after offloading LoRA. "
                                   "Consider using 'cond_diffusion' offload mode which offloads diffusion model during conditioning.");
                         return nullptr;
                     }
@@ -4360,26 +4364,26 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                          sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
                          reload_end - reload_start);
             } else {
-                // GPU reload failed - try freeing LoRA buffers if any, then retry
+                // GPU reload failed - try offloading LoRA to CPU if any, then retry
                 bool have_lora = !sd_ctx->sd->cond_stage_lora_models.empty();
                 if (have_lora) {
-                    LOG_WARN("[Offload] Reload failed - temporarily freeing LoRA buffers to make room");
+                    LOG_WARN("[Offload] Reload failed - offloading LoRA to CPU to make room");
                     for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
-                        lora->free_params_buffer();
+                        lora->move_params_to_cpu();
                     }
                     // Retry reload
                     if (sd_ctx->sd->cond_stage_model->move_params_to_gpu()) {
                         int64_t reload_end = ggml_time_ms();
-                        LOG_WARN("[Offload] Reload succeeded after freeing LoRA (%.2f MB) in %" PRId64 " ms",
+                        LOG_WARN("[Offload] Reload succeeded after offloading LoRA (%.2f MB) in %" PRId64 " ms",
                                  sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
                                  reload_end - reload_start);
-                        // Reload LoRA params from disk now that cond_stage is loaded
-                        LOG_WARN("[Offload] Reloading LoRA weights from disk...");
+                        // Move LoRA back to GPU from CPU memory
+                        LOG_WARN("[Offload] Moving LoRA back to GPU from memory...");
                         for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
-                            lora->reload_params(sd_ctx->sd->n_threads);
+                            lora->move_params_to_gpu();
                         }
                     } else {
-                        LOG_ERROR("[Offload] Failed to reload cond_stage to GPU even after freeing LoRA. "
+                        LOG_ERROR("[Offload] Failed to reload cond_stage to GPU even after offloading LoRA. "
                                   "Consider using 'cond_diffusion' offload mode which offloads diffusion model during conditioning.");
                         return nullptr;
                     }
