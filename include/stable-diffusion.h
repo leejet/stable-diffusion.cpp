@@ -478,6 +478,10 @@ SD_API size_t sd_get_component_vram(sd_ctx_t* sd_ctx, enum sd_component_t compon
 // Get human-readable name for a component
 SD_API const char* sd_component_name(enum sd_component_t component);
 
+// Free all GPU resources (offload all components to CPU and clear LoRAs)
+// Call this before unloading a model to ensure GPU memory is released
+SD_API void sd_free_gpu_resources(sd_ctx_t* sd_ctx);
+
 #ifdef __cplusplus
 }
 #endif

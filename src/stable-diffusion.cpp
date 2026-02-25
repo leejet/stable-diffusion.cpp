@@ -1,5 +1,9 @@
 #include "ggml_extend.hpp"
 
+#ifdef SD_USE_CUDA
+#include "ggml-cuda.h"
+#endif
+
 #include "model.h"
 #include "rng.hpp"
 #include "rng_mt19937.hpp"
@@ -2800,6 +2804,112 @@ public:
         return offloaded_anything;
     }
 
+    // Get current free VRAM on the primary GPU
+    // Returns 0 if CUDA is not available or query fails
+    size_t get_free_vram() {
+        size_t free_vram = 0;
+#ifdef SD_USE_CUDA
+        size_t total_vram = 0;
+        ggml_backend_cuda_get_device_memory(0, &free_vram, &total_vram);
+#endif
+        return free_vram;
+    }
+
+    // Estimate VRAM needed for diffusion sampling
+    // Uses formula approximation since dry-run would be expensive
+    size_t estimate_diffusion_vram(int width, int height) {
+        if (!diffusion_model) {
+            return 0;
+        }
+        // Diffusion params size + compute buffers estimate
+        size_t params_size = diffusion_model->get_params_buffer_size();
+        // Compute buffers scale with resolution: ~64 bytes per latent pixel for DiT models
+        int latent_w = width / get_vae_scale_factor();
+        int latent_h = height / get_vae_scale_factor();
+        size_t compute_estimate = latent_w * latent_h * 64;
+        return params_size + compute_estimate;
+    }
+
+    // Smart check: Should we offload cond_stage after conditioning?
+    // Returns true if offloading is beneficial (VRAM is tight for diffusion)
+    bool should_offload_cond_stage_for_diffusion(int width, int height) {
+        if (offload_config.mode == SD_OFFLOAD_NONE || !offload_config.offload_cond_stage) {
+            return false;
+        }
+        if (!cond_stage_model || !cond_stage_model->is_params_on_gpu()) {
+            return false;  // Nothing to offload
+        }
+
+        size_t cond_stage_vram = cond_stage_model->get_params_vram_size();
+        if (cond_stage_vram < offload_config.min_offload_size) {
+            return false;  // Too small to bother
+        }
+
+        size_t free_vram = get_free_vram();
+        size_t diffusion_needs = estimate_diffusion_vram(width, height);
+
+        // Add safety margin (300MB) for allocation overhead and fragmentation
+        size_t safety_margin = 300 * 1024 * 1024;
+
+        bool vram_is_tight = free_vram < (diffusion_needs + safety_margin);
+
+        if (offload_config.log_offload_events) {
+            LOG_INFO("[Offload] Smart check (cond→diffusion): free=%.2f MB, diffusion_needs=%.2f MB, cond_stage=%.2f MB, tight=%s",
+                     free_vram / (1024.0f * 1024.0f),
+                     diffusion_needs / (1024.0f * 1024.0f),
+                     cond_stage_vram / (1024.0f * 1024.0f),
+                     vram_is_tight ? "yes" : "no");
+        }
+
+        return vram_is_tight;
+    }
+
+    // Smart check: Should we offload diffusion after sampling?
+    // Returns true if offloading is beneficial (VRAM is tight for VAE decode)
+    bool should_offload_diffusion_for_vae(ggml_tensor* latent, bool decode_video = false) {
+        if (offload_config.mode != SD_OFFLOAD_AGGRESSIVE &&
+            offload_config.mode != SD_OFFLOAD_COND_DIFFUSION) {
+            return false;
+        }
+        if (!offload_config.offload_diffusion) {
+            return false;
+        }
+        if (!diffusion_model || !diffusion_model->is_params_on_gpu()) {
+            return false;  // Nothing to offload
+        }
+
+        size_t diffusion_vram = diffusion_model->get_params_vram_size();
+        if (diffusion_vram < offload_config.min_offload_size) {
+            return false;  // Too small to bother
+        }
+
+        size_t free_vram = get_free_vram();
+        size_t vae_needs = estimate_vae_decode_vram(latent, decode_video);
+
+        if (vae_needs == 0) {
+            // Estimation failed - fall back to mode-based decision
+            if (offload_config.log_offload_events) {
+                LOG_WARN("[Offload] VAE estimation failed, using fallback offload decision");
+            }
+            return true;  // Conservative: offload if in aggressive/cond_diffusion mode
+        }
+
+        // Add safety margin (300MB) for allocation overhead and fragmentation
+        size_t safety_margin = 300 * 1024 * 1024;
+
+        bool vram_is_tight = free_vram < (vae_needs + safety_margin);
+
+        if (offload_config.log_offload_events) {
+            LOG_INFO("[Offload] Smart check (diffusion→VAE): free=%.2f MB, vae_needs=%.2f MB, diffusion=%.2f MB, tight=%s",
+                     free_vram / (1024.0f * 1024.0f),
+                     vae_needs / (1024.0f * 1024.0f),
+                     diffusion_vram / (1024.0f * 1024.0f),
+                     vram_is_tight ? "yes" : "no");
+        }
+
+        return vram_is_tight;
+    }
+
     ggml_tensor* decode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode_video = false) {
         const int vae_scale_factor = get_vae_scale_factor();
         int64_t W                  = x->ne[0] * vae_scale_factor;
@@ -3475,7 +3585,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     int sample_steps = static_cast<int>(sigmas.size() - 1);
 
     // On-demand GPU reload: If cond_stage was offloaded to CPU, move it back to GPU before conditioning
-    // This happens at generation START when GPU has more free VRAM (no diffusion/VAE tensors loaded yet)
     // Skip if cond_stage was intentionally kept on CPU (keep_clip_on_cpu=true)
     if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
         sd_ctx->sd->offload_config.offload_cond_stage &&
@@ -3483,40 +3592,75 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         !sd_ctx->sd->cond_stage_on_cpu_only) {
         if (!sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
             int64_t reload_start = ggml_time_ms();
-            if (sd_ctx->sd->cond_stage_model->move_params_to_gpu()) {
-                int64_t reload_end = ggml_time_ms();
-                LOG_WARN("[Offload] On-demand reload: moved cond_stage to GPU (%.2f MB) in %" PRId64 " ms",
-                         sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
-                         reload_end - reload_start);
-            } else {
-                // GPU reload failed - try offloading LoRA to CPU if any, then retry
-                bool have_lora = !sd_ctx->sd->cond_stage_lora_models.empty();
-                if (have_lora) {
-                    LOG_WARN("[Offload] Reload failed - offloading LoRA to CPU to make room");
-                    for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
-                        lora->move_params_to_cpu();
-                    }
-                    // Retry reload
-                    if (sd_ctx->sd->cond_stage_model->move_params_to_gpu()) {
-                        int64_t reload_end = ggml_time_ms();
-                        LOG_WARN("[Offload] Reload succeeded after offloading LoRA (%.2f MB) in %" PRId64 " ms",
-                                 sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
-                                 reload_end - reload_start);
-                        // Move LoRA back to GPU from CPU memory
-                        LOG_WARN("[Offload] Moving LoRA back to GPU from memory...");
-                        for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
-                            lora->move_params_to_gpu();
-                        }
-                    } else {
-                        LOG_ERROR("[Offload] Failed to reload cond_stage to GPU even after offloading LoRA. "
-                                  "Consider using 'cond_diffusion' offload mode which offloads diffusion model during conditioning.");
-                        return nullptr;
-                    }
+
+            // Get sizes for smart decision making
+            size_t cond_stage_size = sd_ctx->sd->cond_stage_model->get_params_buffer_size();
+            size_t diffusion_size = sd_ctx->sd->diffusion_model ? sd_ctx->sd->diffusion_model->get_params_buffer_size() : 0;
+            bool diffusion_on_gpu = sd_ctx->sd->diffusion_model && sd_ctx->sd->diffusion_model->is_params_on_gpu();
+
+            // Check available VRAM using CUDA API
+            size_t free_vram = 0, total_vram = 0;
+#ifdef SD_USE_CUDA
+            ggml_backend_cuda_get_device_memory(0, &free_vram, &total_vram);
+#endif
+            // Add safety margin (500MB) for compute buffers and fragmentation
+            size_t safety_margin = 500 * 1024 * 1024;
+            size_t required_vram = cond_stage_size + safety_margin;
+
+            LOG_WARN("[Offload] cond_stage reload: need %.2f MB, free %.2f MB, diffusion on GPU: %s (%.2f MB)",
+                     required_vram / (1024.0f * 1024.0f),
+                     free_vram / (1024.0f * 1024.0f),
+                     diffusion_on_gpu ? "yes" : "no",
+                     diffusion_size / (1024.0f * 1024.0f));
+
+            // PROACTIVE: If not enough free VRAM and diffusion is on GPU, offload diffusion FIRST
+            // This avoids failed allocations that can fragment GPU memory
+            bool offloaded_diffusion = false;
+            if (free_vram < required_vram && diffusion_on_gpu) {
+                LOG_WARN("[Offload] Proactively offloading diffusion to make room for cond_stage");
+                int64_t offload_start = ggml_time_ms();
+                if (sd_ctx->sd->diffusion_model->move_params_to_cpu()) {
+                    int64_t offload_time = ggml_time_ms() - offload_start;
+                    LOG_WARN("[Offload] Diffusion offloaded to CPU (%.2f MB) in %" PRId64 " ms",
+                             diffusion_size / (1024.0f * 1024.0f), offload_time);
+                    offloaded_diffusion = true;
                 } else {
-                    LOG_ERROR("[Offload] Failed to reload cond_stage to GPU - not enough VRAM. "
-                              "Consider using 'cond_diffusion' offload mode or reducing model size.");
+                    LOG_ERROR("[Offload] Failed to offload diffusion model to CPU");
                     return nullptr;
                 }
+            }
+
+            // Also offload LoRAs if present to maximize available VRAM
+            bool have_lora = !sd_ctx->sd->cond_stage_lora_models.empty();
+            if (have_lora) {
+                LOG_WARN("[Offload] Offloading LoRA models before cond_stage reload");
+                for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
+                    if (lora->is_params_on_gpu()) {
+                        lora->move_params_to_cpu();
+                    }
+                }
+            }
+
+            // Now attempt cond_stage reload
+            if (sd_ctx->sd->cond_stage_model->move_params_to_gpu()) {
+                int64_t reload_end = ggml_time_ms();
+                LOG_WARN("[Offload] cond_stage reloaded to GPU (%.2f MB) in %" PRId64 " ms",
+                         sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
+                         reload_end - reload_start);
+
+                // Move LoRA back to GPU if we offloaded them
+                if (have_lora) {
+                    LOG_WARN("[Offload] Moving LoRA back to GPU...");
+                    for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
+                        lora->move_params_to_gpu();
+                    }
+                }
+                // Note: diffusion will be reloaded before sampling if offloaded
+            } else {
+                // Reload failed even after proactive offloading
+                LOG_ERROR("[Offload] Failed to reload cond_stage to GPU - out of VRAM. "
+                          "Model may be too large for available GPU memory.");
+                return nullptr;
             }
         }
     }
@@ -3560,38 +3704,37 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         sd_ctx->sd->cond_stage_model->free_params_buffer();
     }
 
-    // Dynamic tensor offloading: Move cond_stage to CPU after use to free GPU memory
-    if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
-        sd_ctx->sd->offload_config.offload_cond_stage &&
-        !sd_ctx->sd->free_params_immediately) {
+    // Smart offload: Only move cond_stage to CPU if VRAM is tight for diffusion sampling
+    if (!sd_ctx->sd->free_params_immediately &&
+        sd_ctx->sd->should_offload_cond_stage_for_diffusion(width, height)) {
         size_t vram_size = sd_ctx->sd->cond_stage_model->get_params_vram_size();
-        bool is_on_gpu = sd_ctx->sd->cond_stage_model->is_params_on_gpu();
-        LOG_WARN("[Offload] cond_stage: vram_size=%.2f MB, is_on_gpu=%d, min_offload_size=%.2f MB",
-                 vram_size / (1024.0f * 1024.0f), is_on_gpu ? 1 : 0,
-                 sd_ctx->sd->offload_config.min_offload_size / (1024.0f * 1024.0f));
-
-        // Only offload if actually on GPU
-        if (!is_on_gpu) {
-            LOG_WARN("[Offload] cond_stage already on CPU, skipping offload");
-        } else if (vram_size >= sd_ctx->sd->offload_config.min_offload_size) {
-            int64_t offload_start = ggml_time_ms();
-            if (sd_ctx->sd->cond_stage_model->move_params_to_cpu()) {
-                int64_t offload_end = ggml_time_ms();
-                LOG_WARN("[Offload] Successfully offloaded cond_stage to CPU, freed %.2f MB VRAM in %" PRId64 " ms",
-                         vram_size / (1024.0f * 1024.0f), offload_end - offload_start);
-            } else {
-                LOG_WARN("[Offload] Failed to offload cond_stage to CPU");
-            }
-        } else if (vram_size > 0) {
-            LOG_WARN("[Offload] Skipping cond_stage offload (%.2f MB < %.2f MB threshold)",
-                      vram_size / (1024.0f * 1024.0f),
-                      sd_ctx->sd->offload_config.min_offload_size / (1024.0f * 1024.0f));
+        int64_t offload_start = ggml_time_ms();
+        if (sd_ctx->sd->cond_stage_model->move_params_to_cpu()) {
+            int64_t offload_end = ggml_time_ms();
+            LOG_INFO("[Offload] Smart: offloaded cond_stage to CPU, freed %.2f MB VRAM in %" PRId64 " ms",
+                     vram_size / (1024.0f * 1024.0f), offload_end - offload_start);
+        } else {
+            LOG_WARN("[Offload] Failed to offload cond_stage to CPU");
         }
-    } else {
-        LOG_WARN("[Offload] cond_stage offload skipped: mode=%d, offload_cond_stage=%d, free_params_immediately=%d",
-                 (int)sd_ctx->sd->offload_config.mode,
-                 sd_ctx->sd->offload_config.offload_cond_stage ? 1 : 0,
-                 sd_ctx->sd->free_params_immediately ? 1 : 0);
+    } else if (sd_ctx->sd->offload_config.log_offload_events &&
+               sd_ctx->sd->cond_stage_model && sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
+        LOG_INFO("[Offload] Smart: keeping cond_stage on GPU (sufficient VRAM for diffusion)");
+    }
+
+    // Ensure diffusion model is on GPU before sampling
+    // (May have been temporarily offloaded to make room for cond_stage reload)
+    if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
+        sd_ctx->sd->diffusion_model && !sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
+        int64_t reload_start = ggml_time_ms();
+        if (sd_ctx->sd->diffusion_model->move_params_to_gpu()) {
+            int64_t reload_time = ggml_time_ms() - reload_start;
+            LOG_WARN("[Offload] Reloaded diffusion to GPU before sampling (%.2f MB) in %" PRId64 " ms",
+                     sd_ctx->sd->diffusion_model->get_params_vram_size() / (1024.0f * 1024.0f),
+                     reload_time);
+        } else {
+            LOG_ERROR("[Offload] Failed to reload diffusion model to GPU for sampling - out of VRAM");
+            return nullptr;
+        }
     }
 
     // Control net hint
@@ -3752,28 +3895,27 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         sd_ctx->sd->diffusion_model->free_params_buffer();
     }
 
-    // Dynamic tensor offloading: Move diffusion model to CPU after sampling (aggressive mode)
-    if ((sd_ctx->sd->offload_config.mode == SD_OFFLOAD_AGGRESSIVE ||
-         sd_ctx->sd->offload_config.mode == SD_OFFLOAD_COND_DIFFUSION) &&
-        sd_ctx->sd->offload_config.offload_diffusion &&
-        !sd_ctx->sd->free_params_immediately) {
-        size_t vram_size = sd_ctx->sd->diffusion_model->get_params_vram_size();
-        if (vram_size >= sd_ctx->sd->offload_config.min_offload_size) {
-            int64_t offload_start = ggml_time_ms();
-            if (sd_ctx->sd->diffusion_model->move_params_to_cpu()) {
-                if (sd_ctx->sd->offload_config.log_offload_events) {
-                    int64_t offload_end = ggml_time_ms();
-                    LOG_INFO("offloaded diffusion to CPU, freed %.2f MB VRAM in %" PRId64 " ms",
-                             vram_size / (1024.0f * 1024.0f), offload_end - offload_start);
-                }
-            }
-        }
-    }
-
     int64_t t3 = ggml_time_ms();
     LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
 
-    // Smart offload before VAE decode - estimates VRAM needed and offloads only what's necessary
+    // Smart offload: Only move diffusion to CPU if VRAM is tight for VAE decode
+    if (!final_latents.empty() && !sd_ctx->sd->free_params_immediately &&
+        sd_ctx->sd->should_offload_diffusion_for_vae(final_latents[0], false)) {
+        size_t vram_size = sd_ctx->sd->diffusion_model->get_params_vram_size();
+        int64_t offload_start = ggml_time_ms();
+        if (sd_ctx->sd->diffusion_model->move_params_to_cpu()) {
+            int64_t offload_end = ggml_time_ms();
+            LOG_INFO("[Offload] Smart: offloaded diffusion to CPU, freed %.2f MB VRAM in %" PRId64 " ms",
+                     vram_size / (1024.0f * 1024.0f), offload_end - offload_start);
+        } else {
+            LOG_WARN("[Offload] Failed to offload diffusion to CPU");
+        }
+    } else if (sd_ctx->sd->offload_config.log_offload_events &&
+               sd_ctx->sd->diffusion_model && sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
+        LOG_INFO("[Offload] Smart: keeping diffusion on GPU (sufficient VRAM for VAE decode)");
+    }
+
+    // Also offload cond_stage if still on GPU and configured (it's done after conditioning anyway)
     if (!final_latents.empty()) {
         sd_ctx->sd->smart_offload_for_vae(final_latents[0], false);
     }
@@ -4532,21 +4674,21 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         sd_ctx->sd->cond_stage_model->free_params_buffer();
     }
 
-    // Dynamic tensor offloading: Move cond_stage to CPU after use to free GPU memory
-    if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
-        sd_ctx->sd->offload_config.offload_cond_stage &&
-        !sd_ctx->sd->free_params_immediately) {
+    // Smart offload: Only move cond_stage to CPU if VRAM is tight for diffusion sampling
+    if (!sd_ctx->sd->free_params_immediately &&
+        sd_ctx->sd->should_offload_cond_stage_for_diffusion(width, height)) {
         size_t vram_size = sd_ctx->sd->cond_stage_model->get_params_vram_size();
-        if (vram_size >= sd_ctx->sd->offload_config.min_offload_size) {
-            int64_t offload_start = ggml_time_ms();
-            if (sd_ctx->sd->cond_stage_model->move_params_to_cpu()) {
-                if (sd_ctx->sd->offload_config.log_offload_events) {
-                    int64_t offload_end = ggml_time_ms();
-                    LOG_INFO("offloaded cond_stage to CPU, freed %.2f MB VRAM in %" PRId64 " ms",
-                             vram_size / (1024.0f * 1024.0f), offload_end - offload_start);
-                }
-            }
+        int64_t offload_start = ggml_time_ms();
+        if (sd_ctx->sd->cond_stage_model->move_params_to_cpu()) {
+            int64_t offload_end = ggml_time_ms();
+            LOG_INFO("[Offload] Smart: offloaded cond_stage to CPU, freed %.2f MB VRAM in %" PRId64 " ms",
+                     vram_size / (1024.0f * 1024.0f), offload_end - offload_start);
+        } else {
+            LOG_WARN("[Offload] Failed to offload cond_stage to CPU");
         }
+    } else if (sd_ctx->sd->offload_config.log_offload_events &&
+               sd_ctx->sd->cond_stage_model && sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
+        LOG_INFO("[Offload] Smart: keeping cond_stage on GPU (sufficient VRAM for diffusion)");
     }
 
     int W = width / vae_scale_factor;
@@ -4639,22 +4781,22 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             sd_ctx->sd->diffusion_model->free_params_buffer();
         }
 
-        // Dynamic tensor offloading: Move diffusion model to CPU after sampling
-        if ((sd_ctx->sd->offload_config.mode == SD_OFFLOAD_AGGRESSIVE ||
-             sd_ctx->sd->offload_config.mode == SD_OFFLOAD_COND_DIFFUSION) &&
-            sd_ctx->sd->offload_config.offload_diffusion &&
-            !sd_ctx->sd->free_params_immediately) {
+        // Smart offload: Only move diffusion to CPU if VRAM is tight for VAE decode
+        // Note: For video, we use final_latent which has all frames
+        if (!sd_ctx->sd->free_params_immediately &&
+            sd_ctx->sd->should_offload_diffusion_for_vae(final_latent, true /* decode_video */)) {
             size_t vram_size = sd_ctx->sd->diffusion_model->get_params_vram_size();
-            if (vram_size >= sd_ctx->sd->offload_config.min_offload_size) {
-                int64_t offload_start = ggml_time_ms();
-                if (sd_ctx->sd->diffusion_model->move_params_to_cpu()) {
-                    if (sd_ctx->sd->offload_config.log_offload_events) {
-                        int64_t offload_end = ggml_time_ms();
-                        LOG_INFO("offloaded diffusion to CPU, freed %.2f MB VRAM in %" PRId64 " ms",
-                                 vram_size / (1024.0f * 1024.0f), offload_end - offload_start);
-                    }
-                }
+            int64_t offload_start = ggml_time_ms();
+            if (sd_ctx->sd->diffusion_model->move_params_to_cpu()) {
+                int64_t offload_end = ggml_time_ms();
+                LOG_INFO("[Offload] Smart: offloaded diffusion to CPU, freed %.2f MB VRAM in %" PRId64 " ms",
+                         vram_size / (1024.0f * 1024.0f), offload_end - offload_start);
+            } else {
+                LOG_WARN("[Offload] Failed to offload diffusion to CPU");
             }
+        } else if (sd_ctx->sd->offload_config.log_offload_events &&
+                   sd_ctx->sd->diffusion_model && sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
+            LOG_INFO("[Offload] Smart: keeping diffusion on GPU (sufficient VRAM for VAE decode)");
         }
     }
 
@@ -4964,4 +5106,73 @@ size_t sd_get_component_vram(sd_ctx_t* sd_ctx, sd_component_t component) {
             break;
     }
     return 0;
+}
+
+void sd_free_gpu_resources(sd_ctx_t* sd_ctx) {
+    if (sd_ctx == nullptr || sd_ctx->sd == nullptr) {
+        return;
+    }
+
+    LOG_INFO("[Cleanup] Freeing all GPU resources before unload");
+
+    // Offload all model components to CPU to free GPU buffers
+    if (sd_ctx->sd->cond_stage_model && sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
+        sd_ctx->sd->cond_stage_model->move_params_to_cpu();
+        LOG_INFO("[Cleanup] cond_stage offloaded to CPU");
+    }
+    if (sd_ctx->sd->diffusion_model && sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
+        sd_ctx->sd->diffusion_model->move_params_to_cpu();
+        LOG_INFO("[Cleanup] diffusion offloaded to CPU");
+    }
+    if (sd_ctx->sd->high_noise_diffusion_model && sd_ctx->sd->high_noise_diffusion_model->is_params_on_gpu()) {
+        sd_ctx->sd->high_noise_diffusion_model->move_params_to_cpu();
+        LOG_INFO("[Cleanup] high_noise_diffusion offloaded to CPU");
+    }
+    if (sd_ctx->sd->first_stage_model && sd_ctx->sd->first_stage_model->is_params_on_gpu()) {
+        sd_ctx->sd->first_stage_model->move_params_to_cpu();
+        LOG_INFO("[Cleanup] VAE offloaded to CPU");
+    }
+    if (sd_ctx->sd->tae_first_stage && sd_ctx->sd->tae_first_stage->is_params_on_gpu()) {
+        sd_ctx->sd->tae_first_stage->move_params_to_cpu();
+        LOG_INFO("[Cleanup] TAE offloaded to CPU");
+    }
+    if (sd_ctx->sd->control_net && sd_ctx->sd->control_net->is_params_on_gpu()) {
+        sd_ctx->sd->control_net->move_params_to_cpu();
+        LOG_INFO("[Cleanup] ControlNet offloaded to CPU");
+    }
+    if (sd_ctx->sd->clip_vision && sd_ctx->sd->clip_vision->is_params_on_gpu()) {
+        sd_ctx->sd->clip_vision->move_params_to_cpu();
+        LOG_INFO("[Cleanup] CLIP Vision offloaded to CPU");
+    }
+    if (sd_ctx->sd->pmid_model && sd_ctx->sd->pmid_model->is_params_on_gpu()) {
+        sd_ctx->sd->pmid_model->move_params_to_cpu();
+        LOG_INFO("[Cleanup] PhotoMaker offloaded to CPU");
+    }
+
+    // Clear LoRA models to free their GPU buffers
+    for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
+        if (lora && lora->is_params_on_gpu()) {
+            lora->move_params_to_cpu();
+        }
+    }
+    for (auto& lora : sd_ctx->sd->diffusion_lora_models) {
+        if (lora && lora->is_params_on_gpu()) {
+            lora->move_params_to_cpu();
+        }
+    }
+    for (auto& lora : sd_ctx->sd->first_stage_lora_models) {
+        if (lora && lora->is_params_on_gpu()) {
+            lora->move_params_to_cpu();
+        }
+    }
+    if (sd_ctx->sd->pmid_lora && sd_ctx->sd->pmid_lora->is_params_on_gpu()) {
+        sd_ctx->sd->pmid_lora->move_params_to_cpu();
+    }
+
+    // Clear LoRA vectors entirely to trigger destructor cleanup
+    sd_ctx->sd->cond_stage_lora_models.clear();
+    sd_ctx->sd->diffusion_lora_models.clear();
+    sd_ctx->sd->first_stage_lora_models.clear();
+
+    LOG_INFO("[Cleanup] GPU resources freed");
 }
