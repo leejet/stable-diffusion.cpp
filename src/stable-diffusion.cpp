@@ -3763,10 +3763,20 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
 
     sd_ctx->sd->set_flow_shift(sd_img_gen_params->sample_params.flow_shift);
 
-    // NOTE: We do NOT reload cond_stage here before LoRA.
-    // LoRA runtime application uses clip_backend for its tensors, which is separate from cond_stage params.
-    // Reloading cond_stage to GPU here would use up VRAM and cause LoRA allocation to fail.
-    // Instead, cond_stage will be reloaded on-demand right before conditioning runs.
+    // When offload mode is enabled and we have LoRAs to apply, first offload cond_stage to CPU
+    // to free VRAM for LoRA allocation. LoRA runtime application uses clip_backend which needs VRAM.
+    // cond_stage will be reloaded on-demand right before conditioning runs.
+    if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
+        sd_ctx->sd->offload_config.offload_cond_stage &&
+        sd_img_gen_params->lora_count > 0 &&
+        sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
+        LOG_WARN("[Offload] Offloading cond_stage before LoRA application to free VRAM");
+        int64_t offload_start = ggml_time_ms();
+        if (sd_ctx->sd->cond_stage_model->move_params_to_cpu()) {
+            int64_t offload_end = ggml_time_ms();
+            LOG_WARN("[Offload] cond_stage offloaded to CPU in %" PRId64 " ms", offload_end - offload_start);
+        }
+    }
 
     // Apply lora
     sd_ctx->sd->apply_loras(sd_img_gen_params->loras, sd_img_gen_params->lora_count);
