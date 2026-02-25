@@ -1921,6 +1921,11 @@ public:
 
     virtual ~GGMLRunner() {
         free_params_buffer();
+        // Also free runtime params buffer (GPU) if allocated
+        if (runtime_params_buffer != nullptr) {
+            ggml_backend_buffer_free(runtime_params_buffer);
+            runtime_params_buffer = nullptr;
+        }
         free_compute_buffer();
         free_params_ctx();
         free_compute_ctx();
