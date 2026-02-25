@@ -3050,7 +3050,7 @@ char* sd_sample_params_to_str(const sd_sample_params_t* sample_params) {
              "sample_method: %s, "
              "sample_steps: %d, "
              "eta: %.2f, "
-             "shifted_timestep: %d, ",
+             "shifted_timestep: %d, "
              "flow_shift: %.2f)",
              sample_params->guidance.txt_cfg,
              std::isfinite(sample_params->guidance.img_cfg)
