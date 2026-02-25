@@ -3382,9 +3382,34 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                          sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
                          reload_end - reload_start);
             } else {
-                LOG_ERROR("[Offload] Failed to reload cond_stage to GPU - not enough VRAM. "
-                          "Try reducing resolution, using smaller models, or disabling dynamic offloading.");
-                return NULL;
+                // GPU reload failed - try freeing LoRA buffers if any, then retry
+                bool have_lora = !sd_ctx->sd->cond_stage_lora_models.empty();
+                if (have_lora) {
+                    LOG_WARN("[Offload] Reload failed - temporarily freeing LoRA buffers to make room");
+                    for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
+                        lora->free_params_buffer();
+                    }
+                    // Retry reload
+                    if (sd_ctx->sd->cond_stage_model->move_params_to_gpu()) {
+                        int64_t reload_end = ggml_time_ms();
+                        LOG_WARN("[Offload] Reload succeeded after freeing LoRA (%.2f MB) in %" PRId64 " ms",
+                                 sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
+                                 reload_end - reload_start);
+                        // Reload LoRA params from disk now that cond_stage is loaded
+                        LOG_WARN("[Offload] Reloading LoRA weights from disk...");
+                        for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
+                            lora->reload_params(sd_ctx->sd->n_threads);
+                        }
+                    } else {
+                        LOG_ERROR("[Offload] Failed to reload cond_stage to GPU even after freeing LoRA. "
+                                  "Consider using 'cond_diffusion' offload mode which offloads diffusion model during conditioning.");
+                        return nullptr;
+                    }
+                } else {
+                    LOG_ERROR("[Offload] Failed to reload cond_stage to GPU - not enough VRAM. "
+                              "Consider using 'cond_diffusion' offload mode or reducing model size.");
+                    return nullptr;
+                }
             }
         }
     }
@@ -4335,9 +4360,34 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                          sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
                          reload_end - reload_start);
             } else {
-                LOG_ERROR("[Offload] Failed to reload cond_stage to GPU - not enough VRAM. "
-                          "Try reducing resolution, using smaller models, or disabling dynamic offloading.");
-                return NULL;
+                // GPU reload failed - try freeing LoRA buffers if any, then retry
+                bool have_lora = !sd_ctx->sd->cond_stage_lora_models.empty();
+                if (have_lora) {
+                    LOG_WARN("[Offload] Reload failed - temporarily freeing LoRA buffers to make room");
+                    for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
+                        lora->free_params_buffer();
+                    }
+                    // Retry reload
+                    if (sd_ctx->sd->cond_stage_model->move_params_to_gpu()) {
+                        int64_t reload_end = ggml_time_ms();
+                        LOG_WARN("[Offload] Reload succeeded after freeing LoRA (%.2f MB) in %" PRId64 " ms",
+                                 sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
+                                 reload_end - reload_start);
+                        // Reload LoRA params from disk now that cond_stage is loaded
+                        LOG_WARN("[Offload] Reloading LoRA weights from disk...");
+                        for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
+                            lora->reload_params(sd_ctx->sd->n_threads);
+                        }
+                    } else {
+                        LOG_ERROR("[Offload] Failed to reload cond_stage to GPU even after freeing LoRA. "
+                                  "Consider using 'cond_diffusion' offload mode which offloads diffusion model during conditioning.");
+                        return nullptr;
+                    }
+                } else {
+                    LOG_ERROR("[Offload] Failed to reload cond_stage to GPU - not enough VRAM. "
+                              "Consider using 'cond_diffusion' offload mode or reducing model size.");
+                    return nullptr;
+                }
             }
         }
     }
