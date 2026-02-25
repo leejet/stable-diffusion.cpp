@@ -844,7 +844,8 @@ public:
                 LOG_WARN("[Offload] cond_stage now on GPU (%.2f MB), auto-offload disabled for explicit control",
                          cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f));
             } else {
-                LOG_WARN("[Offload] Failed to move cond_stage to GPU, staying on CPU");
+                LOG_ERROR("[Offload] Failed to move cond_stage to GPU at load time - not enough VRAM for this model configuration");
+                return false;
             }
         }
 
@@ -3381,7 +3382,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                          sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
                          reload_end - reload_start);
             } else {
-                LOG_WARN("[Offload] Failed to move cond_stage to GPU - conditioning will run on CPU (slower)");
+                LOG_ERROR("[Offload] Failed to reload cond_stage to GPU - not enough VRAM. "
+                          "Try reducing resolution, using smaller models, or disabling dynamic offloading.");
+                return NULL;
             }
         }
     }
@@ -4322,7 +4325,9 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                          sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f),
                          reload_end - reload_start);
             } else {
-                LOG_WARN("[Offload] Failed to move cond_stage to GPU - conditioning will run on CPU (slower)");
+                LOG_ERROR("[Offload] Failed to reload cond_stage to GPU - not enough VRAM. "
+                          "Try reducing resolution, using smaller models, or disabling dynamic offloading.");
+                return NULL;
             }
         }
     }
