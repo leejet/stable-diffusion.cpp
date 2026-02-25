@@ -179,6 +179,7 @@ typedef struct {
     bool offload_cond_stage;              // Offload LLM/CLIP after conditioning
     bool offload_diffusion;               // Offload diffusion model after sampling
     bool reload_cond_stage;               // Reload LLM/CLIP for next generation
+    bool reload_diffusion;                // Reload diffusion model for next generation
     bool log_offload_events;              // Log offload/reload events
     size_t min_offload_size;              // Minimum component size to offload (bytes), 0 = no minimum
     size_t target_free_vram;              // Target free VRAM before VAE decode (bytes), 0 = always offload when mode is set

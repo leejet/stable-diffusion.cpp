@@ -2,6 +2,7 @@
 
 #ifdef SD_USE_CUDA
 #include "ggml-cuda.h"
+#include <cuda_runtime.h>
 #endif
 
 #include "model.h"
@@ -249,11 +250,18 @@ public:
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
         offload_config          = sd_ctx_params->offload_config;
 
-        // When dynamic offloading is enabled, force CPU backend creation for cond_stage
-        // This allows offloading even when keep_clip_on_cpu=false
+        // When dynamic offloading is enabled, force CPU backend creation for models
+        // This allows offloading even when user settings don't specify it
         bool cond_stage_offload_to_cpu = offload_params_to_cpu;
-        if (offload_config.mode != SD_OFFLOAD_NONE && offload_config.offload_cond_stage) {
-            cond_stage_offload_to_cpu = true;  // Force CPU backend for dynamic offloading
+        bool diffusion_offload_to_cpu = offload_params_to_cpu;
+        if (offload_config.mode != SD_OFFLOAD_NONE) {
+            // Enable CPU backend for cond_stage (for cond_only, cond_diffusion, aggressive modes)
+            if (offload_config.offload_cond_stage) {
+                cond_stage_offload_to_cpu = true;
+            }
+            // Enable CPU backend for diffusion (needed to temporarily offload when loading cond_stage)
+            // This is required even in cond_only mode because we may need to swap models
+            diffusion_offload_to_cpu = true;
         }
 
         rng = get_rng(sd_ctx_params->rng_type);
@@ -457,7 +465,7 @@ public:
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                               offload_params_to_cpu,
+                                                               diffusion_offload_to_cpu,
                                                                tensor_storage_map);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
@@ -495,7 +503,7 @@ public:
                                                                           tensor_storage_map);
                 }
                 diffusion_model = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
+                                                              diffusion_offload_to_cpu,
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
@@ -506,7 +514,7 @@ public:
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
+                                                              diffusion_offload_to_cpu,
                                                               tensor_storage_map,
                                                               version,
                                                               sd_ctx_params->chroma_use_dit_mask);
@@ -518,13 +526,13 @@ public:
                                                                     1,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
-                                                             offload_params_to_cpu,
+                                                             diffusion_offload_to_cpu,
                                                              tensor_storage_map,
                                                              "model.diffusion_model",
                                                              version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
-                                                                            offload_params_to_cpu,
+                                                                            diffusion_offload_to_cpu,
                                                                             tensor_storage_map,
                                                                             "model.high_noise_diffusion_model",
                                                                             version);
@@ -550,7 +558,7 @@ public:
                                                                  "",
                                                                  enable_vision);
                 diffusion_model  = std::make_shared<QwenImageModel>(backend,
-                                                                   offload_params_to_cpu,
+                                                                   diffusion_offload_to_cpu,
                                                                    tensor_storage_map,
                                                                    "model.diffusion_model",
                                                                    version,
@@ -569,7 +577,7 @@ public:
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<ZImageModel>(backend,
-                                                                offload_params_to_cpu,
+                                                                diffusion_offload_to_cpu,
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
                                                                 version);
@@ -593,7 +601,7 @@ public:
                                                                                            version);
                 }
                 diffusion_model = std::make_shared<UNetModel>(backend,
-                                                              offload_params_to_cpu,
+                                                              diffusion_offload_to_cpu,
                                                               tensor_storage_map,
                                                               version);
                 if (sd_ctx_params->diffusion_conv_direct) {
@@ -835,7 +843,7 @@ public:
         LOG_DEBUG("finished loaded file");
 
         // When dynamic offloading is enabled and user didn't want clip on CPU,
-        // we forced CPU backend creation but now move params to GPU for execution.
+        // we forced CPU backend creation but now TRY to move params to GPU for execution.
         // This gives us the best of both: fast GPU execution with ability to offload later.
         // Skip if cond_stage was intentionally kept on CPU (keep_clip_on_cpu=true).
         if (offload_config.mode != SD_OFFLOAD_NONE &&
@@ -843,13 +851,32 @@ public:
             !cond_stage_on_cpu_only) {
             // Disable automatic offloading - we control offload/reload timing explicitly
             cond_stage_model->set_auto_offload(false);
-            LOG_WARN("[Offload] Moving cond_stage params to GPU for execution (offload_config enabled)");
-            if (cond_stage_model->move_params_to_gpu()) {
-                LOG_WARN("[Offload] cond_stage now on GPU (%.2f MB), auto-offload disabled for explicit control",
-                         cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f));
+
+            // Check if there's enough VRAM to load cond_stage now
+            // If not, keep it on CPU - it will be loaded on-demand before conditioning
+            size_t cond_stage_size = cond_stage_model->get_params_buffer_size();
+            size_t free_vram = 0;
+#ifdef SD_USE_CUDA
+            size_t total_vram = 0;
+            ggml_backend_cuda_get_device_memory(0, &free_vram, &total_vram);
+#endif
+            // Need safety margin for compute buffers
+            size_t safety_margin = 500 * 1024 * 1024;
+
+            if (free_vram >= cond_stage_size + safety_margin) {
+                LOG_WARN("[Offload] Moving cond_stage params to GPU (%.2f MB free, %.2f MB needed)",
+                         free_vram / (1024.0f * 1024.0f), cond_stage_size / (1024.0f * 1024.0f));
+                if (cond_stage_model->move_params_to_gpu()) {
+                    LOG_WARN("[Offload] cond_stage now on GPU (%.2f MB), auto-offload disabled for explicit control",
+                             cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f));
+                } else {
+                    // GPU allocation failed despite having enough reported free VRAM (fragmentation?)
+                    // Keep on CPU - it will work, just with on-demand loading
+                    LOG_WARN("[Offload] cond_stage GPU allocation failed (fragmentation?), keeping on CPU for on-demand loading");
+                }
             } else {
-                LOG_ERROR("[Offload] Failed to move cond_stage to GPU at load time - not enough VRAM for this model configuration");
-                return false;
+                LOG_WARN("[Offload] Not enough VRAM for cond_stage at load time (%.2f MB free, %.2f MB needed), keeping on CPU for on-demand loading",
+                         free_vram / (1024.0f * 1024.0f), cond_stage_size / (1024.0f * 1024.0f));
             }
         }
 
@@ -3202,6 +3229,7 @@ void sd_offload_config_init(sd_offload_config_t* config) {
     config->offload_cond_stage = true;
     config->offload_diffusion  = false;
     config->reload_cond_stage  = false;
+    config->reload_diffusion   = true;   // Default: reload diffusion for next generation
     config->log_offload_events = true;
     config->min_offload_size   = 0;
     config->target_free_vram   = 2ULL * 1024 * 1024 * 1024;  // 2 GB
@@ -3961,35 +3989,63 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     // (conditioning, diffusion, and VAE intermediates are all in work_ctx)
     ggml_free(work_ctx);
 
-    // Dynamic tensor offloading: DON'T reload cond_stage at end of generation
-    // Reason: If we reload cond_stage here, the next generation won't have room for LoRA allocation.
-    // Instead, leave cond_stage on CPU and let the on-demand reload before conditioning handle it.
-    // This ensures LoRA loads first (while cond_stage is on CPU), then cond_stage loads for conditioning.
+    // Dynamic tensor offloading: Reload models to GPU after generation completes
+    // This is configurable - reload_cond_stage controls whether to reload cond_stage
+    // Diffusion is always reloaded if it was offloaded (to be ready for next generation)
     if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
         !sd_ctx->sd->free_params_immediately) {
         int64_t reload_start = ggml_time_ms();
         bool reloaded_any = false;
 
-        // NOTE: We intentionally skip cond_stage reload here.
-        // It will be reloaded on-demand at the start of the next generation, after LoRA loads.
-
-        // Reload diffusion if it was offloaded (aggressive mode only)
-        if ((sd_ctx->sd->offload_config.mode == SD_OFFLOAD_AGGRESSIVE ||
-             sd_ctx->sd->offload_config.mode == SD_OFFLOAD_COND_DIFFUSION) &&
-            sd_ctx->sd->offload_config.offload_diffusion &&
+        // Reload diffusion if configured (reload_diffusion=true) and it was offloaded
+        if (sd_ctx->sd->offload_config.reload_diffusion &&
             sd_ctx->sd->diffusion_model && !sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
-            LOG_WARN("[Offload] Reloading diffusion to GPU...");
+            if (sd_ctx->sd->offload_config.log_offload_events) {
+                LOG_WARN("[Offload] Reloading diffusion to GPU after generation...");
+            }
             if (sd_ctx->sd->diffusion_model->move_params_to_gpu()) {
-                LOG_WARN("[Offload] diffusion reloaded to GPU");
+                if (sd_ctx->sd->offload_config.log_offload_events) {
+                    LOG_WARN("[Offload] diffusion reloaded to GPU (%.2f MB)",
+                             sd_ctx->sd->diffusion_model->get_params_vram_size() / (1024.0f * 1024.0f));
+                }
                 reloaded_any = true;
             } else {
-                LOG_WARN("[Offload] Failed to reload diffusion to GPU");
+                LOG_WARN("[Offload] Failed to reload diffusion to GPU - will load on-demand");
             }
         }
 
-        if (reloaded_any) {
+        // Reload cond_stage if configured (reload_cond_stage=true) and there's enough VRAM
+        if (sd_ctx->sd->offload_config.reload_cond_stage &&
+            sd_ctx->sd->cond_stage_model && !sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
+            // Check if there's enough VRAM
+            size_t cond_stage_size = sd_ctx->sd->cond_stage_model->get_params_buffer_size();
+            size_t free_vram = sd_ctx->sd->get_free_vram();
+            size_t safety_margin = 500 * 1024 * 1024;
+
+            if (free_vram >= cond_stage_size + safety_margin) {
+                if (sd_ctx->sd->offload_config.log_offload_events) {
+                    LOG_WARN("[Offload] Reloading cond_stage to GPU after generation...");
+                }
+                if (sd_ctx->sd->cond_stage_model->move_params_to_gpu()) {
+                    if (sd_ctx->sd->offload_config.log_offload_events) {
+                        LOG_WARN("[Offload] cond_stage reloaded to GPU (%.2f MB)",
+                                 sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f));
+                    }
+                    reloaded_any = true;
+                } else {
+                    LOG_WARN("[Offload] Failed to reload cond_stage to GPU - will load on-demand");
+                }
+            } else {
+                if (sd_ctx->sd->offload_config.log_offload_events) {
+                    LOG_WARN("[Offload] Not enough VRAM to reload cond_stage (%.2f MB free, %.2f MB needed) - will load on-demand",
+                             free_vram / (1024.0f * 1024.0f), cond_stage_size / (1024.0f * 1024.0f));
+                }
+            }
+        }
+
+        if (reloaded_any && sd_ctx->sd->offload_config.log_offload_events) {
             int64_t reload_end = ggml_time_ms();
-            LOG_WARN("[Offload] Reload completed in %" PRId64 " ms", reload_end - reload_start);
+            LOG_WARN("[Offload] Post-generation reload completed in %" PRId64 " ms", reload_end - reload_start);
         }
     }
 
@@ -4847,33 +4903,55 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     // Free work_ctx BEFORE reload attempt - this frees all intermediate tensors from VRAM
     ggml_free(work_ctx);
 
-    // Dynamic tensor offloading: DON'T reload cond_stage at end of generation
-    // Reason: If we reload cond_stage here, the next generation won't have room for LoRA allocation.
-    // Instead, leave cond_stage on CPU and let the on-demand reload before conditioning handle it.
+    // Dynamic tensor offloading: Reload models to GPU after generation completes
     if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
         !sd_ctx->sd->free_params_immediately) {
         int64_t reload_start = ggml_time_ms();
         bool reloaded_any = false;
 
-        // NOTE: We intentionally skip cond_stage reload here.
-        // It will be reloaded on-demand at the start of the next generation, after LoRA loads.
-
-        // Reload diffusion if it was offloaded (aggressive mode only)
-        if ((sd_ctx->sd->offload_config.mode == SD_OFFLOAD_AGGRESSIVE ||
-             sd_ctx->sd->offload_config.mode == SD_OFFLOAD_COND_DIFFUSION) &&
-            sd_ctx->sd->offload_config.offload_diffusion &&
+        // Reload diffusion if configured (reload_diffusion=true) and it was offloaded
+        if (sd_ctx->sd->offload_config.reload_diffusion &&
             sd_ctx->sd->diffusion_model && !sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
+            if (sd_ctx->sd->offload_config.log_offload_events) {
+                LOG_WARN("[Offload] Reloading diffusion to GPU after generation...");
+            }
             if (sd_ctx->sd->diffusion_model->move_params_to_gpu()) {
-                LOG_WARN("[Offload] diffusion reloaded to GPU");
+                if (sd_ctx->sd->offload_config.log_offload_events) {
+                    LOG_WARN("[Offload] diffusion reloaded to GPU (%.2f MB)",
+                             sd_ctx->sd->diffusion_model->get_params_vram_size() / (1024.0f * 1024.0f));
+                }
                 reloaded_any = true;
             } else {
-                LOG_WARN("[Offload] Failed to reload diffusion to GPU");
+                LOG_WARN("[Offload] Failed to reload diffusion to GPU - will load on-demand");
             }
         }
 
-        if (reloaded_any) {
+        // Reload cond_stage if configured
+        if (sd_ctx->sd->offload_config.reload_cond_stage &&
+            sd_ctx->sd->cond_stage_model && !sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
+            size_t cond_stage_size = sd_ctx->sd->cond_stage_model->get_params_buffer_size();
+            size_t free_vram = sd_ctx->sd->get_free_vram();
+            size_t safety_margin = 500 * 1024 * 1024;
+
+            if (free_vram >= cond_stage_size + safety_margin) {
+                if (sd_ctx->sd->offload_config.log_offload_events) {
+                    LOG_WARN("[Offload] Reloading cond_stage to GPU after generation...");
+                }
+                if (sd_ctx->sd->cond_stage_model->move_params_to_gpu()) {
+                    if (sd_ctx->sd->offload_config.log_offload_events) {
+                        LOG_WARN("[Offload] cond_stage reloaded to GPU (%.2f MB)",
+                                 sd_ctx->sd->cond_stage_model->get_params_vram_size() / (1024.0f * 1024.0f));
+                    }
+                    reloaded_any = true;
+                }
+            } else if (sd_ctx->sd->offload_config.log_offload_events) {
+                LOG_WARN("[Offload] Not enough VRAM to reload cond_stage - will load on-demand");
+            }
+        }
+
+        if (reloaded_any && sd_ctx->sd->offload_config.log_offload_events) {
             int64_t reload_end = ggml_time_ms();
-            LOG_WARN("[Offload] Reload completed in %" PRId64 " ms", reload_end - reload_start);
+            LOG_WARN("[Offload] Post-generation reload completed in %" PRId64 " ms", reload_end - reload_start);
         }
     }
 
@@ -5113,60 +5191,87 @@ void sd_free_gpu_resources(sd_ctx_t* sd_ctx) {
         return;
     }
 
-    LOG_INFO("[Cleanup] Freeing all GPU resources before unload");
+    LOG_WARN("[Cleanup] Freeing all GPU resources before unload");
 
-    // Offload all model components to CPU to free GPU buffers
-    if (sd_ctx->sd->cond_stage_model && sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
-        sd_ctx->sd->cond_stage_model->move_params_to_cpu();
-        LOG_INFO("[Cleanup] cond_stage offloaded to CPU");
-    }
-    if (sd_ctx->sd->diffusion_model && sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
-        sd_ctx->sd->diffusion_model->move_params_to_cpu();
-        LOG_INFO("[Cleanup] diffusion offloaded to CPU");
-    }
-    if (sd_ctx->sd->high_noise_diffusion_model && sd_ctx->sd->high_noise_diffusion_model->is_params_on_gpu()) {
-        sd_ctx->sd->high_noise_diffusion_model->move_params_to_cpu();
-        LOG_INFO("[Cleanup] high_noise_diffusion offloaded to CPU");
-    }
-    if (sd_ctx->sd->first_stage_model && sd_ctx->sd->first_stage_model->is_params_on_gpu()) {
-        sd_ctx->sd->first_stage_model->move_params_to_cpu();
-        LOG_INFO("[Cleanup] VAE offloaded to CPU");
-    }
-    if (sd_ctx->sd->tae_first_stage && sd_ctx->sd->tae_first_stage->is_params_on_gpu()) {
-        sd_ctx->sd->tae_first_stage->move_params_to_cpu();
-        LOG_INFO("[Cleanup] TAE offloaded to CPU");
-    }
-    if (sd_ctx->sd->control_net && sd_ctx->sd->control_net->is_params_on_gpu()) {
-        sd_ctx->sd->control_net->move_params_to_cpu();
-        LOG_INFO("[Cleanup] ControlNet offloaded to CPU");
-    }
-    if (sd_ctx->sd->clip_vision && sd_ctx->sd->clip_vision->is_params_on_gpu()) {
-        sd_ctx->sd->clip_vision->move_params_to_cpu();
-        LOG_INFO("[Cleanup] CLIP Vision offloaded to CPU");
-    }
-    if (sd_ctx->sd->pmid_model && sd_ctx->sd->pmid_model->is_params_on_gpu()) {
-        sd_ctx->sd->pmid_model->move_params_to_cpu();
-        LOG_INFO("[Cleanup] PhotoMaker offloaded to CPU");
-    }
+    size_t total_freed = 0;
+
+    // Helper macro to free component GPU memory
+    #define FREE_COMPONENT_GPU(model_ptr, name) do { \
+        auto* model = (model_ptr); \
+        if (model) { \
+            size_t size = model->get_params_vram_size(); \
+            if (size == 0) size = model->get_params_buffer_size(); \
+            if (size > 0) { \
+                if (!model->move_params_to_cpu()) { \
+                    model->free_params_buffer(); \
+                    LOG_WARN("[Cleanup] %s freed GPU buffer (%.2f MB) - no offload backend", name, size / (1024.0f * 1024.0f)); \
+                } else { \
+                    LOG_WARN("[Cleanup] %s offloaded to CPU (%.2f MB)", name, size / (1024.0f * 1024.0f)); \
+                } \
+                total_freed += size; \
+            } \
+        } \
+    } while(0)
+
+    // Free all model components
+    FREE_COMPONENT_GPU(sd_ctx->sd->cond_stage_model.get(), "cond_stage");
+    FREE_COMPONENT_GPU(sd_ctx->sd->diffusion_model.get(), "diffusion");
+    FREE_COMPONENT_GPU(sd_ctx->sd->high_noise_diffusion_model.get(), "high_noise_diffusion");
+    FREE_COMPONENT_GPU(sd_ctx->sd->first_stage_model.get(), "VAE");
+    FREE_COMPONENT_GPU(sd_ctx->sd->tae_first_stage.get(), "TAE");
+    FREE_COMPONENT_GPU(sd_ctx->sd->control_net.get(), "ControlNet");
+    FREE_COMPONENT_GPU(sd_ctx->sd->clip_vision.get(), "CLIP_Vision");
+    FREE_COMPONENT_GPU(sd_ctx->sd->pmid_model.get(), "PhotoMaker");
+
+    #undef FREE_COMPONENT_GPU
 
     // Clear LoRA models to free their GPU buffers
+    size_t lora_freed = 0;
     for (auto& lora : sd_ctx->sd->cond_stage_lora_models) {
-        if (lora && lora->is_params_on_gpu()) {
-            lora->move_params_to_cpu();
+        if (lora) {
+            size_t size = lora->get_params_buffer_size();
+            if (size > 0) {
+                if (!lora->move_params_to_cpu()) {
+                    lora->free_params_buffer();
+                }
+                lora_freed += size;
+            }
         }
     }
     for (auto& lora : sd_ctx->sd->diffusion_lora_models) {
-        if (lora && lora->is_params_on_gpu()) {
-            lora->move_params_to_cpu();
+        if (lora) {
+            size_t size = lora->get_params_buffer_size();
+            if (size > 0) {
+                if (!lora->move_params_to_cpu()) {
+                    lora->free_params_buffer();
+                }
+                lora_freed += size;
+            }
         }
     }
     for (auto& lora : sd_ctx->sd->first_stage_lora_models) {
-        if (lora && lora->is_params_on_gpu()) {
-            lora->move_params_to_cpu();
+        if (lora) {
+            size_t size = lora->get_params_buffer_size();
+            if (size > 0) {
+                if (!lora->move_params_to_cpu()) {
+                    lora->free_params_buffer();
+                }
+                lora_freed += size;
+            }
         }
     }
-    if (sd_ctx->sd->pmid_lora && sd_ctx->sd->pmid_lora->is_params_on_gpu()) {
-        sd_ctx->sd->pmid_lora->move_params_to_cpu();
+    if (sd_ctx->sd->pmid_lora) {
+        size_t size = sd_ctx->sd->pmid_lora->get_params_buffer_size();
+        if (size > 0) {
+            if (!sd_ctx->sd->pmid_lora->move_params_to_cpu()) {
+                sd_ctx->sd->pmid_lora->free_params_buffer();
+            }
+            lora_freed += size;
+        }
+    }
+    if (lora_freed > 0) {
+        total_freed += lora_freed;
+        LOG_WARN("[Cleanup] LoRAs freed (%.2f MB)", lora_freed / (1024.0f * 1024.0f));
     }
 
     // Clear LoRA vectors entirely to trigger destructor cleanup
@@ -5174,5 +5279,10 @@ void sd_free_gpu_resources(sd_ctx_t* sd_ctx) {
     sd_ctx->sd->diffusion_lora_models.clear();
     sd_ctx->sd->first_stage_lora_models.clear();
 
-    LOG_INFO("[Cleanup] GPU resources freed");
+    // Synchronize CUDA to ensure all deallocations complete
+#ifdef SD_USE_CUDA
+    cudaDeviceSynchronize();
+#endif
+
+    LOG_WARN("[Cleanup] GPU resources freed, total: %.2f MB", total_freed / (1024.0f * 1024.0f));
 }
