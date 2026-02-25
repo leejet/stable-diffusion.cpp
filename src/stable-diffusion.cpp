@@ -3223,6 +3223,27 @@ enum sd_offload_mode_t str_to_offload_mode(const char* str) {
     return SD_OFFLOAD_MODE_COUNT;
 }
 
+const char* vram_estimation_to_str[] = {
+    "dryrun",
+    "formula",
+};
+
+const char* sd_vram_estimation_name(enum sd_vram_estimation_t method) {
+    if (method < SD_VRAM_EST_COUNT) {
+        return vram_estimation_to_str[method];
+    }
+    return NONE_STR;
+}
+
+enum sd_vram_estimation_t str_to_vram_estimation(const char* str) {
+    for (int i = 0; i < SD_VRAM_EST_COUNT; i++) {
+        if (!strcmp(str, vram_estimation_to_str[i])) {
+            return (enum sd_vram_estimation_t)i;
+        }
+    }
+    return SD_VRAM_EST_COUNT;
+}
+
 void sd_offload_config_init(sd_offload_config_t* config) {
     config->mode               = SD_OFFLOAD_NONE;
     config->vram_estimation    = SD_VRAM_EST_DRYRUN;  // Dry-run is default (accurate)

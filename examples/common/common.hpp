@@ -663,6 +663,38 @@ struct SDContextParams {
              "--no-offload-log",
              "disable offload/reload event logging",
              false, &offload_config.log_offload_events},
+            {"",
+             "--offload-cond-stage",
+             "offload LLM/CLIP to CPU after conditioning (default: true when offload mode is set)",
+             true, &offload_config.offload_cond_stage},
+            {"",
+             "--no-offload-cond-stage",
+             "keep LLM/CLIP on GPU after conditioning",
+             false, &offload_config.offload_cond_stage},
+            {"",
+             "--offload-diffusion",
+             "offload diffusion model to CPU after sampling (used in cond_diffusion/aggressive modes)",
+             true, &offload_config.offload_diffusion},
+            {"",
+             "--no-offload-diffusion",
+             "keep diffusion model on GPU after sampling",
+             false, &offload_config.offload_diffusion},
+            {"",
+             "--reload-cond-stage",
+             "reload LLM/CLIP to GPU after generation for next generation (default: false)",
+             true, &offload_config.reload_cond_stage},
+            {"",
+             "--no-reload-cond-stage",
+             "keep LLM/CLIP offloaded between generations",
+             false, &offload_config.reload_cond_stage},
+            {"",
+             "--reload-diffusion",
+             "reload diffusion model to GPU after generation (default: true)",
+             true, &offload_config.reload_diffusion},
+            {"",
+             "--no-reload-diffusion",
+             "keep diffusion model offloaded between generations (saves VRAM transfer time for batch work)",
+             false, &offload_config.reload_diffusion},
         };
 
         auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -794,6 +826,19 @@ struct SDContextParams {
             return 1;
         };
 
+        auto on_vram_estimation_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            const char* arg              = argv[index];
+            offload_config.vram_estimation = str_to_vram_estimation(arg);
+            if (offload_config.vram_estimation == SD_VRAM_EST_COUNT) {
+                LOG_ERROR("error: invalid VRAM estimation method %s", arg);
+                return -1;
+            }
+            return 1;
+        };
+
         options.manual_options = {
             {"",
              "--type",
@@ -834,6 +879,11 @@ struct SDContextParams {
              "Use 'cond_only' to offload the LLM/CLIP model to CPU after conditioning, freeing VRAM for diffusion. "
              "This enables generation with large models that would otherwise cause OOM.",
              on_offload_mode_arg},
+            {"",
+             "--vram-estimation",
+             "VRAM estimation method for smart offloading, one of [dryrun, formula] (default: dryrun). "
+             "'dryrun' allocates test tensors for accurate size estimation; 'formula' uses quick calculation.",
+             on_vram_estimation_arg},
         };
 
         return options;
@@ -956,6 +1006,11 @@ struct SDContextParams {
             << vae_tiling_params.rel_size_y << " },\n"
             << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << ",\n"
             << "  offload_config: { mode=" << sd_offload_mode_name(offload_config.mode)
+            << ", vram_est=" << sd_vram_estimation_name(offload_config.vram_estimation)
+            << ", offload_cond=" << (offload_config.offload_cond_stage ? "true" : "false")
+            << ", offload_diff=" << (offload_config.offload_diffusion ? "true" : "false")
+            << ", reload_cond=" << (offload_config.reload_cond_stage ? "true" : "false")
+            << ", reload_diff=" << (offload_config.reload_diffusion ? "true" : "false")
             << ", log=" << (offload_config.log_offload_events ? "true" : "false") << " }\n"
             << "}";
         return oss.str();

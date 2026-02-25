@@ -397,6 +397,8 @@ SD_API const char* sd_lora_apply_mode_name(enum lora_apply_mode_t mode);
 SD_API enum lora_apply_mode_t str_to_lora_apply_mode(const char* str);
 SD_API const char* sd_offload_mode_name(enum sd_offload_mode_t mode);
 SD_API enum sd_offload_mode_t str_to_offload_mode(const char* str);
+SD_API const char* sd_vram_estimation_name(enum sd_vram_estimation_t method);
+SD_API enum sd_vram_estimation_t str_to_vram_estimation(const char* str);
 SD_API void sd_offload_config_init(sd_offload_config_t* config);
 
 SD_API void sd_cache_params_init(sd_cache_params_t* cache_params);
