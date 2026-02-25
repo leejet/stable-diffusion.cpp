@@ -715,8 +715,6 @@ float flux_time_shift(float mu, float sigma, float t) {
 }
 
 struct FluxFlowDenoiser : public DiscreteFlowDenoiser {
-    float shift_sigmas = INFINITY;
-
     FluxFlowDenoiser() = default;
 
     float sigma_to_t(float sigma) override {
