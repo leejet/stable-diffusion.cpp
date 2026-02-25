@@ -165,9 +165,17 @@ enum sd_offload_mode_t {
     SD_OFFLOAD_MODE_COUNT
 };
 
+// VRAM estimation method for smart offloading decisions
+enum sd_vram_estimation_t {
+    SD_VRAM_EST_DRYRUN,        // Dry-run graph allocation for exact size (default, accurate)
+    SD_VRAM_EST_FORMULA,       // Formula-based estimation (faster, approximate)
+    SD_VRAM_EST_COUNT
+};
+
 // Offload configuration for fine-grained control
 typedef struct {
     enum sd_offload_mode_t mode;          // Offload mode
+    enum sd_vram_estimation_t vram_estimation; // VRAM estimation method
     bool offload_cond_stage;              // Offload LLM/CLIP after conditioning
     bool offload_diffusion;               // Offload diffusion model after sampling
     bool reload_cond_stage;               // Reload LLM/CLIP for next generation

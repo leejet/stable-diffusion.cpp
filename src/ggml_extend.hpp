@@ -1984,6 +1984,28 @@ public:
         return 0;
     }
 
+    // Estimate compute buffer size without actually allocating (dry-run)
+    // Returns 0 on failure, otherwise the required buffer size in bytes
+    size_t estimate_compute_buffer_size(get_graph_cb_t get_graph) {
+        reset_compute_ctx();
+        struct ggml_cgraph* gf = get_compute_graph(get_graph);
+        backend_tensor_data_map.clear();
+
+        ggml_gallocr_t temp_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(runtime_backend));
+        if (temp_allocr == nullptr) {
+            return 0;
+        }
+
+        size_t result = 0;
+        if (ggml_gallocr_reserve(temp_allocr, gf)) {
+            result = ggml_gallocr_get_buffer_size(temp_allocr, 0);
+        }
+
+        ggml_gallocr_free(temp_allocr);
+        reset_compute_ctx();  // Clean up after estimation
+        return result;
+    }
+
     // Dynamic tensor offloading API
     // Returns true if params are currently on the runtime (GPU) backend
     bool is_params_on_gpu() const {

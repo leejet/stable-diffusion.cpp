@@ -2698,6 +2698,108 @@ public:
         return get_first_stage_encoding(work_ctx, vae_output);
     }
 
+    // Estimate VRAM needed for VAE decode operation
+    // Returns required bytes, or 0 if estimation fails
+    size_t estimate_vae_decode_vram(ggml_tensor* latent, bool decode_video = false) {
+        if (use_tiny_autoencoder || first_stage_model == nullptr) {
+            // TAE is much smaller, use formula estimate
+            const int vae_scale_factor = get_vae_scale_factor();
+            size_t W = latent->ne[0] * vae_scale_factor;
+            size_t H = latent->ne[1] * vae_scale_factor;
+            return W * H * 12;  // ~12 bytes per pixel for TAE buffers
+        }
+
+        if (offload_config.vram_estimation == SD_VRAM_EST_FORMULA) {
+            // Formula-based estimation: VAE weights + compute buffers
+            const int vae_scale_factor = get_vae_scale_factor();
+            size_t W = latent->ne[0] * vae_scale_factor;
+            size_t H = latent->ne[1] * vae_scale_factor;
+            size_t vae_weights = first_stage_model->get_params_buffer_size();
+            size_t compute_estimate = W * H * 48;  // ~48 bytes per pixel for full VAE
+            return vae_weights + compute_estimate;
+        }
+
+        // Dry-run estimation (default, most accurate)
+        auto get_decode_graph = [&]() -> struct ggml_cgraph* {
+            return ((AutoEncoderKL*)first_stage_model.get())->build_graph(latent, true);
+        };
+        size_t compute_size = first_stage_model->estimate_compute_buffer_size(get_decode_graph);
+        size_t params_size = first_stage_model->get_params_buffer_size();
+
+        if (offload_config.log_offload_events && compute_size > 0) {
+            LOG_INFO("[Offload] VAE decode estimate: compute=%.2f MB, params=%.2f MB, total=%.2f MB",
+                     compute_size / (1024.0f * 1024.0f),
+                     params_size / (1024.0f * 1024.0f),
+                     (compute_size + params_size) / (1024.0f * 1024.0f));
+        }
+
+        return compute_size > 0 ? compute_size + params_size : 0;
+    }
+
+    // Smart offload before VAE decode - only offload what's needed
+    // Returns true if offloading was performed
+    bool smart_offload_for_vae(ggml_tensor* latent, bool decode_video = false) {
+        if (offload_config.mode == SD_OFFLOAD_NONE) {
+            return false;
+        }
+
+        size_t vae_vram_needed = estimate_vae_decode_vram(latent, decode_video);
+        if (vae_vram_needed == 0) {
+            // Estimation failed, fall back to unconditional offload
+            if (offload_config.log_offload_events) {
+                LOG_WARN("[Offload] VAE VRAM estimation failed, using fallback offload");
+            }
+            // Offload cond_stage if configured
+            if (offload_config.offload_cond_stage && cond_stage_model && cond_stage_model->is_params_on_gpu()) {
+                cond_stage_model->move_params_to_cpu();
+            }
+            return true;
+        }
+
+        // Get current free VRAM (approximate - use target as threshold)
+        size_t target_free = offload_config.target_free_vram;
+        size_t vram_to_free = vae_vram_needed > target_free ? 0 : vae_vram_needed;
+
+        // Check what we can offload and how much it would free
+        size_t cond_vram = 0;
+        size_t diffusion_vram = 0;
+        bool cond_on_gpu = cond_stage_model && cond_stage_model->is_params_on_gpu();
+        bool diffusion_on_gpu = diffusion_model && diffusion_model->is_params_on_gpu();
+
+        if (cond_on_gpu) {
+            cond_vram = cond_stage_model->get_params_buffer_size();
+        }
+        if (diffusion_on_gpu) {
+            diffusion_vram = diffusion_model->get_params_buffer_size();
+        }
+
+        bool offloaded_anything = false;
+
+        // Offload cond_stage first (usually smaller, already done after conditioning)
+        if (offload_config.offload_cond_stage && cond_on_gpu && cond_vram >= offload_config.min_offload_size) {
+            if (offload_config.log_offload_events) {
+                LOG_INFO("[Offload] Smart offload: moving cond_stage to CPU (%.2f MB) for VAE decode",
+                         cond_vram / (1024.0f * 1024.0f));
+            }
+            cond_stage_model->move_params_to_cpu();
+            offloaded_anything = true;
+            vram_to_free = (vram_to_free > cond_vram) ? vram_to_free - cond_vram : 0;
+        }
+
+        // Offload diffusion if still needed and configured
+        if (offload_config.offload_diffusion && diffusion_on_gpu && vram_to_free > 0 &&
+            diffusion_vram >= offload_config.min_offload_size) {
+            if (offload_config.log_offload_events) {
+                LOG_INFO("[Offload] Smart offload: moving diffusion to CPU (%.2f MB) for VAE decode",
+                         diffusion_vram / (1024.0f * 1024.0f));
+            }
+            diffusion_model->move_params_to_cpu();
+            offloaded_anything = true;
+        }
+
+        return offloaded_anything;
+    }
+
     ggml_tensor* decode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool decode_video = false) {
         const int vae_scale_factor = get_vae_scale_factor();
         int64_t W                  = x->ne[0] * vae_scale_factor;
@@ -2986,6 +3088,7 @@ enum sd_offload_mode_t str_to_offload_mode(const char* str) {
 
 void sd_offload_config_init(sd_offload_config_t* config) {
     config->mode               = SD_OFFLOAD_NONE;
+    config->vram_estimation    = SD_VRAM_EST_DRYRUN;  // Dry-run is default (accurate)
     config->offload_cond_stage = true;
     config->offload_diffusion  = false;
     config->reload_cond_stage  = false;
@@ -3669,6 +3772,11 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
 
     int64_t t3 = ggml_time_ms();
     LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
+
+    // Smart offload before VAE decode - estimates VRAM needed and offloads only what's necessary
+    if (!final_latents.empty()) {
+        sd_ctx->sd->smart_offload_for_vae(final_latents[0], false);
+    }
 
     // Decode to image
     LOG_INFO("decoding %zu latents", final_latents.size());
@@ -4566,6 +4674,10 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     int64_t t4 = ggml_time_ms();
     LOG_INFO("generating latent video completed, taking %.2fs", (t4 - t2) * 1.0f / 1000);
+
+    // Smart offload before VAE decode - estimates VRAM needed and offloads only what's necessary
+    sd_ctx->sd->smart_offload_for_vae(final_latent, true);
+
     struct ggml_tensor* vid = sd_ctx->sd->decode_first_stage(work_ctx, final_latent, true);
     int64_t t5              = ggml_time_ms();
     LOG_INFO("decode_first_stage completed, taking %.2fs", (t5 - t4) * 1.0f / 1000);
