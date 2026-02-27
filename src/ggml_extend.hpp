@@ -539,11 +539,11 @@ __STATIC_INLINE__ void ggml_ext_tensor_merge_2d(struct ggml_tensor* input,
                 for (int l = 0; l < ne3; l++) {
                     float new_value = ggml_ext_tensor_get_f32(input, ix, iy, k, l);
                     if (overlap_x > 0 || overlap_y > 0) {  // blend colors in overlapped area
-                        float old_value = ggml_ext_tensor_get_f32(output, x + ix, y + iy, k, l);
+                        float old_value = ggml_ext_tensor_get_f32(output, (x + ix) % img_width, (y + iy) % img_height, k, l);
 
                         const float x_f_0 = (circular_x || (overlap_x > 0 && x > 0)) ? (ix - x_skip) / float(overlap_x) : 1;
                         const float x_f_1 = (circular_x || (overlap_x > 0 && x < (img_width - width))) ? (width - ix) / float(overlap_x) : 1;
-                        const float y_f_0 = (circular_y || (overlap_y > 0 && y > 0))? (iy - y_skip) / float(overlap_y) : 1;
+                        const float y_f_0 = (circular_y || (overlap_y > 0 && y > 0)) ? (iy - y_skip) / float(overlap_y) : 1;
                         const float y_f_1 = (circular_y || (overlap_y > 0 && y < (img_height - height))) ? (height - iy) / float(overlap_y) : 1;
 
                         const float x_f = std::min(std::min(x_f_0, x_f_1), 1.f);
@@ -552,9 +552,9 @@ __STATIC_INLINE__ void ggml_ext_tensor_merge_2d(struct ggml_tensor* input,
                         ggml_ext_tensor_set_f32(
                             output,
                             old_value + new_value * smootherstep_f32(y_f) * smootherstep_f32(x_f),
-                            x + ix, y + iy, k, l);
+                            (x + ix) % img_width, (y + iy) % img_height, k, l);
                     } else {
-                        ggml_ext_tensor_set_f32(output, new_value, x + ix, y + iy, k, l);
+                        ggml_ext_tensor_set_f32(output, new_value, (x + ix) % img_width, (y + iy) % img_height, k, l);
                     }
                 }
             }
