@@ -1455,7 +1455,7 @@ public:
         sd_progress_cb_t cb = sd_get_progress_callback();
         void* cbd           = sd_get_progress_callback_data();
         sd_set_progress_callback((sd_progress_cb_t)suppress_pp, nullptr);
-        sd_tiling(input, output, scale, tile_size, tile_overlap_factor, on_processing);
+        sd_tiling(input, output, scale, tile_size, tile_overlap_factor, circular_x, circular_y, on_processing);
         sd_set_progress_callback(cb, cbd);
     }
 
@@ -2546,7 +2546,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     return first_stage_model->compute(n_threads, in, false, &out, work_ctx);
                 };
-                sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, on_tiling);
+                sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, circular_x, circular_y, on_tiling);
             } else {
                 first_stage_model->compute(n_threads, x, false, &result, work_ctx);
             }
@@ -2557,7 +2557,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     return tae_first_stage->compute(n_threads, in, false, &out, nullptr);
                 };
-                sd_tiling(x, result, vae_scale_factor, 64, 0.5f, on_tiling);
+                sd_tiling(x, result, vae_scale_factor, 64, 0.5f, circular_x, circular_y, on_tiling);
             } else {
                 tae_first_stage->compute(n_threads, x, false, &result, work_ctx);
             }
@@ -2675,7 +2675,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     return first_stage_model->compute(n_threads, in, true, &out, nullptr);
                 };
-                sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, on_tiling);
+                sd_tiling_non_square(x, result, vae_scale_factor, tile_size_x, tile_size_y, tile_overlap, circular_x, circular_y, on_tiling);
             } else {
                 if (!first_stage_model->compute(n_threads, x, true, &result, work_ctx)) {
                     LOG_ERROR("Failed to decode latetnts");
@@ -2691,7 +2691,7 @@ public:
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     return tae_first_stage->compute(n_threads, in, true, &out);
                 };
-                sd_tiling(x, result, vae_scale_factor, 64, 0.5f, on_tiling);
+                sd_tiling(x, result, vae_scale_factor, 64, 0.5f, circular_x, circular_y, on_tiling);
             } else {
                 if (!tae_first_stage->compute(n_threads, x, true, &result)) {
                     LOG_ERROR("Failed to decode latetnts");
