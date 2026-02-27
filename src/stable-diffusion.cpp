@@ -110,6 +110,9 @@ public:
     bool external_vae_is_invalid = false;
     bool free_params_immediately = false;
 
+    bool circular_x = false;
+    bool circular_y = false;
+
     std::shared_ptr<RNG> rng         = std::make_shared<PhiloxRNG>();
     std::shared_ptr<RNG> sampler_rng = nullptr;
     int n_threads                    = -1;
@@ -749,12 +752,8 @@ public:
             if (control_net) {
                 control_net->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
             }
-            if (first_stage_model) {
-                first_stage_model->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
-            }
-            if (tae_first_stage) {
-                tae_first_stage->set_circular_axes(sd_ctx_params->circular_x, sd_ctx_params->circular_y);
-            }
+            circular_x = sd_ctx_params->circular_x;
+            circular_y = sd_ctx_params->circular_y;
         }
 
         struct ggml_init_params params;
@@ -3495,6 +3494,25 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
 
 sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
+
+    if (!sd_img_gen_params->vae_tiling_params.enabled) {
+        if (sd_ctx->sd->first_stage_model) {
+            sd_ctx->sd->first_stage_model->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+        if (sd_ctx->sd->tae_first_stage) {
+            sd_ctx->sd->tae_first_stage->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+    } else {
+        // force disable circular padding for vae if tiling is enabled
+        // otherwise it will cause artifacts at the edges of the tiles
+        if (sd_ctx->sd->first_stage_model) {
+            sd_ctx->sd->first_stage_model->set_circular_axes(false, false);
+        }
+        if (sd_ctx->sd->tae_first_stage) {
+            sd_ctx->sd->tae_first_stage->set_circular_axes(false, false);
+        }
+    }
+
     int width                     = sd_img_gen_params->width;
     int height                    = sd_img_gen_params->height;
 
