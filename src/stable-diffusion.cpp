@@ -3495,26 +3495,8 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
 sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params) {
     sd_ctx->sd->vae_tiling_params = sd_img_gen_params->vae_tiling_params;
 
-    if (!sd_img_gen_params->vae_tiling_params.enabled) {
-        if (sd_ctx->sd->first_stage_model) {
-            sd_ctx->sd->first_stage_model->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
-        }
-        if (sd_ctx->sd->tae_first_stage) {
-            sd_ctx->sd->tae_first_stage->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
-        }
-    } else {
-        // force disable circular padding for vae if tiling is enabled
-        // otherwise it will cause artifacts at the edges of the tiles
-        if (sd_ctx->sd->first_stage_model) {
-            sd_ctx->sd->first_stage_model->set_circular_axes(false, false);
-        }
-        if (sd_ctx->sd->tae_first_stage) {
-            sd_ctx->sd->tae_first_stage->set_circular_axes(false, false);
-        }
-    }
-
-    int width                     = sd_img_gen_params->width;
-    int height                    = sd_img_gen_params->height;
+    int width  = sd_img_gen_params->width;
+    int height = sd_img_gen_params->height;
 
     int vae_scale_factor            = sd_ctx->sd->get_vae_scale_factor();
     int diffusion_model_down_factor = sd_ctx->sd->get_diffusion_model_down_factor();
@@ -3526,6 +3508,40 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         width += width_offset;
         height += height_offset;
         LOG_WARN("align up %dx%d to %dx%d (multiple=%d)", sd_img_gen_params->width, sd_img_gen_params->height, width, height, spatial_multiple);
+    }
+
+    bool circular_x = sd_ctx->sd->circular_x;
+    bool circular_y = sd_ctx->sd->circular_y;
+
+    if (!sd_img_gen_params->vae_tiling_params.enabled) {
+        if (sd_ctx->sd->first_stage_model) {
+            sd_ctx->sd->first_stage_model->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+        if (sd_ctx->sd->tae_first_stage) {
+            sd_ctx->sd->tae_first_stage->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+    } else {
+        int tile_size_x, tile_size_y;
+        float _overlap;
+        int latent_size_x = width / sd_ctx->sd->get_vae_scale_factor();
+        int latent_size_y = height / sd_ctx->sd->get_vae_scale_factor();
+        sd_ctx->sd->get_tile_sizes(tile_size_x, tile_size_y, _overlap, sd_img_gen_params->vae_tiling_params, latent_size_x, latent_size_y);
+
+        // force disable circular padding for vae if tiling is enabled unless latent is smaller than tile size
+        // otherwise it will cause artifacts at the edges of the tiles
+        sd_ctx->sd->circular_x = sd_ctx->sd->circular_x && (tile_size_x >= latent_size_x);
+        sd_ctx->sd->circular_y = sd_ctx->sd->circular_y && (tile_size_y >= latent_size_y);
+
+        if (sd_ctx->sd->first_stage_model) {
+            sd_ctx->sd->first_stage_model->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+        if (sd_ctx->sd->tae_first_stage) {
+            sd_ctx->sd->tae_first_stage->set_circular_axes(sd_ctx->sd->circular_x, sd_ctx->sd->circular_y);
+        }
+
+        // disable circular tiling if it's enabled for the VAE
+        sd_ctx->sd->circular_x = circular_x && (tile_size_x < latent_size_x);
+        sd_ctx->sd->circular_y = circular_y && (tile_size_y < latent_size_y);
     }
 
     LOG_DEBUG("generate_image %dx%d", width, height);
@@ -3796,6 +3812,10 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         concat_latent,
                                                         denoise_mask,
                                                         &sd_img_gen_params->cache);
+
+    // restore circular params
+    sd_ctx->sd->circular_x = circular_x;
+    sd_ctx->sd->circular_y = circular_y;
 
     size_t t2 = ggml_time_ms();
 
