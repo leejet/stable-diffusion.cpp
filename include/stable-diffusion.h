@@ -162,6 +162,7 @@ enum sd_offload_mode_t {
     SD_OFFLOAD_COND_ONLY,      // Offload only conditioning (LLM/CLIP) after use
     SD_OFFLOAD_COND_DIFFUSION, // Offload conditioning + diffusion, keep VAE
     SD_OFFLOAD_AGGRESSIVE,     // Offload each component after use (saves most VRAM)
+    SD_OFFLOAD_LAYER_STREAMING, // Stream layers one-by-one (enables models larger than VRAM)
     SD_OFFLOAD_MODE_COUNT
 };
 
@@ -183,6 +184,12 @@ typedef struct {
     bool log_offload_events;              // Log offload/reload events
     size_t min_offload_size;              // Minimum component size to offload (bytes), 0 = no minimum
     size_t target_free_vram;              // Target free VRAM before VAE decode (bytes), 0 = always offload when mode is set
+
+    // Layer streaming configuration (for SD_OFFLOAD_LAYER_STREAMING mode)
+    bool layer_streaming_enabled;         // Enable layer-by-layer streaming execution
+    int streaming_prefetch_layers;        // Number of layers to prefetch ahead (default: 1)
+    int streaming_keep_layers_behind;     // Layers to keep after execution (for skip connections)
+    size_t streaming_min_free_vram;       // Minimum VRAM to keep free during streaming (bytes)
 } sd_offload_config_t;
 
 typedef struct {

@@ -875,8 +875,9 @@ struct SDContextParams {
              on_relative_tile_size_arg},
             {"",
              "--offload-mode",
-             "dynamic VRAM offloading mode, one of [none, cond_only, cond_diffusion, aggressive] (default: none). "
+             "dynamic VRAM offloading mode, one of [none, cond_only, cond_diffusion, aggressive, layer_streaming] (default: none). "
              "Use 'cond_only' to offload the LLM/CLIP model to CPU after conditioning, freeing VRAM for diffusion. "
+             "Use 'layer_streaming' to stream model layers one-by-one (enables models larger than VRAM). "
              "This enables generation with large models that would otherwise cause OOM.",
              on_offload_mode_arg},
             {"",

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common_dit.hpp"
+#include "layer_streaming.hpp"
 #include "model.h"
 #include "rope.hpp"
 
@@ -1565,6 +1566,60 @@ namespace Flux {
             LOG_INFO("flux model loaded");
             flux->test();
         }
+
+        // ========== Layer Streaming Support ==========
+
+        /**
+         * Enable layer streaming for memory-efficient execution
+         * @param config Streaming configuration
+         */
+        void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
+            if (!streaming_engine_) {
+                // Get backends from GGMLRunner
+                ggml_backend_t gpu = runtime_backend;
+                ggml_backend_t cpu = params_backend;
+
+                streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(gpu, cpu);
+            }
+
+            auto cfg = config;
+            cfg.enabled = true;
+            streaming_engine_->set_config(cfg);
+
+            // Register model layers with the streaming engine
+            streaming_engine_->register_model_layers(params_ctx, LayerStreaming::flux_layer_pattern);
+
+            LOG_INFO("FluxRunner: layer streaming enabled with %zu layers",
+                     streaming_engine_->get_registry().get_layer_count());
+        }
+
+        /**
+         * Disable layer streaming
+         */
+        void disable_layer_streaming() {
+            if (streaming_engine_) {
+                auto cfg = streaming_engine_->get_config();
+                cfg.enabled = false;
+                streaming_engine_->set_config(cfg);
+            }
+        }
+
+        /**
+         * Check if layer streaming is enabled
+         */
+        bool is_streaming_enabled() const {
+            return streaming_engine_ && streaming_engine_->get_config().enabled;
+        }
+
+        /**
+         * Get the streaming engine (for advanced configuration)
+         */
+        LayerStreaming::LayerExecutionEngine* get_streaming_engine() {
+            return streaming_engine_.get();
+        }
+
+    private:
+        std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
     };
 
 }  // namespace Flux

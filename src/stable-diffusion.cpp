@@ -3205,6 +3205,7 @@ const char* offload_mode_to_str[] = {
     "cond_only",
     "cond_diffusion",
     "aggressive",
+    "layer_streaming",
 };
 
 const char* sd_offload_mode_name(enum sd_offload_mode_t mode) {
