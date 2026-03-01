@@ -159,7 +159,15 @@ public:
         }
 
         // Create GPU tensor copies
-        std::vector<std::pair<ggml_tensor*, ggml_tensor*>> copy_pairs;
+        // Store (tensor_name, cpu_tensor, gpu_tensor) - we can't rely on ggml_get_name()
+        // because GGMLBlock doesn't call ggml_set_name() on the original tensors
+        struct CopyInfo {
+            std::string name;
+            ggml_tensor* cpu_tensor;
+            ggml_tensor* gpu_tensor;
+        };
+        std::vector<CopyInfo> copy_list;
+
         for (const auto& tensor_name : layer.tensor_names) {
             TensorInfo& info = tensors_[tensor_name];
             if (info.on_gpu) {
@@ -168,10 +176,10 @@ public:
 
             ggml_tensor* gpu_tensor = ggml_dup_tensor(temp_ctx, info.cpu_tensor);
             ggml_set_name(gpu_tensor, tensor_name.c_str());
-            copy_pairs.push_back({info.cpu_tensor, gpu_tensor});
+            copy_list.push_back({tensor_name, info.cpu_tensor, gpu_tensor});
         }
 
-        if (copy_pairs.empty()) {
+        if (copy_list.empty()) {
             ggml_free(temp_ctx);
             layer.on_gpu = true;
             return true;
@@ -186,23 +194,22 @@ public:
         }
 
         // Copy data from CPU to GPU
-        for (auto& [cpu_t, gpu_t] : copy_pairs) {
-            ggml_backend_tensor_copy(cpu_t, gpu_t);
+        for (auto& item : copy_list) {
+            ggml_backend_tensor_copy(item.cpu_tensor, item.gpu_tensor);
         }
         ggml_backend_synchronize(gpu_backend_);
 
         // Update tensor info and swap buffer pointers
-        for (auto& [cpu_t, gpu_t] : copy_pairs) {
-            std::string name = ggml_get_name(cpu_t);
-            TensorInfo& info = tensors_[name];
-            info.gpu_tensor  = gpu_t;
+        for (auto& item : copy_list) {
+            TensorInfo& info = tensors_[item.name];
+            info.gpu_tensor  = item.gpu_tensor;
             info.on_gpu      = true;
             info.last_access = access_counter_++;
 
             // Swap the buffer pointers so the original tensor now points to GPU memory
-            std::swap(cpu_t->buffer, gpu_t->buffer);
-            std::swap(cpu_t->data, gpu_t->data);
-            std::swap(cpu_t->extra, gpu_t->extra);
+            std::swap(item.cpu_tensor->buffer, item.gpu_tensor->buffer);
+            std::swap(item.cpu_tensor->data, item.gpu_tensor->data);
+            std::swap(item.cpu_tensor->extra, item.gpu_tensor->extra);
         }
 
         layer.on_gpu = true;

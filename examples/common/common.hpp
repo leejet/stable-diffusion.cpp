@@ -839,6 +839,42 @@ struct SDContextParams {
             return 1;
         };
 
+        auto on_streaming_prefetch_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            try {
+                offload_config.streaming_prefetch_layers = std::stoi(argv[index]);
+                if (offload_config.streaming_prefetch_layers < 0) {
+                    LOG_ERROR("error: streaming prefetch must be >= 0");
+                    return -1;
+                }
+            } catch (...) {
+                LOG_ERROR("error: invalid streaming prefetch value %s", argv[index]);
+                return -1;
+            }
+            return 1;
+        };
+
+        auto on_streaming_min_vram_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            try {
+                // Parse as MB, convert to bytes
+                int mb = std::stoi(argv[index]);
+                if (mb < 0) {
+                    LOG_ERROR("error: streaming min VRAM must be >= 0");
+                    return -1;
+                }
+                offload_config.streaming_min_free_vram = static_cast<size_t>(mb) * 1024 * 1024;
+            } catch (...) {
+                LOG_ERROR("error: invalid streaming min VRAM value %s", argv[index]);
+                return -1;
+            }
+            return 1;
+        };
+
         options.manual_options = {
             {"",
              "--type",
@@ -885,6 +921,16 @@ struct SDContextParams {
              "VRAM estimation method for smart offloading, one of [dryrun, formula] (default: dryrun). "
              "'dryrun' allocates test tensors for accurate size estimation; 'formula' uses quick calculation.",
              on_vram_estimation_arg},
+            {"",
+             "--streaming-prefetch",
+             "Number of layers to prefetch ahead during layer streaming (default: 1). "
+             "Higher values may improve performance but use more VRAM.",
+             on_streaming_prefetch_arg},
+            {"",
+             "--streaming-min-vram",
+             "Minimum VRAM to keep free during layer streaming, in MB (default: 512). "
+             "Layers will be offloaded when free VRAM drops below this threshold.",
+             on_streaming_min_vram_arg},
         };
 
         return options;

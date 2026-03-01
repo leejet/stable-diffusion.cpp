@@ -47,6 +47,22 @@ struct DiffusionModel {
     virtual bool move_params_to_cpu() { return false; }
     virtual bool move_params_to_gpu() { return false; }
     virtual size_t get_params_vram_size() const { return 0; }
+
+    // Layer streaming interface (for granular tensor offloading)
+    virtual bool supports_layer_streaming() const { return false; }
+    virtual void enable_layer_streaming(int prefetch_layers = 1, size_t min_free_vram = 512 * 1024 * 1024) {
+        (void)prefetch_layers;
+        (void)min_free_vram;
+    }
+    virtual void disable_layer_streaming() {}
+    virtual bool is_layer_streaming_enabled() const { return false; }
+    virtual bool compute_streaming(int n_threads,
+                                   DiffusionParams diffusion_params,
+                                   struct ggml_tensor** output     = nullptr,
+                                   struct ggml_context* output_ctx = nullptr) {
+        // Default: fall back to regular compute
+        return compute(n_threads, diffusion_params, output, output_ctx);
+    }
 };
 
 struct UNetModel : public DiffusionModel {
@@ -119,6 +135,41 @@ struct UNetModel : public DiffusionModel {
     bool move_params_to_cpu() override { return unet.move_params_to_cpu(); }
     bool move_params_to_gpu() override { return unet.move_params_to_gpu(); }
     size_t get_params_vram_size() const override { return unet.get_params_vram_size(); }
+
+    // Layer streaming (coarse-stage for UNet due to skip connections)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        unet.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        unet.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return unet.is_streaming_enabled();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        return unet.compute_streaming(n_threads,
+                                      diffusion_params.x,
+                                      diffusion_params.timesteps,
+                                      diffusion_params.context,
+                                      diffusion_params.c_concat,
+                                      diffusion_params.y,
+                                      diffusion_params.num_video_frames,
+                                      diffusion_params.controls,
+                                      diffusion_params.control_strength,
+                                      output,
+                                      output_ctx);
+    }
 };
 
 struct MMDiTModel : public DiffusionModel {
@@ -265,6 +316,40 @@ struct FluxModel : public DiffusionModel {
     bool move_params_to_cpu() override { return flux.move_params_to_cpu(); }
     bool move_params_to_gpu() override { return flux.move_params_to_gpu(); }
     size_t get_params_vram_size() const override { return flux.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        flux.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        flux.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return flux.is_streaming_enabled();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        return flux.compute_streaming(n_threads,
+                                      diffusion_params.x,
+                                      diffusion_params.timesteps,
+                                      diffusion_params.context,
+                                      diffusion_params.c_concat,
+                                      diffusion_params.y,
+                                      diffusion_params.guidance,
+                                      output,
+                                      output_ctx,
+                                      diffusion_params.skip_layers);
+    }
 };
 
 struct AnimaModel : public DiffusionModel {

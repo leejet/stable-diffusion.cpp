@@ -616,6 +616,21 @@ public:
             diffusion_model->alloc_params_buffer();
             diffusion_model->get_param_tensors(tensors);
 
+            // Enable layer streaming if configured
+            if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+                if (diffusion_model->supports_layer_streaming()) {
+                    LOG_INFO("Enabling layer-by-layer streaming for diffusion model");
+                    LOG_INFO("  Prefetch layers: %d, Min free VRAM: %.0f MB",
+                             offload_config.streaming_prefetch_layers,
+                             offload_config.streaming_min_free_vram / (1024.0 * 1024.0));
+                    diffusion_model->enable_layer_streaming(
+                        offload_config.streaming_prefetch_layers,
+                        offload_config.streaming_min_free_vram);
+                } else {
+                    LOG_WARN("Layer streaming requested but diffusion model does not support it, falling back to normal mode");
+                }
+            }
+
             if (sd_version_is_unet_edit(version)) {
                 vae_decode_only = false;
             }
@@ -1947,6 +1962,15 @@ public:
 
             DiffusionParams diffusion_params;
 
+            // Helper to call appropriate compute method (streaming or regular)
+            const bool use_streaming = work_diffusion_model->is_layer_streaming_enabled();
+            auto do_compute = [&](struct ggml_tensor** output) -> bool {
+                if (use_streaming) {
+                    return work_diffusion_model->compute_streaming(n_threads, diffusion_params, output);
+                }
+                return work_diffusion_model->compute(n_threads, diffusion_params, output);
+            };
+
             const bool easycache_step_active = easycache_enabled && step > 0;
             int easycache_step_index         = easycache_step_active ? (step - 1) : -1;
             if (easycache_step_active) {
@@ -2142,9 +2166,7 @@ public:
 
             bool skip_model = cache_before_condition(active_condition, *active_output);
             if (!skip_model) {
-                if (!work_diffusion_model->compute(n_threads,
-                                                   diffusion_params,
-                                                   active_output)) {
+                if (!do_compute(active_output)) {
                     LOG_ERROR("diffusion model compute failed");
                     return nullptr;
                 }
@@ -2170,9 +2192,7 @@ public:
                 diffusion_params.y        = uncond.c_vector;
                 bool skip_uncond          = cache_before_condition(&uncond, out_uncond);
                 if (!skip_uncond) {
-                    if (!work_diffusion_model->compute(n_threads,
-                                                       diffusion_params,
-                                                       &out_uncond)) {
+                    if (!do_compute(&out_uncond)) {
                         LOG_ERROR("diffusion model compute failed");
                         return nullptr;
                     }
@@ -2188,9 +2208,7 @@ public:
                 diffusion_params.y        = img_cond.c_vector;
                 bool skip_img_cond        = cache_before_condition(&img_cond, out_img_cond);
                 if (!skip_img_cond) {
-                    if (!work_diffusion_model->compute(n_threads,
-                                                       diffusion_params,
-                                                       &out_img_cond)) {
+                    if (!do_compute(&out_img_cond)) {
                         LOG_ERROR("diffusion model compute failed");
                         return nullptr;
                     }
@@ -2210,9 +2228,7 @@ public:
                     diffusion_params.c_concat    = cond.c_concat;
                     diffusion_params.y           = cond.c_vector;
                     diffusion_params.skip_layers = skip_layers;
-                    if (!work_diffusion_model->compute(n_threads,
-                                                       diffusion_params,
-                                                       &out_skip)) {
+                    if (!do_compute(&out_skip)) {
                         LOG_ERROR("diffusion model compute failed");
                         return nullptr;
                     }
@@ -3773,7 +3789,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
 
     // Ensure diffusion model is on GPU before sampling
     // (May have been temporarily offloaded to make room for cond_stage reload)
+    // Note: Skip this for layer_streaming mode - streaming engine loads layers individually
     if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
+        sd_ctx->sd->offload_config.mode != SD_OFFLOAD_LAYER_STREAMING &&
         sd_ctx->sd->diffusion_model && !sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
         int64_t reload_start = ggml_time_ms();
         if (sd_ctx->sd->diffusion_model->move_params_to_gpu()) {
@@ -4020,7 +4038,9 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         bool reloaded_any = false;
 
         // Reload diffusion if configured (reload_diffusion=true) and it was offloaded
+        // Skip for layer_streaming mode - streaming engine handles layer-by-layer loading
         if (sd_ctx->sd->offload_config.reload_diffusion &&
+            sd_ctx->sd->offload_config.mode != SD_OFFLOAD_LAYER_STREAMING &&
             sd_ctx->sd->diffusion_model && !sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
             if (sd_ctx->sd->offload_config.log_offload_events) {
                 LOG_WARN("[Offload] Reloading diffusion to GPU after generation...");
@@ -4932,7 +4952,9 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         bool reloaded_any = false;
 
         // Reload diffusion if configured (reload_diffusion=true) and it was offloaded
+        // Skip for layer_streaming mode - streaming engine handles layer-by-layer loading
         if (sd_ctx->sd->offload_config.reload_diffusion &&
+            sd_ctx->sd->offload_config.mode != SD_OFFLOAD_LAYER_STREAMING &&
             sd_ctx->sd->diffusion_model && !sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
             if (sd_ctx->sd->offload_config.log_offload_events) {
                 LOG_WARN("[Offload] Reloading diffusion to GPU after generation...");
