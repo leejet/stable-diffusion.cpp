@@ -698,9 +698,10 @@ struct UNetModelRunner : public GGMLRunner {
             }
         }
 
-        // Execute full graph
+        // Execute full graph (skip_param_offload=true since streaming engine manages weights)
         bool result = compute(n_threads, x, timesteps, context, c_concat, y,
-                              num_video_frames, controls, control_strength, output, output_ctx);
+                              num_video_frames, controls, control_strength, output, output_ctx,
+                              true /* skip_param_offload */);
 
         int64_t t1 = ggml_time_ms();
 
@@ -766,7 +767,8 @@ struct UNetModelRunner : public GGMLRunner {
                  std::vector<struct ggml_tensor*> controls = {},
                  float control_strength                    = 0.f,
                  struct ggml_tensor** output               = nullptr,
-                 struct ggml_context* output_ctx           = nullptr) {
+                 struct ggml_context* output_ctx           = nullptr,
+                 bool skip_param_offload                   = false) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
         // context: [N, max_position, hidden_size]([N, 77, 768]) or [1, max_position, hidden_size]
@@ -776,7 +778,7 @@ struct UNetModelRunner : public GGMLRunner {
             return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength);
         };
 
-        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx, skip_param_offload);
     }
 
     void test() {

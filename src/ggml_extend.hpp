@@ -2118,8 +2118,11 @@ public:
                  int n_threads,
                  bool free_compute_buffer_immediately = true,
                  struct ggml_tensor** output          = nullptr,
-                 struct ggml_context* output_ctx      = nullptr) {
-        if (!offload_params_to_runtime_backend()) {
+                 struct ggml_context* output_ctx      = nullptr,
+                 bool skip_param_offload              = false) {
+        // In streaming mode, weights are managed by the streaming engine
+        // so skip the bulk offload which would fail due to VRAM limits
+        if (!skip_param_offload && !offload_params_to_runtime_backend()) {
             LOG_ERROR("%s offload params to runtime backend failed", get_desc().c_str());
             return false;
         }

@@ -1863,25 +1863,38 @@ namespace Flux {
             LOG_DEBUG("FluxRunner streaming: loading global layers");
             registry.move_layer_to_gpu("_global");
 
-            // Build and execute preprocessing graph
-            {
-                reset_compute_ctx();
+            // Prepare PE data (computed once, used in graph building callback)
+            pe_vec = Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
+                                       static_cast<int>(x->ne[0]),
+                                       flux_params.patch_size,
+                                       static_cast<int>(x->ne[3]),
+                                       static_cast<int>(context->ne[1]),
+                                       {},  // txt_arange_dims
+                                       {},  // ref_latents
+                                       false,
+                                       flux_params.ref_index_scale,
+                                       flux_params.theta,
+                                       false, false,
+                                       flux_params.axes_dim);
+
+            // Mod index for Chroma (computed once)
+            if (flux_params.is_chroma) {
+                mod_index_arange_vec = std::vector<float>(344);
+                for (int i = 0; i < 344; i++) mod_index_arange_vec[i] = static_cast<float>(i);
+            }
+
+            // Cache input dimensions for graph building callback
+            int patch_size = flux_params.patch_size;
+            int64_t in_W = x->ne[0], in_H = x->ne[1], in_C = x->ne[2], in_N = x->ne[3];
+            int pad_h = (patch_size - in_H % patch_size) % patch_size;
+            int pad_w = (patch_size - in_W % patch_size) % patch_size;
+
+            // Graph building callback - called by alloc_compute_buffer and for actual execution
+            // This ensures the graph is built in the correct compute_ctx
+            auto build_preprocessing_graph = [&]() -> ggml_cgraph* {
                 auto gf = ggml_new_graph_custom(compute_ctx, FLUX_GRAPH_SIZE, false);
 
-                // Prepare PE and other inputs (same as regular compute)
-                pe_vec = Rope::gen_flux_pe(static_cast<int>(x->ne[1]),
-                                           static_cast<int>(x->ne[0]),
-                                           flux_params.patch_size,
-                                           static_cast<int>(x->ne[3]),
-                                           static_cast<int>(context->ne[1]),
-                                           {},  // txt_arange_dims
-                                           {},  // ref_latents
-                                           false,
-                                           flux_params.ref_index_scale,
-                                           flux_params.theta,
-                                           false, false,
-                                           flux_params.axes_dim);
-
+                // Create PE tensor in current compute_ctx
                 int pos_len = static_cast<int>(pe_vec.size() / flux_params.axes_dim_sum / 2);
                 auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, flux_params.axes_dim_sum / 2, pos_len);
                 set_backend_tensor_data(pe, pe_vec.data());
@@ -1889,46 +1902,67 @@ namespace Flux {
                 // Mod index for Chroma
                 ggml_tensor* mod_index_arange = nullptr;
                 if (flux_params.is_chroma) {
-                    mod_index_arange_vec = std::vector<float>(344);
-                    for (int i = 0; i < 344; i++) mod_index_arange_vec[i] = static_cast<float>(i);
                     mod_index_arange = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, 344);
                     set_backend_tensor_data(mod_index_arange, mod_index_arange_vec.data());
                 }
 
                 auto runner_ctx = get_context();
 
-                // Patchify input (same as build_graph)
-                int patch_size = flux_params.patch_size;
-                int64_t W = x->ne[0], H = x->ne[1], C = x->ne[2], N = x->ne[3];
-                int pad_h = (patch_size - H % patch_size) % patch_size;
-                int pad_w = (patch_size - W % patch_size) % patch_size;
+                // Convert input tensors to backend (CRITICAL: same as build_graph)
+                // This creates duplicates in compute_ctx and schedules data copy
+                auto x_be = to_backend(x);
+                auto context_be = to_backend(context);
+                auto timesteps_be = to_backend(timesteps);
+                auto y_be = to_backend(y);
+                auto guidance_be = (flux_params.guidance_embed || flux_params.is_chroma) ? to_backend(guidance) : nullptr;
 
-                auto img = ggml_pad(runner_ctx.ggml_ctx, x, pad_w, pad_h, 0, 0);
-                H = img->ne[1];
-                W = img->ne[0];
-                img = ggml_reshape_4d(runner_ctx.ggml_ctx, img, patch_size, W / patch_size, patch_size, H / patch_size * C * N);
+                // Patchify input (same as build_graph)
+                auto img = ggml_pad(runner_ctx.ggml_ctx, x_be, pad_w, pad_h, 0, 0);
+                int64_t W = img->ne[0], H = img->ne[1];
+                img = ggml_reshape_4d(runner_ctx.ggml_ctx, img, patch_size, W / patch_size, patch_size, H / patch_size * in_C * in_N);
                 img = ggml_cont(runner_ctx.ggml_ctx, ggml_permute(runner_ctx.ggml_ctx, img, 0, 2, 1, 3));
-                img = ggml_reshape_3d(runner_ctx.ggml_ctx, img, patch_size * patch_size * C, W / patch_size * H / patch_size, N);
+                img = ggml_reshape_3d(runner_ctx.ggml_ctx, img, patch_size * patch_size * in_C, W / patch_size * H / patch_size, in_N);
                 img = ggml_cont(runner_ctx.ggml_ctx, ggml_permute(runner_ctx.ggml_ctx, img, 1, 0, 2, 3));
 
-                // Execute preprocessing
-                flux.forward_preprocessing(&runner_ctx, stream_ctx, img, context, timesteps, y, guidance, pe, mod_index_arange);
+                // Execute preprocessing (builds graph nodes)
+                flux.forward_preprocessing(&runner_ctx, stream_ctx, img, context_be, timesteps_be, y_be, guidance_be, pe, mod_index_arange);
 
                 // Build graph with preprocessing outputs
                 ggml_build_forward_expand(gf, stream_ctx.img);
                 ggml_build_forward_expand(gf, stream_ctx.txt);
                 ggml_build_forward_expand(gf, stream_ctx.vec);
 
-                // Allocate and execute
-                if (!alloc_compute_buffer([&]() { return gf; })) {
-                    LOG_ERROR("FluxRunner streaming: failed to allocate preprocessing buffer");
-                    return false;
-                }
-                copy_data_to_backend_tensor();
-                if (ggml_backend_graph_compute(runtime_backend, gf) != GGML_STATUS_SUCCESS) {
-                    LOG_ERROR("FluxRunner streaming: preprocessing compute failed");
-                    return false;
-                }
+                // Mark output tensors for retrieval after execution
+                ggml_set_name(stream_ctx.img, "stream_img");
+                ggml_set_name(stream_ctx.txt, "stream_txt");
+                ggml_set_name(stream_ctx.vec, "stream_vec");
+
+                return gf;
+            };
+
+            // Allocate compute buffer - this calls reset_compute_ctx() and builds graph
+            if (!alloc_compute_buffer(build_preprocessing_graph)) {
+                LOG_ERROR("FluxRunner streaming: failed to allocate preprocessing buffer");
+                return false;
+            }
+
+            // Rebuild graph in allocated context (reset_compute_ctx was called by alloc_compute_buffer)
+            reset_compute_ctx();
+            auto gf = build_preprocessing_graph();
+
+            // Allocate graph tensors
+            if (!ggml_gallocr_alloc_graph(compute_allocr, gf)) {
+                LOG_ERROR("FluxRunner streaming: failed to allocate preprocessing graph");
+                return false;
+            }
+
+            // Copy input data to backend
+            copy_data_to_backend_tensor();
+
+            // Execute preprocessing
+            if (ggml_backend_graph_compute(runtime_backend, gf) != GGML_STATUS_SUCCESS) {
+                LOG_ERROR("FluxRunner streaming: preprocessing compute failed");
+                return false;
             }
 
             int64_t t1 = ggml_time_ms();
