@@ -131,7 +131,7 @@ namespace ZImage {
 
             auto x1 = w1->forward(ctx, x);
             auto x3 = w3->forward(ctx, x);
-            x       = ggml_mul(ctx->ggml_ctx, ggml_silu(ctx->ggml_ctx, x1), x3);
+            x       = ggml_swiglu_split(ctx->ggml_ctx, x1, x3);
             x       = w2->forward(ctx, x);
 
             return x;
