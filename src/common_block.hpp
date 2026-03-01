@@ -1,5 +1,5 @@
-#ifndef __COMMON_HPP__
-#define __COMMON_HPP__
+#ifndef __COMMON_BLOCK_HPP__
+#define __COMMON_BLOCK_HPP__
 
 #include "ggml_extend.hpp"
 
@@ -590,4 +590,4 @@ public:
     }
 };
 
-#endif  // __COMMON_HPP__
+#endif  // __COMMON_BLOCK_HPP__

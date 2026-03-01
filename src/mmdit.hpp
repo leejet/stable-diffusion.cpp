@@ -811,11 +811,11 @@ public:
         auto x_embedder = std::dynamic_pointer_cast<PatchEmbed>(blocks["x_embedder"]);
         auto t_embedder = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"]);
 
-        int64_t w = x->ne[0];
-        int64_t h = x->ne[1];
+        int64_t W = x->ne[0];
+        int64_t H = x->ne[1];
 
         auto patch_embed = x_embedder->forward(ctx, x);                      // [N, H*W, hidden_size]
-        auto pos_embed   = cropped_pos_embed(ctx->ggml_ctx, h, w);           // [1, H*W, hidden_size]
+        auto pos_embed   = cropped_pos_embed(ctx->ggml_ctx, H, W);           // [1, H*W, hidden_size]
         x                = ggml_add(ctx->ggml_ctx, patch_embed, pos_embed);  // [N, H*W, hidden_size]
 
         auto c = t_embedder->forward(ctx, t);  // [N, hidden_size]
@@ -834,7 +834,7 @@ public:
 
         x = forward_core_with_concat(ctx, x, c, context, skip_layers);  // (N, H*W, patch_size ** 2 * out_channels)
 
-        x = unpatchify(ctx->ggml_ctx, x, h, w);  // [N, C, H, W]
+        x = DiT::unpatchify_and_crop(ctx->ggml_ctx, x, H, W, patch_size, patch_size, /*patch_last*/ false);  // [N, C, H, W]
 
         return x;
     }
