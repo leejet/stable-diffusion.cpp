@@ -450,6 +450,39 @@ struct AnimaModel : public DiffusionModel {
                              output,
                              output_ctx);
     }
+
+    // ========== Layer Streaming Support ==========
+
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        anima.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        anima.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return anima.is_streaming_enabled();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        return anima.compute_streaming(n_threads,
+                                       diffusion_params.x,
+                                       diffusion_params.timesteps,
+                                       diffusion_params.context,
+                                       diffusion_params.c_concat,
+                                       diffusion_params.y,
+                                       output,
+                                       output_ctx);
+    }
 };
 
 struct WanModel : public DiffusionModel {

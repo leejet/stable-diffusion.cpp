@@ -8,6 +8,7 @@
 
 #include "common_block.hpp"
 #include "flux.hpp"
+#include "layer_streaming.hpp"
 #include "rope.hpp"
 
 namespace Anima {
@@ -518,6 +519,12 @@ namespace Anima {
         std::vector<float> adapter_q_pe_vec;
         std::vector<float> adapter_k_pe_vec;
         AnimaNet net;
+        int64_t num_layers_ = 28;  // Store for streaming
+
+    private:
+        std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
+
+    public:
 
         AnimaRunner(ggml_backend_t backend,
                     bool offload_params_to_cpu,
@@ -543,6 +550,7 @@ namespace Anima {
             if (num_layers <= 0) {
                 num_layers = 28;
             }
+            num_layers_ = num_layers;  // Store for streaming
             LOG_INFO("anima net layers: %" PRId64, num_layers);
 
             net = AnimaNet(num_layers);
@@ -674,11 +682,107 @@ namespace Anima {
                      struct ggml_tensor* t5_ids      = nullptr,
                      struct ggml_tensor* t5_weights  = nullptr,
                      struct ggml_tensor** output     = nullptr,
-                     struct ggml_context* output_ctx = nullptr) {
+                     struct ggml_context* output_ctx = nullptr,
+                     bool skip_param_offload         = false) {
             auto get_graph = [&]() -> struct ggml_cgraph* {
                 return build_graph(x, timesteps, context, t5_ids, t5_weights);
             };
-            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx, skip_param_offload);
+        }
+
+        // ========== Layer Streaming Support ==========
+
+        /**
+         * Enable layer streaming for memory-efficient execution
+         * @param config Streaming configuration
+         */
+        void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
+            if (!streaming_engine_) {
+                ggml_backend_t gpu = runtime_backend;
+                ggml_backend_t cpu = params_backend;
+                streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(gpu, cpu);
+            }
+
+            auto cfg = config;
+            cfg.enabled = true;
+            streaming_engine_->set_config(cfg);
+
+            // Register model layers with the streaming engine
+            std::map<std::string, ggml_tensor*> tensor_map;
+            net.get_param_tensors(tensor_map, "model.diffusion_model.net");
+            streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::anima_layer_pattern);
+
+            LOG_INFO("AnimaRunner: layer streaming enabled with %zu layers",
+                     streaming_engine_->get_registry().get_layer_count());
+        }
+
+        /**
+         * Disable layer streaming
+         */
+        void disable_layer_streaming() {
+            if (streaming_engine_) {
+                auto cfg = streaming_engine_->get_config();
+                cfg.enabled = false;
+                streaming_engine_->set_config(cfg);
+            }
+        }
+
+        /**
+         * Check if layer streaming is enabled
+         */
+        bool is_streaming_enabled() const {
+            return streaming_engine_ && streaming_engine_->get_config().enabled;
+        }
+
+        /**
+         * Get the streaming engine (for advanced configuration)
+         */
+        LayerStreaming::LayerExecutionEngine* get_streaming_engine() {
+            return streaming_engine_.get();
+        }
+
+        /**
+         * Compute with layer streaming - coarse-stage approach
+         */
+        bool compute_streaming(int n_threads,
+                               struct ggml_tensor* x,
+                               struct ggml_tensor* timesteps,
+                               struct ggml_tensor* context,
+                               struct ggml_tensor* t5_ids      = nullptr,
+                               struct ggml_tensor* t5_weights  = nullptr,
+                               struct ggml_tensor** output     = nullptr,
+                               struct ggml_context* output_ctx = nullptr) {
+            if (!streaming_engine_ || !streaming_engine_->get_config().enabled) {
+                LOG_ERROR("AnimaRunner: streaming not enabled, call enable_layer_streaming() first");
+                return false;
+            }
+
+            int64_t t0 = ggml_time_ms();
+            auto& registry = streaming_engine_->get_registry();
+
+            // Load global layers (embedders, etc.)
+            registry.move_layer_to_gpu("_global");
+
+            // Load all transformer blocks
+            for (int64_t i = 0; i < num_layers_; i++) {
+                std::string layer_name = "blocks." + std::to_string(i);
+                registry.move_layer_to_gpu(layer_name);
+            }
+
+            int64_t t1 = ggml_time_ms();
+            LOG_DEBUG("AnimaRunner streaming: weights loaded in %.2fs", (t1 - t0) / 1000.0);
+
+            // Execute full compute graph with skip_param_offload=true
+            bool result = compute(n_threads, x, timesteps, context, t5_ids, t5_weights,
+                                  output, output_ctx, true /* skip_param_offload */);
+
+            int64_t t2 = ggml_time_ms();
+            LOG_INFO("AnimaRunner streaming: total execution time %.2fs (load: %.2fs, compute: %.2fs)",
+                     (t2 - t0) / 1000.0,
+                     (t1 - t0) / 1000.0,
+                     (t2 - t1) / 1000.0);
+
+            return result;
         }
     };
 }  // namespace Anima

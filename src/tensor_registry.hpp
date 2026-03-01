@@ -607,6 +607,32 @@ inline std::pair<std::string, int> zimage_layer_pattern(const std::string& tenso
     return {"_global", -1};
 }
 
+/**
+ * Helper function to extract Anima layer information from tensor name
+ * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
+ *
+ * Anima structure:
+ * - net.blocks.N.* (28 transformer blocks by default)
+ * - net.x_embedder, net.t_embedder, net.final_layer (global)
+ */
+inline std::pair<std::string, int> anima_layer_pattern(const std::string& tensor_name) {
+    // Look for net.blocks.N pattern
+    size_t nb_pos = tensor_name.find("net.blocks.");
+    if (nb_pos != std::string::npos) {
+        size_t num_start = nb_pos + 11;  // Length of "net.blocks."
+        size_t num_end = tensor_name.find('.', num_start);
+        if (num_end == std::string::npos) {
+            num_end = tensor_name.length();
+        }
+        std::string num_str = tensor_name.substr(num_start, num_end - num_start);
+        int block_idx = std::stoi(num_str);
+        return {"blocks." + num_str, block_idx};
+    }
+
+    // Non-layer tensor (embedders, final_layer, etc.)
+    return {"_global", -1};
+}
+
 }  // namespace LayerStreaming
 
 #endif  // __TENSOR_REGISTRY_HPP__
