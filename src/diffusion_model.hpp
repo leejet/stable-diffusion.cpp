@@ -633,6 +633,38 @@ struct QwenImageModel : public DiffusionModel {
     bool move_params_to_cpu() override { return qwen_image.move_params_to_cpu(); }
     bool move_params_to_gpu() override { return qwen_image.move_params_to_gpu(); }
     size_t get_params_vram_size() const override { return qwen_image.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        qwen_image.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        qwen_image.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return qwen_image.is_streaming_enabled();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        return qwen_image.compute_streaming(n_threads,
+                                            diffusion_params.x,
+                                            diffusion_params.timesteps,
+                                            diffusion_params.context,
+                                            diffusion_params.ref_latents,
+                                            true,  // increase_ref_index
+                                            output,
+                                            output_ctx);
+    }
 };
 
 struct ZImageModel : public DiffusionModel {
@@ -706,6 +738,38 @@ struct ZImageModel : public DiffusionModel {
     bool move_params_to_cpu() override { return z_image.move_params_to_cpu(); }
     bool move_params_to_gpu() override { return z_image.move_params_to_gpu(); }
     size_t get_params_vram_size() const override { return z_image.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        z_image.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        z_image.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return z_image.is_streaming_enabled();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        return z_image.compute_streaming(n_threads,
+                                         diffusion_params.x,
+                                         diffusion_params.timesteps,
+                                         diffusion_params.context,
+                                         diffusion_params.ref_latents,
+                                         true,  // increase_ref_index
+                                         output,
+                                         output_ctx);
+    }
 };
 
 #endif

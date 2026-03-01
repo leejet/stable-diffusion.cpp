@@ -5,6 +5,7 @@
 
 #include "common_block.hpp"
 #include "flux.hpp"
+#include "layer_streaming.hpp"
 
 namespace Qwen {
     constexpr int QWEN_IMAGE_GRAPH_SIZE = 20480;
@@ -525,6 +526,85 @@ namespace Qwen {
             qwen_image.get_param_tensors(tensors, prefix);
         }
 
+        // ============== Layer Streaming Support ==============
+    private:
+        std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
+        bool streaming_enabled_ = false;
+
+    public:
+        void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
+            if (!params_backend || !runtime_backend) {
+                LOG_WARN("QwenImageRunner: Cannot enable streaming without both CPU and GPU backends");
+                return;
+            }
+
+            streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
+                runtime_backend, params_backend);
+
+            LayerStreaming::StreamingConfig cfg = config;
+            cfg.enabled = true;
+            cfg.keep_layers_behind = 0;
+            streaming_engine_->set_config(cfg);
+
+            std::map<std::string, ggml_tensor*> tensor_map;
+            qwen_image.get_param_tensors(tensor_map, "model.diffusion_model");
+            streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::qwen_image_layer_pattern);
+
+            streaming_enabled_ = true;
+            LOG_INFO("QwenImageRunner: Layer streaming enabled (%zu layers)",
+                     streaming_engine_->get_registry().get_layer_count());
+        }
+
+        void disable_layer_streaming() {
+            streaming_enabled_ = false;
+            streaming_engine_.reset();
+            LOG_INFO("QwenImageRunner: Layer streaming disabled");
+        }
+
+        bool is_streaming_enabled() const {
+            return streaming_enabled_ && streaming_engine_ != nullptr;
+        }
+
+        bool compute_streaming(int n_threads,
+                               struct ggml_tensor* x,
+                               struct ggml_tensor* timesteps,
+                               struct ggml_tensor* context,
+                               std::vector<ggml_tensor*> ref_latents = {},
+                               bool increase_ref_index               = false,
+                               struct ggml_tensor** output           = nullptr,
+                               struct ggml_context* output_ctx       = nullptr) {
+            if (!streaming_engine_) {
+                LOG_ERROR("QwenImageRunner: Streaming not enabled");
+                return false;
+            }
+
+            int64_t t0 = ggml_time_ms();
+
+            auto& registry = streaming_engine_->get_registry();
+            auto& budget = streaming_engine_->get_budget();
+
+            auto layers = registry.get_layer_names_sorted();
+            for (const auto& layer_name : layers) {
+                if (!registry.is_layer_on_gpu(layer_name)) {
+                    if (!budget.ensure_vram_for_layer(layer_name, 0)) {
+                        LOG_WARN("QwenImageRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+                    }
+                    registry.move_layer_to_gpu(layer_name);
+                }
+            }
+
+            bool result = compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
+                                  output, output_ctx, true /* skip_param_offload */);
+
+            int64_t t1 = ggml_time_ms();
+
+            if (streaming_engine_->get_config().log_operations) {
+                LOG_DEBUG("QwenImageRunner: Streaming compute completed in %.2fs", (t1 - t0) / 1000.0);
+            }
+
+            return result;
+        }
+
         struct ggml_cgraph* build_graph(struct ggml_tensor* x,
                                         struct ggml_tensor* timesteps,
                                         struct ggml_tensor* context,
@@ -607,7 +687,8 @@ namespace Qwen {
                      std::vector<ggml_tensor*> ref_latents = {},
                      bool increase_ref_index               = false,
                      struct ggml_tensor** output           = nullptr,
-                     struct ggml_context* output_ctx       = nullptr) {
+                     struct ggml_context* output_ctx       = nullptr,
+                     bool skip_param_offload               = false) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
@@ -615,7 +696,7 @@ namespace Qwen {
                 return build_graph(x, timesteps, context, ref_latents, increase_ref_index);
             };
 
-            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx, skip_param_offload);
         }
 
         void test() {

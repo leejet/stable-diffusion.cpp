@@ -525,6 +525,88 @@ inline std::pair<std::string, int> wan_layer_pattern(const std::string& tensor_n
     return {"_global", -1};
 }
 
+/**
+ * Helper function to extract QwenImage layer information from tensor name
+ * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
+ *
+ * QwenImage structure:
+ * - transformer_blocks.N.* (60 transformer blocks)
+ * - time_text_embed, txt_norm, img_in, txt_in, norm_out, proj_out (global)
+ */
+inline std::pair<std::string, int> qwen_image_layer_pattern(const std::string& tensor_name) {
+    // Look for transformer_blocks.N pattern
+    size_t tb_pos = tensor_name.find("transformer_blocks.");
+    if (tb_pos != std::string::npos) {
+        size_t num_start = tb_pos + 19;  // Length of "transformer_blocks."
+        size_t num_end = tensor_name.find('.', num_start);
+        if (num_end == std::string::npos) {
+            num_end = tensor_name.length();
+        }
+        std::string num_str = tensor_name.substr(num_start, num_end - num_start);
+        int block_idx = std::stoi(num_str);
+        return {"transformer_blocks." + num_str, block_idx};
+    }
+
+    // Non-layer tensor (embeddings, norms, projections)
+    return {"_global", -1};
+}
+
+/**
+ * Helper function to extract ZImage layer information from tensor name
+ * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
+ *
+ * ZImage structure:
+ * - context_refiner.N.* (2 refiner blocks)
+ * - noise_refiner.N.* (2 refiner blocks)
+ * - layers.N.* (30 main transformer layers)
+ * - x_embedder, t_embedder, cap_embedder, final_layer (global)
+ */
+inline std::pair<std::string, int> zimage_layer_pattern(const std::string& tensor_name) {
+    // Look for context_refiner.N pattern
+    size_t cr_pos = tensor_name.find("context_refiner.");
+    if (cr_pos != std::string::npos) {
+        size_t num_start = cr_pos + 16;  // Length of "context_refiner."
+        size_t num_end = tensor_name.find('.', num_start);
+        if (num_end == std::string::npos) {
+            num_end = tensor_name.length();
+        }
+        std::string num_str = tensor_name.substr(num_start, num_end - num_start);
+        int block_idx = std::stoi(num_str);
+        return {"context_refiner." + num_str, block_idx};
+    }
+
+    // Look for noise_refiner.N pattern
+    size_t nr_pos = tensor_name.find("noise_refiner.");
+    if (nr_pos != std::string::npos) {
+        size_t num_start = nr_pos + 14;  // Length of "noise_refiner."
+        size_t num_end = tensor_name.find('.', num_start);
+        if (num_end == std::string::npos) {
+            num_end = tensor_name.length();
+        }
+        std::string num_str = tensor_name.substr(num_start, num_end - num_start);
+        int block_idx = std::stoi(num_str);
+        // Offset to come after context_refiner (use 10+)
+        return {"noise_refiner." + num_str, 10 + block_idx};
+    }
+
+    // Look for layers.N pattern (main transformer)
+    size_t l_pos = tensor_name.find("layers.");
+    if (l_pos != std::string::npos) {
+        size_t num_start = l_pos + 7;  // Length of "layers."
+        size_t num_end = tensor_name.find('.', num_start);
+        if (num_end == std::string::npos) {
+            num_end = tensor_name.length();
+        }
+        std::string num_str = tensor_name.substr(num_start, num_end - num_start);
+        int block_idx = std::stoi(num_str);
+        // Offset to come after refiners (use 100+)
+        return {"layers." + num_str, 100 + block_idx};
+    }
+
+    // Non-layer tensor (embedders, final_layer)
+    return {"_global", -1};
+}
+
 }  // namespace LayerStreaming
 
 #endif  // __TENSOR_REGISTRY_HPP__
