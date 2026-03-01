@@ -665,7 +665,7 @@ public:
                                                                     version,
                                                                     sd_ctx_params->qwen_image_zero_cond_t);
             } else if (sd_version_is_anima(version)) {
-                cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
+                cond_stage_model = std::make_shared<AnimaConditioner>(clip_backends[0],
                                                                       offload_params_to_cpu,
                                                                       tensor_storage_map);
                 diffusion_model  = std::make_shared<AnimaModel>(backend,
