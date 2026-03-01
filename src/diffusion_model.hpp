@@ -240,6 +240,38 @@ struct MMDiTModel : public DiffusionModel {
     bool move_params_to_cpu() override { return mmdit.move_params_to_cpu(); }
     bool move_params_to_gpu() override { return mmdit.move_params_to_gpu(); }
     size_t get_params_vram_size() const override { return mmdit.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        mmdit.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        mmdit.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return mmdit.is_streaming_enabled();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        return mmdit.compute_streaming(n_threads,
+                                       diffusion_params.x,
+                                       diffusion_params.timesteps,
+                                       diffusion_params.context,
+                                       diffusion_params.y,
+                                       output,
+                                       output_ctx,
+                                       diffusion_params.skip_layers);
+    }
 };
 
 struct FluxModel : public DiffusionModel {

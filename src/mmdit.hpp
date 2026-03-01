@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "ggml_extend.hpp"
+#include "layer_streaming.hpp"
 #include "model.h"
 
 #define MMDIT_GRAPH_SIZE 10240
@@ -820,6 +821,10 @@ public:
 struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
+    // Layer streaming support
+    std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
+    bool streaming_enabled_ = false;
+
     MMDiTRunner(ggml_backend_t backend,
                 bool offload_params_to_cpu,
                 const String2TensorStorage& tensor_storage_map = {},
@@ -834,6 +839,94 @@ struct MMDiTRunner : public GGMLRunner {
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         mmdit.get_param_tensors(tensors, prefix);
+    }
+
+    // ============== Layer Streaming Support ==============
+
+    /**
+     * Enable layer streaming for MMDiT
+     * MMDiT has no skip connections, so each joint_block is independent.
+     * Uses coarse-stage streaming: load all weights before graph execution.
+     */
+    void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
+        if (!params_backend || !runtime_backend) {
+            LOG_WARN("MMDiTRunner: Cannot enable streaming without both CPU and GPU backends");
+            return;
+        }
+
+        streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
+            runtime_backend, params_backend);
+
+        LayerStreaming::StreamingConfig cfg = config;
+        cfg.enabled = true;
+        // MMDiT has no skip connections, so we only need to keep the current layer
+        cfg.keep_layers_behind = 0;
+        streaming_engine_->set_config(cfg);
+
+        // Register tensors with MMDiT layer pattern
+        std::map<std::string, ggml_tensor*> tensor_map;
+        mmdit.get_param_tensors(tensor_map, "model.diffusion_model");
+        streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::mmdit_layer_pattern);
+
+        streaming_enabled_ = true;
+        LOG_INFO("MMDiTRunner: Layer streaming enabled (%zu layers)",
+                 streaming_engine_->get_registry().get_layer_count());
+    }
+
+    void disable_layer_streaming() {
+        streaming_enabled_ = false;
+        streaming_engine_.reset();
+        LOG_INFO("MMDiTRunner: Layer streaming disabled");
+    }
+
+    bool is_streaming_enabled() const {
+        return streaming_enabled_ && streaming_engine_ != nullptr;
+    }
+
+    /**
+     * Streaming compute for MMDiT
+     * Since MMDiT has no skip connections, we load all joint_blocks before execution.
+     */
+    bool compute_streaming(int n_threads,
+                           struct ggml_tensor* x,
+                           struct ggml_tensor* timesteps,
+                           struct ggml_tensor* context,
+                           struct ggml_tensor* y,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr,
+                           std::vector<int> skip_layers    = std::vector<int>()) {
+        if (!streaming_engine_) {
+            LOG_ERROR("MMDiTRunner: Streaming not enabled");
+            return false;
+        }
+
+        int64_t t0 = ggml_time_ms();
+
+        auto& registry = streaming_engine_->get_registry();
+        auto& budget = streaming_engine_->get_budget();
+
+        // Ensure all MMDiT weights are on GPU for this step
+        auto layers = registry.get_layer_names_sorted();
+        for (const auto& layer_name : layers) {
+            if (!registry.is_layer_on_gpu(layer_name)) {
+                if (!budget.ensure_vram_for_layer(layer_name, 0)) {
+                    LOG_WARN("MMDiTRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+                }
+                registry.move_layer_to_gpu(layer_name);
+            }
+        }
+
+        // Execute full graph (skip_param_offload=true since streaming engine manages weights)
+        bool result = compute(n_threads, x, timesteps, context, y, output, output_ctx, skip_layers,
+                              true /* skip_param_offload */);
+
+        int64_t t1 = ggml_time_ms();
+
+        if (streaming_engine_->get_config().log_operations) {
+            LOG_DEBUG("MMDiTRunner: Streaming compute completed in %.2fs", (t1 - t0) / 1000.0);
+        }
+
+        return result;
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* x,
@@ -868,7 +961,8 @@ struct MMDiTRunner : public GGMLRunner {
                  struct ggml_tensor* y,
                  struct ggml_tensor** output     = nullptr,
                  struct ggml_context* output_ctx = nullptr,
-                 std::vector<int> skip_layers    = std::vector<int>()) {
+                 std::vector<int> skip_layers    = std::vector<int>(),
+                 bool skip_param_offload         = false) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
         // context: [N, max_position, hidden_size]([N, 154, 4096]) or [1, max_position, hidden_size]
@@ -877,7 +971,7 @@ struct MMDiTRunner : public GGMLRunner {
             return build_graph(x, timesteps, context, y, skip_layers);
         };
 
-        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx, skip_param_offload);
     }
 
     void test() {

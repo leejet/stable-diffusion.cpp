@@ -456,6 +456,33 @@ inline std::pair<std::string, int> unet_layer_pattern(const std::string& tensor_
     return {"_global", -1};
 }
 
+/**
+ * Helper function to extract MMDiT layer information from tensor name
+ * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
+ *
+ * MMDiT structure:
+ * - joint_blocks.N.context_block.* and joint_blocks.N.x_block.*
+ * - x_embedder, t_embedder, y_embedder, context_embedder (global)
+ * - final_layer (global)
+ */
+inline std::pair<std::string, int> mmdit_layer_pattern(const std::string& tensor_name) {
+    // Look for joint_blocks.N pattern
+    size_t jb_pos = tensor_name.find("joint_blocks.");
+    if (jb_pos != std::string::npos) {
+        size_t num_start = jb_pos + 13;  // Length of "joint_blocks."
+        size_t num_end = tensor_name.find('.', num_start);
+        if (num_end == std::string::npos) {
+            num_end = tensor_name.length();
+        }
+        std::string num_str = tensor_name.substr(num_start, num_end - num_start);
+        int block_idx = std::stoi(num_str);
+        return {"joint_blocks." + num_str, block_idx};
+    }
+
+    // Non-layer tensor (embedders, final_layer, etc.)
+    return {"_global", -1};
+}
+
 }  // namespace LayerStreaming
 
 #endif  // __TENSOR_REGISTRY_HPP__
