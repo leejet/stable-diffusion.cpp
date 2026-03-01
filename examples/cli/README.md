@@ -44,7 +44,6 @@ Context Options:
                                            CPU physical cores
   --chroma-t5-mask-pad <int>               t5 mask pad size of chroma
   --vae-tile-overlap <float>               tile overlap for vae tiling, in fraction of tile size (default: 0.5)
-  --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --vae-tiling                             process vae in tiles to reduce memory usage
   --force-sdxl-vae-conv-scale              force use of conv scale on sdxl vae
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM when needed
@@ -109,6 +108,7 @@ Generation Options:
   --skip-layer-start <float>               SLG enabling point (default: 0.01)
   --skip-layer-end <float>                 SLG disabling point (default: 0.2)
   --eta <float>                            eta in DDIM, only for DDIM/TCD/res_multistep/res_2s (default: 0)
+  --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --high-noise-cfg-scale <float>           (high noise) unconditional guidance scale: (default: 7.0)
   --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or instruct-pix2pix models (default: same as --cfg-scale)
   --high-noise-guidance <float>            (high noise) distilled guidance scale for models with guidance input (default: 3.5)
