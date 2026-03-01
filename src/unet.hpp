@@ -2,6 +2,7 @@
 #define __UNET_HPP__
 
 #include "common_block.hpp"
+#include "layer_streaming.hpp"
 #include "model.h"
 
 /*==================================================== UnetModel =====================================================*/
@@ -592,6 +593,10 @@ public:
 struct UNetModelRunner : public GGMLRunner {
     UnetModelBlock unet;
 
+    // Layer streaming support
+    std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
+    bool streaming_enabled_ = false;
+
     UNetModelRunner(ggml_backend_t backend,
                     bool offload_params_to_cpu,
                     const String2TensorStorage& tensor_storage_map,
@@ -603,6 +608,107 @@ struct UNetModelRunner : public GGMLRunner {
 
     std::string get_desc() override {
         return "unet";
+    }
+
+    // ============== Layer Streaming Support ==============
+
+    /**
+     * Enable layer streaming for UNet
+     * Note: UNet uses coarse-stage streaming due to skip connections
+     * Stages: input_blocks, middle_block, output_blocks
+     */
+    void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
+        if (!params_backend || !runtime_backend) {
+            LOG_WARN("UNetModelRunner: Cannot enable streaming without both CPU and GPU backends");
+            return;
+        }
+
+        streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
+            runtime_backend, params_backend);
+
+        LayerStreaming::StreamingConfig cfg = config;
+        cfg.enabled = true;
+        // UNet needs to keep more layers due to skip connections
+        cfg.keep_layers_behind = 12;  // Max skip connections in SD1.x/SDXL
+        streaming_engine_->set_config(cfg);
+
+        // Register tensors with UNet layer pattern
+        // Use tensor map from get_param_tensors() since GGML tensors don't have names set
+        std::map<std::string, ggml_tensor*> tensor_map;
+        unet.get_param_tensors(tensor_map, "model.diffusion_model");
+        streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::unet_layer_pattern);
+
+        streaming_enabled_ = true;
+        LOG_INFO("UNetModelRunner: Layer streaming enabled (coarse-stage mode)");
+    }
+
+    void disable_layer_streaming() {
+        streaming_enabled_ = false;
+        streaming_engine_.reset();
+        LOG_INFO("UNetModelRunner: Layer streaming disabled");
+    }
+
+    bool is_streaming_enabled() const {
+        return streaming_enabled_ && streaming_engine_ != nullptr;
+    }
+
+    /**
+     * Streaming compute for UNet
+     * Uses coarse-stage weight management:
+     * 1. Ensure all weights are loaded before graph execution
+     * 2. Execute full graph (can't split due to skip connections)
+     * 3. Manage weight offloading between diffusion steps
+     */
+    bool compute_streaming(int n_threads,
+                           struct ggml_tensor* x,
+                           struct ggml_tensor* timesteps,
+                           struct ggml_tensor* context,
+                           struct ggml_tensor* c_concat,
+                           struct ggml_tensor* y,
+                           int num_video_frames                      = -1,
+                           std::vector<struct ggml_tensor*> controls = {},
+                           float control_strength                    = 0.f,
+                           struct ggml_tensor** output               = nullptr,
+                           struct ggml_context* output_ctx           = nullptr) {
+        if (!streaming_engine_ || !streaming_enabled_) {
+            LOG_WARN("UNetModelRunner: Streaming not enabled, falling back to regular compute");
+            return compute(n_threads, x, timesteps, context, c_concat, y,
+                           num_video_frames, controls, control_strength, output, output_ctx);
+        }
+
+        int64_t t0 = ggml_time_ms();
+
+        // UNet coarse-stage streaming:
+        // Unlike Flux, UNet can't execute stages separately due to GGML's atomic graph execution
+        // and the complex skip connection dependencies.
+        // Instead, we ensure all required weights are loaded before execution
+        // and manage VRAM by offloading between diffusion steps.
+
+        auto& registry = streaming_engine_->get_registry();
+        auto& budget = streaming_engine_->get_budget();
+
+        // Ensure all UNet weights are on GPU for this step
+        auto layers = registry.get_layer_names_sorted();
+        for (const auto& layer_name : layers) {
+            if (!registry.is_layer_on_gpu(layer_name)) {
+                if (!budget.ensure_vram_for_layer(layer_name, 0)) {
+                    LOG_WARN("UNetModelRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+                }
+                registry.move_layer_to_gpu(layer_name);
+            }
+        }
+
+        // Execute full graph
+        bool result = compute(n_threads, x, timesteps, context, c_concat, y,
+                              num_video_frames, controls, control_strength, output, output_ctx);
+
+        int64_t t1 = ggml_time_ms();
+
+        if (streaming_engine_->get_config().log_operations) {
+            LOG_DEBUG("UNetModelRunner: Streaming compute completed in %.2fs", (t1 - t0) / 1000.0);
+        }
+
+        return result;
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {

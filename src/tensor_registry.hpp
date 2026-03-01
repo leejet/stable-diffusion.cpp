@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -96,6 +97,7 @@ public:
 
     /**
      * Register all tensors from a GGML context, auto-detecting layer names from tensor names
+     * NOTE: This only works if tensor names are set with ggml_set_name()
      * @param ctx The GGML context containing tensors
      * @param prefix Prefix to strip from tensor names for layer detection
      * @param layer_pattern_fn Function to extract layer name and index from tensor name
@@ -107,6 +109,20 @@ public:
             std::string name = ggml_get_name(t);
             auto [layer_name, layer_index] = layer_pattern_fn(name);
             register_tensor(name, t, layer_name, layer_index);
+        }
+    }
+
+    /**
+     * Register tensors from a name->tensor map (from GGMLBlock::get_param_tensors)
+     * This is the preferred method as tensor names are properly preserved in the map keys
+     * @param tensors Map of tensor name to tensor pointer
+     * @param layer_pattern_fn Function to extract layer name and index from tensor name
+     */
+    void register_from_map(const std::map<std::string, ggml_tensor*>& tensors,
+                           std::function<std::pair<std::string, int>(const std::string&)> layer_pattern_fn) {
+        for (const auto& [name, tensor] : tensors) {
+            auto [layer_name, layer_index] = layer_pattern_fn(name);
+            register_tensor(name, tensor, layer_name, layer_index);
         }
     }
 

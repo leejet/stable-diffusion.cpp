@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -236,11 +237,28 @@ public:
      * Register layers from a model's parameter context
      * @param params_ctx The GGML context containing model parameters
      * @param layer_pattern_fn Function to extract layer info from tensor names
+     * @deprecated Use register_model_layers_from_map() instead - context tensors often lack proper names
      */
     void register_model_layers(ggml_context* params_ctx,
                                std::function<std::pair<std::string, int>(const std::string&)> layer_pattern_fn) {
         registry_.register_from_context(params_ctx, "", layer_pattern_fn);
+        log_registered_layers();
+    }
 
+    /**
+     * Register layers from a model's tensor map (preferred method)
+     * Uses GGMLBlock::get_param_tensors() which preserves proper tensor names
+     * @param tensors Map of tensor name to tensor pointer
+     * @param layer_pattern_fn Function to extract layer info from tensor names
+     */
+    void register_model_layers_from_map(const std::map<std::string, ggml_tensor*>& tensors,
+                                        std::function<std::pair<std::string, int>(const std::string&)> layer_pattern_fn) {
+        registry_.register_from_map(tensors, layer_pattern_fn);
+        log_registered_layers();
+    }
+
+private:
+    void log_registered_layers() {
         if (config_.log_operations) {
             auto layers = registry_.get_layer_names_sorted();
             LOG_INFO("LayerExecutionEngine: registered %zu layers", layers.size());
@@ -251,6 +269,8 @@ public:
             }
         }
     }
+
+public:
 
     /**
      * Execute a sequence of layers with streaming
