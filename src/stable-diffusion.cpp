@@ -542,9 +542,9 @@ public:
                                                                       offload_params_to_cpu,
                                                                       tensor_storage_map);
                 diffusion_model  = std::make_shared<AnimaModel>(backend,
-                                                                offload_params_to_cpu,
-                                                                tensor_storage_map,
-                                                                "model.diffusion_model");
+                                                               offload_params_to_cpu,
+                                                               tensor_storage_map,
+                                                               "model.diffusion_model");
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,

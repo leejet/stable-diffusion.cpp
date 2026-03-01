@@ -345,7 +345,7 @@ namespace Rope {
                 }
             }
         }
-        return embed_nd(ids, bs, theta, axes_dim, wrap_dims);
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen_image_ids(int h,
@@ -434,7 +434,7 @@ namespace Rope {
                 }
             }
         }
-        return embed_nd(ids, bs, theta, axes_dim, wrap_dims);
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_vid_ids(int t,
@@ -488,7 +488,7 @@ namespace Rope {
                                                     int theta,
                                                     const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_vid_ids(t, h, w, pt, ph, pw, bs);
-        return embed_nd(ids, bs, theta, axes_dim);
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim);
     }
 
     __STATIC_INLINE__ std::vector<std::vector<float>> gen_qwen2vl_ids(int grid_h,
@@ -524,7 +524,7 @@ namespace Rope {
                                                         int theta,
                                                         const std::vector<int>& axes_dim) {
         std::vector<std::vector<float>> ids = gen_qwen2vl_ids(grid_h, grid_w, merge_size, window_index);
-        return embed_nd(ids, 1, theta, axes_dim);
+        return embed_nd(ids, 1, static_cast<float>(theta), axes_dim);
     }
 
     __STATIC_INLINE__ int bound_mod(int a, int m) {
@@ -597,7 +597,7 @@ namespace Rope {
             }
         }
 
-        return embed_nd(ids, bs, theta, axes_dim, wrap_dims);
+        return embed_nd(ids, bs, static_cast<float>(theta), axes_dim, wrap_dims);
     }
 
     __STATIC_INLINE__ struct ggml_tensor* apply_rope(struct ggml_context* ctx,

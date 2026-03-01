@@ -1651,11 +1651,11 @@ struct AnimaConditioner : public Conditioner {
                      const String2TensorStorage& tensor_storage_map = {}) {
         qwen_tokenizer = std::make_shared<LLM::Qwen2Tokenizer>();
         llm            = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::QWEN3,
-                                                          backend,
-                                                          offload_params_to_cpu,
-                                                          tensor_storage_map,
-                                                          "text_encoders.llm",
-                                                          false);
+                                               backend,
+                                               offload_params_to_cpu,
+                                               tensor_storage_map,
+                                               "text_encoders.llm",
+                                               false);
     }
 
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
@@ -1728,11 +1728,11 @@ struct AnimaConditioner : public Conditioner {
                                       const ConditionerParams& conditioner_params) override {
         int64_t t0 = ggml_time_ms();
 
-        auto tokenized      = tokenize(conditioner_params.text);
-        auto& qwen_tokens   = std::get<0>(tokenized);
-        auto& qwen_weights  = std::get<1>(tokenized);
-        auto& t5_tokens     = std::get<2>(tokenized);
-        auto& t5_weights    = std::get<3>(tokenized);
+        auto tokenized     = tokenize(conditioner_params.text);
+        auto& qwen_tokens  = std::get<0>(tokenized);
+        auto& qwen_weights = std::get<1>(tokenized);
+        auto& t5_tokens    = std::get<2>(tokenized);
+        auto& t5_weights   = std::get<3>(tokenized);
 
         auto input_ids = vector_to_ggml_tensor_i32(work_ctx, qwen_tokens);
 
@@ -1763,8 +1763,8 @@ struct AnimaConditioner : public Conditioner {
             }
         }
 
-        struct ggml_tensor* t5_ids_tensor     = nullptr;
-        struct ggml_tensor* t5_weight_tensor  = nullptr;
+        struct ggml_tensor* t5_ids_tensor    = nullptr;
+        struct ggml_tensor* t5_weight_tensor = nullptr;
         if (!t5_tokens.empty()) {
             t5_ids_tensor    = vector_to_ggml_tensor_i32(work_ctx, t5_tokens);
             t5_weight_tensor = vector_to_ggml_tensor(work_ctx, t5_weights);

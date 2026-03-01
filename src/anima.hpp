@@ -36,18 +36,18 @@ namespace Anima {
         GGML_ASSERT(h * p == H && w * p == W);
 
         // Reuse Flux patchify layout on a [W, H, C, N] view.
-        x = ggml_reshape_4d(ctx, x, W, H, C, T);                    // [W, H, C, N]
+        x = ggml_reshape_4d(ctx, x, W, H, C, T);  // [W, H, C, N]
 
         // Flux patchify: [N, C, H, W] -> [N, h*w, C*p*p]
-        x = ggml_reshape_4d(ctx, x, p, w, p, h * C * T);            // [p, w, p, h*C*N]
-        x = ggml_ext_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));   // [p, p, w, h*C*N]
-        x = ggml_reshape_4d(ctx, x, p * p, w * h, C, T);            // [p*p, h*w, C, N]
-        x = ggml_ext_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));   // [p*p, C, h*w, N]
-        x = ggml_reshape_3d(ctx, x, p * p * C, w * h, T);           // [C*p*p, h*w, N]
+        x = ggml_reshape_4d(ctx, x, p, w, p, h * C * T);           // [p, w, p, h*C*N]
+        x = ggml_ext_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [p, p, w, h*C*N]
+        x = ggml_reshape_4d(ctx, x, p * p, w * h, C, T);           // [p*p, h*w, C, N]
+        x = ggml_ext_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [p*p, C, h*w, N]
+        x = ggml_reshape_3d(ctx, x, p * p * C, w * h, T);          // [C*p*p, h*w, N]
 
         // Return [w, h, T, C*p*p]
-        x = ggml_reshape_4d(ctx, x, p * p * C, w, h, T);            // [C*p*p, w, h, N]
-        x = ggml_ext_cont(ctx, ggml_permute(ctx, x, 3, 0, 1, 2));   // [w, h, N, C*p*p]
+        x = ggml_reshape_4d(ctx, x, p * p * C, w, h, T);           // [C*p*p, w, h, N]
+        x = ggml_ext_cont(ctx, ggml_permute(ctx, x, 3, 0, 1, 2));  // [w, h, N, C*p*p]
         return x;
     }
 
@@ -75,9 +75,9 @@ namespace Anima {
         GGML_ASSERT(C * nm == Cp);
 
         // [w, h, 1, C*p*p] -> [W, H, 1, C]
-        x = ggml_reshape_4d(ctx, x, w, h * C, p, p);                                // [w, h*C, p2, p1]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 3, 1));         // [p2, w, p1, h*C]
-        x = ggml_reshape_4d(ctx, x, W, H, T, C);                                     // [W, H, 1, C]
+        x = ggml_reshape_4d(ctx, x, w, h * C, p, p);                         // [w, h*C, p2, p1]
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 3, 1));  // [p2, w, p1, h*C]
+        x = ggml_reshape_4d(ctx, x, W, H, T, C);                             // [W, H, 1, C]
         return x;
     }
 
@@ -131,9 +131,9 @@ namespace Anima {
         }
 
         std::pair<struct ggml_tensor*, struct ggml_tensor*> forward(GGMLRunnerContext* ctx,
-                                                                     struct ggml_tensor* hidden_states,
-                                                                     struct ggml_tensor* embedded_timestep,
-                                                                     struct ggml_tensor* temb = nullptr) {
+                                                                    struct ggml_tensor* hidden_states,
+                                                                    struct ggml_tensor* embedded_timestep,
+                                                                    struct ggml_tensor* temb = nullptr) {
             auto norm     = std::dynamic_pointer_cast<LayerNorm>(blocks["norm"]);
             auto linear_1 = std::dynamic_pointer_cast<Linear>(blocks["1"]);
             auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["2"]);
@@ -212,19 +212,19 @@ namespace Anima {
             : num_heads(num_heads), head_dim(head_dim), out_proj_name(out_proj_name) {
             int64_t inner_dim = num_heads * head_dim;
 
-            blocks["q_proj"]          = std::make_shared<Linear>(query_dim, inner_dim, false);
-            blocks["k_proj"]          = std::make_shared<Linear>(context_dim, inner_dim, false);
-            blocks["v_proj"]          = std::make_shared<Linear>(context_dim, inner_dim, false);
-            blocks["q_norm"]          = std::make_shared<RMSNorm>(head_dim, 1e-6f);
-            blocks["k_norm"]          = std::make_shared<RMSNorm>(head_dim, 1e-6f);
+            blocks["q_proj"]            = std::make_shared<Linear>(query_dim, inner_dim, false);
+            blocks["k_proj"]            = std::make_shared<Linear>(context_dim, inner_dim, false);
+            blocks["v_proj"]            = std::make_shared<Linear>(context_dim, inner_dim, false);
+            blocks["q_norm"]            = std::make_shared<RMSNorm>(head_dim, 1e-6f);
+            blocks["k_norm"]            = std::make_shared<RMSNorm>(head_dim, 1e-6f);
             blocks[this->out_proj_name] = std::make_shared<Linear>(inner_dim, query_dim, false);
         }
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* hidden_states,
                                     struct ggml_tensor* encoder_hidden_states = nullptr,
-                                    struct ggml_tensor* pe_q                 = nullptr,
-                                    struct ggml_tensor* pe_k                 = nullptr) {
+                                    struct ggml_tensor* pe_q                  = nullptr,
+                                    struct ggml_tensor* pe_k                  = nullptr) {
             if (encoder_hidden_states == nullptr) {
                 encoder_hidden_states = hidden_states;
             }
@@ -262,26 +262,26 @@ namespace Anima {
                 auto q_rope = Rope::apply_rope(ctx->ggml_ctx, q4, pe_q, false);
                 auto k_rope = Rope::apply_rope(ctx->ggml_ctx, k4, pe_k, false);
                 attn_out    = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                                  ctx->backend,
-                                                  q_rope,
-                                                  k_rope,
-                                                  v4,
-                                                  num_heads,
-                                                  nullptr,
-                                                  true,
-                                                  ctx->flash_attn_enabled);
+                                                     ctx->backend,
+                                                     q_rope,
+                                                     k_rope,
+                                                     v4,
+                                                     num_heads,
+                                                     nullptr,
+                                                     true,
+                                                     ctx->flash_attn_enabled);
             } else {
                 auto q_flat = ggml_reshape_3d(ctx->ggml_ctx, q4, head_dim * num_heads, L_q, N);
                 auto k_flat = ggml_reshape_3d(ctx->ggml_ctx, k4, head_dim * num_heads, L_k, N);
                 attn_out    = ggml_ext_attention_ext(ctx->ggml_ctx,
-                                                  ctx->backend,
-                                                  q_flat,
-                                                  k_flat,
-                                                  v,
-                                                  num_heads,
-                                                  nullptr,
-                                                  false,
-                                                  ctx->flash_attn_enabled);
+                                                     ctx->backend,
+                                                     q_flat,
+                                                     k_flat,
+                                                     v,
+                                                     num_heads,
+                                                     nullptr,
+                                                     false,
+                                                     ctx->flash_attn_enabled);
             }
 
             return out_proj->forward(ctx, attn_out);
@@ -371,8 +371,8 @@ namespace Anima {
         LLMAdapter(int64_t source_dim = 1024,
                    int64_t target_dim = 1024,
                    int64_t model_dim  = 1024,
-                   int num_layers      = 6,
-                   int num_heads       = 16)
+                   int num_layers     = 6,
+                   int num_heads      = 16)
             : num_layers(num_layers) {
             int64_t head_dim = model_dim / num_heads;
 
@@ -418,8 +418,8 @@ namespace Anima {
                          int64_t text_embed_dim,
                          int64_t num_heads,
                          int64_t head_dim,
-                         int64_t mlp_ratio       = 4,
-                         int64_t adaln_lora_dim  = 256) {
+                         int64_t mlp_ratio      = 4,
+                         int64_t adaln_lora_dim = 256) {
             blocks["adaln_modulation_self_attn"]  = std::make_shared<AdaLayerNormZero>(hidden_size, adaln_lora_dim);
             blocks["self_attn"]                   = std::make_shared<AnimaAttention>(hidden_size, hidden_size, num_heads, head_dim);
             blocks["adaln_modulation_cross_attn"] = std::make_shared<AdaLayerNormZero>(hidden_size, adaln_lora_dim);
@@ -474,7 +474,7 @@ namespace Anima {
                                     struct ggml_tensor* hidden_states,
                                     struct ggml_tensor* embedded_timestep,
                                     struct ggml_tensor* temb) {
-            auto adaln = std::dynamic_pointer_cast<AdaLayerNorm>(blocks["adaln_modulation"]);
+            auto adaln  = std::dynamic_pointer_cast<AdaLayerNorm>(blocks["adaln_modulation"]);
             auto linear = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
 
             hidden_states = adaln->forward(ctx, hidden_states, embedded_timestep, temb);
@@ -485,32 +485,32 @@ namespace Anima {
 
     struct AnimaNet : public GGMLBlock {
     public:
-        int64_t in_channels    = 16;
-        int64_t out_channels   = 16;
-        int64_t hidden_size    = 2048;
-        int64_t text_embed_dim = 1024;
-        int64_t num_heads      = 16;
-        int64_t head_dim       = 128;
-        int64_t patch_size     = 2;
-        int64_t num_layers     = 28;
+        int64_t in_channels       = 16;
+        int64_t out_channels      = 16;
+        int64_t hidden_size       = 2048;
+        int64_t text_embed_dim    = 1024;
+        int64_t num_heads         = 16;
+        int64_t head_dim          = 128;
+        int64_t patch_size        = 2;
+        int64_t num_layers        = 28;
         std::vector<int> axes_dim = {44, 42, 42};
-        int theta = 10000;
+        int theta                 = 10000;
 
     public:
         AnimaNet() = default;
         explicit AnimaNet(int64_t num_layers)
             : num_layers(num_layers) {
-            blocks["x_embedder"]      = std::make_shared<XEmbedder>((in_channels + 1) * patch_size * patch_size, hidden_size);
-            blocks["t_embedder"]      = std::make_shared<TimestepEmbedder>(hidden_size, hidden_size * 3);
+            blocks["x_embedder"]       = std::make_shared<XEmbedder>((in_channels + 1) * patch_size * patch_size, hidden_size);
+            blocks["t_embedder"]       = std::make_shared<TimestepEmbedder>(hidden_size, hidden_size * 3);
             blocks["t_embedding_norm"] = std::make_shared<RMSNorm>(hidden_size, 1e-6f);
             for (int i = 0; i < num_layers; i++) {
                 blocks["blocks." + std::to_string(i)] = std::make_shared<TransformerBlock>(hidden_size,
-                                                                                             text_embed_dim,
-                                                                                             num_heads,
-                                                                                             head_dim);
+                                                                                           text_embed_dim,
+                                                                                           num_heads,
+                                                                                           head_dim);
             }
-            blocks["final_layer"]  = std::make_shared<FinalLayer>(hidden_size, patch_size, out_channels);
-            blocks["llm_adapter"]  = std::make_shared<LLMAdapter>(1024, 1024, 1024, 6, 16);
+            blocks["final_layer"] = std::make_shared<FinalLayer>(hidden_size, patch_size, out_channels);
+            blocks["llm_adapter"] = std::make_shared<LLMAdapter>(1024, 1024, 1024, 6, 16);
         }
 
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -518,8 +518,8 @@ namespace Anima {
                                     struct ggml_tensor* timestep,
                                     struct ggml_tensor* encoder_hidden_states,
                                     struct ggml_tensor* image_pe,
-                                    struct ggml_tensor* t5_ids      = nullptr,
-                                    struct ggml_tensor* t5_weights  = nullptr,
+                                    struct ggml_tensor* t5_ids       = nullptr,
+                                    struct ggml_tensor* t5_weights   = nullptr,
                                     struct ggml_tensor* adapter_q_pe = nullptr,
                                     struct ggml_tensor* adapter_k_pe = nullptr) {
             GGML_ASSERT(x->ne[3] == 1);
@@ -538,7 +538,7 @@ namespace Anima {
             int64_t pad_h = (patch_size - H % patch_size) % patch_size;
             int64_t pad_w = (patch_size - W % patch_size) % patch_size;
             if (pad_h > 0 || pad_w > 0) {
-                x = ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+                x = ggml_ext_pad(ctx->ggml_ctx, x, static_cast<int>(pad_w), static_cast<int>(pad_h), 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
             }
 
             auto padding_mask = ggml_ext_zeros(ctx->ggml_ctx, x->ne[0], x->ne[1], x->ne[2], 1);
@@ -554,8 +554,8 @@ namespace Anima {
 
             x = x_embedder->forward(ctx, x);
 
-            auto timestep_proj   = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, hidden_size);
-            auto temb            = t_embedder->forward(ctx, timestep_proj);
+            auto timestep_proj     = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, static_cast<int>(hidden_size));
+            auto temb              = t_embedder->forward(ctx, timestep_proj);
             auto embedded_timestep = t_embedding_norm->forward(ctx, timestep_proj);
 
             if (t5_ids != nullptr) {
@@ -569,11 +569,11 @@ namespace Anima {
                     adapted_context = ggml_mul(ctx->ggml_ctx, adapted_context, w);
                 }
                 if (adapted_context->ne[1] < 512) {
-                    auto pad_ctx = ggml_ext_zeros(ctx->ggml_ctx,
-                                                  adapted_context->ne[0],
-                                                  512 - adapted_context->ne[1],
-                                                  adapted_context->ne[2],
-                                                  1);
+                    auto pad_ctx    = ggml_ext_zeros(ctx->ggml_ctx,
+                                                     adapted_context->ne[0],
+                                                     512 - adapted_context->ne[1],
+                                                     adapted_context->ne[2],
+                                                     1);
                     adapted_context = ggml_concat(ctx->ggml_ctx, adapted_context, pad_ctx, 1);
                 } else if (adapted_context->ne[1] > 512) {
                     adapted_context = ggml_ext_slice(ctx->ggml_ctx, adapted_context, 1, 0, 512);
@@ -590,10 +590,10 @@ namespace Anima {
 
             x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [n_token, C*4, N]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, w_len, h_len, t_len, x->ne[1]);                    // [C*4, T, H/2, W/2]
-            x = unpatchify_2d(ctx->ggml_ctx, x, patch_size);                                          // [C, T, H, W]
+            x = unpatchify_2d(ctx->ggml_ctx, x, patch_size);                                         // [C, T, H, W]
 
-            x = ggml_ext_slice(ctx->ggml_ctx, x, 1, 0, H);  // [C, T, H, W + pad]
-            x = ggml_ext_slice(ctx->ggml_ctx, x, 0, 0, W);  // [C, T, H, W]
+            x = ggml_ext_slice(ctx->ggml_ctx, x, 1, 0, H);                                  // [C, T, H, W + pad]
+            x = ggml_ext_slice(ctx->ggml_ctx, x, 0, 0, W);                                  // [C, T, H, W]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0], x->ne[1], x->ne[3], x->ne[2]);  // [N, C, H, W]
 
             return x;
@@ -612,7 +612,7 @@ namespace Anima {
                     const String2TensorStorage& tensor_storage_map = {},
                     const std::string prefix                       = "model.diffusion_model")
             : GGMLRunner(backend, offload_params_to_cpu) {
-            int64_t num_layers   = 0;
+            int64_t num_layers    = 0;
             std::string layer_tag = prefix + ".net.blocks.";
             for (const auto& kv : tensor_storage_map) {
                 const std::string& tensor_name = kv.first;
@@ -645,7 +645,7 @@ namespace Anima {
             net.get_param_tensors(tensors, prefix + ".net");
         }
 
-        static std::vector<float> gen_1d_rope_pe_vec(int64_t seq_len, int dim, int theta = 10000) {
+        static std::vector<float> gen_1d_rope_pe_vec(int64_t seq_len, int dim, float theta = 10000.f) {
             std::vector<float> pos(seq_len);
             for (int64_t i = 0; i < seq_len; i++) {
                 pos[i] = static_cast<float>(i);
@@ -709,15 +709,15 @@ namespace Anima {
             int64_t h_pad = x->ne[1] + pad_h;
             int64_t w_pad = x->ne[0] + pad_w;
 
-            image_pe_vec = gen_anima_image_pe_vec(1,
-                                                  static_cast<int>(h_pad),
-                                                  static_cast<int>(w_pad),
-                                                  static_cast<int>(net.patch_size),
-                                                  net.theta,
-                                                  net.axes_dim,
-                                                  4.0f,
-                                                  4.0f,
-                                                  1.0f);
+            image_pe_vec          = gen_anima_image_pe_vec(1,
+                                                           static_cast<int>(h_pad),
+                                                           static_cast<int>(w_pad),
+                                                           static_cast<int>(net.patch_size),
+                                                           net.theta,
+                                                           net.axes_dim,
+                                                           4.0f,
+                                                           4.0f,
+                                                           1.0f);
             int64_t image_pos_len = static_cast<int64_t>(image_pe_vec.size()) / (2 * 2 * (net.head_dim / 2));
             auto image_pe         = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, net.head_dim / 2, image_pos_len);
             set_backend_tensor_data(image_pe, image_pe_vec.data());
@@ -728,8 +728,8 @@ namespace Anima {
                 int64_t target_len = t5_ids->ne[0];
                 int64_t source_len = context->ne[1];
 
-                adapter_q_pe_vec = gen_1d_rope_pe_vec(target_len, 64, 10000);
-                adapter_k_pe_vec = gen_1d_rope_pe_vec(source_len, 64, 10000);
+                adapter_q_pe_vec = gen_1d_rope_pe_vec(target_len, 64, 10000.f);
+                adapter_k_pe_vec = gen_1d_rope_pe_vec(source_len, 64, 10000.f);
 
                 int64_t target_pos_len = static_cast<int64_t>(adapter_q_pe_vec.size()) / (2 * 2 * 32);
                 int64_t source_pos_len = static_cast<int64_t>(adapter_k_pe_vec.size()) / (2 * 2 * 32);
@@ -742,14 +742,14 @@ namespace Anima {
 
             auto runner_ctx = get_context();
             auto out        = net.forward(&runner_ctx,
-                                   x,
-                                   timesteps,
-                                   context,
-                                   image_pe,
-                                   t5_ids,
-                                   t5_weights,
-                                   adapter_q_pe,
-                                   adapter_k_pe);
+                                          x,
+                                          timesteps,
+                                          context,
+                                          image_pe,
+                                          t5_ids,
+                                          t5_weights,
+                                          adapter_q_pe,
+                                          adapter_k_pe);
 
             ggml_build_forward_expand(gf, out);
             return gf;
@@ -759,9 +759,9 @@ namespace Anima {
                      struct ggml_tensor* x,
                      struct ggml_tensor* timesteps,
                      struct ggml_tensor* context,
-                     struct ggml_tensor* t5_ids     = nullptr,
-                     struct ggml_tensor* t5_weights = nullptr,
-                     struct ggml_tensor** output    = nullptr,
+                     struct ggml_tensor* t5_ids      = nullptr,
+                     struct ggml_tensor* t5_weights  = nullptr,
+                     struct ggml_tensor** output     = nullptr,
                      struct ggml_context* output_ctx = nullptr) {
             auto get_graph = [&]() -> struct ggml_cgraph* {
                 return build_graph(x, timesteps, context, t5_ids, t5_weights);
