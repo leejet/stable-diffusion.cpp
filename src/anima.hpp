@@ -779,28 +779,73 @@ namespace Anima {
 
             int64_t t0 = ggml_time_ms();
             auto& registry = streaming_engine_->get_registry();
+            auto& budget = streaming_engine_->get_budget();
 
-            // Load global layers (embedders, etc.)
-            registry.move_layer_to_gpu("_global");
+            // Calculate total model size
+            size_t total_model_size = 0;
+            auto all_layers = registry.get_layer_names_sorted();
+            for (const auto& layer_name : all_layers) {
+                total_model_size += registry.get_layer_size(layer_name);
+            }
 
-            // Load all transformer blocks
-            for (int64_t i = 0; i < num_layers_; i++) {
-                std::string layer_name = "blocks." + std::to_string(i);
-                registry.move_layer_to_gpu(layer_name);
+            // Get available VRAM
+            size_t available_vram = budget.get_available_vram();
+
+            LOG_DEBUG("AnimaRunner: Model size = %.2f GB, Available VRAM = %.2f GB",
+                      total_model_size / (1024.0 * 1024.0 * 1024.0),
+                      available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            // Check if model fits in VRAM
+            if (total_model_size <= available_vram) {
+                // Model fits - load all
+                LOG_INFO("AnimaRunner: Model fits in VRAM, using coarse-stage streaming");
+                registry.move_layer_to_gpu("_global");
+                for (int64_t i = 0; i < num_layers_; i++) {
+                    std::string layer_name = "blocks." + std::to_string(i);
+                    registry.move_layer_to_gpu(layer_name);
+                }
+            } else {
+                // Model doesn't fit - use chunked streaming
+                LOG_INFO("AnimaRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using chunked streaming",
+                         total_model_size / (1024.0 * 1024.0 * 1024.0),
+                         available_vram / (1024.0 * 1024.0 * 1024.0));
+
+                // Load global first
+                registry.move_layer_to_gpu("_global");
+                size_t remaining_vram = budget.get_available_vram();
+
+                // Get typical block size
+                size_t block_size = registry.get_layer_size("blocks.0");
+                size_t compute_estimate = block_size * 3;
+                size_t vram_for_blocks = (remaining_vram > compute_estimate) ? (remaining_vram - compute_estimate) : 0;
+
+                int blocks_loaded = 0;
+                for (int64_t i = 0; i < num_layers_; i++) {
+                    std::string layer_name = "blocks." + std::to_string(i);
+                    size_t layer_size = registry.get_layer_size(layer_name);
+
+                    if (vram_for_blocks >= layer_size) {
+                        if (registry.move_layer_to_gpu(layer_name)) {
+                            vram_for_blocks -= layer_size;
+                            blocks_loaded++;
+                        }
+                    }
+                }
+
+                LOG_INFO("AnimaRunner: %d/%lld blocks on GPU, %lld will compute on CPU",
+                         blocks_loaded, num_layers_, num_layers_ - blocks_loaded);
             }
 
             int64_t t1 = ggml_time_ms();
             LOG_DEBUG("AnimaRunner streaming: weights loaded in %.2fs", (t1 - t0) / 1000.0);
 
-            // Execute full compute graph with skip_param_offload=true
+            // Execute full compute graph
             bool result = compute(n_threads, x, timesteps, context, t5_ids, t5_weights,
                                   output, output_ctx, true /* skip_param_offload */);
 
             int64_t t2 = ggml_time_ms();
             LOG_INFO("AnimaRunner streaming: total execution time %.2fs (load: %.2fs, compute: %.2fs)",
-                     (t2 - t0) / 1000.0,
-                     (t1 - t0) / 1000.0,
-                     (t2 - t1) / 1000.0);
+                     (t2 - t0) / 1000.0, (t1 - t0) / 1000.0, (t2 - t1) / 1000.0);
 
             return result;
         }

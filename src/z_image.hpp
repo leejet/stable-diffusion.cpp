@@ -546,18 +546,88 @@ namespace ZImage {
             auto& registry = streaming_engine_->get_registry();
             auto& budget = streaming_engine_->get_budget();
 
-            // Load all layers to GPU (with budget management)
-            auto layers = registry.get_layer_names_sorted();
-            for (const auto& layer_name : layers) {
-                if (!registry.is_layer_on_gpu(layer_name)) {
-                    if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                        LOG_WARN("ZImageRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
-                    }
-                    registry.move_layer_to_gpu(layer_name);
-                }
+            // Calculate total model size
+            size_t total_model_size = 0;
+            auto all_layers = registry.get_layer_names_sorted();
+            for (const auto& layer_name : all_layers) {
+                total_model_size += registry.get_layer_size(layer_name);
             }
 
-            // Run compute with skip_param_offload=true since streaming manages weights
+            // Get available VRAM
+            size_t available_vram = budget.get_available_vram();
+
+            LOG_DEBUG("ZImageRunner: Model size = %.2f GB, Available VRAM = %.2f GB",
+                      total_model_size / (1024.0 * 1024.0 * 1024.0),
+                      available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            // Check if model fits in VRAM
+            if (total_model_size <= available_vram) {
+                // Model fits - load all
+                LOG_INFO("ZImageRunner: Model fits in VRAM, using coarse-stage streaming");
+                for (const auto& layer_name : all_layers) {
+                    if (!registry.is_layer_on_gpu(layer_name)) {
+                        if (!budget.ensure_vram_for_layer(layer_name, 0)) {
+                            LOG_WARN("ZImageRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+                        }
+                        registry.move_layer_to_gpu(layer_name);
+                    }
+                }
+            } else {
+                // Model doesn't fit - use chunked streaming
+                LOG_INFO("ZImageRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using chunked streaming",
+                         total_model_size / (1024.0 * 1024.0 * 1024.0),
+                         available_vram / (1024.0 * 1024.0 * 1024.0));
+
+                // Load global first
+                registry.move_layer_to_gpu("_global");
+                size_t remaining_vram = budget.get_available_vram();
+
+                // Count layers from registry
+                int total_layers = 0;
+                for (const auto& name : all_layers) {
+                    if (name.find("layers.") != std::string::npos) {
+                        total_layers++;
+                    }
+                }
+
+                // Get typical layer size
+                size_t layer_size = registry.get_layer_size("layers.0");
+                size_t compute_estimate = layer_size * 3;
+                size_t vram_for_layers = (remaining_vram > compute_estimate) ? (remaining_vram - compute_estimate) : 0;
+
+                int layers_loaded = 0;
+
+                // Load refiners first (context_refiner, noise_refiner)
+                for (const auto& name : all_layers) {
+                    if (name.find("context_refiner.") != std::string::npos ||
+                        name.find("noise_refiner.") != std::string::npos) {
+                        size_t size = registry.get_layer_size(name);
+                        if (vram_for_layers >= size) {
+                            if (registry.move_layer_to_gpu(name)) {
+                                vram_for_layers -= size;
+                            }
+                        }
+                    }
+                }
+
+                // Load main layers
+                for (int i = 0; i < total_layers; i++) {
+                    std::string layer_name = "layers." + std::to_string(i);
+                    size_t size = registry.get_layer_size(layer_name);
+
+                    if (vram_for_layers >= size) {
+                        if (registry.move_layer_to_gpu(layer_name)) {
+                            vram_for_layers -= size;
+                            layers_loaded++;
+                        }
+                    }
+                }
+
+                LOG_INFO("ZImageRunner: %d/%d layers on GPU, rest will compute on CPU",
+                         layers_loaded, total_layers);
+            }
+
+            // Run compute
             bool result = compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
                                   output, output_ctx, true /* skip_param_offload */);
 

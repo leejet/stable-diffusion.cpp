@@ -695,27 +695,93 @@ struct UNetModelRunner : public GGMLRunner {
 
         int64_t t0 = ggml_time_ms();
 
-        // UNet coarse-stage streaming:
-        // Unlike Flux, UNet can't execute stages separately due to GGML's atomic graph execution
-        // and the complex skip connection dependencies.
-        // Instead, we ensure all required weights are loaded before execution
-        // and manage VRAM by offloading between diffusion steps.
-
         auto& registry = streaming_engine_->get_registry();
         auto& budget = streaming_engine_->get_budget();
 
-        // Ensure all UNet weights are on GPU for this step
-        auto layers = registry.get_layer_names_sorted();
-        for (const auto& layer_name : layers) {
-            if (!registry.is_layer_on_gpu(layer_name)) {
-                if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                    LOG_WARN("UNetModelRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
-                }
-                registry.move_layer_to_gpu(layer_name);
-            }
+        // Calculate total model size
+        size_t total_model_size = 0;
+        auto all_layers = registry.get_layer_names_sorted();
+        for (const auto& layer_name : all_layers) {
+            total_model_size += registry.get_layer_size(layer_name);
         }
 
-        // Execute full graph (skip_param_offload=true since streaming engine manages weights)
+        // Get available VRAM
+        size_t available_vram = budget.get_available_vram();
+
+        LOG_DEBUG("UNetRunner: Model size = %.2f GB, Available VRAM = %.2f GB",
+                  total_model_size / (1024.0 * 1024.0 * 1024.0),
+                  available_vram / (1024.0 * 1024.0 * 1024.0));
+
+        // Check if model fits in VRAM
+        if (total_model_size <= available_vram) {
+            // Model fits - load all
+            LOG_INFO("UNetRunner: Model fits in VRAM, using coarse-stage streaming");
+            for (const auto& layer_name : all_layers) {
+                if (!registry.is_layer_on_gpu(layer_name)) {
+                    if (!budget.ensure_vram_for_layer(layer_name, 0)) {
+                        LOG_WARN("UNetModelRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+                    }
+                    registry.move_layer_to_gpu(layer_name);
+                }
+            }
+        } else {
+            // Model doesn't fit - use chunked streaming
+            // Note: UNet has skip connections, so we try to keep input/output blocks balanced
+            LOG_INFO("UNetRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using chunked streaming",
+                     total_model_size / (1024.0 * 1024.0 * 1024.0),
+                     available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            // Load global first
+            registry.move_layer_to_gpu("_global");
+            size_t remaining_vram = budget.get_available_vram();
+
+            // Count blocks from registry
+            int input_blocks = 0, output_blocks = 0;
+            for (const auto& name : all_layers) {
+                if (name.find("input_blocks.") != std::string::npos) input_blocks++;
+                else if (name.find("output_blocks.") != std::string::npos) output_blocks++;
+            }
+
+            // Get typical block size
+            size_t block_size = registry.get_layer_size("input_blocks.0");
+            if (block_size == 0) block_size = registry.get_layer_size("middle_block");
+            size_t compute_estimate = block_size * 3;
+            size_t vram_for_blocks = (remaining_vram > compute_estimate) ? (remaining_vram - compute_estimate) : 0;
+
+            int blocks_loaded = 0;
+
+            // Always load middle_block
+            if (registry.move_layer_to_gpu("middle_block")) {
+                vram_for_blocks -= registry.get_layer_size("middle_block");
+                blocks_loaded++;
+            }
+
+            // Load input and output blocks in parallel (they have skip connections)
+            int half_blocks = (input_blocks < output_blocks) ? input_blocks : output_blocks;
+            for (int i = 0; i < half_blocks; i++) {
+                std::string input_name = "input_blocks." + std::to_string(i);
+                std::string output_name = "output_blocks." + std::to_string(i);
+
+                size_t input_size = registry.get_layer_size(input_name);
+                size_t output_size = registry.get_layer_size(output_name);
+
+                if (vram_for_blocks >= input_size + output_size) {
+                    if (registry.move_layer_to_gpu(input_name)) {
+                        vram_for_blocks -= input_size;
+                        blocks_loaded++;
+                    }
+                    if (registry.move_layer_to_gpu(output_name)) {
+                        vram_for_blocks -= output_size;
+                        blocks_loaded++;
+                    }
+                }
+            }
+
+            LOG_INFO("UNetRunner: %d blocks on GPU, rest will compute on CPU",
+                     blocks_loaded);
+        }
+
+        // Execute full graph
         bool result = compute(n_threads, x, timesteps, context, c_concat, y,
                               num_video_frames, controls, control_strength, output, output_ctx,
                               true /* skip_param_offload */);

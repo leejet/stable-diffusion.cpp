@@ -430,6 +430,106 @@ namespace Qwen {
             return img;
         }
 
+        // ============== Staged Forward Methods for True Per-Layer Streaming ==============
+
+        /**
+         * Input stage: compute time embedding, img_in, txt_in projections
+         * Returns: {img, txt, t_emb} tensors
+         */
+        struct StreamingInputResult {
+            ggml_tensor* img;
+            ggml_tensor* txt;
+            ggml_tensor* t_emb;
+        };
+
+        StreamingInputResult forward_input_stage(GGMLRunnerContext* ctx,
+                                                  struct ggml_tensor* x,
+                                                  struct ggml_tensor* timestep,
+                                                  struct ggml_tensor* context,
+                                                  std::vector<ggml_tensor*> ref_latents = {},
+                                                  int64_t* out_img_tokens = nullptr) {
+            auto time_text_embed = std::dynamic_pointer_cast<QwenTimestepProjEmbeddings>(blocks["time_text_embed"]);
+            auto txt_norm        = std::dynamic_pointer_cast<RMSNorm>(blocks["txt_norm"]);
+            auto img_in          = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
+            auto txt_in          = std::dynamic_pointer_cast<Linear>(blocks["txt_in"]);
+
+            auto t_emb = time_text_embed->forward(ctx, timestep);
+            if (params.zero_cond_t) {
+                auto t_emb_0 = time_text_embed->forward(ctx, ggml_ext_zeros(ctx->ggml_ctx, timestep->ne[0], timestep->ne[1], timestep->ne[2], timestep->ne[3]));
+                t_emb        = ggml_concat(ctx->ggml_ctx, t_emb, t_emb_0, 1);
+            }
+
+            // Patchify input (same as main forward())
+            auto img_patched = DiT::pad_and_patchify(ctx, x, params.patch_size, params.patch_size);
+            int64_t img_tokens = img_patched->ne[1];
+
+            // Handle reference latents
+            if (ref_latents.size() > 0) {
+                for (ggml_tensor* ref : ref_latents) {
+                    ref = DiT::pad_and_patchify(ctx, ref, params.patch_size, params.patch_size);
+                    img_patched = ggml_concat(ctx->ggml_ctx, img_patched, ref, 1);
+                }
+            }
+
+            auto img = img_in->forward(ctx, img_patched);
+            auto txt = txt_norm->forward(ctx, context);
+            txt      = txt_in->forward(ctx, txt);
+
+            if (out_img_tokens) {
+                *out_img_tokens = img_tokens;
+            }
+
+            return {img, txt, t_emb};
+        }
+
+        /**
+         * Single block forward: compute one transformer block
+         * Returns: {img_out, txt_out}
+         */
+        std::pair<ggml_tensor*, ggml_tensor*> forward_single_block(GGMLRunnerContext* ctx,
+                                                                    int block_idx,
+                                                                    struct ggml_tensor* img,
+                                                                    struct ggml_tensor* txt,
+                                                                    struct ggml_tensor* t_emb,
+                                                                    struct ggml_tensor* pe,
+                                                                    struct ggml_tensor* modulate_index = nullptr) {
+            auto block = std::dynamic_pointer_cast<QwenImageTransformerBlock>(blocks["transformer_blocks." + std::to_string(block_idx)]);
+            return block->forward(ctx, img, txt, t_emb, pe, modulate_index);
+        }
+
+        /**
+         * Output stage: compute norm_out, proj_out, and unpatchify
+         * Returns: final output tensor [N, C, H, W]
+         */
+        struct ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
+                                                  struct ggml_tensor* img,
+                                                  struct ggml_tensor* t_emb,
+                                                  int64_t img_tokens,
+                                                  int64_t orig_H,
+                                                  int64_t orig_W) {
+            auto norm_out = std::dynamic_pointer_cast<AdaLayerNormContinuous>(blocks["norm_out"]);
+            auto proj_out = std::dynamic_pointer_cast<Linear>(blocks["proj_out"]);
+
+            if (params.zero_cond_t) {
+                t_emb = ggml_ext_chunk(ctx->ggml_ctx, t_emb, 2, 1)[0];
+            }
+
+            // Trim to original img_tokens if ref_latents were used
+            if (img->ne[1] > img_tokens) {
+                img = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, img, 0, 2, 1, 3));
+                img = ggml_view_3d(ctx->ggml_ctx, img, img->ne[0], img->ne[1], img_tokens, img->nb[1], img->nb[2], 0);
+                img = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, img, 0, 2, 1, 3));
+            }
+
+            img = norm_out->forward(ctx, img, t_emb);
+            img = proj_out->forward(ctx, img);
+
+            // Unpatchify and crop
+            img = DiT::unpatchify_and_crop(ctx->ggml_ctx, img, orig_H, orig_W, params.patch_size, params.patch_size);
+
+            return img;
+        }
+
         struct ggml_tensor* forward(GGMLRunnerContext* ctx,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* timestep,
@@ -600,27 +700,375 @@ namespace Qwen {
             auto& registry = streaming_engine_->get_registry();
             auto& budget = streaming_engine_->get_budget();
 
-            auto layers = registry.get_layer_names_sorted();
-            for (const auto& layer_name : layers) {
-                if (!registry.is_layer_on_gpu(layer_name)) {
-                    if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                        LOG_WARN("QwenImageRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+            // Calculate total model size
+            size_t total_model_size = 0;
+            auto all_layers = registry.get_layer_names_sorted();
+            for (const auto& layer_name : all_layers) {
+                total_model_size += registry.get_layer_size(layer_name);
+            }
+
+            // Get available VRAM (with safety margin)
+            size_t available_vram = budget.get_available_vram();
+
+            LOG_DEBUG("QwenImageRunner: Model size = %.2f GB, Available VRAM = %.2f GB",
+                      total_model_size / (1024.0 * 1024.0 * 1024.0),
+                      available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            // Check if model fits in VRAM
+            if (total_model_size <= available_vram) {
+                // Model fits - use coarse-stage (load all, compute once)
+                LOG_INFO("QwenImageRunner: Model fits in VRAM, using coarse-stage streaming");
+                for (const auto& layer_name : all_layers) {
+                    if (!registry.is_layer_on_gpu(layer_name)) {
+                        if (!budget.ensure_vram_for_layer(layer_name, 0)) {
+                            LOG_WARN("QwenImageRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+                        }
+                        registry.move_layer_to_gpu(layer_name);
                     }
-                    registry.move_layer_to_gpu(layer_name);
+                }
+
+                bool result = compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
+                                      output, output_ctx, true /* skip_param_offload */);
+
+                int64_t t1 = ggml_time_ms();
+                if (streaming_engine_->get_config().log_operations) {
+                    LOG_DEBUG("QwenImageRunner: Coarse-stage streaming completed in %.2fs", (t1 - t0) / 1000.0);
+                }
+                return result;
+            }
+
+            // Model doesn't fit - use true per-layer streaming
+            LOG_INFO("QwenImageRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using TRUE per-layer streaming",
+                     total_model_size / (1024.0 * 1024.0 * 1024.0),
+                     available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            return compute_streaming_true(n_threads, x, timesteps, context, ref_latents, increase_ref_index, output, output_ctx);
+        }
+
+    private:
+        // Persistent storage for intermediate tensors between layer executions
+        struct StreamingState {
+            std::vector<float> img_data;
+            std::vector<float> txt_data;
+            std::vector<float> t_emb_data;
+            std::vector<float> pe_data;
+            std::vector<float> modulate_index_data;
+
+            // Tensor dimensions
+            int64_t img_ne[4];
+            int64_t txt_ne[4];
+            int64_t t_emb_ne[4];
+            int64_t pe_ne[4];
+            int64_t modulate_index_ne[4];
+            bool has_modulate_index = false;
+        };
+
+        /**
+         * Copy tensor data to persistent storage
+         */
+        void copy_tensor_to_storage(ggml_tensor* tensor, std::vector<float>& storage, int64_t* ne) {
+            size_t nelements = ggml_nelements(tensor);
+            storage.resize(nelements);
+
+            // Copy to CPU if needed
+            ggml_backend_tensor_get(tensor, storage.data(), 0, nelements * sizeof(float));
+
+            // Store dimensions
+            for (int i = 0; i < 4; i++) {
+                ne[i] = tensor->ne[i];
+            }
+        }
+
+        /**
+         * Create tensor in context from persistent storage
+         */
+        ggml_tensor* create_tensor_from_storage(ggml_context* ctx, const std::vector<float>& storage,
+                                                 const int64_t* ne, const char* name) {
+            ggml_tensor* tensor = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
+            ggml_set_name(tensor, name);
+            return tensor;
+        }
+
+        /**
+         * True per-layer streaming: execute one transformer block at a time
+         * This enables running models larger than VRAM by only keeping one block on GPU at a time.
+         *
+         * The approach:
+         * 1. Execute input stage (time_text_embed, img_in, txt_in) - store results
+         * 2. For each transformer block:
+         *    - Load block weights to GPU
+         *    - Build mini-graph for just this block
+         *    - Execute and store results
+         *    - Offload block weights to CPU
+         * 3. Execute output stage (norm_out, proj_out) - get final result
+         */
+        bool compute_streaming_true(int n_threads,
+                                    struct ggml_tensor* x,
+                                    struct ggml_tensor* timesteps,
+                                    struct ggml_tensor* context,
+                                    std::vector<ggml_tensor*> ref_latents,
+                                    bool increase_ref_index,
+                                    struct ggml_tensor** output,
+                                    struct ggml_context* output_ctx) {
+            auto& registry = streaming_engine_->get_registry();
+            int64_t t_start = ggml_time_ms();
+
+            const int num_layers = qwen_image_params.num_layers;
+            LOG_INFO("QwenImageRunner: TRUE per-layer streaming - %d blocks (one at a time)", num_layers);
+
+            // Phase 1: Load global layers (_global contains input/output projections)
+            LOG_DEBUG("QwenImageRunner: Loading global layers");
+            if (!registry.move_layer_to_gpu("_global")) {
+                LOG_ERROR("QwenImageRunner: Failed to load _global to GPU");
+                return false;
+            }
+
+            // Pre-generate PE and modulate_index vectors (needed for all blocks)
+            pe_vec = Rope::gen_qwen_image_pe(static_cast<int>(x->ne[1]),
+                                              static_cast<int>(x->ne[0]),
+                                              qwen_image_params.patch_size,
+                                              static_cast<int>(x->ne[3]),
+                                              static_cast<int>(context->ne[1]),
+                                              ref_latents,
+                                              increase_ref_index,
+                                              qwen_image_params.theta,
+                                              circular_y_enabled,
+                                              circular_x_enabled,
+                                              qwen_image_params.axes_dim);
+
+            if (qwen_image_params.zero_cond_t) {
+                modulate_index_vec.clear();
+                int64_t h_len = ((x->ne[1] + (qwen_image_params.patch_size / 2)) / qwen_image_params.patch_size);
+                int64_t w_len = ((x->ne[0] + (qwen_image_params.patch_size / 2)) / qwen_image_params.patch_size);
+                int64_t num_img_tokens = h_len * w_len;
+                modulate_index_vec.insert(modulate_index_vec.end(), num_img_tokens, 0.f);
+
+                int64_t num_ref_img_tokens = 0;
+                for (ggml_tensor* ref : ref_latents) {
+                    int64_t rh_len = ((ref->ne[1] + (qwen_image_params.patch_size / 2)) / qwen_image_params.patch_size);
+                    int64_t rw_len = ((ref->ne[0] + (qwen_image_params.patch_size / 2)) / qwen_image_params.patch_size);
+                    num_ref_img_tokens += rh_len * rw_len;
+                }
+                if (num_ref_img_tokens > 0) {
+                    modulate_index_vec.insert(modulate_index_vec.end(), num_ref_img_tokens, 1.f);
                 }
             }
 
-            bool result = compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
-                                  output, output_ctx, true /* skip_param_offload */);
+            // TRUE per-layer streaming with mini-graphs
+            // Execute each block as a separate mini-graph to minimize activation memory
 
-            int64_t t1 = ggml_time_ms();
+            int64_t t_blocks_start = ggml_time_ms();
 
-            if (streaming_engine_->get_config().log_operations) {
-                LOG_DEBUG("QwenImageRunner: Streaming compute completed in %.2fs", (t1 - t0) / 1000.0);
+            // Store original image dimensions for unpatchify
+            int64_t orig_H = x->ne[1];
+            int64_t orig_W = x->ne[0];
+
+            // Persistent storage for intermediate img and txt tensors
+            std::vector<float> persistent_img;
+            std::vector<float> persistent_txt;
+            std::vector<float> persistent_t_emb;
+            int64_t img_ne[4], txt_ne[4], t_emb_ne[4];
+            int64_t img_tokens_count = 0;
+
+            // ============ STAGE 1: Input projections ============
+            LOG_DEBUG("QwenImageRunner: Executing input stage");
+            {
+                // Build mini-graph for input projections only
+                struct ggml_cgraph* input_graph = nullptr;
+                ggml_tensor* img_output = nullptr;
+                ggml_tensor* txt_output = nullptr;
+                ggml_tensor* t_emb_output = nullptr;
+                int64_t img_tokens_local = 0;
+
+                auto get_input_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE / 4);  // Smaller graph
+
+                    ggml_tensor* x_backend = to_backend(x);
+                    ggml_tensor* context_backend = to_backend(context);
+                    ggml_tensor* timesteps_backend = to_backend(timesteps);
+
+                    // Convert ref_latents to backend
+                    std::vector<ggml_tensor*> ref_latents_backend;
+                    for (auto& ref : ref_latents) {
+                        ref_latents_backend.push_back(to_backend(ref));
+                    }
+
+                    auto runner_ctx = get_context();
+                    auto result = qwen_image.forward_input_stage(&runner_ctx, x_backend, timesteps_backend, context_backend,
+                                                                  ref_latents_backend, &img_tokens_local);
+
+                    img_output = result.img;
+                    txt_output = result.txt;
+                    t_emb_output = result.t_emb;
+
+                    // Concatenate outputs into single tensor for extraction
+                    // We'll use img as the primary output and extract separately
+                    ggml_build_forward_expand(gf, result.img);
+                    ggml_build_forward_expand(gf, result.txt);
+                    ggml_build_forward_expand(gf, result.t_emb);
+
+                    return gf;
+                };
+
+                // Execute input stage
+                if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("QwenImageRunner: Input stage failed");
+                    return false;
+                }
+
+                img_tokens_count = img_tokens_local;
+
+                // Extract computed tensors to persistent storage
+                if (img_output && txt_output && t_emb_output) {
+                    // Copy tensor data to CPU storage
+                    size_t img_size = ggml_nelements(img_output);
+                    size_t txt_size = ggml_nelements(txt_output);
+                    size_t t_emb_size = ggml_nelements(t_emb_output);
+
+                    persistent_img.resize(img_size);
+                    persistent_txt.resize(txt_size);
+                    persistent_t_emb.resize(t_emb_size);
+
+                    ggml_backend_tensor_get(img_output, persistent_img.data(), 0, img_size * sizeof(float));
+                    ggml_backend_tensor_get(txt_output, persistent_txt.data(), 0, txt_size * sizeof(float));
+                    ggml_backend_tensor_get(t_emb_output, persistent_t_emb.data(), 0, t_emb_size * sizeof(float));
+
+                    for (int i = 0; i < 4; i++) {
+                        img_ne[i] = img_output->ne[i];
+                        txt_ne[i] = txt_output->ne[i];
+                        t_emb_ne[i] = t_emb_output->ne[i];
+                    }
+                } else {
+                    LOG_ERROR("QwenImageRunner: Failed to get input stage outputs");
+                    return false;
+                }
             }
 
-            return result;
+            LOG_DEBUG("QwenImageRunner: Input stage done, img=%ldx%ldx%ldx%ld, txt=%ldx%ldx%ldx%ld",
+                      img_ne[0], img_ne[1], img_ne[2], img_ne[3],
+                      txt_ne[0], txt_ne[1], txt_ne[2], txt_ne[3]);
+
+            // ============ STAGE 2: Transformer blocks (one at a time) ============
+            for (int block_idx = 0; block_idx < num_layers; block_idx++) {
+                std::string block_name = "transformer_blocks." + std::to_string(block_idx);
+                int64_t t_block_start = ggml_time_ms();
+
+                // Load this block's weights
+                if (!registry.move_layer_to_gpu(block_name)) {
+                    LOG_ERROR("QwenImageRunner: Failed to load block %d", block_idx);
+                    return false;
+                }
+
+                // Build and execute mini-graph for this block
+                ggml_tensor* img_out = nullptr;
+                ggml_tensor* txt_out = nullptr;
+
+                auto get_block_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE / 4);
+
+                    // Create input tensors from persistent storage
+                    ggml_tensor* img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, img_ne[0], img_ne[1], img_ne[2], img_ne[3]);
+                    ggml_tensor* txt_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, txt_ne[0], txt_ne[1], txt_ne[2], txt_ne[3]);
+                    ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
+
+                    // Copy to backend and set data
+                    img_in = to_backend(img_in);
+                    txt_in = to_backend(txt_in);
+                    t_emb_in = to_backend(t_emb_in);
+
+                    set_backend_tensor_data(img_in, persistent_img.data());
+                    set_backend_tensor_data(txt_in, persistent_txt.data());
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
+
+                    // Generate PE
+                    int pos_len = static_cast<int>(pe_vec.size() / qwen_image_params.axes_dim_sum / 2);
+                    ggml_tensor* pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, qwen_image_params.axes_dim_sum / 2, pos_len);
+                    set_backend_tensor_data(pe, pe_vec.data());
+
+                    // Modulate index
+                    ggml_tensor* modulate_index = nullptr;
+                    if (qwen_image_params.zero_cond_t && !modulate_index_vec.empty()) {
+                        modulate_index = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, modulate_index_vec.size());
+                        set_backend_tensor_data(modulate_index, modulate_index_vec.data());
+                    }
+
+                    auto runner_ctx = get_context();
+                    auto [img_result, txt_result] = qwen_image.forward_single_block(&runner_ctx, block_idx,
+                                                                                     img_in, txt_in, t_emb_in, pe, modulate_index);
+
+                    img_out = img_result;
+                    txt_out = txt_result;
+
+                    ggml_build_forward_expand(gf, img_out);
+                    ggml_build_forward_expand(gf, txt_out);
+
+                    return gf;
+                };
+
+                if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("QwenImageRunner: Block %d execution failed", block_idx);
+                    return false;
+                }
+
+                // Extract outputs to persistent storage
+                if (img_out && txt_out) {
+                    ggml_backend_tensor_get(img_out, persistent_img.data(), 0, persistent_img.size() * sizeof(float));
+                    ggml_backend_tensor_get(txt_out, persistent_txt.data(), 0, persistent_txt.size() * sizeof(float));
+
+                    for (int i = 0; i < 4; i++) {
+                        img_ne[i] = img_out->ne[i];
+                        txt_ne[i] = txt_out->ne[i];
+                    }
+                }
+
+                // Offload this block
+                registry.move_layer_to_cpu(block_name);
+
+                LOG_DEBUG("QwenImageRunner: Block %d/%d done (%.2fms)",
+                          block_idx + 1, num_layers, (ggml_time_ms() - t_block_start) / 1.0);
+            }
+
+            // ============ STAGE 3: Output projections ============
+            LOG_DEBUG("QwenImageRunner: Executing output stage");
+            {
+                ggml_tensor* final_out = nullptr;
+
+                auto get_output_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE / 4);
+
+                    // Create input tensors
+                    ggml_tensor* img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, img_ne[0], img_ne[1], img_ne[2], img_ne[3]);
+                    ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
+
+                    img_in = to_backend(img_in);
+                    t_emb_in = to_backend(t_emb_in);
+
+                    set_backend_tensor_data(img_in, persistent_img.data());
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
+
+                    auto runner_ctx = get_context();
+                    final_out = qwen_image.forward_output_stage(&runner_ctx, img_in, t_emb_in,
+                                                                 img_tokens_count, orig_H, orig_W);
+
+                    ggml_build_forward_expand(gf, final_out);
+
+                    return gf;
+                };
+
+                if (!GGMLRunner::compute(get_output_graph, n_threads, false, output, output_ctx, true)) {
+                    LOG_ERROR("QwenImageRunner: Output stage failed");
+                    return false;
+                }
+            }
+
+            int64_t t_end = ggml_time_ms();
+            LOG_INFO("QwenImageRunner: TRUE per-layer streaming completed in %.2fs (%d blocks)",
+                     (t_end - t_start) / 1000.0, num_layers);
+
+            return true;
         }
+
+    public:
 
         struct ggml_cgraph* build_graph(struct ggml_tensor* x,
                                         struct ggml_tensor* timesteps,

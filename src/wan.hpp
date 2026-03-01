@@ -2220,18 +2220,85 @@ namespace WAN {
             auto& registry = streaming_engine_->get_registry();
             auto& budget = streaming_engine_->get_budget();
 
-            // Ensure all WAN weights are on GPU
-            auto layers = registry.get_layer_names_sorted();
-            for (const auto& layer_name : layers) {
-                if (!registry.is_layer_on_gpu(layer_name)) {
-                    if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                        LOG_WARN("WanRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
-                    }
-                    registry.move_layer_to_gpu(layer_name);
-                }
+            // Calculate total model size
+            size_t total_model_size = 0;
+            auto all_layers = registry.get_layer_names_sorted();
+            for (const auto& layer_name : all_layers) {
+                total_model_size += registry.get_layer_size(layer_name);
             }
 
-            // Execute full graph (skip_param_offload=true)
+            // Get available VRAM
+            size_t available_vram = budget.get_available_vram();
+
+            LOG_DEBUG("WanRunner: Model size = %.2f GB, Available VRAM = %.2f GB",
+                      total_model_size / (1024.0 * 1024.0 * 1024.0),
+                      available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            // Check if model fits in VRAM
+            if (total_model_size <= available_vram) {
+                // Model fits - load all
+                LOG_INFO("WanRunner: Model fits in VRAM, using coarse-stage streaming");
+                for (const auto& layer_name : all_layers) {
+                    if (!registry.is_layer_on_gpu(layer_name)) {
+                        if (!budget.ensure_vram_for_layer(layer_name, 0)) {
+                            LOG_WARN("WanRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+                        }
+                        registry.move_layer_to_gpu(layer_name);
+                    }
+                }
+            } else {
+                // Model doesn't fit - use chunked streaming
+                LOG_INFO("WanRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using chunked streaming",
+                         total_model_size / (1024.0 * 1024.0 * 1024.0),
+                         available_vram / (1024.0 * 1024.0 * 1024.0));
+
+                // Load global first
+                registry.move_layer_to_gpu("_global");
+                size_t remaining_vram = budget.get_available_vram();
+
+                // Count blocks from registry
+                int total_blocks = 0;
+                for (const auto& name : all_layers) {
+                    if (name.find("blocks.") != std::string::npos && name.find("vace_blocks.") == std::string::npos) {
+                        total_blocks++;
+                    }
+                }
+
+                // Get typical block size
+                size_t block_size = registry.get_layer_size("blocks.0");
+                size_t compute_estimate = block_size * 3;
+                size_t vram_for_blocks = (remaining_vram > compute_estimate) ? (remaining_vram - compute_estimate) : 0;
+
+                int blocks_loaded = 0;
+                for (int i = 0; i < total_blocks; i++) {
+                    std::string layer_name = "blocks." + std::to_string(i);
+                    size_t layer_size = registry.get_layer_size(layer_name);
+
+                    if (vram_for_blocks >= layer_size) {
+                        if (registry.move_layer_to_gpu(layer_name)) {
+                            vram_for_blocks -= layer_size;
+                            blocks_loaded++;
+                        }
+                    }
+                }
+
+                // Also try to load vace_blocks if present
+                for (const auto& name : all_layers) {
+                    if (name.find("vace_blocks.") != std::string::npos) {
+                        size_t layer_size = registry.get_layer_size(name);
+                        if (vram_for_blocks >= layer_size) {
+                            if (registry.move_layer_to_gpu(name)) {
+                                vram_for_blocks -= layer_size;
+                            }
+                        }
+                    }
+                }
+
+                LOG_INFO("WanRunner: %d/%d blocks on GPU, rest will compute on CPU",
+                         blocks_loaded, total_blocks);
+            }
+
+            // Execute full graph
             bool result = compute(n_threads, x, timesteps, context, clip_fea, c_concat,
                                   time_dim_concat, vace_context, vace_strength, output, output_ctx,
                                   true /* skip_param_offload */);

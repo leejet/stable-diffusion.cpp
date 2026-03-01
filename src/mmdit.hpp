@@ -922,18 +922,73 @@ struct MMDiTRunner : public GGMLRunner {
         auto& registry = streaming_engine_->get_registry();
         auto& budget = streaming_engine_->get_budget();
 
-        // Ensure all MMDiT weights are on GPU for this step
-        auto layers = registry.get_layer_names_sorted();
-        for (const auto& layer_name : layers) {
-            if (!registry.is_layer_on_gpu(layer_name)) {
-                if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                    LOG_WARN("MMDiTRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
-                }
-                registry.move_layer_to_gpu(layer_name);
-            }
+        // Calculate total model size
+        size_t total_model_size = 0;
+        auto all_layers = registry.get_layer_names_sorted();
+        for (const auto& layer_name : all_layers) {
+            total_model_size += registry.get_layer_size(layer_name);
         }
 
-        // Execute full graph (skip_param_offload=true since streaming engine manages weights)
+        // Get available VRAM
+        size_t available_vram = budget.get_available_vram();
+
+        LOG_DEBUG("MMDiTRunner: Model size = %.2f GB, Available VRAM = %.2f GB",
+                  total_model_size / (1024.0 * 1024.0 * 1024.0),
+                  available_vram / (1024.0 * 1024.0 * 1024.0));
+
+        // Check if model fits in VRAM
+        if (total_model_size <= available_vram) {
+            // Model fits - load all and compute
+            LOG_INFO("MMDiTRunner: Model fits in VRAM, using coarse-stage streaming");
+            for (const auto& layer_name : all_layers) {
+                if (!registry.is_layer_on_gpu(layer_name)) {
+                    if (!budget.ensure_vram_for_layer(layer_name, 0)) {
+                        LOG_WARN("MMDiTRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+                    }
+                    registry.move_layer_to_gpu(layer_name);
+                }
+            }
+        } else {
+            // Model doesn't fit - use chunked streaming
+            LOG_INFO("MMDiTRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using chunked streaming",
+                     total_model_size / (1024.0 * 1024.0 * 1024.0),
+                     available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            // Load global first
+            registry.move_layer_to_gpu("_global");
+            size_t remaining_vram = budget.get_available_vram();
+
+            // Get typical block size
+            size_t block_size = registry.get_layer_size("joint_blocks.0");
+            size_t compute_estimate = block_size * 3;
+            size_t vram_for_blocks = (remaining_vram > compute_estimate) ? (remaining_vram - compute_estimate) : 0;
+
+            int blocks_loaded = 0;
+            // Count joint_blocks from registry
+            int total_blocks = 0;
+            for (const auto& name : all_layers) {
+                if (name.find("joint_blocks.") != std::string::npos) {
+                    total_blocks++;
+                }
+            }
+
+            for (int i = 0; i < total_blocks; i++) {
+                std::string layer_name = "joint_blocks." + std::to_string(i);
+                size_t layer_size = registry.get_layer_size(layer_name);
+
+                if (vram_for_blocks >= layer_size) {
+                    if (registry.move_layer_to_gpu(layer_name)) {
+                        vram_for_blocks -= layer_size;
+                        blocks_loaded++;
+                    }
+                }
+            }
+
+            LOG_INFO("MMDiTRunner: %d/%d blocks on GPU, %d will compute on CPU",
+                     blocks_loaded, total_blocks, total_blocks - blocks_loaded);
+        }
+
+        // Execute full graph
         bool result = compute(n_threads, x, timesteps, context, y, output, output_ctx, skip_layers,
                               true /* skip_param_offload */);
 

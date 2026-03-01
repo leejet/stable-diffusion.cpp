@@ -1882,39 +1882,119 @@ namespace Flux {
 
             int64_t t0 = ggml_time_ms();
             auto& registry = streaming_engine_->get_registry();
+            auto& budget = streaming_engine_->get_budget();
 
-            // ========== Phase 1: Load all weights to GPU ==========
-            LOG_DEBUG("FluxRunner streaming: loading all layers to GPU");
+            // Calculate total model size
+            size_t total_model_size = 0;
+            auto all_layers = registry.get_layer_names_sorted();
+            for (const auto& layer_name : all_layers) {
+                total_model_size += registry.get_layer_size(layer_name);
+            }
 
-            // Load global layers (img_in, txt_in, time_in, etc.)
+            // Get available VRAM
+            size_t available_vram = budget.get_available_vram();
+
+            LOG_DEBUG("FluxRunner: Model size = %.2f GB, Available VRAM = %.2f GB",
+                      total_model_size / (1024.0 * 1024.0 * 1024.0),
+                      available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            // Check if model fits in VRAM
+            if (total_model_size <= available_vram) {
+                // Model fits - use coarse-stage (load all, compute once)
+                LOG_INFO("FluxRunner: Model fits in VRAM, using coarse-stage streaming");
+
+                // Load global layers
+                registry.move_layer_to_gpu("_global");
+
+                // Load all double blocks
+                for (int i = 0; i < flux_params.depth; i++) {
+                    std::string layer_name = "double_blocks." + std::to_string(i);
+                    registry.move_layer_to_gpu(layer_name);
+                }
+
+                // Load all single blocks
+                for (int i = 0; i < flux_params.depth_single_blocks; i++) {
+                    std::string layer_name = "single_blocks." + std::to_string(i);
+                    registry.move_layer_to_gpu(layer_name);
+                }
+
+                int64_t t1 = ggml_time_ms();
+                LOG_DEBUG("FluxRunner streaming: weights loaded in %.2fs", (t1 - t0) / 1000.0);
+
+                bool result = compute(n_threads, x, timesteps, context, c_concat, y, guidance,
+                                      ref_latents, increase_ref_index, output, output_ctx,
+                                      skip_layers, true /* skip_param_offload */);
+
+                int64_t t2 = ggml_time_ms();
+                LOG_INFO("FluxRunner streaming: total execution time %.2fs (load: %.2fs, compute: %.2fs)",
+                         (t2 - t0) / 1000.0, (t1 - t0) / 1000.0, (t2 - t1) / 1000.0);
+
+                return result;
+            }
+
+            // Model doesn't fit - use chunked streaming
+            LOG_INFO("FluxRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using chunked streaming",
+                     total_model_size / (1024.0 * 1024.0 * 1024.0),
+                     available_vram / (1024.0 * 1024.0 * 1024.0));
+
+            // Load global layers first
             registry.move_layer_to_gpu("_global");
+            size_t global_size = registry.get_layer_size("_global");
+            size_t remaining_vram = budget.get_available_vram();
 
-            // Load all double blocks
+            // Get typical block size
+            std::string first_double = "double_blocks.0";
+            size_t double_block_size = registry.get_layer_size(first_double);
+            std::string first_single = "single_blocks.0";
+            size_t single_block_size = registry.get_layer_size(first_single);
+
+            // Estimate compute buffer (~3x block size)
+            size_t compute_buffer_estimate = std::max(double_block_size, single_block_size) * 3;
+            size_t vram_for_blocks = (remaining_vram > compute_buffer_estimate)
+                                     ? (remaining_vram - compute_buffer_estimate) : 0;
+
+            int blocks_loaded = 0;
+            int total_blocks = flux_params.depth + flux_params.depth_single_blocks;
+
+            // Load double blocks that fit
             for (int i = 0; i < flux_params.depth; i++) {
                 std::string layer_name = "double_blocks." + std::to_string(i);
-                registry.move_layer_to_gpu(layer_name);
+                size_t block_size = registry.get_layer_size(layer_name);
+
+                if (vram_for_blocks >= block_size) {
+                    if (registry.move_layer_to_gpu(layer_name)) {
+                        vram_for_blocks -= block_size;
+                        blocks_loaded++;
+                    }
+                }
             }
 
-            // Load all single blocks
+            // Load single blocks that fit
             for (int i = 0; i < flux_params.depth_single_blocks; i++) {
                 std::string layer_name = "single_blocks." + std::to_string(i);
-                registry.move_layer_to_gpu(layer_name);
+                size_t block_size = registry.get_layer_size(layer_name);
+
+                if (vram_for_blocks >= block_size) {
+                    if (registry.move_layer_to_gpu(layer_name)) {
+                        vram_for_blocks -= block_size;
+                        blocks_loaded++;
+                    }
+                }
             }
 
-            int64_t t1 = ggml_time_ms();
-            LOG_DEBUG("FluxRunner streaming: weights loaded in %.2fs", (t1 - t0) / 1000.0);
+            LOG_INFO("FluxRunner: %d/%d blocks on GPU, %d blocks will compute on CPU",
+                     blocks_loaded, total_blocks, total_blocks - blocks_loaded);
 
-            // ========== Phase 2: Execute full compute graph ==========
-            // Use regular compute with skip_param_offload=true since we already loaded weights
+            int64_t t1 = ggml_time_ms();
+
+            // Execute - blocks on CPU will compute on CPU (slower but works)
             bool result = compute(n_threads, x, timesteps, context, c_concat, y, guidance,
                                   ref_latents, increase_ref_index, output, output_ctx,
                                   skip_layers, true /* skip_param_offload */);
 
             int64_t t2 = ggml_time_ms();
-            LOG_INFO("FluxRunner streaming: total execution time %.2fs (load: %.2fs, compute: %.2fs)",
-                     (t2 - t0) / 1000.0,
-                     (t1 - t0) / 1000.0,
-                     (t2 - t1) / 1000.0);
+            LOG_INFO("FluxRunner streaming: total %.2fs (load: %.2fs, compute: %.2fs)",
+                     (t2 - t0) / 1000.0, (t1 - t0) / 1000.0, (t2 - t1) / 1000.0);
 
             return result;
         }
