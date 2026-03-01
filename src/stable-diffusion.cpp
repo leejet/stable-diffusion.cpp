@@ -2790,6 +2790,23 @@ public:
             return false;
         }
 
+        // In layer_streaming mode, skip smart offload for diffusion model
+        // The streaming engine manages tensors layer-by-layer with direct buffer swapping,
+        // which leaves GGMLRunner's internal state out of sync. Querying or manipulating
+        // the diffusion model's offload state here would cause inconsistencies.
+        // The cond_stage offload still works normally since it's not managed by streaming.
+        if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+            // Only offload cond_stage if configured - it's not managed by streaming
+            if (offload_config.offload_cond_stage && cond_stage_model && cond_stage_model->is_params_on_gpu()) {
+                if (offload_config.log_offload_events) {
+                    LOG_INFO("[Offload] Layer streaming: moving cond_stage to CPU for VAE decode");
+                }
+                cond_stage_model->move_params_to_cpu();
+                return true;
+            }
+            return false;
+        }
+
         size_t vae_vram_needed = estimate_vae_decode_vram(latent, decode_video);
         if (vae_vram_needed == 0) {
             // Estimation failed, fall back to unconditional offload
@@ -3974,7 +3991,10 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     LOG_INFO("generating %" PRId64 " latent images completed, taking %.2fs", final_latents.size(), (t3 - t1) * 1.0f / 1000);
 
     // Smart offload: Only move diffusion to CPU if VRAM is tight for VAE decode
+    // Skip for layer_streaming mode - streaming engine manages tensors with direct buffer swapping
+    // which leaves GGMLRunner's internal state out of sync
     if (!final_latents.empty() && !sd_ctx->sd->free_params_immediately &&
+        sd_ctx->sd->offload_config.mode != SD_OFFLOAD_LAYER_STREAMING &&
         sd_ctx->sd->should_offload_diffusion_for_vae(final_latents[0], false)) {
         size_t vram_size = sd_ctx->sd->diffusion_model->get_params_vram_size();
         int64_t offload_start = ggml_time_ms();
@@ -3986,6 +4006,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
             LOG_WARN("[Offload] Failed to offload diffusion to CPU");
         }
     } else if (sd_ctx->sd->offload_config.log_offload_events &&
+               sd_ctx->sd->offload_config.mode != SD_OFFLOAD_LAYER_STREAMING &&
                sd_ctx->sd->diffusion_model && sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
         LOG_INFO("[Offload] Smart: keeping diffusion on GPU (sufficient VRAM for VAE decode)");
     }

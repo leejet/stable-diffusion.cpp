@@ -1875,6 +1875,27 @@ struct AnimaConditioner : public Conditioner {
         llm->set_weight_adapter(adapter);
     }
 
+    // Dynamic tensor offloading - delegate to LLM
+    bool is_params_on_gpu() const override {
+        return llm->is_params_on_gpu();
+    }
+
+    bool move_params_to_cpu() override {
+        return llm->move_params_to_cpu();
+    }
+
+    bool move_params_to_gpu() override {
+        return llm->move_params_to_gpu();
+    }
+
+    size_t get_params_vram_size() const override {
+        return llm->get_params_vram_size();
+    }
+
+    void set_auto_offload(bool enabled) override {
+        llm->set_auto_offload(enabled);
+    }
+
     std::tuple<std::vector<int>, std::vector<float>, std::vector<int>, std::vector<float>> tokenize(std::string text) {
         auto parsed_attention = parse_prompt_attention(text);
 
