@@ -745,28 +745,6 @@ public:
         return spatial_pos_embed;
     }
 
-    struct ggml_tensor* unpatchify(struct ggml_context* ctx,
-                                   struct ggml_tensor* x,
-                                   int64_t h,
-                                   int64_t w) {
-        // x: [N, H*W, patch_size * patch_size * C]
-        // return: [N, C, H, W]
-        int64_t n = x->ne[2];
-        int64_t c = out_channels;
-        int64_t p = patch_size;
-        h         = (h + 1) / p;
-        w         = (w + 1) / p;
-
-        GGML_ASSERT(h * w == x->ne[1]);
-
-        x = ggml_reshape_4d(ctx, x, c, p * p, w * h, n);       // [N, H*W, P*P, C]
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));  // [N, C, H*W, P*P]
-        x = ggml_reshape_4d(ctx, x, p, p, w, h * c * n);       // [N*C*H, W, P, P]
-        x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N*C*H, P, W, P]
-        x = ggml_reshape_4d(ctx, x, p * w, p * h, c, n);       // [N, C, H*P, W*P]
-        return x;
-    }
-
     struct ggml_tensor* forward_core_with_concat(GGMLRunnerContext* ctx,
                                                  struct ggml_tensor* x,
                                                  struct ggml_tensor* c_mod,
