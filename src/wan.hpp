@@ -7,6 +7,7 @@
 
 #include "common_block.hpp"
 #include "flux.hpp"
+#include "layer_streaming.hpp"
 #include "rope.hpp"
 #include "vae.hpp"
 
@@ -2133,6 +2134,100 @@ namespace WAN {
             wan.get_param_tensors(tensors, prefix);
         }
 
+        // ============== Layer Streaming Support ==============
+    private:
+        std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
+        bool streaming_enabled_ = false;
+
+    public:
+        /**
+         * Enable layer streaming for WAN
+         * WAN has sequential transformer blocks with no cross-layer dependencies.
+         */
+        void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
+            if (!params_backend || !runtime_backend) {
+                LOG_WARN("WanRunner: Cannot enable streaming without both CPU and GPU backends");
+                return;
+            }
+
+            streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
+                runtime_backend, params_backend);
+
+            LayerStreaming::StreamingConfig cfg = config;
+            cfg.enabled = true;
+            cfg.keep_layers_behind = 0;  // No skip connections
+            streaming_engine_->set_config(cfg);
+
+            // Register tensors with WAN layer pattern
+            std::map<std::string, ggml_tensor*> tensor_map;
+            wan.get_param_tensors(tensor_map, "model.diffusion_model");
+            streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::wan_layer_pattern);
+
+            streaming_enabled_ = true;
+            LOG_INFO("WanRunner: Layer streaming enabled (%zu layers)",
+                     streaming_engine_->get_registry().get_layer_count());
+        }
+
+        void disable_layer_streaming() {
+            streaming_enabled_ = false;
+            streaming_engine_.reset();
+            LOG_INFO("WanRunner: Layer streaming disabled");
+        }
+
+        bool is_streaming_enabled() const {
+            return streaming_enabled_ && streaming_engine_ != nullptr;
+        }
+
+        /**
+         * Streaming compute for WAN
+         * Loads all blocks before execution (coarse-stage streaming).
+         */
+        bool compute_streaming(int n_threads,
+                               struct ggml_tensor* x,
+                               struct ggml_tensor* timesteps,
+                               struct ggml_tensor* context,
+                               struct ggml_tensor* clip_fea        = nullptr,
+                               struct ggml_tensor* c_concat        = nullptr,
+                               struct ggml_tensor* time_dim_concat = nullptr,
+                               struct ggml_tensor* vace_context    = nullptr,
+                               float vace_strength                 = 1.f,
+                               struct ggml_tensor** output         = nullptr,
+                               struct ggml_context* output_ctx     = nullptr) {
+            if (!streaming_engine_) {
+                LOG_ERROR("WanRunner: Streaming not enabled");
+                return false;
+            }
+
+            int64_t t0 = ggml_time_ms();
+
+            auto& registry = streaming_engine_->get_registry();
+            auto& budget = streaming_engine_->get_budget();
+
+            // Ensure all WAN weights are on GPU
+            auto layers = registry.get_layer_names_sorted();
+            for (const auto& layer_name : layers) {
+                if (!registry.is_layer_on_gpu(layer_name)) {
+                    if (!budget.ensure_vram_for_layer(layer_name, 0)) {
+                        LOG_WARN("WanRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
+                    }
+                    registry.move_layer_to_gpu(layer_name);
+                }
+            }
+
+            // Execute full graph (skip_param_offload=true)
+            bool result = compute(n_threads, x, timesteps, context, clip_fea, c_concat,
+                                  time_dim_concat, vace_context, vace_strength, output, output_ctx,
+                                  true /* skip_param_offload */);
+
+            int64_t t1 = ggml_time_ms();
+
+            if (streaming_engine_->get_config().log_operations) {
+                LOG_DEBUG("WanRunner: Streaming compute completed in %.2fs", (t1 - t0) / 1000.0);
+            }
+
+            return result;
+        }
+
         struct ggml_cgraph* build_graph(struct ggml_tensor* x,
                                         struct ggml_tensor* timesteps,
                                         struct ggml_tensor* context,
@@ -2199,12 +2294,13 @@ namespace WAN {
                      struct ggml_tensor* vace_context    = nullptr,
                      float vace_strength                 = 1.f,
                      struct ggml_tensor** output         = nullptr,
-                     struct ggml_context* output_ctx     = nullptr) {
+                     struct ggml_context* output_ctx     = nullptr,
+                     bool skip_param_offload             = false) {
             auto get_graph = [&]() -> struct ggml_cgraph* {
                 return build_graph(x, timesteps, context, clip_fea, c_concat, time_dim_concat, vace_context, vace_strength);
             };
 
-            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx, skip_param_offload);
         }
 
         void test() {

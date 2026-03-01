@@ -483,6 +483,48 @@ inline std::pair<std::string, int> mmdit_layer_pattern(const std::string& tensor
     return {"_global", -1};
 }
 
+/**
+ * Helper function to extract WAN layer information from tensor name
+ * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
+ *
+ * WAN structure:
+ * - blocks.N.* (main transformer blocks, N=0-29 or 0-39)
+ * - vace_blocks.N.* (optional VACE blocks)
+ * - patch_embedding, text_embedding, time_embedding, head (global)
+ */
+inline std::pair<std::string, int> wan_layer_pattern(const std::string& tensor_name) {
+    // Look for blocks.N pattern (main transformer blocks)
+    size_t b_pos = tensor_name.find("blocks.");
+    // Make sure it's not "vace_blocks"
+    if (b_pos != std::string::npos && (b_pos == 0 || tensor_name[b_pos - 1] != '_')) {
+        size_t num_start = b_pos + 7;  // Length of "blocks."
+        size_t num_end = tensor_name.find('.', num_start);
+        if (num_end == std::string::npos) {
+            num_end = tensor_name.length();
+        }
+        std::string num_str = tensor_name.substr(num_start, num_end - num_start);
+        int block_idx = std::stoi(num_str);
+        return {"blocks." + num_str, block_idx};
+    }
+
+    // Look for vace_blocks.N pattern (VACE blocks)
+    size_t vb_pos = tensor_name.find("vace_blocks.");
+    if (vb_pos != std::string::npos) {
+        size_t num_start = vb_pos + 12;  // Length of "vace_blocks."
+        size_t num_end = tensor_name.find('.', num_start);
+        if (num_end == std::string::npos) {
+            num_end = tensor_name.length();
+        }
+        std::string num_str = tensor_name.substr(num_start, num_end - num_start);
+        int block_idx = std::stoi(num_str);
+        // Offset VACE blocks to come after main blocks (use 100+)
+        return {"vace_blocks." + num_str, 100 + block_idx};
+    }
+
+    // Non-layer tensor (embeddings, head, etc.)
+    return {"_global", -1};
+}
+
 }  // namespace LayerStreaming
 
 #endif  // __TENSOR_REGISTRY_HPP__

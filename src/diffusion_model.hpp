@@ -524,6 +524,41 @@ struct WanModel : public DiffusionModel {
     bool move_params_to_cpu() override { return wan.move_params_to_cpu(); }
     bool move_params_to_gpu() override { return wan.move_params_to_gpu(); }
     size_t get_params_vram_size() const override { return wan.get_params_vram_size(); }
+
+    // Layer streaming (granular tensor offloading)
+    bool supports_layer_streaming() const override { return true; }
+
+    void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {
+        LayerStreaming::StreamingConfig config;
+        config.prefetch_layers = prefetch_layers;
+        config.min_free_vram = min_free_vram;
+        wan.enable_layer_streaming(config);
+    }
+
+    void disable_layer_streaming() override {
+        wan.disable_layer_streaming();
+    }
+
+    bool is_layer_streaming_enabled() const override {
+        return wan.is_streaming_enabled();
+    }
+
+    bool compute_streaming(int n_threads,
+                           DiffusionParams diffusion_params,
+                           struct ggml_tensor** output     = nullptr,
+                           struct ggml_context* output_ctx = nullptr) override {
+        return wan.compute_streaming(n_threads,
+                                     diffusion_params.x,
+                                     diffusion_params.timesteps,
+                                     diffusion_params.context,
+                                     diffusion_params.y,
+                                     diffusion_params.c_concat,
+                                     nullptr,
+                                     diffusion_params.vace_context,
+                                     diffusion_params.vace_strength,
+                                     output,
+                                     output_ctx);
+    }
 };
 
 struct QwenImageModel : public DiffusionModel {
