@@ -2883,6 +2883,13 @@ public:
             return false;  // Nothing to offload
         }
 
+        // For layer_streaming mode, ALWAYS offload cond_stage to maximize VRAM for layer loading
+        // The streaming engine needs all available VRAM to load layers one at a time
+        if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+            LOG_INFO("[Offload] Layer streaming mode: will offload cond_stage to free VRAM for layer loading");
+            return true;
+        }
+
         size_t cond_stage_vram = cond_stage_model->get_params_vram_size();
         if (cond_stage_vram < offload_config.min_offload_size) {
             return false;  // Too small to bother
