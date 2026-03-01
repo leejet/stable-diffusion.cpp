@@ -378,6 +378,8 @@ struct FluxModel : public DiffusionModel {
                                       diffusion_params.c_concat,
                                       diffusion_params.y,
                                       diffusion_params.guidance,
+                                      diffusion_params.ref_latents,
+                                      diffusion_params.increase_ref_index,
                                       output,
                                       output_ctx,
                                       diffusion_params.skip_layers);

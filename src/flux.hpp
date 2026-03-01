@@ -1842,6 +1842,8 @@ namespace Flux {
                                struct ggml_tensor* c_concat,
                                struct ggml_tensor* y,
                                struct ggml_tensor* guidance,
+                               std::vector<ggml_tensor*> ref_latents = {},
+                               bool increase_ref_index               = false,
                                struct ggml_tensor** output           = nullptr,
                                struct ggml_context* output_ctx       = nullptr,
                                std::vector<int> skip_layers          = std::vector<int>()) {
@@ -1870,8 +1872,8 @@ namespace Flux {
                                        static_cast<int>(x->ne[3]),
                                        static_cast<int>(context->ne[1]),
                                        {},  // txt_arange_dims
-                                       {},  // ref_latents
-                                       false,
+                                       ref_latents,
+                                       increase_ref_index,
                                        flux_params.ref_index_scale,
                                        flux_params.theta,
                                        false, false,
@@ -1916,6 +1918,12 @@ namespace Flux {
                 auto y_be = to_backend(y);
                 auto guidance_be = (flux_params.guidance_embed || flux_params.is_chroma) ? to_backend(guidance) : nullptr;
 
+                // Convert ref_latents to backend (for Kontext models)
+                std::vector<ggml_tensor*> ref_latents_be;
+                for (auto ref : ref_latents) {
+                    ref_latents_be.push_back(to_backend(ref));
+                }
+
                 // Patchify input (same as build_graph)
                 auto img = ggml_pad(runner_ctx.ggml_ctx, x_be, pad_w, pad_h, 0, 0);
                 int64_t W = img->ne[0], H = img->ne[1];
@@ -1923,6 +1931,17 @@ namespace Flux {
                 img = ggml_cont(runner_ctx.ggml_ctx, ggml_permute(runner_ctx.ggml_ctx, img, 0, 2, 1, 3));
                 img = ggml_reshape_3d(runner_ctx.ggml_ctx, img, patch_size * patch_size * in_C, W / patch_size * H / patch_size, in_N);
                 img = ggml_cont(runner_ctx.ggml_ctx, ggml_permute(runner_ctx.ggml_ctx, img, 1, 0, 2, 3));
+
+                // Process and concatenate ref_latents (for Kontext models)
+                for (auto ref : ref_latents_be) {
+                    // Process ref image same as main image (patchify)
+                    ref = ggml_pad(runner_ctx.ggml_ctx, ref, pad_w, pad_h, 0, 0);
+                    ref = ggml_reshape_4d(runner_ctx.ggml_ctx, ref, patch_size, W / patch_size, patch_size, H / patch_size * in_C * in_N);
+                    ref = ggml_cont(runner_ctx.ggml_ctx, ggml_permute(runner_ctx.ggml_ctx, ref, 0, 2, 1, 3));
+                    ref = ggml_reshape_3d(runner_ctx.ggml_ctx, ref, patch_size * patch_size * in_C, W / patch_size * H / patch_size, in_N);
+                    ref = ggml_cont(runner_ctx.ggml_ctx, ggml_permute(runner_ctx.ggml_ctx, ref, 1, 0, 2, 3));
+                    img = ggml_concat(runner_ctx.ggml_ctx, img, ref, 1);
+                }
 
                 // Execute preprocessing (builds graph nodes)
                 flux.forward_preprocessing(&runner_ctx, stream_ctx, img, context_be, timesteps_be, y_be, guidance_be, pe, mod_index_arange);
