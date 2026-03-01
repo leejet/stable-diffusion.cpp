@@ -4011,6 +4011,13 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
         LOG_INFO("[Offload] Smart: keeping diffusion on GPU (sufficient VRAM for VAE decode)");
     }
 
+    // For layer_streaming mode: offload all streaming layers before VAE decode
+    // This frees GPU memory that was used by the streaming engine for layer weights
+    if (sd_ctx->sd->offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+        sd_ctx->sd->diffusion_model && sd_ctx->sd->diffusion_model->is_layer_streaming_enabled()) {
+        sd_ctx->sd->diffusion_model->offload_streaming_layers();
+    }
+
     // Also offload cond_stage if still on GPU and configured (it's done after conditioning anyway)
     if (!final_latents.empty()) {
         sd_ctx->sd->smart_offload_for_vae(final_latents[0], false);

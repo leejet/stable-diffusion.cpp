@@ -735,6 +735,26 @@ namespace Anima {
         }
 
         /**
+         * Offload all streaming layers to CPU (free GPU memory)
+         */
+        void offload_streaming_layers() {
+            if (streaming_engine_) {
+                auto& registry = streaming_engine_->get_registry();
+                auto layers = registry.get_layer_names_sorted();
+                size_t offloaded = 0;
+                for (const auto& layer : layers) {
+                    if (registry.is_layer_on_gpu(layer)) {
+                        registry.move_layer_to_cpu(layer);
+                        offloaded++;
+                    }
+                }
+                if (offloaded > 0) {
+                    LOG_INFO("AnimaRunner: Offloaded %zu streaming layers to CPU", offloaded);
+                }
+            }
+        }
+
+        /**
          * Get the streaming engine (for advanced configuration)
          */
         LayerStreaming::LayerExecutionEngine* get_streaming_engine() {

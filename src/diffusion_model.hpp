@@ -63,6 +63,8 @@ struct DiffusionModel {
         // Default: fall back to regular compute
         return compute(n_threads, diffusion_params, output, output_ctx);
     }
+    // Offload all streaming layers to CPU (free GPU memory after diffusion)
+    virtual void offload_streaming_layers() {}
 };
 
 struct UNetModel : public DiffusionModel {
@@ -152,6 +154,10 @@ struct UNetModel : public DiffusionModel {
 
     bool is_layer_streaming_enabled() const override {
         return unet.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        unet.offload_streaming_layers();
     }
 
     bool compute_streaming(int n_threads,
@@ -257,6 +263,10 @@ struct MMDiTModel : public DiffusionModel {
 
     bool is_layer_streaming_enabled() const override {
         return mmdit.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        mmdit.offload_streaming_layers();
     }
 
     bool compute_streaming(int n_threads,
@@ -367,6 +377,10 @@ struct FluxModel : public DiffusionModel {
         return flux.is_streaming_enabled();
     }
 
+    void offload_streaming_layers() override {
+        flux.offload_streaming_layers();
+    }
+
     bool compute_streaming(int n_threads,
                            DiffusionParams diffusion_params,
                            struct ggml_tensor** output     = nullptr,
@@ -468,6 +482,10 @@ struct AnimaModel : public DiffusionModel {
 
     bool is_layer_streaming_enabled() const override {
         return anima.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        anima.offload_streaming_layers();
     }
 
     bool compute_streaming(int n_threads,
@@ -576,6 +594,10 @@ struct WanModel : public DiffusionModel {
 
     bool is_layer_streaming_enabled() const override {
         return wan.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        wan.offload_streaming_layers();
     }
 
     bool compute_streaming(int n_threads,
@@ -700,6 +722,10 @@ struct QwenImageModel : public DiffusionModel {
                                             output,
                                             output_ctx);
     }
+
+    void offload_streaming_layers() override {
+        qwen_image.offload_streaming_layers();
+    }
 };
 
 struct ZImageModel : public DiffusionModel {
@@ -790,6 +816,10 @@ struct ZImageModel : public DiffusionModel {
 
     bool is_layer_streaming_enabled() const override {
         return z_image.is_streaming_enabled();
+    }
+
+    void offload_streaming_layers() override {
+        z_image.offload_streaming_layers();
     }
 
     bool compute_streaming(int n_threads,
