@@ -956,14 +956,30 @@ namespace Qwen {
                       txt_ne[0], txt_ne[1], txt_ne[2], txt_ne[3]);
 
             // ============ STAGE 2: Transformer blocks (one at a time) ============
+            // With async prefetching: while computing block N, prefetch block N+1
+
+            // Start prefetching the first block
+            std::string first_block_name = "transformer_blocks.0";
+            streaming_engine_->prefetch_layer(first_block_name);
+
             for (int block_idx = 0; block_idx < num_layers; block_idx++) {
                 std::string block_name = "transformer_blocks." + std::to_string(block_idx);
                 int64_t t_block_start = ggml_time_ms();
 
-                // Load this block's weights
+                // Wait for this block's prefetch to complete (if it was prefetched)
+                streaming_engine_->wait_for_prefetch(block_name);
+
+                // Load this block's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(block_name)) {
                     LOG_ERROR("QwenImageRunner: Failed to load block %d", block_idx);
                     return false;
+                }
+
+                // Start async prefetch of the NEXT block while we compute this one
+                // This overlaps memory transfer with GPU computation
+                if (block_idx + 1 < num_layers) {
+                    std::string next_block_name = "transformer_blocks." + std::to_string(block_idx + 1);
+                    streaming_engine_->prefetch_layer(next_block_name);
                 }
 
                 // Build and execute mini-graph for this block

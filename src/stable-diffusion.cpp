@@ -857,6 +857,15 @@ public:
 
         LOG_DEBUG("finished loaded file");
 
+        // For layer streaming mode, offload all diffusion model layers to CPU immediately
+        // This frees VRAM for the LLM/CLIP during conditioning
+        // Layers will be loaded on-demand during streaming execution
+        if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING &&
+            diffusion_model && diffusion_model->is_layer_streaming_enabled()) {
+            LOG_INFO("[Offload] Offloading diffusion model layers to CPU for layer streaming");
+            diffusion_model->offload_streaming_layers();
+        }
+
         // When dynamic offloading is enabled and user didn't want clip on CPU,
         // we forced CPU backend creation but now TRY to move params to GPU for execution.
         // This gives us the best of both: fast GPU execution with ability to offload later.

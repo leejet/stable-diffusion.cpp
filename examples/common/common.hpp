@@ -481,7 +481,12 @@ struct SDContextParams {
     float flow_shift = INFINITY;
 
     // Dynamic tensor offloading configuration
-    sd_offload_config_t offload_config = {SD_OFFLOAD_NONE, SD_VRAM_EST_DRYRUN, true, false, false, true, true, 0, 2ULL * 1024 * 1024 * 1024};
+    // {mode, vram_estimation, offload_cond, offload_diff, reload_cond, reload_diff, log_ops,
+    //  min_offload_size, target_free_vram,
+    //  layer_streaming_enabled, streaming_prefetch_layers, streaming_keep_layers_behind, streaming_min_free_vram}
+    sd_offload_config_t offload_config = {SD_OFFLOAD_NONE, SD_VRAM_EST_DRYRUN, true, false, false, true, true,
+                                          0, 2ULL * 1024 * 1024 * 1024,  // min_offload_size=0, target_free_vram=2GB
+                                          false, 1, 0, 512ULL * 1024 * 1024};  // streaming: disabled, prefetch=1, keep=0, min_vram=512MB
 
     ArgOptions get_options() {
         ArgOptions options;

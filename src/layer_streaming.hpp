@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -371,6 +372,69 @@ public:
         registry_.clear();
     }
 
+    /**
+     * Start prefetching a layer asynchronously
+     * Uses ggml_backend_tensor_copy_async to overlap memory transfers with computation
+     */
+    void prefetch_layer(const std::string& layer_name) {
+        if (!config_.async_prefetch) {
+            return;
+        }
+
+        // Don't prefetch if already on GPU or already pending
+        if (registry_.is_layer_on_gpu(layer_name)) {
+            return;
+        }
+
+        if (pending_prefetches_.find(layer_name) != pending_prefetches_.end()) {
+            return;  // Already prefetching
+        }
+
+        // Start async prefetch
+        if (registry_.start_async_layer_load(layer_name, gpu_backend_, cpu_backend_)) {
+            pending_prefetches_.insert(layer_name);
+            if (config_.log_operations) {
+                LOG_DEBUG("LayerExecutionEngine: Started async prefetch for '%s'", layer_name.c_str());
+            }
+        }
+    }
+
+    /**
+     * Wait for a pending prefetch to complete
+     * Call this before using a layer that was prefetched
+     */
+    void wait_for_prefetch(const std::string& layer_name) {
+        auto it = pending_prefetches_.find(layer_name);
+        if (it == pending_prefetches_.end()) {
+            return;  // Not pending
+        }
+
+        // Complete the async transfer
+        if (registry_.complete_async_layer_load(layer_name, gpu_backend_)) {
+            pending_prefetches_.erase(it);
+            if (config_.log_operations) {
+                LOG_DEBUG("LayerExecutionEngine: Completed async prefetch for '%s'", layer_name.c_str());
+            }
+        }
+    }
+
+    /**
+     * Wait for all pending prefetches to complete
+     */
+    void wait_for_all_prefetches() {
+        for (const auto& layer_name : pending_prefetches_) {
+            registry_.complete_async_layer_load(layer_name, gpu_backend_);
+        }
+        pending_prefetches_.clear();
+    }
+
+    /**
+     * Check if a layer is currently being prefetched
+     */
+    bool is_prefetch_pending(const std::string& layer_name) const {
+        return pending_prefetches_.find(layer_name) != pending_prefetches_.end();
+    }
+
 private:
     /**
      * Ensure a layer's weights are loaded to GPU
@@ -387,19 +451,6 @@ private:
         }
 
         return registry_.move_layer_to_gpu(layer_name);
-    }
-
-    /**
-     * Start prefetching a layer asynchronously
-     * Note: True async requires CUDA streams, this is a placeholder for now
-     */
-    void prefetch_layer(const std::string& layer_name) {
-        // TODO: Implement async prefetch using ggml_backend_tensor_copy_async
-        // For now, this is a no-op - the layer will be loaded synchronously when needed
-        // In a full implementation:
-        // 1. Use a separate CUDA stream for memory transfers
-        // 2. Queue the transfer asynchronously
-        // 3. Track pending transfers
     }
 
     /**
@@ -458,6 +509,9 @@ private:
     IntermediateTensorManager intermediates_;
 
     StreamingConfig config_;
+
+    // Tracking for async prefetches
+    std::set<std::string> pending_prefetches_;
 };
 
 /**

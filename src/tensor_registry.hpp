@@ -47,6 +47,20 @@ struct LayerInfo {
     ggml_backend_buffer_t gpu_buffer = nullptr; // GPU buffer for this layer's tensors
 };
 
+// State for async layer loading (used to track in-flight transfers)
+struct AsyncLoadState {
+    struct CopyInfo {
+        std::string name;
+        ggml_tensor* cpu_tensor;
+        ggml_tensor* gpu_tensor;
+    };
+
+    ggml_context* temp_ctx = nullptr;
+    ggml_backend_buffer_t gpu_buffer = nullptr;
+    std::vector<CopyInfo> copy_list;
+    int64_t start_time = 0;
+};
+
 /**
  * TensorRegistry tracks tensor locations and supports layer-wise operations
  */
@@ -352,9 +366,180 @@ public:
     }
 
     /**
+     * Start async loading of a layer's tensors to GPU
+     * This initiates the transfer but doesn't wait for completion.
+     * Call complete_async_layer_load() to finalize.
+     * @param layer_name The layer to load
+     * @param gpu_backend GPU backend for allocation and transfer
+     * @param cpu_backend CPU backend (source)
+     * @return true if async load was started successfully
+     */
+    bool start_async_layer_load(const std::string& layer_name,
+                                ggml_backend_t gpu_backend,
+                                ggml_backend_t cpu_backend) {
+        auto it = layers_.find(layer_name);
+        if (it == layers_.end()) {
+            LOG_ERROR("TensorRegistry: layer '%s' not found for async load", layer_name.c_str());
+            return false;
+        }
+
+        LayerInfo& layer = it->second;
+        if (layer.on_gpu) {
+            return true;  // Already on GPU
+        }
+
+        // Check if already in async loading state
+        if (async_loading_layers_.find(layer_name) != async_loading_layers_.end()) {
+            return true;  // Already loading
+        }
+
+        int64_t t0 = ggml_time_ms();
+
+        // Create a temporary context for GPU tensor allocation
+        size_t ctx_size = layer.tensor_names.size() * ggml_tensor_overhead() + 1024;
+        struct ggml_init_params ctx_params = {
+            ctx_size,
+            nullptr,
+            true  // no_alloc
+        };
+        ggml_context* temp_ctx = ggml_init(ctx_params);
+        if (temp_ctx == nullptr) {
+            LOG_ERROR("TensorRegistry: failed to create temp context for async load of layer '%s'", layer_name.c_str());
+            return false;
+        }
+
+        // Create GPU tensor copies (using the CopyInfo from AsyncLoadState)
+        std::vector<AsyncLoadState::CopyInfo> copy_list;
+
+        for (const auto& tensor_name : layer.tensor_names) {
+            TensorInfo& info = tensors_[tensor_name];
+            if (info.on_gpu) {
+                continue;  // Already on GPU
+            }
+
+            ggml_tensor* gpu_tensor = ggml_dup_tensor(temp_ctx, info.cpu_tensor);
+            ggml_set_name(gpu_tensor, tensor_name.c_str());
+            copy_list.push_back({tensor_name, info.cpu_tensor, gpu_tensor});
+        }
+
+        if (copy_list.empty()) {
+            ggml_free(temp_ctx);
+            layer.on_gpu = true;
+            return true;
+        }
+
+        // Allocate GPU buffer for these tensors
+        ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(temp_ctx, gpu_backend);
+        if (buffer == nullptr) {
+            LOG_ERROR("TensorRegistry: failed to allocate GPU buffer for async load of layer '%s'", layer_name.c_str());
+            ggml_free(temp_ctx);
+            return false;
+        }
+
+        // Start async copy from CPU to GPU
+        for (auto& item : copy_list) {
+            // Use async copy - this queues the transfer but may not block
+            ggml_backend_tensor_copy_async(cpu_backend, gpu_backend, item.cpu_tensor, item.gpu_tensor);
+        }
+
+        // Store async state for completion later
+        AsyncLoadState state;
+        state.temp_ctx = temp_ctx;
+        state.gpu_buffer = buffer;
+        state.copy_list = std::move(copy_list);
+        state.start_time = t0;
+
+        async_loading_layers_[layer_name] = std::move(state);
+
+        return true;
+    }
+
+    /**
+     * Complete async loading of a layer's tensors to GPU
+     * This waits for any pending async transfers and finalizes the layer state.
+     * @param layer_name The layer to complete loading
+     * @param gpu_backend GPU backend for synchronization
+     * @return true if layer is now on GPU
+     */
+    bool complete_async_layer_load(const std::string& layer_name,
+                                   ggml_backend_t gpu_backend) {
+        auto async_it = async_loading_layers_.find(layer_name);
+        if (async_it == async_loading_layers_.end()) {
+            // Not in async loading - check if already on GPU
+            auto layer_it = layers_.find(layer_name);
+            if (layer_it != layers_.end() && layer_it->second.on_gpu) {
+                return true;
+            }
+            return false;
+        }
+
+        AsyncLoadState& state = async_it->second;
+        auto layer_it = layers_.find(layer_name);
+        if (layer_it == layers_.end()) {
+            // Layer was removed - clean up
+            ggml_backend_buffer_free(state.gpu_buffer);
+            ggml_free(state.temp_ctx);
+            async_loading_layers_.erase(async_it);
+            return false;
+        }
+
+        LayerInfo& layer = layer_it->second;
+
+        // Wait for all async transfers to complete
+        ggml_backend_synchronize(gpu_backend);
+
+        // Update tensor info and swap buffer pointers
+        for (auto& item : state.copy_list) {
+            TensorInfo& info = tensors_[item.name];
+            info.gpu_tensor = item.gpu_tensor;
+            info.on_gpu = true;
+            info.last_access = access_counter_++;
+
+            // Swap the buffer pointers so the original tensor now points to GPU memory
+            std::swap(item.cpu_tensor->buffer, item.gpu_tensor->buffer);
+            std::swap(item.cpu_tensor->data, item.gpu_tensor->data);
+            std::swap(item.cpu_tensor->extra, item.gpu_tensor->extra);
+        }
+
+        layer.on_gpu = true;
+        layer.gpu_buffer = state.gpu_buffer;
+        current_gpu_usage_ += layer.total_size_bytes;
+
+        // Store the temp context for later cleanup
+        layer_contexts_[layer_name] = state.temp_ctx;
+
+        int64_t t1 = ggml_time_ms();
+        LOG_DEBUG("TensorRegistry: async loaded layer '%s' to GPU (%.2f MB) in %.2fs",
+                  layer_name.c_str(),
+                  layer.total_size_bytes / (1024.0 * 1024.0),
+                  (t1 - state.start_time) / 1000.0);
+
+        async_loading_layers_.erase(async_it);
+        return true;
+    }
+
+    /**
+     * Check if a layer is currently being async loaded
+     */
+    bool is_layer_async_loading(const std::string& layer_name) const {
+        return async_loading_layers_.find(layer_name) != async_loading_layers_.end();
+    }
+
+    /**
      * Clear all registrations and free GPU resources
      */
     void clear() {
+        // Clean up any pending async loads first
+        for (auto& [name, state] : async_loading_layers_) {
+            if (state.gpu_buffer) {
+                ggml_backend_buffer_free(state.gpu_buffer);
+            }
+            if (state.temp_ctx) {
+                ggml_free(state.temp_ctx);
+            }
+        }
+        async_loading_layers_.clear();
+
         // Move all layers to CPU first
         for (auto& [name, layer] : layers_) {
             if (layer.on_gpu) {
@@ -380,6 +565,7 @@ private:
     std::unordered_map<std::string, TensorInfo> tensors_;
     std::unordered_map<std::string, LayerInfo> layers_;
     std::unordered_map<std::string, ggml_context*> layer_contexts_;
+    std::unordered_map<std::string, AsyncLoadState> async_loading_layers_;
 
     size_t current_gpu_usage_ = 0;
     uint64_t access_counter_  = 0;
