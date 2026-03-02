@@ -734,6 +734,9 @@ namespace Qwen {
                 if (streaming_engine_->get_config().log_operations) {
                     LOG_DEBUG("QwenImageRunner: Coarse-stage streaming completed in %.2fs", (t1 - t0) / 1000.0);
                 }
+
+                // Free compute buffer so next iteration can use different graph if needed
+                free_compute_buffer();
                 return result;
             }
 
@@ -910,7 +913,7 @@ namespace Qwen {
                     return gf;
                 };
 
-                // Execute input stage
+                // Execute input stage - don't free compute buffer immediately
                 if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
                     LOG_ERROR("QwenImageRunner: Input stage failed");
                     return false;
@@ -940,8 +943,12 @@ namespace Qwen {
                     }
                 } else {
                     LOG_ERROR("QwenImageRunner: Failed to get input stage outputs");
+                    free_compute_buffer();
                     return false;
                 }
+
+                // Now safe to free compute buffer
+                free_compute_buffer();
             }
 
             LOG_DEBUG("QwenImageRunner: Input stage done, img=%ldx%ldx%ldx%ld, txt=%ldx%ldx%ldx%ld",
@@ -1005,6 +1012,7 @@ namespace Qwen {
                     return gf;
                 };
 
+                // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
                     LOG_ERROR("QwenImageRunner: Block %d execution failed", block_idx);
                     return false;
@@ -1020,6 +1028,9 @@ namespace Qwen {
                         txt_ne[i] = txt_out->ne[i];
                     }
                 }
+
+                // Now safe to free compute buffer
+                free_compute_buffer();
 
                 // Offload this block
                 registry.move_layer_to_cpu(block_name);
@@ -1055,7 +1066,7 @@ namespace Qwen {
                     return gf;
                 };
 
-                if (!GGMLRunner::compute(get_output_graph, n_threads, false, output, output_ctx, true)) {
+                if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
                     LOG_ERROR("QwenImageRunner: Output stage failed");
                     return false;
                 }

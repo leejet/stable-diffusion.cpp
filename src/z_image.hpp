@@ -454,6 +454,115 @@ namespace ZImage {
 
             return out;
         }
+
+        // ============== Staged Forward Methods for True Per-Layer Streaming ==============
+
+        /**
+         * Input stage result structure
+         */
+        struct StreamingInputResult {
+            ggml_tensor* txt;       // [N, n_txt_token + n_txt_pad_token, hidden_size]
+            ggml_tensor* img;       // [N, n_img_token + n_img_pad_token, hidden_size]
+            ggml_tensor* t_emb;     // [N, hidden_size]
+            ggml_tensor* txt_pe;    // PE for txt
+            ggml_tensor* img_pe;    // PE for img
+            ggml_tensor* full_pe;   // Full PE for main layers
+            int64_t n_txt_token;
+            int64_t n_txt_pad_token;
+            int64_t n_img_token;
+        };
+
+        /**
+         * Input stage: compute embeddings and initial projections
+         */
+        StreamingInputResult forward_input_stage(GGMLRunnerContext* ctx,
+                                                  struct ggml_tensor* x,
+                                                  struct ggml_tensor* timestep,
+                                                  struct ggml_tensor* context,
+                                                  struct ggml_tensor* pe) {
+            auto x_embedder     = std::dynamic_pointer_cast<Linear>(blocks["x_embedder"]);
+            auto t_embedder     = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"]);
+            auto cap_embedder_0 = std::dynamic_pointer_cast<RMSNorm>(blocks["cap_embedder.0"]);
+            auto cap_embedder_1 = std::dynamic_pointer_cast<Linear>(blocks["cap_embedder.1"]);
+
+            auto txt_pad_token = params["cap_pad_token"];
+            auto img_pad_token = params["x_pad_token"];
+
+            int64_t N           = x->ne[2];
+            int64_t n_img_token = x->ne[1];
+            int64_t n_txt_token = context->ne[1];
+
+            auto t_emb = t_embedder->forward(ctx, timestep);
+
+            auto txt = cap_embedder_1->forward(ctx, cap_embedder_0->forward(ctx, context));  // [N, n_txt_token, hidden_size]
+            auto img = x_embedder->forward(ctx, x);                                          // [N, n_img_token, hidden_size]
+
+            int64_t n_txt_pad_token = Rope::bound_mod(static_cast<int>(n_txt_token), SEQ_MULTI_OF);
+            if (n_txt_pad_token > 0) {
+                auto txt_pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, txt_pad_token, txt_pad_token->ne[0], n_txt_pad_token, N, 1);
+                txt                 = ggml_concat(ctx->ggml_ctx, txt, txt_pad_tokens, 1);
+            }
+
+            int64_t n_img_pad_token = Rope::bound_mod(static_cast<int>(n_img_token), SEQ_MULTI_OF);
+            if (n_img_pad_token > 0) {
+                auto img_pad_tokens = ggml_repeat_4d(ctx->ggml_ctx, img_pad_token, img_pad_token->ne[0], n_img_pad_token, N, 1);
+                img                 = ggml_concat(ctx->ggml_ctx, img, img_pad_tokens, 1);
+            }
+
+            auto txt_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, 0, txt->ne[1]);
+            auto img_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt->ne[1], pe->ne[3]);
+
+            return {txt, img, t_emb, txt_pe, img_pe, pe, n_txt_token, n_txt_pad_token, n_img_token};
+        }
+
+        /**
+         * Execute one context_refiner block
+         */
+        ggml_tensor* forward_context_refiner_block(GGMLRunnerContext* ctx,
+                                                    int block_idx,
+                                                    struct ggml_tensor* txt,
+                                                    struct ggml_tensor* txt_pe) {
+            auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["context_refiner." + std::to_string(block_idx)]);
+            return block->forward(ctx, txt, txt_pe, nullptr, nullptr);
+        }
+
+        /**
+         * Execute one noise_refiner block
+         */
+        ggml_tensor* forward_noise_refiner_block(GGMLRunnerContext* ctx,
+                                                  int block_idx,
+                                                  struct ggml_tensor* img,
+                                                  struct ggml_tensor* img_pe,
+                                                  struct ggml_tensor* t_emb) {
+            auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["noise_refiner." + std::to_string(block_idx)]);
+            return block->forward(ctx, img, img_pe, nullptr, t_emb);
+        }
+
+        /**
+         * Execute one main layer block
+         */
+        ggml_tensor* forward_layer_block(GGMLRunnerContext* ctx,
+                                          int block_idx,
+                                          struct ggml_tensor* txt_img,
+                                          struct ggml_tensor* pe,
+                                          struct ggml_tensor* t_emb) {
+            auto block = std::dynamic_pointer_cast<JointTransformerBlock>(blocks["layers." + std::to_string(block_idx)]);
+            return block->forward(ctx, txt_img, pe, nullptr, t_emb);
+        }
+
+        /**
+         * Output stage: apply final_layer
+         */
+        ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
+                                           struct ggml_tensor* txt_img,
+                                           struct ggml_tensor* t_emb) {
+            auto final_layer = std::dynamic_pointer_cast<FinalLayer>(blocks["final_layer"]);
+            return final_layer->forward(ctx, txt_img, t_emb);
+        }
+
+        int get_num_refiner_layers() const { return z_image_params.num_refiner_layers; }
+        int get_num_layers() const { return z_image_params.num_layers; }
+        int get_patch_size() const { return z_image_params.patch_size; }
     };
 
     struct ZImageRunner : public GGMLRunner {
@@ -572,72 +681,279 @@ namespace ZImage {
                         registry.move_layer_to_gpu(layer_name);
                     }
                 }
-            } else {
-                // Model doesn't fit - use chunked streaming
-                LOG_INFO("ZImageRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using chunked streaming",
-                         total_model_size / (1024.0 * 1024.0 * 1024.0),
-                         available_vram / (1024.0 * 1024.0 * 1024.0));
+                // Run compute with coarse-stage
+                bool result = compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
+                                      output, output_ctx, true /* skip_param_offload */);
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("ZImageRunner: Coarse-stage streaming completed in %.2fs", (t1 - t0) / 1000.0);
 
-                // Load global first
-                registry.move_layer_to_gpu("_global");
-                size_t remaining_vram = budget.get_available_vram();
-
-                // Count layers from registry
-                int total_layers = 0;
-                for (const auto& name : all_layers) {
-                    if (name.find("layers.") != std::string::npos) {
-                        total_layers++;
-                    }
-                }
-
-                // Get typical layer size
-                size_t layer_size = registry.get_layer_size("layers.0");
-                size_t compute_estimate = layer_size * 3;
-                size_t vram_for_layers = (remaining_vram > compute_estimate) ? (remaining_vram - compute_estimate) : 0;
-
-                int layers_loaded = 0;
-
-                // Load refiners first (context_refiner, noise_refiner)
-                for (const auto& name : all_layers) {
-                    if (name.find("context_refiner.") != std::string::npos ||
-                        name.find("noise_refiner.") != std::string::npos) {
-                        size_t size = registry.get_layer_size(name);
-                        if (vram_for_layers >= size) {
-                            if (registry.move_layer_to_gpu(name)) {
-                                vram_for_layers -= size;
-                            }
-                        }
-                    }
-                }
-
-                // Load main layers
-                for (int i = 0; i < total_layers; i++) {
-                    std::string layer_name = "layers." + std::to_string(i);
-                    size_t size = registry.get_layer_size(layer_name);
-
-                    if (vram_for_layers >= size) {
-                        if (registry.move_layer_to_gpu(layer_name)) {
-                            vram_for_layers -= size;
-                            layers_loaded++;
-                        }
-                    }
-                }
-
-                LOG_INFO("ZImageRunner: %d/%d layers on GPU, rest will compute on CPU",
-                         layers_loaded, total_layers);
+                // Free compute buffer so next iteration can use different graph if needed
+                free_compute_buffer();
+                return result;
             }
 
-            // Run compute
-            bool result = compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
-                                  output, output_ctx, true /* skip_param_offload */);
+            // Model doesn't fit - use TRUE per-layer streaming
+            LOG_INFO("ZImageRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using TRUE per-layer streaming",
+                     total_model_size / (1024.0 * 1024.0 * 1024.0),
+                     available_vram / (1024.0 * 1024.0 * 1024.0));
 
-            int64_t t1 = ggml_time_ms();
+            return compute_streaming_true(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
+                                          output, output_ctx);
+        }
 
-            if (streaming_engine_->get_config().log_operations) {
-                LOG_DEBUG("ZImageRunner: Streaming compute completed in %.2fs", (t1 - t0) / 1000.0);
+        /**
+         * TRUE per-layer streaming for ZImage
+         * Executes each block as a separate mini-graph to minimize VRAM usage
+         */
+        bool compute_streaming_true(int n_threads,
+                                     struct ggml_tensor* x,
+                                     struct ggml_tensor* timesteps,
+                                     struct ggml_tensor* context,
+                                     std::vector<ggml_tensor*> ref_latents = {},
+                                     bool increase_ref_index               = false,
+                                     struct ggml_tensor** output           = nullptr,
+                                     struct ggml_context* output_ctx       = nullptr) {
+            auto& registry = streaming_engine_->get_registry();
+            int64_t t_start = ggml_time_ms();
+
+            const int num_refiner_layers = z_image.get_num_refiner_layers();
+            const int num_layers = z_image.get_num_layers();
+            const int patch_size = z_image.get_patch_size();
+            const int64_t W = x->ne[0];
+            const int64_t H = x->ne[1];
+
+            LOG_INFO("ZImageRunner: TRUE per-layer streaming - %d refiners + %d layers",
+                     num_refiner_layers, num_layers);
+
+            // Load global layers
+            if (!registry.move_layer_to_gpu("_global")) {
+                LOG_ERROR("ZImageRunner: Failed to load _global to GPU");
+                return false;
             }
 
-            return result;
+            // Generate PE
+            pe_vec = Rope::gen_z_image_pe(static_cast<int>(H),
+                                           static_cast<int>(W),
+                                           z_image_params.patch_size,
+                                           static_cast<int>(x->ne[3]),
+                                           static_cast<int>(context->ne[1]),
+                                           SEQ_MULTI_OF,
+                                           ref_latents,
+                                           increase_ref_index,
+                                           z_image_params.theta,
+                                           circular_y_enabled,
+                                           circular_x_enabled,
+                                           z_image_params.axes_dim);
+
+            // For ZImage with refiners, we'll execute refiners with global,
+            // then stream main layers one at a time
+            // This is a simplified approach - refiners are usually small
+
+            // Persistent storage
+            std::vector<float> persistent_txt_img;
+            std::vector<float> persistent_t_emb;
+            int64_t txt_img_ne[4], t_emb_ne[4];
+            int64_t n_txt_token = 0, n_txt_pad_token = 0, n_img_token_val = 0;
+
+            // Stage 1: Input + Refiners (all in one graph since refiners are small)
+            LOG_DEBUG("ZImageRunner: Executing input + refiners stage");
+            {
+                ggml_tensor* txt_img_output = nullptr;
+                ggml_tensor* t_emb_output = nullptr;
+
+                auto get_refiner_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 2);
+                    auto runner_ctx = get_context();
+
+                    ggml_tensor* x_backend = to_backend(x);
+                    ggml_tensor* context_backend = to_backend(context);
+                    ggml_tensor* timesteps_backend = to_backend(timesteps);
+
+                    // Patchify
+                    auto img = DiT::pad_and_patchify(&runner_ctx, x_backend, patch_size, patch_size, false);
+                    n_img_token_val = img->ne[1];
+
+                    // Handle ref_latents
+                    for (auto& ref : ref_latents) {
+                        auto ref_backend = to_backend(ref);
+                        ref_backend = DiT::pad_and_patchify(&runner_ctx, ref_backend, patch_size, patch_size, false);
+                        img = ggml_concat(compute_ctx, img, ref_backend, 1);
+                    }
+
+                    // PE tensor
+                    int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
+                    auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
+                    set_backend_tensor_data(pe, pe_vec.data());
+
+                    // Input stage
+                    auto input_result = z_image.forward_input_stage(&runner_ctx, img, timesteps_backend, context_backend, pe);
+                    auto txt = input_result.txt;
+                    img = input_result.img;
+                    auto t_emb = input_result.t_emb;
+                    auto txt_pe = input_result.txt_pe;
+                    auto img_pe = input_result.img_pe;
+                    n_txt_token = input_result.n_txt_token;
+                    n_txt_pad_token = input_result.n_txt_pad_token;
+
+                    // Context refiners
+                    for (int i = 0; i < num_refiner_layers; i++) {
+                        txt = z_image.forward_context_refiner_block(&runner_ctx, i, txt, txt_pe);
+                    }
+
+                    // Noise refiners
+                    for (int i = 0; i < num_refiner_layers; i++) {
+                        img = z_image.forward_noise_refiner_block(&runner_ctx, i, img, img_pe, t_emb);
+                    }
+
+                    // Concat for main layers
+                    txt_img_output = ggml_concat(compute_ctx, txt, img, 1);
+                    t_emb_output = t_emb;
+
+                    ggml_build_forward_expand(gf, txt_img_output);
+                    ggml_build_forward_expand(gf, t_emb_output);
+
+                    return gf;
+                };
+
+                // Don't free compute buffer immediately - we need to read outputs first
+                if (!GGMLRunner::compute(get_refiner_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("ZImageRunner: Refiner stage failed");
+                    return false;
+                }
+
+                // Extract to persistent storage
+                if (txt_img_output && t_emb_output) {
+                    size_t txt_img_size = ggml_nelements(txt_img_output);
+                    size_t t_emb_size = ggml_nelements(t_emb_output);
+
+                    persistent_txt_img.resize(txt_img_size);
+                    persistent_t_emb.resize(t_emb_size);
+
+                    ggml_backend_tensor_get(txt_img_output, persistent_txt_img.data(), 0, txt_img_size * sizeof(float));
+                    ggml_backend_tensor_get(t_emb_output, persistent_t_emb.data(), 0, t_emb_size * sizeof(float));
+
+                    for (int i = 0; i < 4; i++) {
+                        txt_img_ne[i] = txt_img_output->ne[i];
+                        t_emb_ne[i] = t_emb_output->ne[i];
+                    }
+                } else {
+                    LOG_ERROR("ZImageRunner: Failed to get refiner stage outputs");
+                    free_compute_buffer();
+                    return false;
+                }
+
+                // Now safe to free compute buffer
+                free_compute_buffer();
+            }
+
+            LOG_DEBUG("ZImageRunner: Refiner stage done, txt_img=%ldx%ldx%ld", txt_img_ne[0], txt_img_ne[1], txt_img_ne[2]);
+
+            // Stage 2: Main layers (one at a time)
+            for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
+                std::string layer_name = "layers." + std::to_string(layer_idx);
+                int64_t t_block_start = ggml_time_ms();
+
+                if (!registry.move_layer_to_gpu(layer_name)) {
+                    LOG_ERROR("ZImageRunner: Failed to load %s", layer_name.c_str());
+                    return false;
+                }
+
+                ggml_tensor* txt_img_out = nullptr;
+
+                auto get_layer_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
+
+                    ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                  txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
+                    ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
+
+                    txt_img_in = to_backend(txt_img_in);
+                    t_emb_in = to_backend(t_emb_in);
+
+                    set_backend_tensor_data(txt_img_in, persistent_txt_img.data());
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
+
+                    // PE tensor
+                    int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
+                    auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
+                    set_backend_tensor_data(pe, pe_vec.data());
+
+                    auto runner_ctx = get_context();
+                    txt_img_out = z_image.forward_layer_block(&runner_ctx, layer_idx, txt_img_in, pe, t_emb_in);
+
+                    ggml_build_forward_expand(gf, txt_img_out);
+
+                    return gf;
+                };
+
+                // Don't free compute buffer immediately - we need to read outputs first
+                if (!GGMLRunner::compute(get_layer_graph, n_threads, false, nullptr, nullptr, true)) {
+                    LOG_ERROR("ZImageRunner: Layer %d execution failed", layer_idx);
+                    return false;
+                }
+
+                // Extract output
+                if (txt_img_out) {
+                    ggml_backend_tensor_get(txt_img_out, persistent_txt_img.data(), 0, persistent_txt_img.size() * sizeof(float));
+                    for (int i = 0; i < 4; i++) {
+                        txt_img_ne[i] = txt_img_out->ne[i];
+                    }
+                }
+
+                // Now safe to free compute buffer
+                free_compute_buffer();
+
+                registry.move_layer_to_cpu(layer_name);
+
+                LOG_DEBUG("ZImageRunner: Layer %d/%d done (%.2fms)",
+                          layer_idx + 1, num_layers, (ggml_time_ms() - t_block_start) / 1.0);
+            }
+
+            // Stage 3: Output
+            LOG_DEBUG("ZImageRunner: Executing output stage");
+            {
+                auto get_output_graph = [&]() -> struct ggml_cgraph* {
+                    struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
+
+                    ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                  txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
+                    ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                                t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
+
+                    txt_img_in = to_backend(txt_img_in);
+                    t_emb_in = to_backend(t_emb_in);
+
+                    set_backend_tensor_data(txt_img_in, persistent_txt_img.data());
+                    set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
+
+                    auto runner_ctx = get_context();
+                    auto final_out = z_image.forward_output_stage(&runner_ctx, txt_img_in, t_emb_in);
+
+                    // Extract img portion and unpatchify
+                    int64_t n_img_token = n_img_token_val;
+                    final_out = ggml_ext_slice(compute_ctx, final_out, 1,
+                                               n_txt_token + n_txt_pad_token,
+                                               n_txt_token + n_txt_pad_token + n_img_token);
+                    final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W, patch_size, patch_size, false);
+                    final_out = ggml_ext_scale(compute_ctx, final_out, -1.f);
+
+                    ggml_build_forward_expand(gf, final_out);
+
+                    return gf;
+                };
+
+                if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
+                    LOG_ERROR("ZImageRunner: Output stage failed");
+                    return false;
+                }
+            }
+
+            int64_t t_end = ggml_time_ms();
+            LOG_INFO("ZImageRunner: TRUE per-layer streaming completed in %.2fs (%d refiners + %d layers)",
+                     (t_end - t_start) / 1000.0, num_refiner_layers, num_layers);
+
+            return true;
         }
 
         struct ggml_cgraph* build_graph(struct ggml_tensor* x,

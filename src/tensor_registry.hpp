@@ -139,6 +139,8 @@ public:
         }
 
         LayerInfo& layer = it->second;
+        LOG_DEBUG("TensorRegistry: move_layer_to_gpu('%s') - on_gpu=%d, tensors=%zu",
+                  layer_name.c_str(), layer.on_gpu ? 1 : 0, layer.tensor_names.size());
         if (layer.on_gpu) {
             return true;  // Already on GPU
         }

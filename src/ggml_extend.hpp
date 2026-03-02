@@ -1752,19 +1752,25 @@ protected:
         return gf;
     }
 
-    bool alloc_compute_buffer(get_graph_cb_t get_graph) {
+    // Allocate compute buffer and optionally return the graph used for reservation.
+    // If out_gf is provided and the allocator was just created, it will be set to the
+    // graph used for reservation (which should be reused for allocation to avoid
+    // tensor pointer mismatches). If allocator already existed, out_gf will be nullptr.
+    bool alloc_compute_buffer(get_graph_cb_t get_graph, struct ggml_cgraph** out_gf = nullptr) {
         if (compute_allocr != nullptr) {
+            if (out_gf) *out_gf = nullptr;  // Caller must rebuild graph
             return true;
         }
         reset_compute_ctx();
         struct ggml_cgraph* gf = get_compute_graph(get_graph);
-        backend_tensor_data_map.clear();
+        // Don't clear backend_tensor_data_map here - compute() will use it
         compute_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(runtime_backend));
 
         if (!ggml_gallocr_reserve(compute_allocr, gf)) {
             // failed to allocate the compute buffer
             LOG_ERROR("%s: failed to allocate the compute buffer\n", get_desc().c_str());
             free_compute_buffer();
+            if (out_gf) *out_gf = nullptr;
             return false;
         }
 
@@ -1774,6 +1780,8 @@ protected:
                   get_desc().c_str(),
                   compute_buffer_size / 1024.0 / 1024.0,
                   ggml_backend_is_cpu(runtime_backend) ? "RAM" : "VRAM");
+
+        if (out_gf) *out_gf = gf;  // Return graph for reuse
         return true;
     }
 
@@ -1818,6 +1826,11 @@ protected:
             auto tensor = kv.first;
             auto data   = kv.second;
 
+            // Skip tensors that weren't allocated (e.g., unused input tensors
+            // that were added to the map but not used in the graph)
+            if (tensor->buffer == nullptr) {
+                continue;
+            }
             ggml_backend_tensor_set(tensor, data, 0, ggml_nbytes(tensor));
         }
 
@@ -2126,12 +2139,21 @@ public:
             LOG_ERROR("%s offload params to runtime backend failed", get_desc().c_str());
             return false;
         }
-        if (!alloc_compute_buffer(get_graph)) {
+
+        struct ggml_cgraph* gf = nullptr;
+        if (!alloc_compute_buffer(get_graph, &gf)) {
             LOG_ERROR("%s alloc compute buffer failed", get_desc().c_str());
             return false;
         }
-        reset_compute_ctx();
-        struct ggml_cgraph* gf = get_compute_graph(get_graph);
+        // If alloc_compute_buffer just created a new allocator, gf contains the graph
+        // used for reservation and we MUST reuse it (same tensor pointers).
+        // If allocator already existed, gf is nullptr and we need to rebuild.
+        if (gf == nullptr) {
+            backend_tensor_data_map.clear();
+            reset_compute_ctx();
+            gf = get_compute_graph(get_graph);
+        }
+
         if (!ggml_gallocr_alloc_graph(compute_allocr, gf)) {
             LOG_ERROR("%s alloc compute graph failed", get_desc().c_str());
             return false;
