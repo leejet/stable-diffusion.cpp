@@ -1,3 +1,4 @@
 [submodule "ggml"]
     path = ggml
-	url = https://github.com/ggml-org/ggml.git
+	url = https://github.com/rmatif/ggml.git
+	branch = ace
