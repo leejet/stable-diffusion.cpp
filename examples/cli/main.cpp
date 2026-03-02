@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <cmath>
 #include <cctype>
 #include <filesystem>
 #include <functional>
@@ -149,7 +150,7 @@ struct SDCliParams {
         options.manual_options = {
             {"-M",
              "--mode",
-             "run mode, one of [img_gen, vid_gen, upscale, convert], default: img_gen",
+             "run mode, one of [img_gen, vid_gen, audio_gen, upscale, convert], default: img_gen",
              on_mode_arg},
             {"",
              "--preview",
@@ -168,6 +169,10 @@ struct SDCliParams {
         if (output_path.length() == 0) {
             LOG_ERROR("error: the following arguments are required: output_path");
             return false;
+        }
+
+        if (mode == AUDIO_GEN && output_path == "output.png") {
+            output_path = "output.wav";
         }
 
         if (mode == CONVERT) {
@@ -370,6 +375,87 @@ std::string format_frame_idx(std::string pattern, int frame_idx) {
     return result;
 }
 
+static bool write_wav(const std::string& path, const sd_audio_t& audio) {
+    if (audio.data == nullptr || audio.sample_count == 0 || audio.channels == 0) {
+        return false;
+    }
+
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) {
+        return false;
+    }
+
+    uint32_t sample_rate = audio.sample_rate;
+    uint16_t channels = static_cast<uint16_t>(audio.channels);
+    uint16_t bits_per_sample = 16;
+    uint32_t byte_rate = sample_rate * channels * (bits_per_sample / 8);
+    uint16_t block_align = channels * (bits_per_sample / 8);
+    uint32_t data_size = audio.sample_count * channels * (bits_per_sample / 8);
+    uint32_t chunk_size = 36 + data_size;
+
+    fwrite("RIFF", 1, 4, f);
+    fwrite(&chunk_size, 4, 1, f);
+    fwrite("WAVE", 1, 4, f);
+    fwrite("fmt ", 1, 4, f);
+    uint32_t subchunk1_size = 16;
+    uint16_t audio_format = 1;
+    fwrite(&subchunk1_size, 4, 1, f);
+    fwrite(&audio_format, 2, 1, f);
+    fwrite(&channels, 2, 1, f);
+    fwrite(&sample_rate, 4, 1, f);
+    fwrite(&byte_rate, 4, 1, f);
+    fwrite(&block_align, 2, 1, f);
+    fwrite(&bits_per_sample, 2, 1, f);
+    fwrite("data", 1, 4, f);
+    fwrite(&data_size, 4, 1, f);
+
+    for (uint32_t i = 0; i < audio.sample_count * audio.channels; ++i) {
+        float v = audio.data[i];
+        if (v > 1.0f) v = 1.0f;
+        if (v < -1.0f) v = -1.0f;
+        int16_t s = (int16_t)std::lrintf(v * 32767.0f);
+        fwrite(&s, sizeof(int16_t), 1, f);
+    }
+
+    fclose(f);
+    return true;
+}
+
+bool save_audio_result(const SDCliParams& cli_params,
+                       const SDGenerationParams& gen_params,
+                       const sd_audio_t& audio) {
+    (void)gen_params;
+    namespace fs      = std::filesystem;
+    fs::path out_path = cli_params.output_path;
+
+    if (!out_path.parent_path().empty()) {
+        std::error_code ec;
+        fs::create_directories(out_path.parent_path(), ec);
+        if (ec) {
+            LOG_ERROR("failed to create directory '%s': %s",
+                      out_path.parent_path().string().c_str(), ec.message().c_str());
+            return false;
+        }
+    }
+
+    fs::path base_path = out_path;
+    fs::path ext       = out_path.has_extension() ? out_path.extension() : fs::path{};
+    if (!ext.empty())
+        base_path.replace_extension();
+
+    std::string ext_lower = ext.string();
+    std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), ::tolower);
+    if (ext_lower != ".wav") {
+        ext = ".wav";
+    }
+
+    fs::path audio_path = base_path;
+    audio_path += ext;
+    bool ok = write_wav(audio_path.string(), audio);
+    LOG_INFO("save result audio to '%s' (%s)", audio_path.string().c_str(), ok ? "success" : "failure");
+    return ok;
+}
+
 bool save_results(const SDCliParams& cli_params,
                   const SDContextParams& ctx_params,
                   const SDGenerationParams& gen_params,
@@ -501,6 +587,10 @@ int main(int argc, const char* argv[]) {
     cli_params.preview_fps = gen_params.fps;
     if (cli_params.preview_method == PREVIEW_PROJ)
         cli_params.preview_fps /= 4;
+    if (cli_params.mode == AUDIO_GEN) {
+        cli_params.preview_method = PREVIEW_NONE;
+        cli_params.preview_noisy  = false;
+    }
 
     sd_set_log_callback(sd_log_cb, (void*)&cli_params);
     log_verbose = cli_params.verbose;
@@ -538,6 +628,56 @@ int main(int argc, const char* argv[]) {
                      cli_params.output_path.c_str());
             return 0;
         }
+    }
+
+    if (cli_params.mode == AUDIO_GEN) {
+        bool vae_decode_only = true;
+        sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(vae_decode_only, true, false);
+
+        sd_ctx_t* sd_ctx = new_sd_ctx(&sd_ctx_params);
+        if (sd_ctx == nullptr) {
+            LOG_INFO("new_sd_ctx_t failed");
+            return 1;
+        }
+
+        if (gen_params.sample_params.sample_method == SAMPLE_METHOD_COUNT) {
+            gen_params.sample_params.sample_method = sd_get_default_sample_method(sd_ctx);
+        }
+        if (gen_params.sample_params.scheduler == SCHEDULER_COUNT) {
+            gen_params.sample_params.scheduler = sd_get_default_scheduler(sd_ctx, gen_params.sample_params.sample_method);
+        }
+        if (gen_params.sample_params.guidance.txt_cfg == 7.0f) {
+            gen_params.sample_params.guidance.txt_cfg = 1.0f;
+        }
+
+        sd_audio_gen_params_t audio_params = {
+            gen_params.lora_vec.data(),
+            static_cast<uint32_t>(gen_params.lora_vec.size()),
+            gen_params.prompt.c_str(),
+            gen_params.negative_prompt.c_str(),
+            gen_params.lyrics.c_str(),
+            gen_params.keyscale.c_str(),
+            gen_params.language.c_str(),
+            gen_params.bpm,
+            gen_params.duration,
+            gen_params.timesignature,
+            gen_params.lm_seed,
+            gen_params.sample_params,
+            gen_params.seed,
+        };
+
+        sd_audio_t* audio = generate_audio(sd_ctx, &audio_params);
+        if (audio == nullptr) {
+            LOG_ERROR("audio generation failed");
+            free_sd_ctx(sd_ctx);
+            return 1;
+        }
+
+        bool ok = save_audio_result(cli_params, gen_params, *audio);
+        free(audio->data);
+        free(audio);
+        free_sd_ctx(sd_ctx);
+        return ok ? 0 : 1;
     }
 
     bool vae_decode_only     = true;

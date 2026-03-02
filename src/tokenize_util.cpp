@@ -919,23 +919,31 @@ std::vector<std::string> token_split(const std::string& text) {
 
         // `\s*[\r\n]+|\s+(?!\S)|\s+`
         if (is_space(cp)) {
-            std::string token;
-            bool saw_new_line = false;
-
-            while (i < cps.size() && is_space(cps[i])) {
-                token += codepoint_to_utf8(cps[i]);
-
-                if (cps[i] == U'\r' || cps[i] == U'\n') {
-                    saw_new_line = true;
-                } else {
-                    if (saw_new_line) {
-                        break;
-                    }
+            // Match `\s*[\r\n]+` first: include any leading spaces before newline(s)
+            size_t j = i;
+            while (j < cps.size() && is_space(cps[j]) && cps[j] != U'\r' && cps[j] != U'\n') {
+                ++j;
+            }
+            if (j < cps.size() && (cps[j] == U'\r' || cps[j] == U'\n')) {
+                size_t k = j;
+                while (k < cps.size() && (cps[k] == U'\r' || cps[k] == U'\n')) {
+                    ++k;
                 }
-
-                ++i;
+                std::string token;
+                for (size_t idx = i; idx < k; ++idx) {
+                    token += codepoint_to_utf8(cps[idx]);
+                }
+                tokens.push_back(token);
+                i = k;
+                continue;
             }
 
+            // Fallback: consume a contiguous whitespace run
+            std::string token;
+            while (i < cps.size() && is_space(cps[i])) {
+                token += codepoint_to_utf8(cps[i]);
+                ++i;
+            }
             tokens.push_back(token);
             continue;
         }

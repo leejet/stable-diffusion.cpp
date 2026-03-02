@@ -654,16 +654,19 @@ float time_snr_shift(float alpha, float t) {
 struct DiscreteFlowDenoiser : public Denoiser {
     float sigmas[TIMESTEPS];
     float shift = 3.0f;
+    float multiplier = 1000.0f;
 
     float sigma_data = 1.0f;
 
-    DiscreteFlowDenoiser(float shift = 3.0f) {
-        set_shift(shift);
+    DiscreteFlowDenoiser(float shift = 3.0f, float multiplier = 1000.0f)
+        : shift(shift), multiplier(multiplier) {
+        set_parameters();
     }
 
     void set_parameters() {
         for (int i = 1; i < TIMESTEPS + 1; i++) {
-            sigmas[i - 1] = t_to_sigma(static_cast<float>(i));
+            float t = (static_cast<float>(i) / static_cast<float>(TIMESTEPS)) * multiplier;
+            sigmas[i - 1] = t_to_sigma(t);
         }
     }
 
@@ -681,12 +684,71 @@ struct DiscreteFlowDenoiser : public Denoiser {
     }
 
     float sigma_to_t(float sigma) override {
-        return sigma * 1000.f;
+        return sigma * multiplier;
     }
 
     float t_to_sigma(float t) override {
-        t = t + 1;
-        return time_snr_shift(shift, t / 1000.f);
+        return time_snr_shift(shift, t / multiplier);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int /*image_seq_len*/, scheduler_t scheduler_type, SDVersion version) override {
+        auto scaled_t_to_sigma = [&](float t) {
+            float t_scaled = (t / static_cast<float>(TIMESTEPS)) * multiplier;
+            return t_to_sigma(t_scaled);
+        };
+
+        std::shared_ptr<SigmaScheduler> scheduler;
+        switch (scheduler_type) {
+            case DISCRETE_SCHEDULER:
+                LOG_INFO("get_sigmas with discrete scheduler");
+                scheduler = std::make_shared<DiscreteScheduler>();
+                break;
+            case KARRAS_SCHEDULER:
+                LOG_INFO("get_sigmas with Karras scheduler");
+                scheduler = std::make_shared<KarrasScheduler>();
+                break;
+            case EXPONENTIAL_SCHEDULER:
+                LOG_INFO("get_sigmas exponential scheduler");
+                scheduler = std::make_shared<ExponentialScheduler>();
+                break;
+            case AYS_SCHEDULER:
+                LOG_INFO("get_sigmas with Align-Your-Steps scheduler");
+                scheduler = std::make_shared<AYSScheduler>(version);
+                break;
+            case GITS_SCHEDULER:
+                LOG_INFO("get_sigmas with GITS scheduler");
+                scheduler = std::make_shared<GITSScheduler>();
+                break;
+            case SGM_UNIFORM_SCHEDULER:
+                LOG_INFO("get_sigmas with SGM Uniform scheduler");
+                scheduler = std::make_shared<SGMUniformScheduler>();
+                break;
+            case SIMPLE_SCHEDULER:
+                LOG_INFO("get_sigmas with Simple scheduler");
+                scheduler = std::make_shared<SimpleScheduler>();
+                break;
+            case SMOOTHSTEP_SCHEDULER:
+                LOG_INFO("get_sigmas with SmoothStep scheduler");
+                scheduler = std::make_shared<SmoothStepScheduler>();
+                break;
+            case BONG_TANGENT_SCHEDULER:
+                LOG_INFO("get_sigmas with bong_tangent scheduler");
+                scheduler = std::make_shared<BongTangentScheduler>();
+                break;
+            case KL_OPTIMAL_SCHEDULER:
+                LOG_INFO("get_sigmas with KL Optimal scheduler");
+                scheduler = std::make_shared<KLOptimalScheduler>();
+                break;
+            case LCM_SCHEDULER:
+                LOG_INFO("get_sigmas with LCM scheduler");
+                scheduler = std::make_shared<LCMScheduler>();
+                break;
+            default:
+                LOG_INFO("get_sigmas with discrete scheduler (default)");
+                scheduler = std::make_shared<DiscreteScheduler>();
+                break;
+        }
+        return scheduler->get_sigmas(n, sigma_min(), sigma_max(), scaled_t_to_sigma);
     }
 
     std::vector<float> get_scalings(float sigma) override {

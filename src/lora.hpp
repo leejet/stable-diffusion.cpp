@@ -127,6 +127,19 @@ struct LoraModel : public GGMLRunner {
 
             lora_tensors = std::move(new_lora_tensors);
         }
+
+        if (model_tensors.find("model.diffusion_model.decoder.layers.0.self_attn.q_proj.weight") != model_tensors.end()) {
+            std::unordered_map<std::string, ggml_tensor*> new_lora_tensors;
+            for (auto& [old_name, tensor] : lora_tensors) {
+                std::string new_name = old_name;
+                const std::string prefix = "lora.base_model.model.";
+                if (new_name.rfind(prefix, 0) == 0) {
+                    new_name.replace(0, prefix.size(), "lora.model.diffusion_model.decoder.");
+                }
+                new_lora_tensors[new_name] = tensor;
+            }
+            lora_tensors = std::move(new_lora_tensors);
+        }
     }
 
     ggml_tensor* get_lora_weight_diff(const std::string& model_tensor_name, ggml_context* ctx) {

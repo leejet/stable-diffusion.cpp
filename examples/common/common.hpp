@@ -37,14 +37,16 @@ namespace fs = std::filesystem;
 const char* modes_str[] = {
     "img_gen",
     "vid_gen",
+    "audio_gen",
     "convert",
     "upscale",
 };
-#define SD_ALL_MODES_STR "img_gen, vid_gen, convert, upscale"
+#define SD_ALL_MODES_STR "img_gen, vid_gen, audio_gen, convert, upscale"
 
 enum SDMode {
     IMG_GEN,
     VID_GEN,
+    AUDIO_GEN,
     CONVERT,
     UPSCALE,
     MODE_COUNT
@@ -1024,6 +1026,13 @@ struct SDGenerationParams {
     std::string prompt;
     std::string prompt_with_lora;  // for metadata record only
     std::string negative_prompt;
+    std::string lyrics;
+    std::string language = "en";
+    std::string keyscale = "C major";
+    float bpm            = 120.f;
+    float duration       = 120.f;
+    int timesignature    = 2;
+    int lm_seed          = 0;
     int clip_skip   = -1;  // <= 0 represents unspecified
     int width       = -1;
     int height      = -1;
@@ -1090,6 +1099,18 @@ struct SDGenerationParams {
              "--negative-prompt",
              "the negative prompt (default: \"\")",
              &negative_prompt},
+            {"",
+             "--lyrics",
+             "lyrics for ACE audio models",
+             &lyrics},
+            {"",
+             "--language",
+             "language for ACE audio lyrics (default: en)",
+             &language},
+            {"",
+             "--keyscale",
+             "keyscale for ACE audio (e.g. \"C major\")",
+             &keyscale},
             {"-i",
              "--init-img",
              "path to the init image",
@@ -1131,6 +1152,14 @@ struct SDGenerationParams {
              "--width",
              "image width, in pixel space (default: 512)",
              &width},
+            {"",
+             "--timesignature",
+             "time signature for ACE audio (default: 2)",
+             &timesignature},
+            {"",
+             "--lm-seed",
+             "seed for ACE audio semantic token generation (default: 0)",
+             &lm_seed},
             {"",
              "--steps",
              "number of sample steps (default: 20)",
@@ -1176,6 +1205,14 @@ struct SDGenerationParams {
              "--cfg-scale",
              "unconditional guidance scale: (default: 7.0)",
              &sample_params.guidance.txt_cfg},
+            {"",
+             "--bpm",
+             "tempo in BPM for ACE audio (default: 120)",
+             &bpm},
+            {"",
+             "--duration",
+             "duration in seconds for ACE audio (default: 120.0)",
+             &duration},
             {"",
              "--img-cfg-scale",
              "image guidance scale for inpaint or instruct-pix2pix models: (default: same as --cfg-scale)",
@@ -1573,6 +1610,13 @@ struct SDGenerationParams {
 
         load_if_exists("prompt", prompt);
         load_if_exists("negative_prompt", negative_prompt);
+        load_if_exists("lyrics", lyrics);
+        load_if_exists("language", language);
+        load_if_exists("keyscale", keyscale);
+        load_if_exists("bpm", bpm);
+        load_if_exists("duration", duration);
+        load_if_exists("timesignature", timesignature);
+        load_if_exists("lm_seed", lm_seed);
         load_if_exists("cache_mode", cache_mode);
         load_if_exists("cache_option", cache_option);
         load_if_exists("cache_preset", cache_preset);
@@ -1742,6 +1786,13 @@ struct SDGenerationParams {
         if (strength < 0.f || strength > 1.f) {
             LOG_ERROR("error: can only work with strength in [0.0, 1.0]\n");
             return false;
+        }
+
+        if (mode == AUDIO_GEN) {
+            if (duration <= 0.f) {
+                LOG_ERROR("error: audio duration must be greater than 0\n");
+                return false;
+            }
         }
 
         sd_cache_params_init(&cache_params);
@@ -1937,6 +1988,13 @@ struct SDGenerationParams {
             << "  high_noise_loras: \"" << high_noise_loras_str << "\",\n"
             << "  prompt: \"" << prompt << "\",\n"
             << "  negative_prompt: \"" << negative_prompt << "\",\n"
+            << "  lyrics: \"" << lyrics << "\",\n"
+            << "  language: \"" << language << "\",\n"
+            << "  keyscale: \"" << keyscale << "\",\n"
+            << "  bpm: " << bpm << ",\n"
+            << "  duration: " << duration << ",\n"
+            << "  timesignature: " << timesignature << ",\n"
+            << "  lm_seed: " << lm_seed << ",\n"
             << "  clip_skip: " << clip_skip << ",\n"
             << "  width: " << width << ",\n"
             << "  height: " << height << ",\n"

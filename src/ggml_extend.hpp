@@ -173,13 +173,43 @@ __STATIC_INLINE__ void ggml_ext_tensor_set_f32(struct ggml_tensor* tensor, float
 }
 
 __STATIC_INLINE__ float ggml_ext_tensor_get_f32(const ggml_tensor* tensor, int64_t i0, int64_t i1 = 0, int64_t i2 = 0, int64_t i3 = 0) {
+    size_t offset = i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0];
+
     if (tensor->buffer != nullptr) {
-        float value;
-        ggml_backend_tensor_get(tensor, &value, i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0], sizeof(float));
-        return value;
+        if (tensor->type == GGML_TYPE_F32) {
+            float value;
+            ggml_backend_tensor_get(tensor, &value, offset, sizeof(value));
+            return value;
+        } else if (tensor->type == GGML_TYPE_F16) {
+            ggml_fp16_t value;
+            ggml_backend_tensor_get(tensor, &value, offset, sizeof(value));
+            return ggml_fp16_to_fp32(value);
+        } else if (tensor->type == GGML_TYPE_BF16) {
+            ggml_bf16_t value;
+            ggml_backend_tensor_get(tensor, &value, offset, sizeof(value));
+            return ggml_bf16_to_fp32(value);
+        } else if (tensor->type == GGML_TYPE_I32) {
+            int32_t value;
+            ggml_backend_tensor_get(tensor, &value, offset, sizeof(value));
+            return (float)value;
+        }
     }
-    GGML_ASSERT(tensor->nb[0] == sizeof(float));
-    return *(float*)((char*)(tensor->data) + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0]);
+
+    if (tensor->type == GGML_TYPE_F32) {
+        return *(float*)((char*)(tensor->data) + offset);
+    } else if (tensor->type == GGML_TYPE_F16) {
+        ggml_fp16_t value = *(ggml_fp16_t*)((char*)(tensor->data) + offset);
+        return ggml_fp16_to_fp32(value);
+    } else if (tensor->type == GGML_TYPE_BF16) {
+        ggml_bf16_t value = *(ggml_bf16_t*)((char*)(tensor->data) + offset);
+        return ggml_bf16_to_fp32(value);
+    } else if (tensor->type == GGML_TYPE_I32) {
+        int32_t value = *(int32_t*)((char*)(tensor->data) + offset);
+        return (float)value;
+    }
+
+    GGML_ASSERT(false);
+    return 0.0f;
 }
 
 __STATIC_INLINE__ int ggml_ext_tensor_get_i32(const ggml_tensor* tensor, int64_t i0, int64_t i1 = 0, int64_t i2 = 0, int64_t i3 = 0) {
@@ -1211,6 +1241,21 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_full(struct ggml_context* ctx,
     return t;
 }
 
+__STATIC_INLINE__ struct ggml_tensor* ggml_ext_repeat(struct ggml_context* ctx,
+                                                      struct ggml_tensor* a,
+                                                      struct ggml_tensor* like) {
+    if (like->type == GGML_TYPE_F16 || like->type == GGML_TYPE_F32) {
+        return ggml_cont(ctx, ggml_repeat(ctx, a, like));
+    }
+    int n_dims = ggml_n_dims(like);
+    int64_t ne[GGML_MAX_DIMS] = {1, 1, 1, 1};
+    for (int i = 0; i < n_dims; ++i) {
+        ne[i] = like->ne[i];
+    }
+    auto target = ggml_new_tensor(ctx, GGML_TYPE_F16, n_dims, ne);
+    return ggml_cont(ctx, ggml_repeat(ctx, a, target));
+}
+
 __STATIC_INLINE__ struct ggml_tensor* ggml_ext_zeros(struct ggml_context* ctx,
                                                      int64_t ne0,
                                                      int64_t ne1,
@@ -1611,6 +1656,13 @@ struct GGMLRunnerContext {
     bool circular_x_enabled                       = false;
     bool circular_y_enabled                       = false;
     std::shared_ptr<WeightAdapter> weight_adapter = nullptr;
+    std::map<struct ggml_tensor*, const void*>* backend_tensor_data_map = nullptr;
+
+    void set_backend_tensor_data(struct ggml_tensor* tensor, const void* data) {
+        if (backend_tensor_data_map != nullptr) {
+            (*backend_tensor_data_map)[tensor] = data;
+        }
+    }
 };
 
 struct GGMLRunner {
@@ -1807,6 +1859,18 @@ protected:
             auto tensor = kv.first;
             auto data   = kv.second;
 
+            if (data == nullptr) {
+                LOG_WARN("%s: backend tensor data is null for '%s', skipping data copy",
+                         get_desc().c_str(),
+                         ggml_get_name(tensor));
+                continue;
+            }
+            if (tensor->buffer == nullptr) {
+                LOG_WARN("%s: backend tensor buffer not set for '%s', skipping data copy",
+                         get_desc().c_str(),
+                         ggml_get_name(tensor));
+                continue;
+            }
             ggml_backend_tensor_set(tensor, data, 0, ggml_nbytes(tensor));
         }
 
@@ -1928,6 +1992,7 @@ public:
         runner_ctx.circular_x_enabled    = circular_x_enabled;
         runner_ctx.circular_y_enabled    = circular_y_enabled;
         runner_ctx.weight_adapter        = weight_adapter;
+        runner_ctx.backend_tensor_data_map = &backend_tensor_data_map;
         return runner_ctx;
     }
 
@@ -2102,6 +2167,25 @@ protected:
         return wtype;
     }
 
+    bool tensor_has_shape_3d(const std::string& name,
+                             const String2TensorStorage& tensor_storage_map,
+                             int64_t n0,
+                             int64_t n1,
+                             int64_t n2) const {
+        auto iter = tensor_storage_map.find(name);
+        if (iter == tensor_storage_map.end()) {
+            return false;
+        }
+        const TensorStorage& tensor_storage = iter->second;
+        if (tensor_storage.n_dims < 3) {
+            return false;
+        }
+        if (tensor_storage.n_dims > 3 && tensor_storage.ne[3] != 1) {
+            return false;
+        }
+        return tensor_storage.ne[0] == n0 && tensor_storage.ne[1] == n1 && tensor_storage.ne[2] == n2;
+    }
+
     void init_blocks(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
         for (auto& pair : blocks) {
             auto& block = pair.second;
@@ -2223,6 +2307,22 @@ public:
           force_prec_f32(force_prec_f32),
           scale(scale) {}
 
+    struct ggml_tensor* get_weight() const {
+        auto iter = params.find("weight");
+        if (iter == params.end()) {
+            return nullptr;
+        }
+        return iter->second;
+    }
+
+    struct ggml_tensor* get_bias() const {
+        auto iter = params.find("bias");
+        if (iter == params.end()) {
+            return nullptr;
+        }
+        return iter->second;
+    }
+
     struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         struct ggml_tensor* w = params["weight"];
         struct ggml_tensor* b = nullptr;
@@ -2264,6 +2364,14 @@ public:
     Embedding(int64_t num_embeddings, int64_t embedding_dim)
         : embedding_dim(embedding_dim),
           num_embeddings(num_embeddings) {
+    }
+
+    struct ggml_tensor* get_weight() const {
+        auto iter = params.find("weight");
+        if (iter == params.end()) {
+            return nullptr;
+        }
+        return iter->second;
     }
 
     struct ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -2366,6 +2474,445 @@ public:
                                 ctx->circular_x_enabled,
                                 ctx->circular_y_enabled,
                                 scale);
+    }
+};
+
+class Conv1d : public UnaryBlock {
+protected:
+    int64_t in_channels;
+    int64_t out_channels;
+    int kernel_size;
+    int stride;
+    int padding;
+    int dilation;
+    bool bias;
+    std::string prefix;
+
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        this->prefix         = prefix;
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
+        // PyTorch Conv1d weights are stored as [out_channels, in_channels, kernel_size]
+        // Some models store already-permuted [kernel_size, in_channels, out_channels].
+        if (tensor_has_shape_3d(prefix + "weight", tensor_storage_map, kernel_size, in_channels, out_channels)) {
+            params["weight"] = ggml_new_tensor_3d(ctx, wtype, kernel_size, in_channels, out_channels);
+        } else {
+            params["weight"] = ggml_new_tensor_3d(ctx, wtype, out_channels, in_channels, kernel_size);
+        }
+        if (bias) {
+            enum ggml_type btype = get_type(prefix + "bias", tensor_storage_map, GGML_TYPE_F32);
+            params["bias"]       = ggml_new_tensor_1d(ctx, btype, out_channels);
+        }
+    }
+
+public:
+    Conv1d(int64_t in_channels,
+           int64_t out_channels,
+           int kernel_size,
+           int stride   = 1,
+           int padding  = 0,
+           int dilation = 1,
+           bool bias    = true)
+        : in_channels(in_channels),
+          out_channels(out_channels),
+          kernel_size(kernel_size),
+          stride(stride),
+          padding(padding),
+          dilation(dilation),
+          bias(bias) {}
+
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+        struct ggml_tensor* w = params["weight"];
+        struct ggml_tensor* b = bias ? params["bias"] : nullptr;
+
+        if (w->ne[0] == out_channels && w->ne[1] == in_channels && w->ne[2] == kernel_size) {
+            // Convert [out, in, k] -> [k, in, out] for ggml_conv_1d
+            w = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, w, 2, 1, 0, 3));
+        }
+
+        x = ggml_conv_1d(ctx->ggml_ctx, w, x, stride, padding, dilation);
+
+        if (b != nullptr) {
+            auto b_view = ggml_reshape_3d(ctx->ggml_ctx, b, 1, b->ne[0], 1);
+            b_view      = ggml_ext_repeat(ctx->ggml_ctx, b_view, x);
+            x           = ggml_add_inplace(ctx->ggml_ctx, x, b_view);
+        }
+        return x;
+    }
+};
+
+class ConvTranspose1d : public UnaryBlock {
+protected:
+    int64_t in_channels;
+    int64_t out_channels;
+    int kernel_size;
+    int stride;
+    int padding;
+    int dilation;
+    bool bias;
+    std::string prefix;
+
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        this->prefix         = prefix;
+        enum ggml_type wtype = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
+        // PyTorch ConvTranspose1d weights are stored as [in_channels, out_channels, kernel_size]
+        // Some models store already-permuted [kernel_size, out_channels, in_channels].
+        if (tensor_has_shape_3d(prefix + "weight", tensor_storage_map, kernel_size, out_channels, in_channels)) {
+            params["weight"] = ggml_new_tensor_3d(ctx, wtype, kernel_size, out_channels, in_channels);
+        } else {
+            params["weight"] = ggml_new_tensor_3d(ctx, wtype, in_channels, out_channels, kernel_size);
+        }
+        if (bias) {
+            enum ggml_type btype = get_type(prefix + "bias", tensor_storage_map, GGML_TYPE_F32);
+            params["bias"]       = ggml_new_tensor_1d(ctx, btype, out_channels);
+        }
+    }
+
+public:
+    ConvTranspose1d(int64_t in_channels,
+                    int64_t out_channels,
+                    int kernel_size,
+                    int stride   = 1,
+                    int padding  = 0,
+                    int dilation = 1,
+                    bool bias    = true)
+        : in_channels(in_channels),
+          out_channels(out_channels),
+          kernel_size(kernel_size),
+          stride(stride),
+          padding(padding),
+          dilation(dilation),
+          bias(bias) {}
+
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+        GGML_ASSERT(dilation == 1);
+        GGML_ASSERT(padding >= 0);
+
+        struct ggml_tensor* w = params["weight"];
+        struct ggml_tensor* b = bias ? params["bias"] : nullptr;
+
+        if (w->ne[0] == in_channels && w->ne[1] == out_channels && w->ne[2] == kernel_size) {
+            // Convert [in, out, k] -> [k, out, in] for ggml_conv_transpose_1d
+            w = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, w, 2, 1, 0, 3));
+        }
+
+        int64_t batch = x->ne[2];
+        struct ggml_tensor* out = nullptr;
+        for (int64_t i = 0; i < batch; i++) {
+            struct ggml_tensor* x_i = ggml_view_3d(ctx->ggml_ctx,
+                                                   x,
+                                                   x->ne[0],
+                                                   x->ne[1],
+                                                   1,
+                                                   x->nb[1],
+                                                   x->nb[2],
+                                                   i * x->nb[2]);
+            x_i = ggml_reshape_2d(ctx->ggml_ctx, x_i, x_i->ne[0], x_i->ne[1]);
+            struct ggml_tensor* out_i = ggml_conv_transpose_1d(ctx->ggml_ctx, w, x_i, stride, 0, 1);
+            if (padding > 0) {
+                out_i = ggml_ext_slice(ctx->ggml_ctx, out_i, 0, padding, out_i->ne[0] - padding);
+            }
+            out_i = ggml_reshape_3d(ctx->ggml_ctx, out_i, out_i->ne[0], out_i->ne[1], 1);
+            if (out == nullptr) {
+                out = out_i;
+            } else {
+                out = ggml_concat(ctx->ggml_ctx, out, out_i, 2);
+            }
+        }
+
+        if (b != nullptr) {
+            auto b_view = ggml_reshape_3d(ctx->ggml_ctx, b, 1, b->ne[0], 1);
+            b_view      = ggml_ext_repeat(ctx->ggml_ctx, b_view, out);
+            out         = ggml_add_inplace(ctx->ggml_ctx, out, b_view);
+        }
+        return out;
+    }
+};
+
+class Snake1d : public UnaryBlock {
+protected:
+    int64_t channels;
+    bool logscale;
+
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        enum ggml_type wtype = get_type(prefix + "alpha", tensor_storage_map, GGML_TYPE_F32);
+        params["alpha"]      = ggml_new_tensor_1d(ctx, wtype, channels);
+        wtype                = get_type(prefix + "beta", tensor_storage_map, GGML_TYPE_F32);
+        params["beta"]       = ggml_new_tensor_1d(ctx, wtype, channels);
+    }
+
+    struct ggml_tensor* broadcast_param(struct ggml_context* ctx, struct ggml_tensor* p, struct ggml_tensor* x) const {
+        if (ggml_n_dims(x) == 4) {
+            p = ggml_reshape_4d(ctx, p, 1, p->ne[0], 1, 1);
+        } else {
+            p = ggml_reshape_3d(ctx, p, 1, p->ne[0], 1);
+        }
+        return ggml_ext_repeat(ctx, p, x);
+    }
+
+public:
+    Snake1d(int64_t channels, bool logscale = true)
+        : channels(channels), logscale(logscale) {}
+
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+        auto alpha = params["alpha"];
+        auto beta  = params["beta"];
+        if (logscale) {
+            alpha = ggml_exp(ctx->ggml_ctx, alpha);
+            beta  = ggml_exp(ctx->ggml_ctx, beta);
+        }
+
+        alpha = broadcast_param(ctx->ggml_ctx, alpha, x);
+        beta  = broadcast_param(ctx->ggml_ctx, beta, x);
+
+        auto ax     = ggml_mul(ctx->ggml_ctx, x, alpha);
+        auto sin_ax = ggml_sin(ctx->ggml_ctx, ax);
+        auto sin_sq = ggml_sqr(ctx->ggml_ctx, sin_ax);
+
+        auto eps = ggml_ext_full(ctx->ggml_ctx, 1e-9f, x->ne[0], x->ne[1], x->ne[2], x->ne[3]);
+        auto inv = ggml_div(ctx->ggml_ctx, ggml_ext_ones(ctx->ggml_ctx, x->ne[0], x->ne[1], x->ne[2], x->ne[3]), ggml_add(ctx->ggml_ctx, beta, eps));
+        auto add = ggml_mul(ctx->ggml_ctx, inv, sin_sq);
+        return ggml_add(ctx->ggml_ctx, x, add);
+    }
+};
+
+class WNConv1d : public UnaryBlock {
+protected:
+    int64_t in_channels;
+    int64_t out_channels;
+    int kernel_size;
+    int stride;
+    int padding;
+    int dilation;
+    bool bias;
+    std::string weight_v_key = "weight_v";
+    std::string weight_g_key = "weight_g";
+
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        std::string param_g = "parametrizations.weight.original0";
+        std::string param_v = "parametrizations.weight.original1";
+        if (tensor_storage_map.find(prefix + param_g) != tensor_storage_map.end() ||
+            tensor_storage_map.find(prefix + param_v) != tensor_storage_map.end()) {
+            bool g_is_original0 = tensor_has_shape_3d(prefix + param_g, tensor_storage_map, out_channels, 1, 1) ||
+                                  tensor_has_shape_3d(prefix + param_g, tensor_storage_map, 1, 1, out_channels);
+            if (g_is_original0) {
+                weight_g_key = param_g;
+                weight_v_key = param_v;
+            } else {
+                weight_g_key = param_v;
+                weight_v_key = param_g;
+            }
+        }
+
+        enum ggml_type wtype = get_type(prefix + weight_v_key, tensor_storage_map, GGML_TYPE_F32);
+        // PyTorch weight_norm Conv1d uses [out_channels, in_channels, kernel_size]
+        // Some models store already-permuted [kernel_size, in_channels, out_channels].
+        if (tensor_has_shape_3d(prefix + weight_v_key, tensor_storage_map, kernel_size, in_channels, out_channels)) {
+            params[weight_v_key] = ggml_new_tensor_3d(ctx, wtype, kernel_size, in_channels, out_channels);
+        } else {
+            params[weight_v_key] = ggml_new_tensor_3d(ctx, wtype, out_channels, in_channels, kernel_size);
+        }
+        wtype = get_type(prefix + weight_g_key, tensor_storage_map, GGML_TYPE_F32);
+        if (tensor_has_shape_3d(prefix + weight_g_key, tensor_storage_map, 1, 1, out_channels)) {
+            params[weight_g_key] = ggml_new_tensor_3d(ctx, wtype, 1, 1, out_channels);
+        } else {
+            params[weight_g_key] = ggml_new_tensor_3d(ctx, wtype, out_channels, 1, 1);
+        }
+        if (bias) {
+            enum ggml_type btype = get_type(prefix + "bias", tensor_storage_map, GGML_TYPE_F32);
+            params["bias"]       = ggml_new_tensor_1d(ctx, btype, out_channels);
+        }
+    }
+
+    struct ggml_tensor* normalize_weight(GGMLRunnerContext* ctx, struct ggml_tensor* w_v, struct ggml_tensor* w_g) const {
+        auto w_v_f = ggml_cast(ctx->ggml_ctx, w_v, GGML_TYPE_F32);
+        auto w_g_f = ggml_cast(ctx->ggml_ctx, w_g, GGML_TYPE_F32);
+        w_v_f      = ggml_cont(ctx->ggml_ctx, w_v_f);
+        w_g_f      = ggml_cont(ctx->ggml_ctx, w_g_f);
+
+        if (w_v_f->ne[0] == out_channels && w_v_f->ne[1] == in_channels && w_v_f->ne[2] == kernel_size) {
+            // Convert [out, in, k] -> [k, in, out]
+            w_v_f = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, w_v_f, 2, 1, 0, 3));
+        }
+
+        auto w_flat = ggml_reshape_2d(ctx->ggml_ctx, w_v_f, w_v_f->ne[0] * w_v_f->ne[1], w_v_f->ne[2]);
+        auto w_sq   = ggml_sqr(ctx->ggml_ctx, w_flat);
+        auto w_norm = ggml_sum_rows(ctx->ggml_ctx, w_sq);
+        w_norm      = ggml_sqrt(ctx->ggml_ctx, w_norm);
+        w_norm      = ggml_reshape_1d(ctx->ggml_ctx, w_norm, ggml_nelements(w_norm));
+
+        auto g_1d  = ggml_reshape_1d(ctx->ggml_ctx, w_g_f, ggml_nelements(w_norm));
+        auto scale = ggml_div(ctx->ggml_ctx, g_1d, w_norm);
+        scale      = ggml_reshape_3d(ctx->ggml_ctx, scale, 1, 1, scale->ne[0]);
+        scale      = ggml_ext_repeat(ctx->ggml_ctx, scale, w_v_f);
+
+        auto w = ggml_mul(ctx->ggml_ctx, w_v_f, scale);
+        if (w_v->type != GGML_TYPE_F32) {
+            w = ggml_cast(ctx->ggml_ctx, w, w_v->type);
+        }
+        return w;
+    }
+
+public:
+    WNConv1d(int64_t in_channels,
+             int64_t out_channels,
+             int kernel_size,
+             int stride   = 1,
+             int padding  = 0,
+             int dilation = 1,
+             bool bias    = true)
+        : in_channels(in_channels),
+          out_channels(out_channels),
+          kernel_size(kernel_size),
+          stride(stride),
+          padding(padding),
+          dilation(dilation),
+          bias(bias) {}
+
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+        auto w = normalize_weight(ctx, params[weight_v_key], params[weight_g_key]);
+        struct ggml_tensor* b = bias ? params["bias"] : nullptr;
+
+        x = ggml_conv_1d(ctx->ggml_ctx, w, x, stride, padding, dilation);
+
+        if (b != nullptr) {
+            auto b_view = ggml_reshape_3d(ctx->ggml_ctx, b, 1, b->ne[0], 1);
+            b_view      = ggml_ext_repeat(ctx->ggml_ctx, b_view, x);
+            x           = ggml_add_inplace(ctx->ggml_ctx, x, b_view);
+        }
+        return x;
+    }
+};
+
+class WNConvTranspose1d : public UnaryBlock {
+protected:
+    int64_t in_channels;
+    int64_t out_channels;
+    int kernel_size;
+    int stride;
+    int padding;
+    int dilation;
+    bool bias;
+    std::string weight_v_key = "weight_v";
+    std::string weight_g_key = "weight_g";
+
+    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
+        std::string param_g = "parametrizations.weight.original0";
+        std::string param_v = "parametrizations.weight.original1";
+        if (tensor_storage_map.find(prefix + param_g) != tensor_storage_map.end() ||
+            tensor_storage_map.find(prefix + param_v) != tensor_storage_map.end()) {
+            bool g_is_original0 = tensor_has_shape_3d(prefix + param_g, tensor_storage_map, in_channels, 1, 1) ||
+                                  tensor_has_shape_3d(prefix + param_g, tensor_storage_map, 1, 1, in_channels);
+            if (g_is_original0) {
+                weight_g_key = param_g;
+                weight_v_key = param_v;
+            } else {
+                weight_g_key = param_v;
+                weight_v_key = param_g;
+            }
+        }
+
+        enum ggml_type wtype = get_type(prefix + weight_v_key, tensor_storage_map, GGML_TYPE_F32);
+        // PyTorch ConvTranspose1d weight_norm uses [in_channels, out_channels, kernel_size]
+        // Some models store already-permuted [kernel_size, out_channels, in_channels].
+        if (tensor_has_shape_3d(prefix + weight_v_key, tensor_storage_map, kernel_size, out_channels, in_channels)) {
+            params[weight_v_key] = ggml_new_tensor_3d(ctx, wtype, kernel_size, out_channels, in_channels);
+        } else {
+            params[weight_v_key] = ggml_new_tensor_3d(ctx, wtype, in_channels, out_channels, kernel_size);
+        }
+        wtype = get_type(prefix + weight_g_key, tensor_storage_map, GGML_TYPE_F32);
+        if (tensor_has_shape_3d(prefix + weight_g_key, tensor_storage_map, 1, 1, in_channels)) {
+            params[weight_g_key] = ggml_new_tensor_3d(ctx, wtype, 1, 1, in_channels);
+        } else {
+            params[weight_g_key] = ggml_new_tensor_3d(ctx, wtype, in_channels, 1, 1);
+        }
+        if (bias) {
+            enum ggml_type btype = get_type(prefix + "bias", tensor_storage_map, GGML_TYPE_F32);
+            params["bias"]       = ggml_new_tensor_1d(ctx, btype, out_channels);
+        }
+    }
+
+    struct ggml_tensor* normalize_weight(GGMLRunnerContext* ctx, struct ggml_tensor* w_v, struct ggml_tensor* w_g) const {
+        auto w_v_f = ggml_cast(ctx->ggml_ctx, w_v, GGML_TYPE_F32);
+        auto w_g_f = ggml_cast(ctx->ggml_ctx, w_g, GGML_TYPE_F32);
+        w_v_f      = ggml_cont(ctx->ggml_ctx, w_v_f);
+        w_g_f      = ggml_cont(ctx->ggml_ctx, w_g_f);
+
+        if (w_v_f->ne[0] == in_channels && w_v_f->ne[1] == out_channels && w_v_f->ne[2] == kernel_size) {
+            // Convert [in, out, k] -> [k, out, in]
+            w_v_f = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, w_v_f, 2, 1, 0, 3));
+        }
+
+        auto w_flat = ggml_reshape_2d(ctx->ggml_ctx, w_v_f, w_v_f->ne[0] * w_v_f->ne[1], w_v_f->ne[2]);
+        auto w_sq   = ggml_sqr(ctx->ggml_ctx, w_flat);
+        auto w_norm = ggml_sum_rows(ctx->ggml_ctx, w_sq);
+        w_norm      = ggml_sqrt(ctx->ggml_ctx, w_norm);
+        w_norm      = ggml_reshape_1d(ctx->ggml_ctx, w_norm, ggml_nelements(w_norm));
+
+        auto g_1d  = ggml_reshape_1d(ctx->ggml_ctx, w_g_f, ggml_nelements(w_norm));
+        auto scale = ggml_div(ctx->ggml_ctx, g_1d, w_norm);
+        scale      = ggml_reshape_3d(ctx->ggml_ctx, scale, 1, 1, scale->ne[0]);
+        scale      = ggml_ext_repeat(ctx->ggml_ctx, scale, w_v_f);
+
+        auto w = ggml_mul(ctx->ggml_ctx, w_v_f, scale);
+        if (w_v->type != GGML_TYPE_F32) {
+            w = ggml_cast(ctx->ggml_ctx, w, w_v->type);
+        }
+        return w;
+    }
+
+public:
+    WNConvTranspose1d(int64_t in_channels,
+                      int64_t out_channels,
+                      int kernel_size,
+                      int stride   = 1,
+                      int padding  = 0,
+                      int dilation = 1,
+                      bool bias    = true)
+        : in_channels(in_channels),
+          out_channels(out_channels),
+          kernel_size(kernel_size),
+          stride(stride),
+          padding(padding),
+          dilation(dilation),
+          bias(bias) {}
+
+    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+        GGML_ASSERT(dilation == 1);
+        GGML_ASSERT(padding >= 0);
+
+        auto w = normalize_weight(ctx, params[weight_v_key], params[weight_g_key]);
+        struct ggml_tensor* b = bias ? params["bias"] : nullptr;
+
+        int64_t batch = x->ne[2];
+        struct ggml_tensor* out = nullptr;
+        for (int64_t i = 0; i < batch; i++) {
+            struct ggml_tensor* x_i = ggml_view_3d(ctx->ggml_ctx,
+                                                   x,
+                                                   x->ne[0],
+                                                   x->ne[1],
+                                                   1,
+                                                   x->nb[1],
+                                                   x->nb[2],
+                                                   i * x->nb[2]);
+            x_i = ggml_reshape_2d(ctx->ggml_ctx, x_i, x_i->ne[0], x_i->ne[1]);
+            struct ggml_tensor* out_i = ggml_conv_transpose_1d(ctx->ggml_ctx, w, x_i, stride, 0, 1);
+            if (padding > 0) {
+                out_i = ggml_ext_slice(ctx->ggml_ctx, out_i, 0, padding, out_i->ne[0] - padding);
+            }
+            out_i = ggml_reshape_3d(ctx->ggml_ctx, out_i, out_i->ne[0], out_i->ne[1], 1);
+            if (out == nullptr) {
+                out = out_i;
+            } else {
+                out = ggml_concat(ctx->ggml_ctx, out, out_i, 2);
+            }
+        }
+
+        if (b != nullptr) {
+            auto b_view = ggml_reshape_3d(ctx->ggml_ctx, b, 1, b->ne[0], 1);
+            b_view      = ggml_ext_repeat(ctx->ggml_ctx, b_view, out);
+            out         = ggml_add_inplace(ctx->ggml_ctx, out, b_view);
+        }
+        return out;
     }
 };
 

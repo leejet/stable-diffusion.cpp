@@ -211,6 +211,13 @@ typedef struct {
 } sd_image_t;
 
 typedef struct {
+    uint32_t sample_rate;
+    uint32_t channels;
+    uint32_t sample_count;
+    float* data;
+} sd_audio_t;
+
+typedef struct {
     int* layers;
     size_t layer_count;
     float layer_start;
@@ -309,6 +316,22 @@ typedef struct {
     uint32_t lora_count;
     const char* prompt;
     const char* negative_prompt;
+    const char* lyrics;
+    const char* keyscale;
+    const char* language;
+    float bpm;
+    float duration;
+    int timesignature;
+    int lm_seed;
+    sd_sample_params_t sample_params;
+    int64_t seed;
+} sd_audio_gen_params_t;
+
+typedef struct {
+    const sd_lora_t* loras;
+    uint32_t lora_count;
+    const char* prompt;
+    const char* negative_prompt;
     int clip_skip;
     sd_image_t init_image;
     sd_image_t end_image;
@@ -371,6 +394,10 @@ SD_API enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sa
 SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
 SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_gen_params);
+
+SD_API void sd_audio_gen_params_init(sd_audio_gen_params_t* sd_audio_gen_params);
+SD_API char* sd_audio_gen_params_to_str(const sd_audio_gen_params_t* sd_audio_gen_params);
+SD_API sd_audio_t* generate_audio(sd_ctx_t* sd_ctx, const sd_audio_gen_params_t* sd_audio_gen_params);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
 SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, int* num_frames_out);

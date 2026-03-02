@@ -19,6 +19,7 @@
 #include "tae.hpp"
 #include "ucache.hpp"
 #include "vae.hpp"
+#include "ace_vae.hpp"
 
 #include "latent-preview.h"
 #include "name_conversion.h"
@@ -53,6 +54,7 @@ const char* model_version_to_str[] = {
     "Flux.2 klein",
     "Z-Image",
     "Ovis Image",
+    "ACE Step 1.5",
 };
 
 const char* sampling_methods_str[] = {
@@ -273,11 +275,16 @@ public:
             }
         }
 
-        bool is_unet = sd_version_is_unet(model_loader.get_sd_version());
+        SDVersion detected_version = model_loader.get_sd_version();
+        bool is_unet = sd_version_is_unet(detected_version);
+        bool is_ace  = sd_version_is_ace(detected_version);
 
         if (strlen(SAFE_STR(sd_ctx_params->clip_l_path)) > 0) {
             LOG_INFO("loading clip_l from '%s'", sd_ctx_params->clip_l_path);
             std::string prefix = is_unet ? "cond_stage_model.transformer." : "text_encoders.clip_l.transformer.";
+            if (is_ace) {
+                prefix = "text_encoders.qwen3_06b.";
+            }
             if (!model_loader.init_from_file(sd_ctx_params->clip_l_path, prefix)) {
                 LOG_WARN("loading clip_l from '%s' failed", sd_ctx_params->clip_l_path);
             }
@@ -339,10 +346,39 @@ public:
         auto& tensor_storage_map = model_loader.get_tensor_storage_map();
 
         LOG_INFO("Version: %s ", model_version_to_str[version]);
+        std::string tensor_type_rules = SAFE_STR(sd_ctx_params->tensor_type_rules);
         ggml_type wtype               = (int)sd_ctx_params->wtype < std::min<int>(SD_TYPE_COUNT, GGML_TYPE_COUNT)
                                             ? (ggml_type)sd_ctx_params->wtype
                                             : GGML_TYPE_COUNT;
-        std::string tensor_type_rules = SAFE_STR(sd_ctx_params->tensor_type_rules);
+        if (wtype == GGML_TYPE_COUNT && sd_version_is_ace(version) && !ggml_backend_is_cpu(backend)) {
+            wtype = GGML_TYPE_F16;
+        }
+        if (sd_version_is_ace(version) && !ggml_backend_is_cpu(backend)) {
+            const char* ace_lm_rules   = "^text_encoders\\.qwen3_2b\\.=bf16,^text_encoders\\.qwen3_4b\\.=bf16,^text_encoders\\.llm\\.=bf16";
+            const char* ace_enc_rules  = "^model\\.diffusion_model\\.encoder\\.=bf16";
+            bool has_lm_rule = tensor_type_rules.find("text_encoders.qwen3_2b") != std::string::npos ||
+                               tensor_type_rules.find("text_encoders.qwen3_4b") != std::string::npos ||
+                               tensor_type_rules.find("text_encoders.llm") != std::string::npos;
+            bool has_enc_rule = tensor_type_rules.find("model.diffusion_model.encoder") != std::string::npos;
+
+            std::string added_rules;
+            if (!has_lm_rule) {
+                added_rules = ace_lm_rules;
+            }
+            if (!has_enc_rule) {
+                if (!added_rules.empty()) {
+                    added_rules += ",";
+                }
+                added_rules += ace_enc_rules;
+            }
+            if (!added_rules.empty()) {
+                if (tensor_type_rules.empty()) {
+                    tensor_type_rules = added_rules;
+                } else {
+                    tensor_type_rules = added_rules + "," + tensor_type_rules;
+                }
+            }
+        }
         if (wtype != GGML_TYPE_COUNT || tensor_type_rules.size() > 0) {
             model_loader.set_wtype_override(wtype, tensor_type_rules);
         }
@@ -408,6 +444,9 @@ public:
                    sd_version_is_qwen_image(version) ||
                    sd_version_is_anima(version) ||
                    sd_version_is_flux2(version)) {
+            scale_factor = 1.0f;
+            shift_factor = 0.f;
+        } else if (sd_version_is_ace(version)) {
             scale_factor = 1.0f;
             shift_factor = 0.f;
         }
@@ -555,6 +594,13 @@ public:
                                                                 tensor_storage_map,
                                                                 "model.diffusion_model",
                                                                 version);
+            } else if (sd_version_is_ace(version)) {
+                cond_stage_model = std::make_shared<AceConditioner>(clip_backend,
+                                                                    offload_params_to_cpu,
+                                                                    tensor_storage_map);
+                diffusion_model  = std::make_shared<AceModel>(backend,
+                                                              offload_params_to_cpu,
+                                                              tensor_storage_map);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -616,6 +662,29 @@ public:
                                                                             version);
                     first_stage_model->alloc_params_buffer();
                     first_stage_model->get_param_tensors(tensors, "first_stage_model");
+                } else if (sd_version_is_ace(version)) {
+                    auto has_prefix = [&](const std::string& prefix) {
+                        for (const auto& kv : tensor_storage_map) {
+                            if (kv.first.rfind(prefix, 0) == 0) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                    std::string vae_prefix = "first_stage_model";
+                    if (has_prefix("vae.")) {
+                        vae_prefix = "vae";
+                    } else if (has_prefix("encoder.") || has_prefix("decoder.")) {
+                        vae_prefix.clear();
+                    }
+
+                    first_stage_model = std::make_shared<AudioOobleckVAE>(vae_backend,
+                                                                          offload_params_to_cpu,
+                                                                          tensor_storage_map,
+                                                                          vae_prefix,
+                                                                          vae_decode_only);
+                    first_stage_model->alloc_params_buffer();
+                    first_stage_model->get_param_tensors(tensors, vae_prefix);
                 } else if (version == VERSION_CHROMA_RADIANCE) {
                     first_stage_model = std::make_shared<FakeVAE>(vae_backend,
                                                                   offload_params_to_cpu);
@@ -892,6 +961,7 @@ public:
         // init denoiser
         {
             prediction_t pred_type = sd_ctx_params->prediction;
+            float flow_multiplier  = 1000.f;
 
             if (pred_type == PREDICTION_COUNT) {
                 if (sd_version_is_sd2(version)) {
@@ -915,12 +985,17 @@ public:
                            sd_version_is_wan(version) ||
                            sd_version_is_qwen_image(version) ||
                            sd_version_is_anima(version) ||
-                           sd_version_is_z_image(version)) {
+                           sd_version_is_z_image(version) ||
+                           sd_version_is_ace(version)) {
                     pred_type = FLOW_PRED;
                     if (sd_version_is_wan(version)) {
                         default_flow_shift = 5.f;
                     } else {
                         default_flow_shift = 3.f;
+                    }
+                    if (sd_version_is_ace(version)) {
+                        // Comfy uses multiplier=1.0 for ACE Step 1.5 flow scheduling.
+                        flow_multiplier = 1.0f;
                     }
                 } else if (sd_version_is_flux(version)) {
                     pred_type = FLUX_FLOW_PRED;
@@ -953,7 +1028,8 @@ public:
                     break;
                 case FLOW_PRED: {
                     LOG_INFO("running in FLOW mode");
-                    denoiser = std::make_shared<DiscreteFlowDenoiser>();
+                    float init_flow_shift = std::isfinite(default_flow_shift) ? default_flow_shift : 3.0f;
+                    denoiser = std::make_shared<DiscreteFlowDenoiser>(init_flow_shift, flow_multiplier);
                     break;
                 }
                 case FLUX_FLOW_PRED: {
@@ -1833,6 +1909,9 @@ public:
 
         struct ggml_tensor* preview_tensor = nullptr;
         auto sd_preview_mode               = sd_get_preview_mode();
+        if (sd_version_is_ace(version)) {
+            sd_preview_mode = PREVIEW_NONE;
+        }
         if (sd_preview_mode != PREVIEW_NONE && sd_preview_mode != PREVIEW_PROJ) {
             int64_t W = x->ne[0] * get_vae_scale_factor();
             int64_t H = x->ne[1] * get_vae_scale_factor();
@@ -1860,6 +1939,9 @@ public:
             auto sd_preview_cb      = sd_get_preview_callback();
             auto sd_preview_cb_data = sd_get_preview_callback_data();
             auto sd_preview_mode    = sd_get_preview_mode();
+            if (sd_version_is_ace(version)) {
+                sd_preview_mode = PREVIEW_NONE;
+            }
             if (step == 1 || step == -1) {
                 pretty_progress(0, (int)steps, 0);
             }
@@ -2012,7 +2094,6 @@ public:
             copy_ggml_tensor(noised_input, input);
             // noised_input = noised_input * c_in
             ggml_ext_tensor_scale_inplace(noised_input, c_in);
-
             if (denoise_mask != nullptr && version == VERSION_WAN2_2_TI2V) {
                 apply_mask(noised_input, init_latent, denoise_mask);
             }
@@ -2051,11 +2132,17 @@ public:
                 diffusion_params.context  = cond.c_crossattn;
                 diffusion_params.c_concat = cond.c_concat;
                 diffusion_params.y        = cond.c_vector;
+                diffusion_params.lyric_embed = cond.c_lyrics;
+                diffusion_params.refer_audio = cond.refer_audio;
+                diffusion_params.audio_codes = cond.audio_codes;
                 active_condition          = &cond;
             } else {
                 diffusion_params.context  = id_cond.c_crossattn;
                 diffusion_params.c_concat = cond.c_concat;
                 diffusion_params.y        = id_cond.c_vector;
+                diffusion_params.lyric_embed = id_cond.c_lyrics;
+                diffusion_params.refer_audio = id_cond.refer_audio;
+                diffusion_params.audio_codes = id_cond.audio_codes;
                 active_condition          = &id_cond;
             }
 
@@ -2087,6 +2174,9 @@ public:
                 diffusion_params.context  = uncond.c_crossattn;
                 diffusion_params.c_concat = uncond.c_concat;
                 diffusion_params.y        = uncond.c_vector;
+                diffusion_params.lyric_embed = uncond.c_lyrics;
+                diffusion_params.refer_audio = uncond.refer_audio;
+                diffusion_params.audio_codes = uncond.audio_codes;
                 bool skip_uncond          = cache_before_condition(&uncond, out_uncond);
                 if (!skip_uncond) {
                     if (!work_diffusion_model->compute(n_threads,
@@ -2105,6 +2195,9 @@ public:
                 diffusion_params.context  = img_cond.c_crossattn;
                 diffusion_params.c_concat = img_cond.c_concat;
                 diffusion_params.y        = img_cond.c_vector;
+                diffusion_params.lyric_embed = img_cond.c_lyrics;
+                diffusion_params.refer_audio = img_cond.refer_audio;
+                diffusion_params.audio_codes = img_cond.audio_codes;
                 bool skip_img_cond        = cache_before_condition(&img_cond, out_img_cond);
                 if (!skip_img_cond) {
                     if (!work_diffusion_model->compute(n_threads,
@@ -2129,6 +2222,9 @@ public:
                     diffusion_params.c_concat    = cond.c_concat;
                     diffusion_params.y           = cond.c_vector;
                     diffusion_params.skip_layers = skip_layers;
+                    diffusion_params.lyric_embed = cond.c_lyrics;
+                    diffusion_params.refer_audio = cond.refer_audio;
+                    diffusion_params.audio_codes = cond.audio_codes;
                     if (!work_diffusion_model->compute(n_threads,
                                                        diffusion_params,
                                                        &out_skip)) {
@@ -2289,6 +2385,8 @@ public:
             vae_scale_factor = 16;
         } else if (version == VERSION_CHROMA_RADIANCE) {
             vae_scale_factor = 1;
+        } else if (sd_version_is_ace(version)) {
+            vae_scale_factor = 1920;
         }
         return vae_scale_factor;
     }
@@ -2314,6 +2412,8 @@ public:
                 latent_channel = 3;
             } else if (sd_version_is_flux2(version)) {
                 latent_channel = 128;
+            } else if (sd_version_is_ace(version)) {
+                latent_channel = 64;
             } else {
                 latent_channel = 16;
             }
@@ -2345,6 +2445,18 @@ public:
         } else {
             init_latent = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, W, H, C, 1);
         }
+        ggml_set_f32(init_latent, shift_factor);
+        return init_latent;
+    }
+
+    ggml_tensor* generate_init_audio_latent(ggml_context* work_ctx,
+                                            float duration_seconds,
+                                            int batch = 1) {
+        int64_t hop = get_vae_scale_factor();
+        int64_t length = static_cast<int64_t>(std::round(duration_seconds * 48000.0f / hop));
+        length = std::max<int64_t>(1, length);
+        int C = get_latent_channel();
+        ggml_tensor* init_latent = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, C, length, batch);
         ggml_set_f32(init_latent, shift_factor);
         return init_latent;
     }
@@ -2409,6 +2521,9 @@ public:
     }
 
     void process_latent_in(ggml_tensor* latent) {
+        if (sd_version_is_ace(version)) {
+            return;
+        }
         if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version) || sd_version_is_flux2(version)) {
             int channel_dim = sd_version_is_flux2(version) ? 2 : 3;
             std::vector<float> latents_mean_vec;
@@ -2448,6 +2563,9 @@ public:
     }
 
     void process_latent_out(ggml_tensor* latent) {
+        if (sd_version_is_ace(version)) {
+            return;
+        }
         if (sd_version_is_wan(version) || sd_version_is_qwen_image(version) || sd_version_is_anima(version) || sd_version_is_flux2(version)) {
             int channel_dim = sd_version_is_flux2(version) ? 2 : 3;
             std::vector<float> latents_mean_vec;
@@ -2727,11 +2845,23 @@ public:
     void set_flow_shift(float flow_shift = INFINITY) {
         auto flow_denoiser = std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser);
         if (flow_denoiser) {
-            if (flow_shift == INFINITY) {
-                flow_shift = default_flow_shift;
+            if (!std::isfinite(flow_shift)) {
+                flow_shift = std::isfinite(default_flow_shift) ? default_flow_shift : 3.0f;
             }
             flow_denoiser->set_shift(flow_shift);
         }
+    }
+
+    ggml_tensor* decode_audio(ggml_context* work_ctx, ggml_tensor* x) {
+        ggml_tensor* result = nullptr;
+        if (!use_tiny_autoencoder) {
+            if (!first_stage_model->compute(n_threads, x, true, &result, work_ctx)) {
+                LOG_ERROR("audio vae decode failed");
+                return nullptr;
+            }
+            first_stage_model->free_compute_buffer();
+        }
+        return result;
     }
 };
 
@@ -3160,6 +3290,58 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
     return buf;
 }
 
+void sd_audio_gen_params_init(sd_audio_gen_params_t* sd_audio_gen_params) {
+    *sd_audio_gen_params = {};
+    sd_sample_params_init(&sd_audio_gen_params->sample_params);
+    sd_audio_gen_params->sample_params.sample_steps    = 8;
+    sd_audio_gen_params->sample_params.guidance.txt_cfg = 1.0f;
+    sd_audio_gen_params->sample_params.scheduler       = SIMPLE_SCHEDULER;
+    sd_audio_gen_params->sample_params.sample_method   = EULER_SAMPLE_METHOD;
+    sd_audio_gen_params->bpm                           = 120.f;
+    sd_audio_gen_params->duration                      = 120.f;
+    sd_audio_gen_params->timesignature                 = 2;
+    sd_audio_gen_params->language                      = "en";
+    sd_audio_gen_params->keyscale                      = "C major";
+    sd_audio_gen_params->lm_seed                       = 0;
+    sd_audio_gen_params->seed                          = -1;
+}
+
+char* sd_audio_gen_params_to_str(const sd_audio_gen_params_t* sd_audio_gen_params) {
+    char* buf = (char*)malloc(4096);
+    if (!buf)
+        return nullptr;
+    buf[0] = '\0';
+
+    char* sample_params_str = sd_sample_params_to_str(&sd_audio_gen_params->sample_params);
+
+    snprintf(buf + strlen(buf), 4096 - strlen(buf),
+             "prompt: %s\n"
+             "negative_prompt: %s\n"
+             "lyrics: %s\n"
+             "bpm: %.2f\n"
+             "duration: %.2f\n"
+             "timesignature: %d\n"
+             "language: %s\n"
+             "keyscale: %s\n"
+             "lm_seed: %d\n"
+             "sample_params: %s\n"
+             "seed: %" PRId64 "\n",
+             SAFE_STR(sd_audio_gen_params->prompt),
+             SAFE_STR(sd_audio_gen_params->negative_prompt),
+             SAFE_STR(sd_audio_gen_params->lyrics),
+             sd_audio_gen_params->bpm,
+             sd_audio_gen_params->duration,
+             sd_audio_gen_params->timesignature,
+             SAFE_STR(sd_audio_gen_params->language),
+             SAFE_STR(sd_audio_gen_params->keyscale),
+             sd_audio_gen_params->lm_seed,
+             SAFE_STR(sample_params_str),
+             sd_audio_gen_params->seed);
+
+    free(sample_params_str);
+    return buf;
+}
+
 void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
     *sd_vid_gen_params = {};
     sd_sample_params_init(&sd_vid_gen_params->sample_params);
@@ -3223,6 +3405,9 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
         auto edm_v_denoiser = std::dynamic_pointer_cast<EDMVDenoiser>(sd_ctx->sd->denoiser);
         if (edm_v_denoiser) {
             return EXPONENTIAL_SCHEDULER;
+        }
+        if (sd_version_is_ace(sd_ctx->sd->version)) {
+            return SIMPLE_SCHEDULER;
         }
     }
     if (sample_method == LCM_SAMPLE_METHOD) {
@@ -3531,7 +3716,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     }
 
     struct ggml_init_params params;
-    params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
+    params.mem_size   = static_cast<size_t>(1024 * 1024) * 4096;  // 4G (ACE audio needs larger scratch for full lyric conditioning)
     params.mem_buffer = nullptr;
     params.no_alloc   = false;
     // LOG_DEBUG("mem_size %u ", params.mem_size);
@@ -3799,6 +3984,210 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     LOG_INFO("generate_image completed in %.2fs", (t2 - t0) * 1.0f / 1000);
 
     return result_images;
+}
+
+sd_audio_t* generate_audio(sd_ctx_t* sd_ctx, const sd_audio_gen_params_t* sd_audio_gen_params) {
+    if (sd_ctx == nullptr || sd_audio_gen_params == nullptr) {
+        return nullptr;
+    }
+    if (!sd_version_is_ace(sd_ctx->sd->version)) {
+        LOG_ERROR("audio generation is only supported with ACE Step 1.5 models");
+        return nullptr;
+    }
+    if (auto ace_model = std::dynamic_pointer_cast<AceModel>(sd_ctx->sd->diffusion_model)) {
+        ace_model->ace.reset_encoder_cache();
+    }
+
+    struct ggml_init_params params;
+    params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
+    params.mem_buffer = nullptr;
+    params.no_alloc   = false;
+
+    struct ggml_context* work_ctx = ggml_init(params);
+    if (!work_ctx) {
+        LOG_ERROR("ggml_init() failed");
+        return nullptr;
+    }
+
+    int64_t seed = sd_audio_gen_params->seed;
+    if (seed < 0) {
+        srand((int)time(nullptr));
+        seed = rand();
+    }
+    sd_ctx->sd->rng->manual_seed(seed);
+    sd_ctx->sd->sampler_rng->manual_seed(seed);
+
+    sd_ctx->sd->apply_loras(sd_audio_gen_params->loras, sd_audio_gen_params->lora_count);
+
+    enum sample_method_t sample_method = sd_audio_gen_params->sample_params.sample_method;
+    if (sample_method == SAMPLE_METHOD_COUNT) {
+        sample_method = sd_get_default_sample_method(sd_ctx);
+    }
+    LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
+
+    int sample_steps = sd_audio_gen_params->sample_params.sample_steps;
+    std::vector<float> sigmas;
+    if (sd_audio_gen_params->sample_params.custom_sigmas_count > 0) {
+        sigmas = std::vector<float>(sd_audio_gen_params->sample_params.custom_sigmas,
+                                    sd_audio_gen_params->sample_params.custom_sigmas + sd_audio_gen_params->sample_params.custom_sigmas_count);
+        if (sample_steps != sigmas.size() - 1) {
+            sample_steps = static_cast<int>(sigmas.size()) - 1;
+            LOG_WARN("sample_steps != custom_sigmas_count - 1, set sample_steps to %d", sample_steps);
+        }
+    }
+
+    ConditionerParams condition_params;
+    condition_params.text         = SAFE_STR(sd_audio_gen_params->prompt);
+    condition_params.lyrics       = SAFE_STR(sd_audio_gen_params->lyrics);
+    condition_params.keyscale     = strlen(SAFE_STR(sd_audio_gen_params->keyscale)) > 0 ? SAFE_STR(sd_audio_gen_params->keyscale) : "C major";
+    condition_params.language     = strlen(SAFE_STR(sd_audio_gen_params->language)) > 0 ? SAFE_STR(sd_audio_gen_params->language) : "en";
+    condition_params.bpm          = sd_audio_gen_params->bpm;
+    condition_params.duration     = sd_audio_gen_params->duration;
+    condition_params.timesignature = sd_audio_gen_params->timesignature;
+    condition_params.lm_seed      = sd_audio_gen_params->lm_seed;
+
+    SDCondition cond = sd_ctx->sd->cond_stage_model->get_learned_condition(work_ctx,
+                                                                           sd_ctx->sd->n_threads,
+                                                                           condition_params);
+
+    SDCondition uncond;
+    if (sd_audio_gen_params->sample_params.guidance.txt_cfg != 1.0f) {
+        uncond = cond;
+        if (cond.c_crossattn) {
+            auto zero = ggml_dup_tensor(work_ctx, cond.c_crossattn);
+            ggml_set_f32(zero, 0.f);
+            uncond.c_crossattn = zero;
+        }
+        if (cond.c_lyrics) {
+            auto zero = ggml_dup_tensor(work_ctx, cond.c_lyrics);
+            ggml_set_f32(zero, 0.f);
+            uncond.c_lyrics = zero;
+        }
+    }
+
+    if (sd_ctx->sd->free_params_immediately) {
+        sd_ctx->sd->cond_stage_model->free_params_buffer();
+    }
+
+    ggml_tensor* init_latent = sd_ctx->sd->generate_init_audio_latent(work_ctx,
+                                                                      sd_audio_gen_params->duration,
+                                                                      1);
+
+    ggml_tensor* noise = ggml_new_tensor_3d(work_ctx,
+                                            GGML_TYPE_F32,
+                                            init_latent->ne[0],
+                                            init_latent->ne[1],
+                                            init_latent->ne[2]);
+    ggml_ext_im_set_randn_f32(noise, sd_ctx->sd->rng);
+
+    int seq_len = static_cast<int>(init_latent->ne[1]);
+    if (sd_audio_gen_params->sample_params.custom_sigmas_count == 0) {
+        scheduler_t scheduler = sd_audio_gen_params->sample_params.scheduler;
+        if (scheduler == SCHEDULER_COUNT) {
+            scheduler = sd_get_default_scheduler(sd_ctx, sample_method);
+        }
+        sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
+                                                  seq_len,
+                                                  scheduler,
+                                                  sd_ctx->sd->version);
+    }
+
+    SDCondition img_cond;
+    SDCondition id_cond;
+
+    ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx,
+                                          sd_ctx->sd->diffusion_model,
+                                          true,
+                                          init_latent,
+                                          noise,
+                                          cond,
+                                          uncond,
+                                          img_cond,
+                                          nullptr,
+                                          0.0f,
+                                          sd_audio_gen_params->sample_params.guidance,
+                                          sd_audio_gen_params->sample_params.eta,
+                                          sd_audio_gen_params->sample_params.shifted_timestep,
+                                          sample_method,
+                                          sigmas,
+                                          -1,
+                                          id_cond,
+                                          {},
+                                          false,
+                                          nullptr,
+                                          nullptr,
+                                          1.0f,
+                                          nullptr);
+
+    if (sd_ctx->sd->free_params_immediately) {
+        sd_ctx->sd->diffusion_model->free_params_buffer();
+    }
+
+    if (x_0 == nullptr) {
+        LOG_ERROR("sampling failed");
+        ggml_free(work_ctx);
+        return nullptr;
+    }
+
+    {
+        float x_min = std::numeric_limits<float>::infinity();
+        float x_max = -std::numeric_limits<float>::infinity();
+        for (int64_t t = 0; t < x_0->ne[1]; ++t) {
+            for (int64_t c = 0; c < x_0->ne[0]; ++c) {
+                float v = ggml_ext_tensor_get_f32(x_0, c, t, 0);
+                x_min = std::min(x_min, v);
+                x_max = std::max(x_max, v);
+            }
+        }
+        LOG_INFO("audio latent stats: min=%.6f max=%.6f", x_min, x_max);
+    }
+
+    ggml_tensor* audio_tensor = sd_ctx->sd->decode_audio(work_ctx, x_0);
+    if (audio_tensor == nullptr) {
+        ggml_free(work_ctx);
+        return nullptr;
+    }
+
+
+    if (sd_ctx->sd->free_params_immediately && !sd_ctx->sd->use_tiny_autoencoder) {
+        sd_ctx->sd->first_stage_model->free_params_buffer();
+    }
+
+    sd_ctx->sd->lora_stat();
+
+    int64_t sample_count = audio_tensor->ne[0];
+    int64_t channels = audio_tensor->ne[1];
+    sd_audio_t* result = (sd_audio_t*)calloc(1, sizeof(sd_audio_t));
+    if (result == nullptr) {
+        ggml_free(work_ctx);
+        return nullptr;
+    }
+
+    result->sample_rate = 48000;
+    result->channels    = static_cast<uint32_t>(channels);
+    result->sample_count = static_cast<uint32_t>(sample_count);
+    result->data = (float*)malloc(sample_count * channels * sizeof(float));
+
+    if (!result->data) {
+        free(result);
+        ggml_free(work_ctx);
+        return nullptr;
+    }
+
+    float v_min = std::numeric_limits<float>::infinity();
+    float v_max = -std::numeric_limits<float>::infinity();
+    for (int64_t t = 0; t < sample_count; ++t) {
+        for (int64_t c = 0; c < channels; ++c) {
+            float v = ggml_ext_tensor_get_f32(audio_tensor, t, c, 0);
+            v_min = std::min(v_min, v);
+            v_max = std::max(v_max, v);
+            result->data[t * channels + c] = v;
+        }
+    }
+    LOG_INFO("audio decode stats: min=%.6f max=%.6f", v_min, v_max);
+
+    ggml_free(work_ctx);
+    return result;
 }
 
 SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, int* num_frames_out) {

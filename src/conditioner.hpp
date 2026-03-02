@@ -4,11 +4,19 @@
 #include "clip.hpp"
 #include "llm.hpp"
 #include "t5.hpp"
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <memory>
+#include <random>
 
 struct SDCondition {
     struct ggml_tensor* c_crossattn = nullptr;  // aka context
     struct ggml_tensor* c_vector    = nullptr;  // aka y
     struct ggml_tensor* c_concat    = nullptr;
+    struct ggml_tensor* c_lyrics    = nullptr;  // ace: lyric embedding
+    struct ggml_tensor* refer_audio = nullptr;  // ace: reference audio (acoustic hidden states)
+    std::shared_ptr<std::vector<int>> audio_codes;  // ace: semantic audio codes
 
     std::vector<struct ggml_tensor*> extra_c_crossattns;
 
@@ -22,6 +30,13 @@ struct SDCondition {
 
 struct ConditionerParams {
     std::string text;
+    std::string lyrics;
+    std::string keyscale = "C major";
+    std::string language = "en";
+    float bpm            = 120.f;
+    float duration       = 120.f;
+    int timesignature    = 2;
+    int lm_seed          = 0;
     int clip_skip                       = -1;
     int width                           = -1;
     int height                          = -1;
@@ -2148,6 +2163,811 @@ struct LLMEmbedder : public Conditioner {
         int64_t t1 = ggml_time_ms();
         LOG_DEBUG("computing condition graph completed, taking %" PRId64 " ms", t1 - t0);
         return {hidden_states, nullptr, nullptr, extra_hidden_states_vec};
+    }
+};
+
+struct AceConditioner : public Conditioner {
+    std::shared_ptr<LLM::Qwen3Tokenizer> tokenizer;
+    std::shared_ptr<LLM::LLMRunner> base_llm;
+    std::shared_ptr<LLM::LLMRunner> lm_llm;
+    std::string base_llm_prefix;
+    std::string lm_llm_prefix;
+
+    static bool has_prefix(const String2TensorStorage& tensor_storage_map, const std::string& prefix) {
+        for (const auto& kv : tensor_storage_map) {
+            if (kv.first.rfind(prefix, 0) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static std::string resolve_prefix(const String2TensorStorage& tensor_storage_map, const std::string& base_prefix) {
+        // LLM blocks already add ".model" in their submodule names. Pick a prefix that
+        // results in "<prefix>.model.*" matching the weight file.
+        std::string transformer_model_prefix = base_prefix + ".transformer.model";
+        if (has_prefix(tensor_storage_map, transformer_model_prefix + ".")) {
+            return base_prefix + ".transformer";
+        }
+        std::string transformer_prefix = base_prefix + ".transformer";
+        if (has_prefix(tensor_storage_map, transformer_prefix + ".")) {
+            return transformer_prefix;
+        }
+        std::string model_prefix = base_prefix + ".model";
+        if (has_prefix(tensor_storage_map, model_prefix + ".")) {
+            return base_prefix;
+        }
+        return base_prefix;
+    }
+
+    static float parse_qwen3_size(const std::string& name) {
+        std::string s = name;
+        if (s.rfind("qwen3_", 0) == 0) {
+            s = s.substr(6);
+        }
+        if (!s.empty() && s.back() == 'b') {
+            s.pop_back();
+        }
+        if (s.empty()) {
+            return 0.f;
+        }
+        if (s.find('.') != std::string::npos) {
+            return std::stof(s);
+        }
+        if (s.size() > 1 && s[0] == '0') {
+            return std::stof("0." + s.substr(1));
+        }
+        return std::stof(s);
+    }
+
+    static std::vector<std::pair<float, std::string>> find_qwen3_variants(const String2TensorStorage& tensor_storage_map) {
+        std::map<std::string, float> found;
+        for (const auto& kv : tensor_storage_map) {
+            if (kv.first.rfind("text_encoders.qwen3_", 0) != 0) {
+                continue;
+            }
+            auto end = kv.first.find('.', strlen("text_encoders."));
+            if (end == std::string::npos) {
+                continue;
+            }
+            std::string model_name = kv.first.substr(strlen("text_encoders."), end - strlen("text_encoders."));
+            if (found.find(model_name) == found.end()) {
+                found[model_name] = parse_qwen3_size(model_name);
+            }
+        }
+        std::vector<std::pair<float, std::string>> variants;
+        variants.reserve(found.size());
+        for (const auto& kv : found) {
+            variants.emplace_back(kv.second, "text_encoders." + kv.first);
+        }
+        std::sort(variants.begin(), variants.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        return variants;
+    }
+
+    static bool has_qwen3_variant(const String2TensorStorage& tensor_storage_map, const std::string& name) {
+        std::string prefix = "text_encoders." + name + ".";
+        return has_prefix(tensor_storage_map, prefix);
+    }
+
+    static std::string resolve_qwen3_variant(const String2TensorStorage& tensor_storage_map, const std::string& name) {
+        std::string prefix = "text_encoders." + name;
+        return resolve_prefix(tensor_storage_map, prefix);
+    }
+
+    AceConditioner(ggml_backend_t backend,
+                   bool offload_params_to_cpu,
+                   const String2TensorStorage& tensor_storage_map = {}) {
+        tokenizer = std::make_shared<LLM::Qwen3Tokenizer>();
+
+        auto variants = find_qwen3_variants(tensor_storage_map);
+        std::string base_prefix = "text_encoders.qwen3_06b";
+        if (!variants.empty()) {
+            base_prefix = variants.front().second;
+        }
+
+        base_llm_prefix = resolve_prefix(tensor_storage_map, base_prefix);
+        base_llm = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::QWEN3,
+                                                    backend,
+                                                    offload_params_to_cpu,
+                                                    tensor_storage_map,
+                                                    base_llm_prefix,
+                                                    false);
+
+        bool has_lm = has_prefix(tensor_storage_map, "text_encoders.llm.");
+        if (has_lm) {
+            lm_llm_prefix = resolve_prefix(tensor_storage_map, "text_encoders.llm");
+        } else if (has_qwen3_variant(tensor_storage_map, "qwen3_2b")) {
+            lm_llm_prefix = resolve_qwen3_variant(tensor_storage_map, "qwen3_2b");
+        } else if (has_qwen3_variant(tensor_storage_map, "qwen3_4b")) {
+            lm_llm_prefix = resolve_qwen3_variant(tensor_storage_map, "qwen3_4b");
+        } else if (variants.size() > 1) {
+            std::string lm_prefix = variants.back().second;
+            if (lm_prefix != base_prefix) {
+                lm_llm_prefix = resolve_prefix(tensor_storage_map, lm_prefix);
+            }
+        }
+
+        if (!lm_llm_prefix.empty()) {
+            lm_llm = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::QWEN3,
+                                                      backend,
+                                                      offload_params_to_cpu,
+                                                      tensor_storage_map,
+                                                      lm_llm_prefix,
+                                                      false);
+        }
+    }
+
+    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+        if (base_llm) {
+            base_llm->get_param_tensors(tensors, base_llm_prefix);
+        }
+        if (lm_llm) {
+            lm_llm->get_param_tensors(tensors, lm_llm_prefix);
+        }
+    }
+
+    void alloc_params_buffer() override {
+        if (base_llm) {
+            base_llm->alloc_params_buffer();
+        }
+        if (lm_llm) {
+            lm_llm->alloc_params_buffer();
+        }
+    }
+
+    void free_params_buffer() override {
+        if (base_llm) {
+            base_llm->free_params_buffer();
+        }
+        if (lm_llm) {
+            lm_llm->free_params_buffer();
+        }
+    }
+
+    size_t get_params_buffer_size() override {
+        size_t size = 0;
+        if (base_llm) {
+            size += base_llm->get_params_buffer_size();
+        }
+        if (lm_llm) {
+            size += lm_llm->get_params_buffer_size();
+        }
+        return size;
+    }
+
+    void set_flash_attention_enabled(bool enabled) override {
+        if (base_llm) {
+            base_llm->set_flash_attention_enabled(false);
+        }
+        if (lm_llm) {
+            lm_llm->set_flash_attention_enabled(enabled);
+        }
+    }
+
+    void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        if (base_llm) {
+            base_llm->set_weight_adapter(adapter);
+        }
+        if (lm_llm) {
+            lm_llm->set_weight_adapter(adapter);
+        }
+    }
+
+    static std::string format_meta_cap(int bpm, int timesignature, const std::string& keyscale, int duration) {
+        std::ostringstream oss;
+        oss << "- bpm: " << bpm << "\n";
+        oss << "- timesignature: " << timesignature << "\n";
+        oss << "- keyscale: " << keyscale << "\n";
+        oss << "- duration: " << duration << "\n";
+        return oss.str();
+    }
+
+    static std::string format_meta_lm(int bpm, int timesignature, const std::string& keyscale, int duration) {
+        std::ostringstream oss;
+        oss << "bpm: " << bpm << "\n";
+        oss << "duration: " << duration << "\n";
+        oss << "keyscale: " << keyscale << "\n";
+        oss << "timesignature: " << timesignature;
+        return oss.str();
+    }
+
+        std::vector<float> compute_logits(int n_threads,
+                                          LLM::LLMRunner* runner,
+                                          const std::vector<int>& tokens,
+                                          int pad_len = 0) {
+        std::vector<float> logits;
+        if (!runner) {
+            return logits;
+        }
+
+        size_t vocab_size = static_cast<size_t>(runner->params.vocab_size);
+        size_t logits_vocab_size = vocab_size;
+        int64_t logits_start = runner->get_logits_range_start();
+        int64_t logits_end = runner->get_logits_range_end();
+        if (logits_end > logits_start) {
+            logits_vocab_size = static_cast<size_t>(logits_end - logits_start);
+        }
+        if (logits_vocab_size == 0 || tokens.empty()) {
+            return logits;
+        }
+
+        size_t n_tokens = tokens.size();
+        size_t mask_bytes = n_tokens * n_tokens * sizeof(float);
+        size_t mem_size = std::max<size_t>({logits_vocab_size * sizeof(float) * 2,
+                                            8 * 1024 * 1024,
+                                            mask_bytes + 1024 * 1024});
+        struct ggml_init_params params;
+        params.mem_size   = mem_size;
+        params.mem_buffer = nullptr;
+        params.no_alloc   = false;
+        struct ggml_context* ctx = ggml_init(params);
+        if (!ctx) {
+            return logits;
+        }
+
+        ggml_tensor* input_ids = vector_to_ggml_tensor_i32(ctx, tokens);
+        ggml_tensor* logits_tensor = nullptr;
+        std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+
+        ggml_tensor* attention_mask = nullptr;
+        {
+            // Match Comfy: use finite negative mask values to avoid NaNs in some backends.
+            constexpr float kMaskNeg = -65504.0f;
+            int64_t n_tokens_i = static_cast<int64_t>(tokens.size());
+            std::vector<float> attention_mask_vec(static_cast<size_t>(n_tokens_i) * static_cast<size_t>(n_tokens_i), 0.f);
+            for (int64_t i0 = 0; i0 < n_tokens_i; ++i0) {
+                for (int64_t i1 = 0; i1 < n_tokens_i; ++i1) {
+                    float value = 0.f;
+                    if (i0 < pad_len) {  // mask out pad tokens as keys (left padding)
+                        value = kMaskNeg;
+                    } else if (i0 > i1) {  // causal mask
+                        value = kMaskNeg;
+                    }
+                    attention_mask_vec[i1 * n_tokens_i + i0] = value;
+                }
+            }
+            attention_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_tokens_i, n_tokens_i);
+            if (attention_mask->data != nullptr) {
+                memcpy(attention_mask->data, attention_mask_vec.data(), attention_mask_vec.size() * sizeof(float));
+            } else {
+                ggml_ext_tensor_iter(attention_mask, [&](ggml_tensor* mask, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
+                    size_t idx = static_cast<size_t>(i1 * n_tokens_i + i0);
+                    ggml_ext_tensor_set_f32(mask, attention_mask_vec[idx], i0, i1, i2, i3);
+                });
+            }
+        }
+
+        if (!runner->compute_logits(n_threads, input_ids, attention_mask, image_embeds, &logits_tensor, ctx) || logits_tensor == nullptr) {
+            ggml_free(ctx);
+            return logits;
+        }
+
+        size_t n = static_cast<size_t>(ggml_nelements(logits_tensor));
+        logits.resize(std::min(n, logits_vocab_size));
+        if (logits_tensor->type == GGML_TYPE_F32 && logits_tensor->buffer == nullptr) {
+            memcpy(logits.data(), logits_tensor->data, logits.size() * sizeof(float));
+        } else {
+            for (size_t i = 0; i < logits.size(); ++i) {
+                logits[i] = ggml_ext_tensor_get_f32(logits_tensor, i);
+            }
+        }
+        ggml_free(ctx);
+        return logits;
+    }
+
+    bool compute_logits_kv_cfg(int n_threads,
+                               LLM::LLMRunner* runner,
+                               const std::vector<int>& cond_tokens,
+                               const std::vector<int>& uncond_tokens,
+                               int64_t n_past,
+                               int cond_pad_len,
+                               int uncond_pad_len,
+                               std::vector<float>& cond_logits,
+                               std::vector<float>& uncond_logits) {
+        cond_logits.clear();
+        uncond_logits.clear();
+        if (!runner || cond_tokens.empty() || cond_tokens.size() != uncond_tokens.size()) {
+            return false;
+        }
+
+        size_t vocab_size = static_cast<size_t>(runner->params.vocab_size);
+        size_t logits_vocab_size = vocab_size;
+        int64_t logits_start = runner->get_logits_range_start();
+        int64_t logits_end = runner->get_logits_range_end();
+        if (logits_end > logits_start) {
+            logits_vocab_size = static_cast<size_t>(logits_end - logits_start);
+        }
+        if (logits_vocab_size == 0) {
+            return false;
+        }
+
+        const size_t n_tokens = cond_tokens.size();
+        ggml_tensor* logits_tensor = nullptr;
+        bool ok = false;
+
+        if (n_tokens == 1 && n_past > 0) {
+            size_t mem_size = std::max<size_t>(logits_vocab_size * 2 * sizeof(float), 2 * 1024 * 1024);
+            struct ggml_init_params params;
+            params.mem_size   = mem_size;
+            params.mem_buffer = nullptr;
+            params.no_alloc   = false;
+            struct ggml_context* ctx = ggml_init(params);
+            if (!ctx) {
+                return false;
+            }
+
+            std::vector<int> ids = {cond_tokens[0], uncond_tokens[0]};
+            std::vector<int> pad_lens = {cond_pad_len, uncond_pad_len};
+            ok = runner->compute_logits_kv_decode_1token(n_threads, ids, n_past, pad_lens, &logits_tensor, ctx);
+            if (!ok || logits_tensor == nullptr) {
+                ggml_free(ctx);
+                return false;
+            }
+
+            const size_t n_vocab = std::min<size_t>(logits_vocab_size, static_cast<size_t>(logits_tensor->ne[0]));
+            cond_logits.resize(n_vocab);
+            uncond_logits.resize(n_vocab);
+            for (size_t i = 0; i < n_vocab; ++i) {
+                cond_logits[i] = ggml_ext_tensor_get_f32(logits_tensor, static_cast<int64_t>(i), 0, 0, 0);
+                uncond_logits[i] = ggml_ext_tensor_get_f32(logits_tensor, static_cast<int64_t>(i), 0, 1, 0);
+            }
+
+            ggml_free(ctx);
+            return true;
+        }
+
+        const size_t n_kv = static_cast<size_t>(n_past) + n_tokens;
+        size_t mask_bytes = n_kv * n_tokens * 2 * sizeof(float);
+        size_t mem_size = std::max<size_t>({logits_vocab_size * 2 * sizeof(float),
+                                            8 * 1024 * 1024,
+                                            mask_bytes + 1024 * 1024});
+        struct ggml_init_params params;
+        params.mem_size   = mem_size;
+        params.mem_buffer = nullptr;
+        params.no_alloc   = false;
+        struct ggml_context* ctx = ggml_init(params);
+        if (!ctx) {
+            return false;
+        }
+
+        ggml_tensor* input_ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_tokens, 2);
+        {
+            int32_t* ids = static_cast<int32_t*>(input_ids->data);
+            for (size_t i = 0; i < n_tokens; ++i) {
+                ids[i] = cond_tokens[i];
+                ids[n_tokens + i] = uncond_tokens[i];
+            }
+        }
+
+        constexpr float kMaskNeg = -65504.0f;
+        ggml_tensor* attention_mask = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_kv, n_tokens, 2);
+        std::vector<float> attention_mask_vec(n_kv * n_tokens * 2, 0.f);
+        for (int b = 0; b < 2; ++b) {
+            int pad_len = b == 0 ? cond_pad_len : uncond_pad_len;
+            size_t offset = static_cast<size_t>(b) * n_kv * n_tokens;
+            for (size_t q = 0; q < n_tokens; ++q) {
+                int64_t abs_q = n_past + static_cast<int64_t>(q);
+                for (size_t k = 0; k < n_kv; ++k) {
+                    float value = 0.f;
+                    if (static_cast<int>(k) < pad_len || static_cast<int64_t>(k) > abs_q) {
+                        value = kMaskNeg;
+                    }
+                    attention_mask_vec[offset + q * n_kv + k] = value;
+                }
+            }
+        }
+        if (attention_mask->data != nullptr) {
+            memcpy(attention_mask->data, attention_mask_vec.data(), attention_mask_vec.size() * sizeof(float));
+        } else {
+            for (int b = 0; b < 2; ++b) {
+                size_t offset = static_cast<size_t>(b) * n_kv * n_tokens;
+                for (size_t q = 0; q < n_tokens; ++q) {
+                    for (size_t k = 0; k < n_kv; ++k) {
+                        ggml_ext_tensor_set_f32(attention_mask,
+                                                attention_mask_vec[offset + q * n_kv + k],
+                                                static_cast<int64_t>(k),
+                                                static_cast<int64_t>(q),
+                                                b,
+                                                0);
+                    }
+                }
+            }
+        }
+
+        std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+        ok = runner->compute_logits_kv(n_threads,
+                                       input_ids,
+                                       attention_mask,
+                                       image_embeds,
+                                       n_past,
+                                       &logits_tensor,
+                                       ctx);
+        if (!ok || logits_tensor == nullptr) {
+            ggml_free(ctx);
+            return false;
+        }
+
+        const size_t n_vocab = std::min<size_t>(logits_vocab_size, static_cast<size_t>(logits_tensor->ne[0]));
+        cond_logits.resize(n_vocab);
+        uncond_logits.resize(n_vocab);
+        for (size_t i = 0; i < n_vocab; ++i) {
+            cond_logits[i] = ggml_ext_tensor_get_f32(logits_tensor, static_cast<int64_t>(i), 0, 0, 0);
+            uncond_logits[i] = ggml_ext_tensor_get_f32(logits_tensor, static_cast<int64_t>(i), 0, 1, 0);
+        }
+
+        ggml_free(ctx);
+        return true;
+    }
+
+    int sample_from_logits(const std::vector<float>& logits,
+                           float temperature,
+                           float top_p,
+                           std::mt19937_64& rng) {
+        if (logits.empty()) {
+            return -1;
+        }
+
+        int vocab_size = static_cast<int>(logits.size());
+        if (temperature <= 0.f) {
+            int best = 0;
+            float best_val = logits[0];
+            for (int i = 1; i < vocab_size; ++i) {
+                if (logits[i] > best_val) {
+                    best_val = logits[i];
+                    best = i;
+                }
+            }
+            return best;
+        }
+
+        float max_logit = -std::numeric_limits<float>::infinity();
+        for (int i = 0; i < vocab_size; ++i) {
+            if (logits[i] > max_logit) {
+                max_logit = logits[i];
+            }
+        }
+
+        std::vector<float> probs(vocab_size, 0.f);
+        double sum = 0.0;
+        for (int i = 0; i < vocab_size; ++i) {
+            float val = (logits[i] - max_logit) / temperature;
+            if (std::isinf(logits[i]) && logits[i] < 0) {
+                probs[i] = 0.f;
+                continue;
+            }
+            float p = std::exp(val);
+            probs[i] = p;
+            sum += p;
+        }
+
+        if (sum <= 0.0) {
+            int best = 0;
+            float best_val = logits[0];
+            for (int i = 1; i < vocab_size; ++i) {
+                if (logits[i] > best_val) {
+                    best_val = logits[i];
+                    best = i;
+                }
+            }
+            return best;
+        }
+
+        if (top_p < 1.0f) {
+            std::vector<int> indices(vocab_size);
+            for (int i = 0; i < vocab_size; ++i) {
+                indices[i] = i;
+            }
+            std::sort(indices.begin(), indices.end(), [&](int a, int b) { return probs[a] > probs[b]; });
+
+            double cumulative = 0.0;
+            std::vector<char> keep(vocab_size, 0);
+            for (int idx : indices) {
+                cumulative += probs[idx] / sum;
+                keep[idx] = 1;
+                if (cumulative >= top_p) {
+                    break;
+                }
+            }
+
+            double new_sum = 0.0;
+            for (int i = 0; i < vocab_size; ++i) {
+                if (!keep[i]) {
+                    probs[i] = 0.f;
+                } else {
+                    new_sum += probs[i];
+                }
+            }
+            sum = new_sum > 0.0 ? new_sum : sum;
+        }
+
+        std::uniform_real_distribution<double> dist(0.0, sum);
+        double r = dist(rng);
+        double acc = 0.0;
+        for (int i = 0; i < vocab_size; ++i) {
+            acc += probs[i];
+            if (acc >= r) {
+                return i;
+            }
+        }
+        return vocab_size - 1;
+    }
+
+    std::shared_ptr<std::vector<int>> generate_audio_codes(int n_threads,
+                                                           const std::string& lm_prompt,
+                                                           const std::string& lm_prompt_negative,
+                                                           int min_tokens,
+                                                           int lm_seed) {
+        const int audio_start_id = 151669;
+        const float cfg_scale = 2.0f;
+        const float temperature = 0.85f;
+        const float top_p = 0.9f;
+
+        std::shared_ptr<std::vector<int>> codes = std::make_shared<std::vector<int>>();
+        auto runner = lm_llm ? lm_llm.get() : base_llm.get();
+        if (!runner || !tokenizer) {
+            return codes;
+        }
+
+        int64_t t0 = ggml_time_ms();
+        LOG_INFO("ACE LM: generating %d audio tokens (seed=%d)", min_tokens, lm_seed);
+
+        std::vector<int> cond_tokens = tokenizer->tokenize(lm_prompt, nullptr);
+        std::vector<int> uncond_tokens = tokenizer->tokenize(lm_prompt_negative, nullptr);
+
+        const int pad_token_id = 151643;
+        int pos_pad = 0;
+        int neg_pad = 0;
+        if (uncond_tokens.size() < cond_tokens.size()) {
+            neg_pad = static_cast<int>(cond_tokens.size() - uncond_tokens.size());
+            uncond_tokens.insert(uncond_tokens.begin(), neg_pad, pad_token_id);
+        } else if (cond_tokens.size() < uncond_tokens.size()) {
+            pos_pad = static_cast<int>(uncond_tokens.size() - cond_tokens.size());
+            cond_tokens.insert(cond_tokens.begin(), pos_pad, pad_token_id);
+        }
+
+        const int num_tokens_to_generate = min_tokens;
+        std::mt19937_64 rng(static_cast<uint64_t>(lm_seed));
+        bool use_kv_cache = true;
+        int64_t n_past = 0;
+        std::vector<int> cond_tokens_full = cond_tokens;
+        std::vector<int> uncond_tokens_full = uncond_tokens;
+        std::vector<int> cond_step_tokens = cond_tokens;
+        std::vector<int> uncond_step_tokens = uncond_tokens;
+
+        const int64_t full_vocab_end = runner->params.vocab_size;
+        runner->set_logits_range(audio_start_id, full_vocab_end);
+        const int logits_id_offset = static_cast<int>(runner->get_logits_range_start());
+
+        runner->reset_kv_cache();
+        if (use_kv_cache) {
+            int64_t kv_capacity = static_cast<int64_t>(cond_tokens.size()) + static_cast<int64_t>(num_tokens_to_generate);
+            if (!runner->prepare_kv_cache(kv_capacity, 2)) {
+                use_kv_cache = false;
+                LOG_WARN("ACE LM: KV-cache allocation failed, falling back to full-sequence logits");
+            }
+        }
+
+        for (int step = 0; step < num_tokens_to_generate; ++step) {
+            std::vector<float> cond_logits;
+            std::vector<float> uncond_logits;
+            if (use_kv_cache) {
+                bool ok = compute_logits_kv_cfg(n_threads,
+                                                runner,
+                                                cond_step_tokens,
+                                                uncond_step_tokens,
+                                                n_past,
+                                                pos_pad,
+                                                neg_pad,
+                                                cond_logits,
+                                                uncond_logits);
+                if (ok) {
+                    n_past += static_cast<int64_t>(cond_step_tokens.size());
+                }
+                if (!ok) {
+                    use_kv_cache = false;
+                    runner->reset_kv_cache();
+                    LOG_WARN("ACE LM: KV-cache decode unavailable, falling back to full-sequence logits");
+                }
+            }
+            if (!use_kv_cache) {
+                cond_logits = compute_logits(n_threads, runner, cond_tokens_full, pos_pad);
+                uncond_logits = compute_logits(n_threads, runner, uncond_tokens_full, neg_pad);
+            }
+            if (cond_logits.empty() || uncond_logits.empty() || cond_logits.size() != uncond_logits.size()) {
+                break;
+            }
+            std::vector<float> cfg_logits(cond_logits.size(), 0.f);
+            for (size_t i = 0; i < cond_logits.size(); ++i) {
+                cfg_logits[i] = uncond_logits[i] + cfg_scale * (cond_logits[i] - uncond_logits[i]);
+            }
+
+            const int mask_upto = std::max(0, audio_start_id - logits_id_offset);
+            for (int i = 0; i < mask_upto && i < static_cast<int>(cfg_logits.size()); ++i) {
+                cfg_logits[i] = -std::numeric_limits<float>::infinity();
+            }
+
+            if (top_p < 1.0f) {
+                std::vector<int> indices(cfg_logits.size());
+                for (size_t i = 0; i < indices.size(); ++i) {
+                    indices[i] = static_cast<int>(i);
+                }
+                std::sort(indices.begin(), indices.end(),
+                          [&](int a, int b) { return cfg_logits[a] > cfg_logits[b]; });
+
+                float max_logit = -std::numeric_limits<float>::infinity();
+                for (float v : cfg_logits) {
+                    if (v > max_logit) {
+                        max_logit = v;
+                    }
+                }
+                double sum = 0.0;
+                std::vector<double> sorted_probs(indices.size(), 0.0);
+                for (size_t i = 0; i < indices.size(); ++i) {
+                    float v = cfg_logits[indices[i]];
+                    if (std::isinf(v) && v < 0) {
+                        sorted_probs[i] = 0.0;
+                        continue;
+                    }
+                    double p = std::exp((double)(v - max_logit));
+                    sorted_probs[i] = p;
+                    sum += p;
+                }
+                if (sum > 0.0) {
+                    double cumulative = 0.0;
+                    std::vector<char> remove(indices.size(), 0);
+                    for (size_t i = 0; i < indices.size(); ++i) {
+                        cumulative += sorted_probs[i] / sum;
+                        if (cumulative > top_p) {
+                            remove[i] = 1;
+                        }
+                    }
+                    for (int i = static_cast<int>(remove.size()) - 1; i >= 1; --i) {
+                        remove[i] = remove[i - 1];
+                    }
+                    if (!remove.empty()) {
+                        remove[0] = 0;
+                    }
+                    for (size_t i = 0; i < indices.size(); ++i) {
+                        if (remove[i]) {
+                            cfg_logits[indices[i]] = -std::numeric_limits<float>::infinity();
+                        }
+                    }
+                }
+            }
+
+            int next_token = logits_id_offset + sample_from_logits(cfg_logits, temperature, 1.0f, rng);
+            if (next_token < audio_start_id) {
+                next_token = audio_start_id;
+            }
+
+            codes->push_back(next_token - audio_start_id);
+            cond_tokens_full.push_back(next_token);
+            uncond_tokens_full.push_back(next_token);
+            cond_step_tokens.assign(1, next_token);
+            uncond_step_tokens.assign(1, next_token);
+
+            if ((step + 1) % 10 == 0 || step + 1 == num_tokens_to_generate) {
+                int64_t t = ggml_time_ms();
+                LOG_INFO("ACE LM: generated %d/%d tokens (elapsed %.2fs)", step + 1, num_tokens_to_generate, (t - t0) / 1000.0);
+            }
+        }
+        runner->reset_kv_cache();
+        runner->set_logits_range(0, full_vocab_end);
+        int64_t t1 = ggml_time_ms();
+        LOG_INFO("ACE LM: audio token generation done in %.2fs", (t1 - t0) / 1000.0);
+
+        return codes;
+    }
+
+    SDCondition get_learned_condition(ggml_context* work_ctx,
+                                      int n_threads,
+                                      const ConditionerParams& conditioner_params) override {
+        SDCondition cond;
+
+        std::string caption = conditioner_params.text;
+        std::string lyrics  = conditioner_params.lyrics;
+        std::string language = conditioner_params.language;
+        std::string keyscale = conditioner_params.keyscale;
+        int bpm = static_cast<int>(std::round(conditioner_params.bpm));
+        int timesignature = conditioner_params.timesignature;
+        int duration = std::max(1, static_cast<int>(std::ceil(conditioner_params.duration)));
+
+        std::string meta_lm = format_meta_lm(bpm, timesignature, keyscale, duration);
+        std::string meta_cap = format_meta_cap(bpm, timesignature, keyscale, duration);
+
+        std::string lm_template = "<|im_start|>system\n# Instruction\nGenerate audio semantic tokens based on the given conditions:\n\n<|im_end|>\n<|im_start|>user\n# Caption\n";
+        std::string lm_prompt = lm_template + caption + "\n" + lyrics + "\n<|im_end|>\n<|im_start|>assistant\n<think>\n" + meta_lm + "\n</think>\n\n<|im_end|>\n";
+        std::string lm_prompt_negative = lm_template + caption + "\n" + lyrics + "\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<|im_end|>\n";
+
+        std::string lyric_prompt = "# Languages\n" + language + "\n\n# Lyric" + lyrics + "<|endoftext|><|endoftext|>";
+        std::string qwen_prompt = "# Instruction\nGenerate audio semantic tokens based on the given conditions:\n\n# Caption\n" + caption + "# Metas\n" + meta_cap + "<|endoftext|>\n<|endoftext|>";
+
+        auto tokens_and_weights = tokenize_with_weights(qwen_prompt);
+        auto tokens = tokens_and_weights.first;
+        auto weights = tokens_and_weights.second;
+        auto lyric_tokens = tokenizer->tokenize(lyric_prompt, nullptr);
+
+        ggml_tensor* context = nullptr;
+        ggml_tensor* lyric_embed = nullptr;
+        if (base_llm) {
+            std::set<int> out_layers;
+            auto input_ids = vector_to_ggml_tensor_i32(work_ctx, tokens);
+            std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+            base_llm->compute(n_threads, input_ids, nullptr, image_embeds, out_layers, &context, work_ctx);
+            if (context && !weights.empty()) {
+                float original_mean = ggml_ext_tensor_mean(context);
+                int64_t n_tokens = context->ne[1];
+                int64_t weight_len = static_cast<int64_t>(weights.size());
+                int64_t limit = std::min(n_tokens, weight_len);
+                for (int i2 = 0; i2 < context->ne[2]; ++i2) {
+                    for (int i1 = 0; i1 < limit; ++i1) {
+                        for (int i0 = 0; i0 < context->ne[0]; ++i0) {
+                            float value = ggml_ext_tensor_get_f32(context, i0, i1, i2);
+                            value *= weights[i1];
+                            ggml_ext_tensor_set_f32(context, value, i0, i1, i2);
+                        }
+                    }
+                }
+                float new_mean = ggml_ext_tensor_mean(context);
+                if (new_mean != 0.f) {
+                    ggml_ext_tensor_scale_inplace(context, (original_mean / new_mean));
+                }
+            }
+
+            std::set<int> lyric_layers = {0};
+            auto lyric_ids = vector_to_ggml_tensor_i32(work_ctx, lyric_tokens);
+            base_llm->compute(n_threads, lyric_ids, nullptr, image_embeds, lyric_layers, &lyric_embed, work_ctx);
+        }
+
+        static const float kReferAudioVec[64] = {
+            -1.3672e-01f, -1.5820e-01f,  5.8594e-01f, -5.7422e-01f,  3.0273e-02f,
+             2.7930e-01f, -2.5940e-03f, -2.0703e-01f, -1.6113e-01f, -1.4746e-01f,
+            -2.7710e-02f, -1.8066e-01f, -2.9688e-01f,  1.6016e+00f, -2.6719e+00f,
+             7.7734e-01f, -1.3516e+00f, -1.9434e-01f, -7.1289e-02f, -5.0938e+00f,
+             2.4316e-01f,  4.7266e-01f,  4.6387e-02f, -6.6406e-01f, -2.1973e-01f,
+            -6.7578e-01f, -1.5723e-01f,  9.5312e-01f, -2.0020e-01f, -1.7109e+00f,
+             5.8984e-01f, -5.7422e-01f,  5.1562e-01f,  2.8320e-01f,  1.4551e-01f,
+            -1.8750e-01f, -5.9814e-02f,  3.6719e-01f, -1.0059e-01f, -1.5723e-01f,
+             2.0605e-01f, -4.3359e-01f, -8.2812e-01f,  4.5654e-02f, -6.6016e-01f,
+             1.4844e-01f,  9.4727e-02f,  3.8477e-01f, -1.2578e+00f, -3.3203e-01f,
+            -8.5547e-01f,  4.3359e-01f,  4.2383e-01f, -8.9453e-01f, -5.0391e-01f,
+            -5.6152e-02f, -2.9219e+00f, -2.4658e-02f,  5.0391e-01f,  9.8438e-01f,
+             7.2754e-02f, -2.1582e-01f,  6.3672e-01f,  1.0000e+00f
+        };
+
+        ggml_tensor* refer_audio = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 64, 750, 1);
+        for (int64_t t = 0; t < refer_audio->ne[1]; ++t) {
+            for (int64_t c = 0; c < refer_audio->ne[0]; ++c) {
+                ggml_ext_tensor_set_f32(refer_audio, kReferAudioVec[c], c, t, 0);
+            }
+        }
+
+        int min_tokens = std::max(1, duration * 5);
+        std::shared_ptr<std::vector<int>> audio_codes =
+            generate_audio_codes(n_threads, lm_prompt, lm_prompt_negative, min_tokens, conditioner_params.lm_seed);
+
+        cond.c_crossattn = context;
+        cond.c_lyrics    = lyric_embed;
+        cond.refer_audio = refer_audio;
+        cond.audio_codes = audio_codes;
+        return cond;
+    }
+
+private:
+    std::pair<std::vector<int>, std::vector<float>> tokenize_with_weights(const std::string& text) {
+        auto parsed_attention = parse_prompt_attention(text);
+        std::vector<int> tokens;
+        std::vector<float> weights;
+        for (const auto& item : parsed_attention) {
+            const std::string& curr_text = item.first;
+            float curr_weight = item.second;
+            auto curr_tokens = tokenizer->tokenize(curr_text, nullptr);
+            tokens.insert(tokens.end(), curr_tokens.begin(), curr_tokens.end());
+            weights.insert(weights.end(), curr_tokens.size(), curr_weight);
+        }
+        tokenizer->pad_tokens(tokens, weights, 0, false);
+        return {tokens, weights};
     }
 };
 

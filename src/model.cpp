@@ -1044,6 +1044,12 @@ SDVersion ModelLoader::get_sd_version() {
     bool has_output_block_71         = false;
 
     for (auto& [name, tensor_storage] : tensor_storage_map) {
+        if (tensor_storage.name.find("model.diffusion_model.decoder.layers.0.self_attn.q_proj.weight") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.decoder.layers.0.cross_attn.q_proj.weight") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.encoder.lyric_encoder.layers.0.input_layernorm.weight") != std::string::npos ||
+            tensor_storage.name.find("model.diffusion_model.tokenizer.quantizer.project_in.weight") != std::string::npos) {
+            return VERSION_ACE_STEP_1_5;
+        }
         if (!(is_xl)) {
             if (tensor_storage.name.find("model.diffusion_model.double_blocks.") != std::string::npos) {
                 is_flux = true;
