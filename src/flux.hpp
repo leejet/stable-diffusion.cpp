@@ -2265,6 +2265,12 @@ namespace Flux {
                       img_ne[0], img_ne[1], img_ne[2], txt_ne[0], txt_ne[1], txt_ne[2]);
 
             // ============ STAGE 2a: Double blocks (one at a time) ============
+            // Start async prefetch for first double block
+            if (num_double_blocks > 0 && streaming_engine_) {
+                std::string first_block = "double_blocks.0";
+                streaming_engine_->prefetch_layer(first_block);
+            }
+
             for (int block_idx = 0; block_idx < num_double_blocks; block_idx++) {
                 // Check skip_layers
                 if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), block_idx) != skip_layers.end()) {
@@ -2275,10 +2281,21 @@ namespace Flux {
                 std::string block_name = "double_blocks." + std::to_string(block_idx);
                 int64_t t_block_start = ggml_time_ms();
 
-                // Load this block's weights
+                // Wait for this block's prefetch to complete (if async prefetch was started)
+                if (streaming_engine_) {
+                    streaming_engine_->wait_for_prefetch(block_name);
+                }
+
+                // Load this block's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(block_name)) {
                     LOG_ERROR("FluxRunner: Failed to load %s", block_name.c_str());
                     return false;
+                }
+
+                // Start async prefetch of NEXT block while we compute this one
+                if (streaming_engine_ && block_idx + 1 < num_double_blocks) {
+                    std::string next_block = "double_blocks." + std::to_string(block_idx + 1);
+                    streaming_engine_->prefetch_layer(next_block);
                 }
 
                 ggml_tensor* img_out = nullptr;
@@ -2367,6 +2384,12 @@ namespace Flux {
             }
 
             // ============ STAGE 2b: Single blocks (one at a time) ============
+            // Start async prefetch for first single block
+            if (num_single_blocks > 0 && streaming_engine_) {
+                std::string first_block = "single_blocks.0";
+                streaming_engine_->prefetch_layer(first_block);
+            }
+
             for (int block_idx = 0; block_idx < num_single_blocks; block_idx++) {
                 // Check skip_layers (single blocks start at depth offset)
                 int skip_idx = block_idx + flux_params.depth;
@@ -2378,10 +2401,21 @@ namespace Flux {
                 std::string block_name = "single_blocks." + std::to_string(block_idx);
                 int64_t t_block_start = ggml_time_ms();
 
-                // Load this block's weights
+                // Wait for this block's prefetch to complete (if async prefetch was started)
+                if (streaming_engine_) {
+                    streaming_engine_->wait_for_prefetch(block_name);
+                }
+
+                // Load this block's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(block_name)) {
                     LOG_ERROR("FluxRunner: Failed to load %s", block_name.c_str());
                     return false;
+                }
+
+                // Start async prefetch of NEXT block while we compute this one
+                if (streaming_engine_ && block_idx + 1 < num_single_blocks) {
+                    std::string next_block = "single_blocks." + std::to_string(block_idx + 1);
+                    streaming_engine_->prefetch_layer(next_block);
                 }
 
                 ggml_tensor* txt_img_out = nullptr;

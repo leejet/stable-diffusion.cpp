@@ -849,13 +849,31 @@ namespace ZImage {
             LOG_DEBUG("ZImageRunner: Refiner stage done, txt_img=%ldx%ldx%ld", txt_img_ne[0], txt_img_ne[1], txt_img_ne[2]);
 
             // Stage 2: Main layers (one at a time)
+            // Start async prefetch for first layer
+            if (num_layers > 0 && streaming_engine_) {
+                std::string first_layer = "layers.0";
+                streaming_engine_->prefetch_layer(first_layer);
+            }
+
             for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
                 std::string layer_name = "layers." + std::to_string(layer_idx);
                 int64_t t_block_start = ggml_time_ms();
 
+                // Wait for this layer's prefetch to complete (if async prefetch was started)
+                if (streaming_engine_) {
+                    streaming_engine_->wait_for_prefetch(layer_name);
+                }
+
+                // Load this layer's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(layer_name)) {
                     LOG_ERROR("ZImageRunner: Failed to load %s", layer_name.c_str());
                     return false;
+                }
+
+                // Start async prefetch of NEXT layer while we compute this one
+                if (streaming_engine_ && layer_idx + 1 < num_layers) {
+                    std::string next_layer = "layers." + std::to_string(layer_idx + 1);
+                    streaming_engine_->prefetch_layer(next_layer);
                 }
 
                 ggml_tensor* txt_img_out = nullptr;
