@@ -437,6 +437,10 @@ public:
         }
 
         // Start async copy from CPU to GPU
+        // Note: ggml_backend_tensor_copy_async may fall back to sync for CPU→CUDA
+        LOG_DEBUG("TensorRegistry: Starting async copy for layer '%s' (%zu tensors, %.2f MB)",
+                  layer_name.c_str(), copy_list.size(), layer.total_size_bytes / (1024.0 * 1024.0));
+
         for (auto& item : copy_list) {
             // Use async copy - this queues the transfer but may not block
             ggml_backend_tensor_copy_async(cpu_backend, gpu_backend, item.cpu_tensor, item.gpu_tensor);

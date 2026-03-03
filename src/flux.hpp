@@ -2051,12 +2051,25 @@ namespace Flux {
             // Get available VRAM
             size_t available_vram = budget.get_available_vram();
 
-            LOG_DEBUG("FluxRunner: Model size = %.2f GB, Available VRAM = %.2f GB",
+            // Check how much is already on GPU (for CFG - multiple calls per step)
+            size_t already_on_gpu = 0;
+            for (const auto& layer_name : all_layers) {
+                if (registry.is_layer_on_gpu(layer_name)) {
+                    already_on_gpu += registry.get_layer_size(layer_name);
+                }
+            }
+
+            // Effective model size = what still needs to be loaded
+            size_t remaining_to_load = (total_model_size > already_on_gpu) ? (total_model_size - already_on_gpu) : 0;
+
+            LOG_DEBUG("FluxRunner: Model size = %.2f GB, On GPU = %.2f GB, Remaining = %.2f GB, Available VRAM = %.2f GB",
                       total_model_size / (1024.0 * 1024.0 * 1024.0),
+                      already_on_gpu / (1024.0 * 1024.0 * 1024.0),
+                      remaining_to_load / (1024.0 * 1024.0 * 1024.0),
                       available_vram / (1024.0 * 1024.0 * 1024.0));
 
-            // Check if model fits in VRAM
-            if (total_model_size <= available_vram) {
+            // Check if model fits in VRAM (accounting for what's already loaded)
+            if (remaining_to_load <= available_vram) {
                 // Model fits - use coarse-stage (load all, compute once)
                 LOG_INFO("FluxRunner: Model fits in VRAM, using coarse-stage streaming");
 
@@ -2092,8 +2105,8 @@ namespace Flux {
             }
 
             // Model doesn't fit - use TRUE per-layer streaming
-            LOG_INFO("FluxRunner: Model exceeds VRAM (%.2f GB > %.2f GB), using TRUE per-layer streaming",
-                     total_model_size / (1024.0 * 1024.0 * 1024.0),
+            LOG_INFO("FluxRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
+                     remaining_to_load / (1024.0 * 1024.0 * 1024.0),
                      available_vram / (1024.0 * 1024.0 * 1024.0));
 
             return compute_streaming_true(n_threads, x, timesteps, context, c_concat, y, guidance,

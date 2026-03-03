@@ -618,17 +618,22 @@ public:
 
             // Enable layer streaming if configured
             if (offload_config.mode == SD_OFFLOAD_LAYER_STREAMING) {
+                LOG_INFO("[LayerStreaming] Mode is layer_streaming, checking model support...");
                 if (diffusion_model->supports_layer_streaming()) {
-                    LOG_INFO("Enabling layer-by-layer streaming for diffusion model");
-                    LOG_INFO("  Prefetch layers: %d, Min free VRAM: %.0f MB",
+                    LOG_INFO("[LayerStreaming] Enabling layer-by-layer streaming for diffusion model");
+                    LOG_INFO("[LayerStreaming] Prefetch layers: %d, Min free VRAM: %.0f MB",
                              offload_config.streaming_prefetch_layers,
                              offload_config.streaming_min_free_vram / (1024.0 * 1024.0));
                     diffusion_model->enable_layer_streaming(
                         offload_config.streaming_prefetch_layers,
                         offload_config.streaming_min_free_vram);
+                    LOG_INFO("[LayerStreaming] is_layer_streaming_enabled() = %s",
+                             diffusion_model->is_layer_streaming_enabled() ? "true" : "false");
                 } else {
-                    LOG_WARN("Layer streaming requested but diffusion model does not support it, falling back to normal mode");
+                    LOG_WARN("[LayerStreaming] Diffusion model does not support layer streaming, falling back to normal mode");
                 }
+            } else {
+                LOG_DEBUG("[LayerStreaming] Mode is not layer_streaming (mode=%d)", offload_config.mode);
             }
 
             if (sd_version_is_unet_edit(version)) {
@@ -1973,6 +1978,10 @@ public:
 
             // Helper to call appropriate compute method (streaming or regular)
             const bool use_streaming = work_diffusion_model->is_layer_streaming_enabled();
+            if (step == 1 || step == -1) {
+                LOG_DEBUG("[LayerStreaming] Diffusion step %d: use_streaming=%s",
+                          step, use_streaming ? "true" : "false");
+            }
             auto do_compute = [&](struct ggml_tensor** output) -> bool {
                 if (use_streaming) {
                     return work_diffusion_model->compute_streaming(n_threads, diffusion_params, output);
