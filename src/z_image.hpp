@@ -2,7 +2,6 @@
 #define __Z_IMAGE_HPP__
 
 #include <algorithm>
-#include <cfloat>
 #include <cmath>
 
 #include "flux.hpp"
@@ -579,83 +578,6 @@ namespace ZImage {
         std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
         bool streaming_enabled_ = false;
 
-    private:
-        // Debug helper: compute statistics for a float vector
-        struct TensorStats {
-            float min_val;
-            float max_val;
-            float sum;
-            float mean;
-            size_t nan_count;
-            size_t inf_count;
-            size_t zero_count;
-            bool valid;
-        };
-
-        TensorStats compute_stats(const std::vector<float>& data, size_t max_samples = 10000) {
-            TensorStats stats = {FLT_MAX, -FLT_MAX, 0.0f, 0.0f, 0, 0, 0, true};
-            if (data.empty()) {
-                stats.valid = false;
-                return stats;
-            }
-
-            size_t sample_count = std::min(data.size(), max_samples);
-            size_t step = data.size() / sample_count;
-            if (step < 1) step = 1;
-
-            for (size_t i = 0; i < data.size(); i += step) {
-                float v = data[i];
-                if (std::isnan(v)) {
-                    stats.nan_count++;
-                } else if (std::isinf(v)) {
-                    stats.inf_count++;
-                } else {
-                    if (v < stats.min_val) stats.min_val = v;
-                    if (v > stats.max_val) stats.max_val = v;
-                    stats.sum += v;
-                    if (std::abs(v) < 1e-10f) stats.zero_count++;
-                }
-            }
-            stats.mean = stats.sum / sample_count;
-            return stats;
-        }
-
-        void log_tensor_stats(const char* name, const std::vector<float>& data, const int64_t* ne) {
-            auto stats = compute_stats(data);
-            LOG_DEBUG("ZImage [%s]: shape=[%ld,%ld,%ld,%ld] nelems=%zu min=%.6f max=%.6f mean=%.6f nan=%zu inf=%zu zero=%zu",
-                      name, ne[0], ne[1], ne[2], ne[3], data.size(),
-                      stats.min_val, stats.max_val, stats.mean,
-                      stats.nan_count, stats.inf_count, stats.zero_count);
-        }
-
-        // Debug helper: print first/last few values for detailed comparison
-        void log_tensor_values(const char* name, const std::vector<float>& data, size_t count = 5) {
-            if (data.empty()) {
-                LOG_DEBUG("ZImage [%s]: EMPTY", name);
-                return;
-            }
-            std::string first_vals, last_vals;
-            size_t n = std::min(count, data.size());
-            for (size_t i = 0; i < n; i++) {
-                first_vals += std::to_string(data[i]) + " ";
-            }
-            for (size_t i = data.size() - n; i < data.size(); i++) {
-                last_vals += std::to_string(data[i]) + " ";
-            }
-            LOG_DEBUG("ZImage [%s]: first=[%s] last=[%s]", name, first_vals.c_str(), last_vals.c_str());
-        }
-
-        // Debug helper: compute checksum for data integrity verification
-        uint32_t compute_checksum(const std::vector<float>& data) {
-            uint32_t sum = 0;
-            for (size_t i = 0; i < data.size(); i += 100) {
-                union { float f; uint32_t u; } conv;
-                conv.f = data[i];
-                sum ^= conv.u;
-            }
-            return sum;
-        }
-
     public:
 
         ZImageRunner(ggml_backend_t backend,
@@ -764,7 +686,11 @@ namespace ZImage {
                       available_vram / (1024.0 * 1024.0 * 1024.0));
 
             // Check if model fits in VRAM (accounting for what's already loaded)
-            if (remaining_to_load <= available_vram) {
+            // Environment variable to force TRUE streaming for debugging
+            const char* force_true_streaming = std::getenv("SDCPP_FORCE_TRUE_STREAMING");
+            bool force_true = force_true_streaming && std::string(force_true_streaming) == "1";
+
+            if (!force_true && remaining_to_load <= available_vram) {
                 // Model fits - load all
                 LOG_INFO("ZImageRunner: Model fits in VRAM, using coarse-stage streaming");
                 for (const auto& layer_name : all_layers) {
@@ -802,9 +728,13 @@ namespace ZImage {
                 return result;
             }
 
-            LOG_INFO("ZImageRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
-                     remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                     available_vram / (1024.0 * 1024.0 * 1024.0));
+            if (force_true) {
+                LOG_WARN("ZImageRunner: SDCPP_FORCE_TRUE_STREAMING=1, forcing TRUE per-layer streaming");
+            } else {
+                LOG_INFO("ZImageRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
+                         remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                         available_vram / (1024.0 * 1024.0 * 1024.0));
+            }
 
             return compute_streaming_true(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
                                           output, output_ctx);
@@ -853,11 +783,7 @@ namespace ZImage {
                     return false;
                 }
             }
-            LOG_DEBUG("ZImageRunner: Loaded %d refiner layers", num_refiner_layers * 2);
-
             // Generate PE
-            LOG_DEBUG("ZImage PE gen: H=%ld W=%ld patch=%d batch=%ld context_tokens=%ld SEQ_MULTI_OF=%d ref_count=%zu",
-                      H, W, z_image_params.patch_size, x->ne[3], context->ne[1], SEQ_MULTI_OF, ref_latents.size());
             pe_vec = Rope::gen_z_image_pe(static_cast<int>(H),
                                            static_cast<int>(W),
                                            z_image_params.patch_size,
@@ -870,8 +796,6 @@ namespace ZImage {
                                            circular_y_enabled,
                                            circular_x_enabled,
                                            z_image_params.axes_dim);
-            LOG_DEBUG("ZImage PE gen: pe_vec size=%zu, expected positions=%ld",
-                      pe_vec.size(), pe_vec.size() / z_image_params.axes_dim_sum / 2);
 
             // For ZImage with refiners, we'll execute refiners with global,
             // then stream main layers one at a time
@@ -884,7 +808,6 @@ namespace ZImage {
             int64_t n_txt_token = 0, n_txt_pad_token = 0, n_img_token_val = 0;
 
             // Stage 1: Input + Refiners (all in one graph since refiners are small)
-            LOG_DEBUG("ZImageRunner: Executing input + refiners stage");
             {
                 ggml_tensor* txt_img_output = nullptr;
                 ggml_tensor* t_emb_output = nullptr;
@@ -923,12 +846,10 @@ namespace ZImage {
                     n_txt_token = input_result.n_txt_token;
                     n_txt_pad_token = input_result.n_txt_pad_token;
 
-                    // PE size verification
+                    // Verify PE size
                     int64_t total_tokens = txt->ne[1] + img->ne[1];
-                    LOG_DEBUG("ZImage PE check: pe->ne[3]=%ld, txt->ne[1]=%ld, img->ne[1]=%ld, total=%ld",
-                              pe->ne[3], txt->ne[1], img->ne[1], total_tokens);
                     if (pe->ne[3] != total_tokens) {
-                        LOG_ERROR("ZImage PE MISMATCH: PE has %ld positions but model needs %ld tokens!",
+                        LOG_ERROR("ZImage PE mismatch: PE has %ld positions but model needs %ld tokens",
                                   pe->ne[3], total_tokens);
                     }
 
@@ -973,13 +894,6 @@ namespace ZImage {
                         txt_img_ne[i] = txt_img_output->ne[i];
                         t_emb_ne[i] = t_emb_output->ne[i];
                     }
-
-                    // Debug: comprehensive tensor statistics
-                    log_tensor_stats("refiner_txt_img", persistent_txt_img, txt_img_ne);
-                    log_tensor_stats("refiner_t_emb", persistent_t_emb, t_emb_ne);
-                    // Debug: detailed values and checksum
-                    log_tensor_values("refiner_txt_img", persistent_txt_img, 5);
-                    LOG_DEBUG("ZImage: refiner checksum=0x%08x", compute_checksum(persistent_txt_img));
                 } else {
                     LOG_ERROR("ZImageRunner: Failed to get refiner stage outputs");
                     free_compute_buffer();
@@ -990,14 +904,6 @@ namespace ZImage {
                 free_compute_buffer();
             }
 
-            // Compute element sum for sanity check
-            double refiner_sum = 0.0;
-            for (size_t i = 0; i < std::min(size_t(10000), persistent_txt_img.size()); i++) {
-                refiner_sum += persistent_txt_img[i];
-            }
-            LOG_DEBUG("ZImageRunner: Refiner stage done, txt_img=%ldx%ldx%ld, element_sum(first 10k)=%.6f",
-                      txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], refiner_sum);
-
             // Offload refiner layers to free VRAM for main layers
             for (int i = 0; i < num_refiner_layers; i++) {
                 std::string cr_name = "context_refiner." + std::to_string(i);
@@ -1005,18 +911,16 @@ namespace ZImage {
                 registry.move_layer_to_cpu(cr_name);
                 registry.move_layer_to_cpu(nr_name);
             }
-            LOG_DEBUG("ZImageRunner: Offloaded refiner layers");
 
-            // Stage 2: Main layers (one at a time)
             // Start async prefetch for first layer
             if (num_layers > 0 && streaming_engine_) {
                 std::string first_layer = "layers.0";
                 streaming_engine_->prefetch_layer(first_layer);
             }
 
+            // Stage 2: Main layers (one at a time)
             for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
                 std::string layer_name = "layers." + std::to_string(layer_idx);
-                int64_t t_block_start = ggml_time_ms();
 
                 // Wait for this layer's prefetch to complete (if async prefetch was started)
                 if (streaming_engine_) {
@@ -1029,14 +933,6 @@ namespace ZImage {
                     return false;
                 }
 
-                // DEBUG: Verify layer is on GPU after load
-                if (layer_idx == 0) {
-                    bool on_gpu = registry.is_layer_on_gpu(layer_name);
-                    size_t layer_size = registry.get_layer_size(layer_name);
-                    LOG_DEBUG("ZImage DEBUG: Layer %s loaded - on_gpu=%d, size=%.2f MB",
-                              layer_name.c_str(), on_gpu ? 1 : 0, layer_size / (1024.0 * 1024.0));
-                }
-
                 // Start async prefetch of NEXT layer while we compute this one
                 if (streaming_engine_ && layer_idx + 1 < num_layers) {
                     std::string next_layer = "layers." + std::to_string(layer_idx + 1);
@@ -1045,22 +941,7 @@ namespace ZImage {
 
                 ggml_tensor* txt_img_out = nullptr;
 
-                // Debug: log input statistics for first layer
-                if (layer_idx == 0) {
-                    log_tensor_stats("layer_0_input_txt_img", persistent_txt_img, txt_img_ne);
-                    log_tensor_stats("layer_0_input_t_emb", persistent_t_emb, t_emb_ne);
-                    LOG_DEBUG("ZImage: PE vec size=%zu, axes_dim_sum=%ld", pe_vec.size(), z_image_params.axes_dim_sum);
-                }
-
-                // Store pointers for verification after compute
-                ggml_tensor* layer_txt_img_in = nullptr;
-                int lambda_call_count = 0;
-
                 auto get_layer_graph = [&]() -> struct ggml_cgraph* {
-                    lambda_call_count++;
-                    if (layer_idx == 0) {
-                        LOG_DEBUG("ZImage DEBUG: get_layer_graph lambda called, count=%d", lambda_call_count);
-                    }
                     struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
 
                     ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
@@ -1071,17 +952,6 @@ namespace ZImage {
                     txt_img_in = to_backend(txt_img_in);
                     t_emb_in = to_backend(t_emb_in);
 
-                    // Store for verification
-                    layer_txt_img_in = txt_img_in;
-
-                    // Debug: Log tensor pointers and data pointers
-                    if (layer_idx == 0) {
-                        LOG_DEBUG("ZImage DEBUG: txt_img_in tensor ptr=%p, buffer=%p",
-                                  (void*)txt_img_in, (void*)(txt_img_in ? txt_img_in->buffer : nullptr));
-                        LOG_DEBUG("ZImage DEBUG: persistent_txt_img.data()=%p, first val=%.6f",
-                                  (void*)persistent_txt_img.data(), persistent_txt_img[0]);
-                    }
-
                     set_backend_tensor_data(txt_img_in, persistent_txt_img.data());
                     set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
 
@@ -1089,12 +959,6 @@ namespace ZImage {
                     int pos_len = static_cast<int>(pe_vec.size() / z_image_params.axes_dim_sum / 2);
                     auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, z_image_params.axes_dim_sum / 2, pos_len);
                     set_backend_tensor_data(pe, pe_vec.data());
-
-                    // Debug: Check PE first values
-                    if (layer_idx == 0) {
-                        LOG_DEBUG("ZImage DEBUG: PE tensor ptr=%p, pe_vec[0]=%.6f",
-                                  (void*)pe, pe_vec[0]);
-                    }
 
                     auto runner_ctx = get_context();
                     txt_img_out = z_image.forward_layer_block(&runner_ctx, layer_idx, txt_img_in, pe, t_emb_in);
@@ -1104,85 +968,16 @@ namespace ZImage {
                     return gf;
                 };
 
-                // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_layer_graph, n_threads, false, nullptr, nullptr, true)) {
                     LOG_ERROR("ZImageRunner: Layer %d execution failed", layer_idx);
                     return false;
                 }
 
-                // Check if lambda was called multiple times
-                if (layer_idx == 0) {
-                    LOG_DEBUG("ZImage DEBUG: After compute, lambda was called %d times", lambda_call_count);
-                    if (lambda_call_count > 1) {
-                        LOG_WARN("ZImage DEBUG: Lambda called multiple times - tensor pointers may be stale!");
-                    }
-                }
-
-                // Note: After compute, GGML may have reused the input buffer for intermediate
-                // calculations, so checking input data here is not meaningful. The data was
-                // correctly copied before compute via copy_data_to_backend_tensor().
-
                 // Extract output
                 if (txt_img_out) {
-                    // Verify sizes match
-                    size_t expected_bytes = ggml_nbytes(txt_img_out);
-                    size_t actual_bytes = persistent_txt_img.size() * sizeof(float);
-                    if (expected_bytes != actual_bytes && layer_idx == 0) {
-                        LOG_ERROR("ZImage SIZE MISMATCH: tensor has %zu bytes, persistent has %zu bytes",
-                                  expected_bytes, actual_bytes);
-                    }
                     ggml_backend_tensor_get(txt_img_out, persistent_txt_img.data(), 0, persistent_txt_img.size() * sizeof(float));
                     for (int i = 0; i < 4; i++) {
                         txt_img_ne[i] = txt_img_out->ne[i];
-                    }
-
-                    // Debug: log statistics and values for key layers (first, middle, last)
-                    if (layer_idx == 0 || layer_idx == num_layers / 2 || layer_idx == num_layers - 1) {
-                        char layer_label[64];
-                        snprintf(layer_label, sizeof(layer_label), "layer_%d_out", layer_idx);
-                        log_tensor_stats(layer_label, persistent_txt_img, txt_img_ne);
-                        log_tensor_values(layer_label, persistent_txt_img, 5);
-                        LOG_DEBUG("ZImage: layer_%d checksum=0x%08x", layer_idx, compute_checksum(persistent_txt_img));
-
-                        // Debug: Check if different token positions have different values (grid pattern would show same values)
-                        // txt_img shape is [hidden_size, n_tokens, 1, 1] = [3840, 2784, 1, 1]
-                        // Token 32 is first img token (after 11 txt + 21 pad)
-                        // Compare tokens at different spatial positions
-                        int64_t hidden_size = txt_img_ne[0];
-                        int64_t n_tokens = txt_img_ne[1];
-                        if (n_tokens > 100 && hidden_size == 3840) {
-                            // Sample 4 tokens at different positions (first img, middle, near end)
-                            int64_t tok1 = 32;       // First img token
-                            int64_t tok2 = 32 + 64;  // One row down (w=43, so next row is +43, but let's use 64)
-                            int64_t tok3 = n_tokens / 2;  // Middle
-                            int64_t tok4 = n_tokens - 10; // Near end
-
-                            LOG_DEBUG("ZImage layer_%d token comparison (checking for grid pattern):", layer_idx);
-                            LOG_DEBUG("  Token %ld (first img): [%.4f, %.4f, %.4f, %.4f]",
-                                      tok1,
-                                      persistent_txt_img[tok1 * hidden_size + 0],
-                                      persistent_txt_img[tok1 * hidden_size + 1],
-                                      persistent_txt_img[tok1 * hidden_size + 2],
-                                      persistent_txt_img[tok1 * hidden_size + 3]);
-                            LOG_DEBUG("  Token %ld (offset): [%.4f, %.4f, %.4f, %.4f]",
-                                      tok2,
-                                      persistent_txt_img[tok2 * hidden_size + 0],
-                                      persistent_txt_img[tok2 * hidden_size + 1],
-                                      persistent_txt_img[tok2 * hidden_size + 2],
-                                      persistent_txt_img[tok2 * hidden_size + 3]);
-                            LOG_DEBUG("  Token %ld (middle): [%.4f, %.4f, %.4f, %.4f]",
-                                      tok3,
-                                      persistent_txt_img[tok3 * hidden_size + 0],
-                                      persistent_txt_img[tok3 * hidden_size + 1],
-                                      persistent_txt_img[tok3 * hidden_size + 2],
-                                      persistent_txt_img[tok3 * hidden_size + 3]);
-                            LOG_DEBUG("  Token %ld (near end): [%.4f, %.4f, %.4f, %.4f]",
-                                      tok4,
-                                      persistent_txt_img[tok4 * hidden_size + 0],
-                                      persistent_txt_img[tok4 * hidden_size + 1],
-                                      persistent_txt_img[tok4 * hidden_size + 2],
-                                      persistent_txt_img[tok4 * hidden_size + 3]);
-                        }
                     }
                 }
 
@@ -1190,29 +985,9 @@ namespace ZImage {
                 free_compute_buffer();
 
                 registry.move_layer_to_cpu(layer_name);
-
-                // Compute element sum for sanity check (every 5 layers)
-                if (layer_idx % 5 == 0 || layer_idx == num_layers - 1) {
-                    double layer_sum = 0.0;
-                    for (size_t i = 0; i < std::min(size_t(10000), persistent_txt_img.size()); i++) {
-                        layer_sum += persistent_txt_img[i];
-                    }
-                    LOG_DEBUG("ZImageRunner: Layer %d/%d done (%.2fms), element_sum(first 10k)=%.6f",
-                              layer_idx + 1, num_layers, (ggml_time_ms() - t_block_start) / 1.0, layer_sum);
-                } else {
-                    LOG_DEBUG("ZImageRunner: Layer %d/%d done (%.2fms)",
-                              layer_idx + 1, num_layers, (ggml_time_ms() - t_block_start) / 1.0);
-                }
             }
 
             // Stage 3: Output
-            LOG_DEBUG("ZImageRunner: Executing output stage");
-            log_tensor_stats("output_stage_input_txt_img", persistent_txt_img, txt_img_ne);
-            log_tensor_stats("output_stage_input_t_emb", persistent_t_emb, t_emb_ne);
-            log_tensor_values("output_stage_input_txt_img", persistent_txt_img, 5);
-            LOG_DEBUG("ZImage: output_stage_input checksum=0x%08x", compute_checksum(persistent_txt_img));
-            LOG_DEBUG("ZImage output: n_txt_token=%ld, n_txt_pad_token=%ld, n_img_token_val=%ld",
-                      n_txt_token, n_txt_pad_token, n_img_token_val);
             {
                 auto get_output_graph = [&]() -> struct ggml_cgraph* {
                     struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
@@ -1231,42 +1006,14 @@ namespace ZImage {
                     auto runner_ctx = get_context();
                     auto final_out = z_image.forward_output_stage(&runner_ctx, txt_img_in, t_emb_in);
 
-                    LOG_DEBUG("ZImage output: after final_layer shape=[%ld,%ld,%ld,%ld]",
-                              final_out->ne[0], final_out->ne[1], final_out->ne[2], final_out->ne[3]);
-
                     // Extract img portion and unpatchify
                     int64_t n_img_token = n_img_token_val;
-                    LOG_DEBUG("ZImage output: slice [%ld, %ld) from dim 1, H=%ld W=%ld patch=%d",
-                              n_txt_token + n_txt_pad_token,
-                              n_txt_token + n_txt_pad_token + n_img_token,
-                              H, W, patch_size);
-
                     final_out = ggml_ext_slice(compute_ctx, final_out, 1,
                                                n_txt_token + n_txt_pad_token,
                                                n_txt_token + n_txt_pad_token + n_img_token);
 
-                    LOG_DEBUG("ZImage output: after slice shape=[%ld,%ld,%ld,%ld]",
-                              final_out->ne[0], final_out->ne[1], final_out->ne[2], final_out->ne[3]);
-
-                    // DEBUG: Add a node to capture pre-unpatchify values for analysis
-                    ggml_set_name(final_out, "zimage_pre_unpatchify");
-
-                    // Verify dimensions for unpatchify
-                    int pad_h = (patch_size - H % patch_size) % patch_size;
-                    int pad_w = (patch_size - W % patch_size) % patch_size;
-                    int64_t expected_h = (H + pad_h) / patch_size;
-                    int64_t expected_w = (W + pad_w) / patch_size;
-                    int64_t expected_patches = expected_h * expected_w;
-                    LOG_DEBUG("ZImage output: unpatchify expects h=%ld w=%ld patches=%ld, got patches=%ld",
-                              expected_h, expected_w, expected_patches, final_out->ne[1]);
-
                     final_out = DiT::unpatchify_and_crop(compute_ctx, final_out, H, W, patch_size, patch_size, false);
-
-                    LOG_DEBUG("ZImage output: after unpatchify shape=[%ld,%ld,%ld,%ld]",
-                              final_out->ne[0], final_out->ne[1], final_out->ne[2], final_out->ne[3]);
-
                     final_out = ggml_ext_scale(compute_ctx, final_out, -1.f);
-                    ggml_set_name(final_out, "zimage_final_output");
 
                     ggml_build_forward_expand(gf, final_out);
 
