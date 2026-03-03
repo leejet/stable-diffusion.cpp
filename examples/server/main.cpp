@@ -345,7 +345,7 @@ int main(int argc, const char** argv) {
     auto get_lora_full_path = [&](const std::string& path) -> std::string {
         std::lock_guard<std::mutex> lock(lora_mutex);
         auto it = std::find_if(lora_cache.begin(), lora_cache.end(),
-                           [&](const LoraEntry& e) { return e.path == path; });
+                               [&](const LoraEntry& e) { return e.path == path; });
         return (it != lora_cache.end()) ? it->fullpath : "";
     };
 
@@ -567,7 +567,7 @@ int main(int argc, const char** argv) {
 
             std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(prompt);
 
-            size_t image_count = req.form.get_file_count("image[]");
+            size_t image_count    = req.form.get_file_count("image[]");
             bool has_legacy_image = req.form.has_file("image");
             if (image_count == 0 && !has_legacy_image) {
                 res.status = 400;
