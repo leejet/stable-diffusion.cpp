@@ -744,6 +744,21 @@ namespace ZImage {
                 return false;
             }
 
+            // Load refiner layers (context_refiner and noise_refiner)
+            for (int i = 0; i < num_refiner_layers; i++) {
+                std::string cr_name = "context_refiner." + std::to_string(i);
+                std::string nr_name = "noise_refiner." + std::to_string(i);
+                if (!registry.move_layer_to_gpu(cr_name)) {
+                    LOG_ERROR("ZImageRunner: Failed to load %s to GPU", cr_name.c_str());
+                    return false;
+                }
+                if (!registry.move_layer_to_gpu(nr_name)) {
+                    LOG_ERROR("ZImageRunner: Failed to load %s to GPU", nr_name.c_str());
+                    return false;
+                }
+            }
+            LOG_DEBUG("ZImageRunner: Loaded %d refiner layers", num_refiner_layers * 2);
+
             // Generate PE
             pe_vec = Rope::gen_z_image_pe(static_cast<int>(H),
                                            static_cast<int>(W),
@@ -860,6 +875,15 @@ namespace ZImage {
             }
 
             LOG_DEBUG("ZImageRunner: Refiner stage done, txt_img=%ldx%ldx%ld", txt_img_ne[0], txt_img_ne[1], txt_img_ne[2]);
+
+            // Offload refiner layers to free VRAM for main layers
+            for (int i = 0; i < num_refiner_layers; i++) {
+                std::string cr_name = "context_refiner." + std::to_string(i);
+                std::string nr_name = "noise_refiner." + std::to_string(i);
+                registry.move_layer_to_cpu(cr_name);
+                registry.move_layer_to_cpu(nr_name);
+            }
+            LOG_DEBUG("ZImageRunner: Offloaded refiner layers");
 
             // Stage 2: Main layers (one at a time)
             // Start async prefetch for first layer
