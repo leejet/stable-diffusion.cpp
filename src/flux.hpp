@@ -105,11 +105,11 @@ namespace Flux {
             auto qkv         = qkv_proj->forward(ctx, x);
             int64_t head_dim = qkv->ne[0] / 3 / num_heads;
             auto q           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
-                                            qkv->nb[0]*head_dim, qkv->nb[1], qkv->nb[2], 0);
+                                            qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], 0);
             auto k           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
-                                            qkv->nb[0]*head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0])*qkv->ne[0]/3);
+                                            qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * qkv->ne[0] / 3);
             auto v           = ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, num_heads, qkv->ne[1], qkv->ne[2],
-                                            qkv->nb[0]*head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0])*2*qkv->ne[0]/3);
+                                            qkv->nb[0] * head_dim, qkv->nb[1], qkv->nb[2], (qkv->nb[0]) * 2 * qkv->ne[0] / 3);
             q                = norm->query_norm(ctx, q);
             k                = norm->key_norm(ctx, k);
             return {q, k, v};
@@ -495,13 +495,12 @@ namespace Flux {
 
             int64_t head_dim = hidden_size / num_heads;
 
-            auto q           = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
-                                            qkv_mlp->nb[0]*head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], 0);
-            auto k           = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
-                                            qkv_mlp->nb[0]*head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], (qkv_mlp->nb[0])*hidden_size);
-            auto v           = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
-                                            qkv_mlp->nb[0]*head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], (qkv_mlp->nb[0])*2*hidden_size);
-
+            auto q = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
+                                  qkv_mlp->nb[0] * head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], 0);
+            auto k = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
+                                  qkv_mlp->nb[0] * head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], (qkv_mlp->nb[0]) * hidden_size);
+            auto v = ggml_view_4d(ctx->ggml_ctx, qkv_mlp, head_dim, num_heads, qkv_mlp->ne[1], qkv_mlp->ne[2],
+                                  qkv_mlp->nb[0] * head_dim, qkv_mlp->nb[1], qkv_mlp->nb[2], (qkv_mlp->nb[0]) * 2 * hidden_size);
 
             q         = norm->query_norm(ctx, q);
             k         = norm->key_norm(ctx, k);
