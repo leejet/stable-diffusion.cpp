@@ -2,6 +2,8 @@
 #define __Z_IMAGE_HPP__
 
 #include <algorithm>
+#include <cfloat>
+#include <cmath>
 
 #include "flux.hpp"
 #include "ggml_extend.hpp"
@@ -577,6 +579,57 @@ namespace ZImage {
         std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
         bool streaming_enabled_ = false;
 
+    private:
+        // Debug helper: compute statistics for a float vector
+        struct TensorStats {
+            float min_val;
+            float max_val;
+            float sum;
+            float mean;
+            size_t nan_count;
+            size_t inf_count;
+            size_t zero_count;
+            bool valid;
+        };
+
+        TensorStats compute_stats(const std::vector<float>& data, size_t max_samples = 10000) {
+            TensorStats stats = {FLT_MAX, -FLT_MAX, 0.0f, 0.0f, 0, 0, 0, true};
+            if (data.empty()) {
+                stats.valid = false;
+                return stats;
+            }
+
+            size_t sample_count = std::min(data.size(), max_samples);
+            size_t step = data.size() / sample_count;
+            if (step < 1) step = 1;
+
+            for (size_t i = 0; i < data.size(); i += step) {
+                float v = data[i];
+                if (std::isnan(v)) {
+                    stats.nan_count++;
+                } else if (std::isinf(v)) {
+                    stats.inf_count++;
+                } else {
+                    if (v < stats.min_val) stats.min_val = v;
+                    if (v > stats.max_val) stats.max_val = v;
+                    stats.sum += v;
+                    if (std::abs(v) < 1e-10f) stats.zero_count++;
+                }
+            }
+            stats.mean = stats.sum / sample_count;
+            return stats;
+        }
+
+        void log_tensor_stats(const char* name, const std::vector<float>& data, const int64_t* ne) {
+            auto stats = compute_stats(data);
+            LOG_DEBUG("ZImage [%s]: shape=[%ld,%ld,%ld,%ld] nelems=%zu min=%.6f max=%.6f mean=%.6f nan=%zu inf=%zu zero=%zu",
+                      name, ne[0], ne[1], ne[2], ne[3], data.size(),
+                      stats.min_val, stats.max_val, stats.mean,
+                      stats.nan_count, stats.inf_count, stats.zero_count);
+        }
+
+    public:
+
         ZImageRunner(ggml_backend_t backend,
                      bool offload_params_to_cpu,
                      const String2TensorStorage& tensor_storage_map = {},
@@ -705,16 +758,13 @@ namespace ZImage {
                 return result;
             }
 
-            // Model doesn't fit - TRUE per-layer streaming has bugs, fall back to normal compute
-            // TODO: Fix TRUE per-layer streaming for ZImage
-            LOG_WARN("ZImageRunner: Model doesn't fully fit in VRAM (%.2f GB remaining, %.2f GB available). "
-                     "TRUE per-layer streaming disabled due to bugs - using normal compute with partial CPU offload",
+            // Model doesn't fit - use TRUE per-layer streaming
+            LOG_INFO("ZImageRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
                      remaining_to_load / (1024.0 * 1024.0 * 1024.0),
                      available_vram / (1024.0 * 1024.0 * 1024.0));
 
-            // Disable streaming for this compute - use normal path which handles CPU/GPU mixed execution
-            return compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
-                          output, output_ctx, false /* skip_param_offload */);
+            return compute_streaming_true(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
+                                          output, output_ctx);
         }
 
         /**
@@ -867,6 +917,10 @@ namespace ZImage {
                         txt_img_ne[i] = txt_img_output->ne[i];
                         t_emb_ne[i] = t_emb_output->ne[i];
                     }
+
+                    // Debug: comprehensive tensor statistics
+                    log_tensor_stats("refiner_txt_img", persistent_txt_img, txt_img_ne);
+                    log_tensor_stats("refiner_t_emb", persistent_t_emb, t_emb_ne);
                 } else {
                     LOG_ERROR("ZImageRunner: Failed to get refiner stage outputs");
                     free_compute_buffer();
@@ -918,6 +972,13 @@ namespace ZImage {
 
                 ggml_tensor* txt_img_out = nullptr;
 
+                // Debug: log input statistics for first layer
+                if (layer_idx == 0) {
+                    log_tensor_stats("layer_0_input_txt_img", persistent_txt_img, txt_img_ne);
+                    log_tensor_stats("layer_0_input_t_emb", persistent_t_emb, t_emb_ne);
+                    LOG_DEBUG("ZImage: PE vec size=%zu, axes_dim_sum=%ld", pe_vec.size(), z_image_params.axes_dim_sum);
+                }
+
                 auto get_layer_graph = [&]() -> struct ggml_cgraph* {
                     struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
 
@@ -957,6 +1018,13 @@ namespace ZImage {
                     for (int i = 0; i < 4; i++) {
                         txt_img_ne[i] = txt_img_out->ne[i];
                     }
+
+                    // Debug: log statistics for key layers (first, middle, last)
+                    if (layer_idx == 0 || layer_idx == num_layers / 2 || layer_idx == num_layers - 1) {
+                        char layer_label[64];
+                        snprintf(layer_label, sizeof(layer_label), "layer_%d_out", layer_idx);
+                        log_tensor_stats(layer_label, persistent_txt_img, txt_img_ne);
+                    }
                 }
 
                 // Now safe to free compute buffer
@@ -970,6 +1038,10 @@ namespace ZImage {
 
             // Stage 3: Output
             LOG_DEBUG("ZImageRunner: Executing output stage");
+            log_tensor_stats("output_stage_input_txt_img", persistent_txt_img, txt_img_ne);
+            log_tensor_stats("output_stage_input_t_emb", persistent_t_emb, t_emb_ne);
+            LOG_DEBUG("ZImage output: n_txt_token=%ld, n_txt_pad_token=%ld, n_img_token_val=%ld",
+                      n_txt_token, n_txt_pad_token, n_img_token_val);
             {
                 auto get_output_graph = [&]() -> struct ggml_cgraph* {
                     struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
