@@ -58,7 +58,7 @@ struct StreamingConfig {
     int keep_layers_behind    = 0;       // How many layers to keep after execution (for skip connections)
     size_t min_free_vram      = 512 * 1024 * 1024;  // Minimum VRAM to keep free (512 MB)
     bool async_prefetch       = true;    // Use async memory transfers when available
-    bool log_operations       = true;    // Log streaming operations
+    bool log_operations       = false;   // Log streaming operations (verbose)
 };
 
 /**

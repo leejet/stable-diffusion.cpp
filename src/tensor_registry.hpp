@@ -153,8 +153,6 @@ public:
         }
 
         LayerInfo& layer = it->second;
-        LOG_DEBUG("TensorRegistry: move_layer_to_gpu('%s') - on_gpu=%d, tensors=%zu",
-                  layer_name.c_str(), layer.on_gpu ? 1 : 0, layer.tensor_names.size());
         if (layer.on_gpu) {
             return true;  // Already on GPU
         }
@@ -234,12 +232,6 @@ public:
         // Store the temp context for later cleanup
         layer_contexts_[layer_name] = temp_ctx;
 
-        int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("TensorRegistry: moved layer '%s' to GPU (%.2f MB) in %.2fs",
-                  layer_name.c_str(),
-                  layer.total_size_bytes / (1024.0 * 1024.0),
-                  (t1 - t0) / 1000.0);
-
         return true;
     }
 
@@ -257,8 +249,6 @@ public:
         if (!layer.on_gpu) {
             return;  // Already on CPU
         }
-
-        int64_t t0 = ggml_time_ms();
 
         // Restore original CPU buffer pointers
         for (const auto& tensor_name : layer.tensor_names) {
@@ -291,12 +281,6 @@ public:
 
         current_gpu_usage_ -= layer.total_size_bytes;
         layer.on_gpu = false;
-
-        int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("TensorRegistry: moved layer '%s' to CPU (%.2f MB) in %.2fs",
-                  layer_name.c_str(),
-                  layer.total_size_bytes / (1024.0 * 1024.0),
-                  (t1 - t0) / 1000.0);
     }
 
     /**
@@ -438,9 +422,6 @@ public:
 
         // Start async copy from CPU to GPU
         // Note: ggml_backend_tensor_copy_async may fall back to sync for CPU→CUDA
-        LOG_DEBUG("TensorRegistry: Starting async copy for layer '%s' (%zu tensors, %.2f MB)",
-                  layer_name.c_str(), copy_list.size(), layer.total_size_bytes / (1024.0 * 1024.0));
-
         for (auto& item : copy_list) {
             // Use async copy - this queues the transfer but may not block
             ggml_backend_tensor_copy_async(cpu_backend, gpu_backend, item.cpu_tensor, item.gpu_tensor);
@@ -511,12 +492,6 @@ public:
 
         // Store the temp context for later cleanup
         layer_contexts_[layer_name] = state.temp_ctx;
-
-        int64_t t1 = ggml_time_ms();
-        LOG_DEBUG("TensorRegistry: async loaded layer '%s' to GPU (%.2f MB) in %.2fs",
-                  layer_name.c_str(),
-                  layer.total_size_bytes / (1024.0 * 1024.0),
-                  (t1 - state.start_time) / 1000.0);
 
         async_loading_layers_.erase(async_it);
         return true;
