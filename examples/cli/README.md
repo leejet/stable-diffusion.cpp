@@ -4,11 +4,12 @@
 usage: ./bin/sd-cli  [options]
 
 CLI Options:
-  -o, --output <string>       path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)
-  --output-begin-idx <int>    starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)
+  -o, --output <string>       path to write result image to. you can use printf-style %d format specifiers for image sequences (default:
+                              ./output.png) (eg. output_%03d.png)
   --preview-path <string>     path to write preview image to (default: ./preview.png)
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
+  --output-begin-idx <int>    starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)
   --canny                     apply canny preprocessor (edge detection)
   --convert-name              convert tensor name (for convert mode)
   -v, --verbose               print extra info
@@ -59,6 +60,7 @@ Context Options:
   --circularx                              enable circular RoPE wrapping on x-axis (width) only
   --circulary                              enable circular RoPE wrapping on y-axis (height) only
   --chroma-disable-dit-mask                disable dit mask for chroma
+  --qwen-image-zero-cond-t                 enable zero_cond_t for qwen image
   --chroma-enable-t5-mask                  enable t5 mask for chroma
   --type                                   weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). If not specified, the default is the
                                            type of the weight file
@@ -107,7 +109,7 @@ Generation Options:
                                            medium
   --skip-layer-start <float>               SLG enabling point (default: 0.01)
   --skip-layer-end <float>                 SLG disabling point (default: 0.2)
-  --eta <float>                            eta in DDIM, only for DDIM/TCD/res_multistep/res_2s (default: 0)
+  --eta <float>                            eta in DDIM, only for DDIM and TCD (default: 0)
   --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --high-noise-cfg-scale <float>           (high noise) unconditional guidance scale: (default: 7.0)
   --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or instruct-pix2pix models (default: same as --cfg-scale)
@@ -115,7 +117,7 @@ Generation Options:
   --high-noise-slg-scale <float>           (high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)
   --high-noise-skip-layer-start <float>    (high noise) SLG enabling point (default: 0.01)
   --high-noise-skip-layer-end <float>      (high noise) SLG disabling point (default: 0.2)
-  --high-noise-eta <float>                 (high noise) eta in DDIM, only for DDIM/TCD/res_multistep/res_2s (default: 0)
+  --high-noise-eta <float>                 (high noise) eta in DDIM, only for DDIM and TCD (default: 0)
   --strength <float>                       strength for noising/unnoising (default: 0.75)
   --pm-style-strength <float>
   --control-strength <float>               strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image
@@ -124,10 +126,12 @@ Generation Options:
   --increase-ref-index                     automatically increase the indices of references images based on the order they are listed (starting with 1).
   --disable-auto-resize-ref-image          disable auto resize of ref images
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
-  --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd,
-                                           res_multistep, res_2s] (default: euler for Flux/SD3/Wan, euler_a otherwise)
-  --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
-                                           tcd, res_multistep, res_2s] default: euler for Flux/SD3/Wan, euler_a otherwise
+  --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
+                                           tcd, res_multistep, res_2s] (default: euler for Flux/SD3/Wan, euler_a
+                                           otherwise)
+  --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm,
+                                           ddim_trailing, tcd, res_multistep, res_2s] default: euler for Flux/SD3/Wan,
+                                           euler_a otherwise
   --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple,
                                            kl_optimal, lcm, bong_tangent], default: discrete
   --sigmas                                 custom sigma values for the sampler, comma-separated (e.g., "14.61,7.8,3.5,0.0").
