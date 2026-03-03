@@ -1822,6 +1822,10 @@ protected:
     }
 
     void copy_data_to_backend_tensor() {
+        int copied_count = 0;
+        int skipped_count = 0;
+        bool logged_large_tensor = false;
+
         for (auto& kv : backend_tensor_data_map) {
             auto tensor = kv.first;
             auto data   = kv.second;
@@ -1829,9 +1833,25 @@ protected:
             // Skip tensors that weren't allocated (e.g., unused input tensors
             // that were added to the map but not used in the graph)
             if (tensor->buffer == nullptr) {
+                skipped_count++;
                 continue;
             }
+
+            // Debug: log copy for large tensors (likely txt_img_in)
+            if (!logged_large_tensor && data != nullptr && ggml_nbytes(tensor) > 1000000) {
+                const float* fdata = static_cast<const float*>(data);
+                LOG_DEBUG("copy_data_to_backend: tensor=%p buffer=%p data=%p nbytes=%zu first_vals=%.6f %.6f %.6f",
+                          (void*)tensor, (void*)tensor->buffer, data, ggml_nbytes(tensor),
+                          fdata[0], fdata[1], fdata[2]);
+                logged_large_tensor = true;
+            }
+
             ggml_backend_tensor_set(tensor, data, 0, ggml_nbytes(tensor));
+            copied_count++;
+        }
+
+        if (copied_count > 0 || skipped_count > 0) {
+            LOG_DEBUG("copy_data_to_backend_tensor: copied %d tensors, skipped %d", copied_count, skipped_count);
         }
 
         backend_tensor_data_map.clear();
