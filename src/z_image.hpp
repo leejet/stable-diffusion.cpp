@@ -705,13 +705,16 @@ namespace ZImage {
                 return result;
             }
 
-            // Model doesn't fit - use TRUE per-layer streaming
-            LOG_INFO("ZImageRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
+            // Model doesn't fit - TRUE per-layer streaming has bugs, fall back to normal compute
+            // TODO: Fix TRUE per-layer streaming for ZImage
+            LOG_WARN("ZImageRunner: Model doesn't fully fit in VRAM (%.2f GB remaining, %.2f GB available). "
+                     "TRUE per-layer streaming disabled due to bugs - using normal compute with partial CPU offload",
                      remaining_to_load / (1024.0 * 1024.0 * 1024.0),
                      available_vram / (1024.0 * 1024.0 * 1024.0));
 
-            return compute_streaming_true(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
-                                          output, output_ctx);
+            // Disable streaming for this compute - use normal path which handles CPU/GPU mixed execution
+            return compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
+                          output, output_ctx, false /* skip_param_offload */);
         }
 
         /**
