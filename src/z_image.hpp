@@ -1118,44 +1118,9 @@ namespace ZImage {
                     }
                 }
 
-                // Verify input data was loaded correctly (for first layer)
-                if (layer_idx == 0 && layer_txt_img_in != nullptr) {
-                    LOG_DEBUG("ZImage DEBUG: After compute, tensor ptr=%p, buffer=%p",
-                              (void*)layer_txt_img_in, (void*)(layer_txt_img_in ? layer_txt_img_in->buffer : nullptr));
-
-                    if (layer_txt_img_in->buffer != nullptr) {
-                        std::vector<float> verify_data(persistent_txt_img.size());
-                        ggml_backend_tensor_get(layer_txt_img_in, verify_data.data(), 0, verify_data.size() * sizeof(float));
-
-                        // Compare first few and last few values
-                        bool match = true;
-                        for (size_t i = 0; i < std::min(size_t(10), verify_data.size()) && match; i++) {
-                            if (std::abs(verify_data[i] - persistent_txt_img[i]) > 1e-5f) {
-                                match = false;
-                            }
-                        }
-                        for (size_t i = verify_data.size() - std::min(size_t(10), verify_data.size()); i < verify_data.size() && match; i++) {
-                            if (std::abs(verify_data[i] - persistent_txt_img[i]) > 1e-5f) {
-                                match = false;
-                            }
-                        }
-
-                        if (match) {
-                            LOG_DEBUG("ZImage: Layer 0 input data VERIFIED - matches persistent storage");
-                        } else {
-                            LOG_ERROR("ZImage: Layer 0 input data MISMATCH!");
-                            LOG_ERROR("ZImage: Expected first values: %.6f %.6f %.6f",
-                                      persistent_txt_img[0], persistent_txt_img[1], persistent_txt_img[2]);
-                            LOG_ERROR("ZImage: Got first values: %.6f %.6f %.6f",
-                                      verify_data[0], verify_data[1], verify_data[2]);
-                            // Check if it looks like PE data
-                            LOG_ERROR("ZImage: pe_vec first values: %.6f %.6f %.6f",
-                                      pe_vec[0], pe_vec[1], pe_vec[2]);
-                        }
-                    } else {
-                        LOG_ERROR("ZImage: Layer 0 input tensor has NO BUFFER after compute!");
-                    }
-                }
+                // Note: After compute, GGML may have reused the input buffer for intermediate
+                // calculations, so checking input data here is not meaningful. The data was
+                // correctly copied before compute via copy_data_to_backend_tensor().
 
                 // Extract output
                 if (txt_img_out) {
