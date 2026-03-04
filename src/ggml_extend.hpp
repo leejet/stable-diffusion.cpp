@@ -2004,6 +2004,10 @@ public:
     }
 
     void free_params_buffer() {
+        // If params are on GPU, move them back to CPU first (this also frees runtime_params_buffer)
+        if (params_on_runtime_backend) {
+            offload_params_to_params_backend();
+        }
         if (params_buffer != nullptr) {
             ggml_backend_buffer_free(params_buffer);
             params_buffer = nullptr;

@@ -462,7 +462,7 @@ public:
             }
             if (sd_version_is_sd3(version)) {
                 cond_stage_model = std::make_shared<SD3CLIPEmbedder>(clip_backend,
-                                                                     offload_params_to_cpu,
+                                                                     cond_stage_offload_to_cpu,
                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
                                                                diffusion_offload_to_cpu,
@@ -541,7 +541,7 @@ public:
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-I2V-1.3B") {
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(backend,
-                                                                             offload_params_to_cpu,
+                                                                             diffusion_offload_to_cpu,
                                                                              tensor_storage_map);
                     clip_vision->alloc_params_buffer();
                     clip_vision->get_param_tensors(tensors);
@@ -565,10 +565,10 @@ public:
                                                                    sd_ctx_params->qwen_image_zero_cond_t);
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
-                                                                      offload_params_to_cpu,
+                                                                      cond_stage_offload_to_cpu,
                                                                       tensor_storage_map);
                 diffusion_model  = std::make_shared<AnimaModel>(backend,
-                                                               offload_params_to_cpu,
+                                                               diffusion_offload_to_cpu,
                                                                tensor_storage_map,
                                                                "model.diffusion_model");
             } else if (sd_version_is_z_image(version)) {
@@ -3940,6 +3940,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     }
 
     // Smart offload: Only move cond_stage to CPU if VRAM is tight for diffusion sampling
+    bool cond_stage_offload_failed = false;
     if (!sd_ctx->sd->free_params_immediately &&
         sd_ctx->sd->should_offload_cond_stage_for_diffusion(width, height)) {
         size_t vram_size = sd_ctx->sd->cond_stage_model->get_params_vram_size();
@@ -3949,7 +3950,10 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
             LOG_INFO("[Offload] Smart: offloaded cond_stage to CPU, freed %.2f MB VRAM in %" PRId64 " ms",
                      vram_size / (1024.0f * 1024.0f), offload_end - offload_start);
         } else {
-            LOG_WARN("[Offload] Failed to offload cond_stage to CPU");
+            LOG_ERROR("[Offload] Failed to offload cond_stage to CPU (no CPU backend configured). "
+                      "This usually means the model was created without offload support. "
+                      "Diffusion model load will likely OOM.");
+            cond_stage_offload_failed = true;
         }
     } else if (sd_ctx->sd->offload_config.log_offload_events &&
                sd_ctx->sd->cond_stage_model && sd_ctx->sd->cond_stage_model->is_params_on_gpu()) {
@@ -3962,6 +3966,11 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
     if (sd_ctx->sd->offload_config.mode != SD_OFFLOAD_NONE &&
         sd_ctx->sd->offload_config.mode != SD_OFFLOAD_LAYER_STREAMING &&
         sd_ctx->sd->diffusion_model && !sd_ctx->sd->diffusion_model->is_params_on_gpu()) {
+        if (cond_stage_offload_failed) {
+            LOG_ERROR("[Offload] Cannot load diffusion model - cond_stage offload failed and VRAM is full. "
+                      "Try --offload-mode layer_streaming or use a smaller/quantized model.");
+            return nullptr;
+        }
         int64_t reload_start = ggml_time_ms();
         if (sd_ctx->sd->diffusion_model->move_params_to_gpu()) {
             int64_t reload_time = ggml_time_ms() - reload_start;
