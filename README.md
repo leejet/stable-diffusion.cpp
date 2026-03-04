@@ -15,6 +15,9 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/01/18** 🚀 stable-diffusion.cpp now supports **FLUX.2-klein**  
+  👉 Details: [PR #1193](https://github.com/leejet/stable-diffusion.cpp/pull/1193)
+
 * **2025/12/01** 🚀 stable-diffusion.cpp now supports **Z-Image**  
   👉 Details: [PR #1020](https://github.com/leejet/stable-diffusion.cpp/pull/1020)
 
@@ -43,16 +46,17 @@ API and command-line option may change frequently.***
     - SDXL, [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo)
     - [Some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
     - [SD3/SD3.5](./docs/sd3.md)
-    - [FlUX.1-dev/FlUX.1-schnell](./docs/flux.md)
-    - [FLUX.2-dev](./docs/flux2.md)
+    - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
+    - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
     - [Chroma](./docs/chroma.md)
     - [Chroma1-Radiance](./docs/chroma_radiance.md)
     - [Qwen Image](./docs/qwen_image.md)
     - [Z-Image](./docs/z_image.md)
     - [Ovis-Image](./docs/ovis_image.md)
+    - [Anima](./docs/anima.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
-    - [Qwen Image Edit/Qwen Image Edit 2509](./docs/qwen_image_edit.md)
+    - [Qwen Image Edit series](./docs/qwen_image_edit.md)
   - Video Models
     - [Wan2.1/Wan2.2](./docs/wan.md)
   - [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
@@ -70,7 +74,7 @@ API and command-line option may change frequently.***
   - SYCL
 - Supported weight formats
   - Pytorch checkpoint (`.ckpt` or `.pth`)
-  - Safetensors (`./safetensors`)
+  - Safetensors (`.safetensors`)
   - GGUF (`.gguf`)
 - Supported platforms
     - Linux
@@ -127,15 +131,16 @@ If you want to improve performance or reduce VRAM/RAM usage, please refer to [pe
 
 - [SD1.x/SD2.x/SDXL](./docs/sd.md)
 - [SD3/SD3.5](./docs/sd3.md)
-- [FlUX.1-dev/FlUX.1-schnell](./docs/flux.md)
-- [FLUX.2-dev](./docs/flux2.md)
+- [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
+- [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
 - [FLUX.1-Kontext-dev](./docs/kontext.md)
 - [Chroma](./docs/chroma.md)
 - [🔥Qwen Image](./docs/qwen_image.md)
-- [🔥Qwen Image Edit/Qwen Image Edit 2509](./docs/qwen_image_edit.md)
+- [🔥Qwen Image Edit series](./docs/qwen_image_edit.md)
 - [🔥Wan2.1/Wan2.2](./docs/wan.md)
 - [🔥Z-Image](./docs/z_image.md)
 - [Ovis-Image](./docs/ovis_image.md)
+- [Anima](./docs/anima.md)
 - [LoRA](./docs/lora.md)
 - [LCM/LCM-LoRA](./docs/lcm.md)
 - [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)
@@ -143,6 +148,7 @@ If you want to improve performance or reduce VRAM/RAM usage, please refer to [pe
 - [Using TAESD to faster decoding](./docs/taesd.md)
 - [Docker](./docs/docker.md)
 - [Quantization and GGUF](./docs/quantization_and_gguf.md)
+- [Inference acceleration via caching](./docs/caching.md)
 
 ## Bindings
 

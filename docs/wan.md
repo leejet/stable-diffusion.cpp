@@ -39,6 +39,9 @@
         - safetensors: https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/vae/wan_2.1_vae.safetensors
     - wan_2.2_vae (for Wan2.2 TI2V 5B only)
         - safetensors: https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/main/split_files/vae/wan2.2_vae.safetensors
+
+    > Wan models vae requires really much VRAM! If you do not have enough VRAM, please try tae instead, though the results may be poorer. For tae usage, please refer to [taesd](taesd.md)
+
 - Download umt5_xxl
     - safetensors: https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/main/split_files/text_encoders/umt5_xxl_fp16.safetensors
     - gguf: https://huggingface.co/city96/umt5-xxl-encoder-gguf/tree/main

@@ -95,17 +95,28 @@ static void print_utf8(FILE* stream, const char* utf8) {
                    ? GetStdHandle(STD_ERROR_HANDLE)
                    : GetStdHandle(STD_OUTPUT_HANDLE);
 
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-    if (wlen <= 0)
-        return;
+    DWORD mode;
+    BOOL is_console = GetConsoleMode(h, &mode);
 
-    wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
-    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+    if (is_console) {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+        if (wlen <= 0)
+            return;
 
-    DWORD written;
-    WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
+        wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
+        if (!wbuf)
+            return;
 
-    free(wbuf);
+        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
+
+        DWORD written;
+        WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
+
+        free(wbuf);
+    } else {
+        DWORD written;
+        WriteFile(h, utf8, (DWORD)strlen(utf8), &written, NULL);
+    }
 #else
     fputs(utf8, stream);
 #endif
@@ -434,7 +445,7 @@ struct SDContextParams {
     std::string photo_maker_path;
     sd_type_t wtype = SD_TYPE_COUNT;
     std::string tensor_type_rules;
-    std::string lora_model_dir;
+    std::string lora_model_dir = ".";
 
     std::map<std::string, std::string> embedding_map;
     std::vector<sd_embedding_t> embedding_vec;
@@ -442,16 +453,24 @@ struct SDContextParams {
     rng_type_t rng_type         = CUDA_RNG;
     rng_type_t sampler_rng_type = RNG_TYPE_COUNT;
     bool offload_params_to_cpu  = false;
+    bool enable_mmap            = false;
     bool control_net_cpu        = false;
     bool clip_on_cpu            = false;
     bool vae_on_cpu             = false;
+    bool flash_attn             = false;
     bool diffusion_flash_attn   = false;
     bool diffusion_conv_direct  = false;
     bool vae_conv_direct        = false;
 
+    bool circular   = false;
+    bool circular_x = false;
+    bool circular_y = false;
+
     bool chroma_use_dit_mask = true;
     bool chroma_use_t5_mask  = false;
     int chroma_t5_mask_pad   = 1;
+
+    bool qwen_image_zero_cond_t = false;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
@@ -562,10 +581,6 @@ struct SDContextParams {
              "--vae-tile-overlap",
              "tile overlap for vae tiling, in fraction of tile size (default: 0.5)",
              &vae_tiling_params.target_overlap},
-            {"",
-             "--flow-shift",
-             "shift value for Flow models like SD3.x or WAN (default: auto)",
-             &flow_shift},
         };
 
         options.bool_options = {
@@ -582,6 +597,10 @@ struct SDContextParams {
              "place the weights in RAM to save VRAM, and automatically load them into VRAM when needed",
              true, &offload_params_to_cpu},
             {"",
+             "--mmap",
+             "whether to memory-map model",
+             true, &enable_mmap},
+            {"",
              "--control-net-cpu",
              "keep controlnet in cpu (for low vram)",
              true, &control_net_cpu},
@@ -594,8 +613,12 @@ struct SDContextParams {
              "keep vae in cpu (for low vram)",
              true, &vae_on_cpu},
             {"",
+             "--fa",
+             "use flash attention",
+             true, &flash_attn},
+            {"",
              "--diffusion-fa",
-             "use flash attention in the diffusion model",
+             "use flash attention in the diffusion model only",
              true, &diffusion_flash_attn},
             {"",
              "--diffusion-conv-direct",
@@ -606,9 +629,25 @@ struct SDContextParams {
              "use ggml_conv2d_direct in the vae model",
              true, &vae_conv_direct},
             {"",
+             "--circular",
+             "enable circular padding for convolutions",
+             true, &circular},
+            {"",
+             "--circularx",
+             "enable circular RoPE wrapping on x-axis (width) only",
+             true, &circular_x},
+            {"",
+             "--circulary",
+             "enable circular RoPE wrapping on y-axis (height) only",
+             true, &circular_y},
+            {"",
              "--chroma-disable-dit-mask",
              "disable dit mask for chroma",
              false, &chroma_use_dit_mask},
+            {"",
+             "--qwen-image-zero-cond-t",
+             "enable zero_cond_t for qwen image",
+             true, &qwen_image_zero_cond_t},
             {"",
              "--chroma-enable-t5-mask",
              "enable t5 mask for chroma",
@@ -771,7 +810,7 @@ struct SDContextParams {
     }
 
     void build_embedding_map() {
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
 
         if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
             return;
@@ -860,15 +899,20 @@ struct SDContextParams {
             << "  photo_maker_path: \"" << photo_maker_path << "\",\n"
             << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
             << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
-            << "  flow_shift: " << (std::isinf(flow_shift) ? "INF" : std::to_string(flow_shift)) << "\n"
             << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
+            << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
             << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
             << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
             << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
+            << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
             << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
             << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
             << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
+            << "  circular: " << (circular ? "true" : "false") << ",\n"
+            << "  circular_x: " << (circular_x ? "true" : "false") << ",\n"
+            << "  circular_y: " << (circular_y ? "true" : "false") << ",\n"
             << "  chroma_use_dit_mask: " << (chroma_use_dit_mask ? "true" : "false") << ",\n"
+            << "  qwen_image_zero_cond_t: " << (qwen_image_zero_cond_t ? "true" : "false") << ",\n"
             << "  chroma_use_t5_mask: " << (chroma_use_t5_mask ? "true" : "false") << ",\n"
             << "  chroma_t5_mask_pad: " << chroma_t5_mask_pad << ",\n"
             << "  prediction: " << sd_prediction_name(prediction) << ",\n"
@@ -921,18 +965,22 @@ struct SDContextParams {
             prediction,
             lora_apply_mode,
             offload_params_to_cpu,
+            enable_mmap,
             clip_on_cpu,
             control_net_cpu,
             vae_on_cpu,
+            flash_attn,
             diffusion_flash_attn,
             taesd_preview,
             diffusion_conv_direct,
             vae_conv_direct,
+            circular || circular_x,
+            circular || circular_y,
             force_sdxl_vae_conv_scale,
             chroma_use_dit_mask,
             chroma_use_t5_mask,
             chroma_t5_mask_pad,
-            flow_shift,
+            qwen_image_zero_cond_t,
         };
         return sd_ctx_params;
     }
@@ -977,8 +1025,8 @@ struct SDGenerationParams {
     std::string prompt_with_lora;  // for metadata record only
     std::string negative_prompt;
     int clip_skip   = -1;  // <= 0 represents unspecified
-    int width       = 512;
-    int height      = 512;
+    int width       = -1;
+    int height      = -1;
     int batch_count = 1;
     std::string init_image_path;
     std::string end_image_path;
@@ -997,8 +1045,12 @@ struct SDGenerationParams {
 
     std::vector<float> custom_sigmas;
 
-    std::string easycache_option;
-    sd_easycache_params_t easycache_params;
+    std::string cache_mode;
+    std::string cache_option;
+    std::string cache_preset;
+    std::string scm_mask;
+    bool scm_policy_dynamic = true;
+    sd_cache_params_t cache_params{};
 
     float moe_boundary  = 0.875f;
     int video_frames    = 1;
@@ -1148,6 +1200,10 @@ struct SDGenerationParams {
              "--eta",
              "eta in DDIM, only for DDIM and TCD (default: 0)",
              &sample_params.eta},
+            {"",
+             "--flow-shift",
+             "shift value for Flow models like SD3.x or WAN (default: auto)",
+             &sample_params.flow_shift},
             {"",
              "--high-noise-cfg-scale",
              "(high noise) unconditional guidance scale: (default: 7.0)",
@@ -1335,10 +1391,10 @@ struct SDGenerationParams {
                 if (!item.empty()) {
                     try {
                         custom_sigmas.push_back(std::stof(item));
-                    } catch (const std::invalid_argument& e) {
+                    } catch (const std::invalid_argument&) {
                         LOG_ERROR("error: invalid float value '%s' in --sigmas", item.c_str());
                         return -1;
-                    } catch (const std::out_of_range& e) {
+                    } catch (const std::out_of_range&) {
                         LOG_ERROR("error: float value '%s' out of range in --sigmas", item.c_str());
                         return -1;
                     }
@@ -1360,36 +1416,64 @@ struct SDGenerationParams {
             return 1;
         };
 
-        auto on_easycache_arg = [&](int argc, const char** argv, int index) {
-            const std::string default_values = "0.2,0.15,0.95";
-            auto looks_like_value            = [](const std::string& token) {
-                if (token.empty()) {
-                    return false;
-                }
-                if (token[0] != '-') {
-                    return true;
-                }
-                if (token.size() == 1) {
-                    return false;
-                }
-                unsigned char next = static_cast<unsigned char>(token[1]);
-                return std::isdigit(next) || token[1] == '.';
-            };
+        auto on_cache_mode_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            cache_mode = argv_to_utf8(index, argv);
+            if (cache_mode != "easycache" && cache_mode != "ucache" &&
+                cache_mode != "dbcache" && cache_mode != "taylorseer" && cache_mode != "cache-dit") {
+                fprintf(stderr, "error: invalid cache mode '%s', must be 'easycache', 'ucache', 'dbcache', 'taylorseer', or 'cache-dit'\n", cache_mode.c_str());
+                return -1;
+            }
+            return 1;
+        };
 
-            std::string option_value;
-            int consumed = 0;
-            if (index + 1 < argc) {
-                std::string next_arg = argv[index + 1];
-                if (looks_like_value(next_arg)) {
-                    option_value = argv_to_utf8(index + 1, argv);
-                    consumed     = 1;
-                }
+        auto on_cache_option_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
             }
-            if (option_value.empty()) {
-                option_value = default_values;
+            cache_option = argv_to_utf8(index, argv);
+            return 1;
+        };
+
+        auto on_scm_mask_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
             }
-            easycache_option = option_value;
-            return consumed;
+            scm_mask = argv_to_utf8(index, argv);
+            return 1;
+        };
+
+        auto on_scm_policy_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            std::string policy = argv_to_utf8(index, argv);
+            if (policy == "dynamic") {
+                scm_policy_dynamic = true;
+            } else if (policy == "static") {
+                scm_policy_dynamic = false;
+            } else {
+                fprintf(stderr, "error: invalid scm policy '%s', must be 'dynamic' or 'static'\n", policy.c_str());
+                return -1;
+            }
+            return 1;
+        };
+
+        auto on_cache_preset_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            cache_preset = argv_to_utf8(index, argv);
+            if (cache_preset != "slow" && cache_preset != "s" && cache_preset != "S" &&
+                cache_preset != "medium" && cache_preset != "m" && cache_preset != "M" &&
+                cache_preset != "fast" && cache_preset != "f" && cache_preset != "F" &&
+                cache_preset != "ultra" && cache_preset != "u" && cache_preset != "U") {
+                fprintf(stderr, "error: invalid cache preset '%s', must be 'slow'/'s', 'medium'/'m', 'fast'/'f', or 'ultra'/'u'\n", cache_preset.c_str());
+                return -1;
+            }
+            return 1;
         };
 
         options.manual_options = {
@@ -1399,17 +1483,17 @@ struct SDGenerationParams {
              on_seed_arg},
             {"",
              "--sampling-method",
-             "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd] "
+             "sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s] "
              "(default: euler for Flux/SD3/Wan, euler_a otherwise)",
              on_sample_method_arg},
             {"",
              "--high-noise-sampling-method",
-             "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd]"
+             "(high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing, tcd, res_multistep, res_2s]"
              " default: euler for Flux/SD3/Wan, euler_a otherwise",
              on_high_noise_sample_method_arg},
             {"",
              "--scheduler",
-             "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, lcm], default: discrete",
+             "denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple, kl_optimal, lcm, bong_tangent], default: discrete",
              on_scheduler_arg},
             {"",
              "--sigmas",
@@ -1428,9 +1512,25 @@ struct SDGenerationParams {
              "reference image for Flux Kontext models (can be used multiple times)",
              on_ref_image_arg},
             {"",
-             "--easycache",
-             "enable EasyCache for DiT models with optional \"threshold,start_percent,end_percent\" (default: 0.2,0.15,0.95)",
-             on_easycache_arg},
+             "--cache-mode",
+             "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)",
+             on_cache_mode_arg},
+            {"",
+             "--cache-option",
+             "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
+             on_cache_option_arg},
+            {"",
+             "--cache-preset",
+             "cache-dit preset: 'slow'/'s', 'medium'/'m', 'fast'/'f', 'ultra'/'u'",
+             on_cache_preset_arg},
+            {"",
+             "--scm-mask",
+             "SCM steps mask for cache-dit: comma-separated 0/1 (e.g., \"1,1,1,0,0,1,0,0,1,0\") - 1=compute, 0=can cache",
+             on_scm_mask_arg},
+            {"",
+             "--scm-policy",
+             "SCM policy: 'dynamic' (default) or 'static'",
+             on_scm_policy_arg},
 
         };
 
@@ -1473,7 +1573,10 @@ struct SDGenerationParams {
 
         load_if_exists("prompt", prompt);
         load_if_exists("negative_prompt", negative_prompt);
-        load_if_exists("easycache_option", easycache_option);
+        load_if_exists("cache_mode", cache_mode);
+        load_if_exists("cache_option", cache_option);
+        load_if_exists("cache_preset", cache_preset);
+        load_if_exists("scm_mask", scm_mask);
 
         load_if_exists("clip_skip", clip_skip);
         load_if_exists("width", width);
@@ -1496,9 +1599,30 @@ struct SDGenerationParams {
         load_if_exists("skip_layers", skip_layers);
         load_if_exists("high_noise_skip_layers", high_noise_skip_layers);
 
+        load_if_exists("steps", sample_params.sample_steps);
+        load_if_exists("high_noise_steps", high_noise_sample_params.sample_steps);
         load_if_exists("cfg_scale", sample_params.guidance.txt_cfg);
         load_if_exists("img_cfg_scale", sample_params.guidance.img_cfg);
         load_if_exists("guidance", sample_params.guidance.distilled_guidance);
+        load_if_exists("flow_shift", sample_params.flow_shift);
+
+        auto load_sampler_if_exists = [&](const char* key, enum sample_method_t& out) {
+            if (j.contains(key) && j[key].is_string()) {
+                enum sample_method_t tmp = str_to_sample_method(j[key].get<std::string>().c_str());
+                if (tmp != SAMPLE_METHOD_COUNT) {
+                    out = tmp;
+                }
+            }
+        };
+        load_sampler_if_exists("sample_method", sample_params.sample_method);
+        load_sampler_if_exists("high_noise_sample_method", high_noise_sample_params.sample_method);
+
+        if (j.contains("scheduler") && j["scheduler"].is_string()) {
+            enum scheduler_t tmp = str_to_scheduler(j["scheduler"].get<std::string>().c_str());
+            if (tmp != SCHEDULER_COUNT) {
+                sample_params.scheduler = tmp;
+            }
+        }
 
         return true;
     }
@@ -1508,7 +1632,7 @@ struct SDGenerationParams {
             return;
         }
         static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
-        static const std::vector<std::string> valid_ext = {".pt", ".safetensors", ".gguf"};
+        static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt"};
         std::smatch m;
 
         std::string tmp = prompt;
@@ -1587,17 +1711,24 @@ struct SDGenerationParams {
         }
     }
 
+    bool width_and_height_are_set() const {
+        return width > 0 && height > 0;
+    }
+
+    void set_width_and_height_if_unset(int w, int h) {
+        if (!width_and_height_are_set()) {
+            LOG_INFO("set width x height to %d x %d", w, h);
+            width  = w;
+            height = h;
+        }
+    }
+
+    int get_resolved_width() const { return (width > 0) ? width : 512; }
+
+    int get_resolved_height() const { return (height > 0) ? height : 512; }
+
     bool process_and_check(SDMode mode, const std::string& lora_model_dir) {
         prompt_with_lora = prompt;
-        if (width <= 0) {
-            LOG_ERROR("error: the width must be greater than 0\n");
-            return false;
-        }
-
-        if (height <= 0) {
-            LOG_ERROR("error: the height must be greater than 0\n");
-            return false;
-        }
 
         if (sample_params.sample_steps <= 0) {
             LOG_ERROR("error: the sample_steps must be greater than 0\n");
@@ -1613,57 +1744,118 @@ struct SDGenerationParams {
             return false;
         }
 
-        if (!easycache_option.empty()) {
-            float values[3] = {0.0f, 0.0f, 0.0f};
-            std::stringstream ss(easycache_option);
+        sd_cache_params_init(&cache_params);
+
+        auto parse_named_params = [&](const std::string& opt_str) -> bool {
+            std::stringstream ss(opt_str);
             std::string token;
-            int idx = 0;
             while (std::getline(ss, token, ',')) {
-                auto trim = [](std::string& s) {
-                    const char* whitespace = " \t\r\n";
-                    auto start             = s.find_first_not_of(whitespace);
-                    if (start == std::string::npos) {
-                        s.clear();
-                        return;
-                    }
-                    auto end = s.find_last_not_of(whitespace);
-                    s        = s.substr(start, end - start + 1);
-                };
-                trim(token);
-                if (token.empty()) {
-                    LOG_ERROR("error: invalid easycache option '%s'", easycache_option.c_str());
+                size_t eq_pos = token.find('=');
+                if (eq_pos == std::string::npos) {
+                    LOG_ERROR("error: cache option '%s' missing '=' separator", token.c_str());
                     return false;
                 }
-                if (idx >= 3) {
-                    LOG_ERROR("error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
-                    return false;
-                }
+                std::string key = token.substr(0, eq_pos);
+                std::string val = token.substr(eq_pos + 1);
                 try {
-                    values[idx] = std::stof(token);
+                    if (key == "threshold") {
+                        if (cache_mode == "easycache" || cache_mode == "ucache") {
+                            cache_params.reuse_threshold = std::stof(val);
+                        } else {
+                            cache_params.residual_diff_threshold = std::stof(val);
+                        }
+                    } else if (key == "start") {
+                        cache_params.start_percent = std::stof(val);
+                    } else if (key == "end") {
+                        cache_params.end_percent = std::stof(val);
+                    } else if (key == "decay") {
+                        cache_params.error_decay_rate = std::stof(val);
+                    } else if (key == "relative") {
+                        cache_params.use_relative_threshold = (std::stof(val) != 0.0f);
+                    } else if (key == "reset") {
+                        cache_params.reset_error_on_compute = (std::stof(val) != 0.0f);
+                    } else if (key == "Fn" || key == "fn") {
+                        cache_params.Fn_compute_blocks = std::stoi(val);
+                    } else if (key == "Bn" || key == "bn") {
+                        cache_params.Bn_compute_blocks = std::stoi(val);
+                    } else if (key == "warmup") {
+                        cache_params.max_warmup_steps = std::stoi(val);
+                    } else {
+                        LOG_ERROR("error: unknown cache parameter '%s'", key.c_str());
+                        return false;
+                    }
                 } catch (const std::exception&) {
-                    LOG_ERROR("error: invalid easycache value '%s'", token.c_str());
+                    LOG_ERROR("error: invalid value '%s' for parameter '%s'", val.c_str(), key.c_str());
                     return false;
                 }
-                idx++;
             }
-            if (idx != 3) {
-                LOG_ERROR("error: easycache expects exactly 3 comma-separated values (threshold,start,end)\n");
-                return false;
+            return true;
+        };
+
+        if (!cache_mode.empty()) {
+            if (cache_mode == "easycache") {
+                cache_params.mode                   = SD_CACHE_EASYCACHE;
+                cache_params.reuse_threshold        = 0.2f;
+                cache_params.start_percent          = 0.15f;
+                cache_params.end_percent            = 0.95f;
+                cache_params.error_decay_rate       = 1.0f;
+                cache_params.use_relative_threshold = true;
+                cache_params.reset_error_on_compute = true;
+            } else if (cache_mode == "ucache") {
+                cache_params.mode                   = SD_CACHE_UCACHE;
+                cache_params.reuse_threshold        = 1.0f;
+                cache_params.start_percent          = 0.15f;
+                cache_params.end_percent            = 0.95f;
+                cache_params.error_decay_rate       = 1.0f;
+                cache_params.use_relative_threshold = true;
+                cache_params.reset_error_on_compute = true;
+            } else if (cache_mode == "dbcache") {
+                cache_params.mode                    = SD_CACHE_DBCACHE;
+                cache_params.Fn_compute_blocks       = 8;
+                cache_params.Bn_compute_blocks       = 0;
+                cache_params.residual_diff_threshold = 0.08f;
+                cache_params.max_warmup_steps        = 8;
+            } else if (cache_mode == "taylorseer") {
+                cache_params.mode                    = SD_CACHE_TAYLORSEER;
+                cache_params.Fn_compute_blocks       = 8;
+                cache_params.Bn_compute_blocks       = 0;
+                cache_params.residual_diff_threshold = 0.08f;
+                cache_params.max_warmup_steps        = 8;
+            } else if (cache_mode == "cache-dit") {
+                cache_params.mode                    = SD_CACHE_CACHE_DIT;
+                cache_params.Fn_compute_blocks       = 8;
+                cache_params.Bn_compute_blocks       = 0;
+                cache_params.residual_diff_threshold = 0.08f;
+                cache_params.max_warmup_steps        = 8;
             }
-            if (values[0] < 0.0f) {
-                LOG_ERROR("error: easycache threshold must be non-negative\n");
-                return false;
+
+            if (!cache_option.empty()) {
+                if (!parse_named_params(cache_option)) {
+                    return false;
+                }
             }
-            if (values[1] < 0.0f || values[1] >= 1.0f || values[2] <= 0.0f || values[2] > 1.0f || values[1] >= values[2]) {
-                LOG_ERROR("error: easycache start/end percents must satisfy 0.0 <= start < end <= 1.0\n");
-                return false;
+
+            if (cache_mode == "easycache" || cache_mode == "ucache") {
+                if (cache_params.reuse_threshold < 0.0f) {
+                    LOG_ERROR("error: cache threshold must be non-negative");
+                    return false;
+                }
+                if (cache_params.start_percent < 0.0f || cache_params.start_percent >= 1.0f ||
+                    cache_params.end_percent <= 0.0f || cache_params.end_percent > 1.0f ||
+                    cache_params.start_percent >= cache_params.end_percent) {
+                    LOG_ERROR("error: cache start/end percents must satisfy 0.0 <= start < end <= 1.0");
+                    return false;
+                }
             }
-            easycache_params.enabled         = true;
-            easycache_params.reuse_threshold = values[0];
-            easycache_params.start_percent   = values[1];
-            easycache_params.end_percent     = values[2];
-        } else {
-            easycache_params.enabled = false;
+        }
+
+        if (cache_params.mode == SD_CACHE_DBCACHE ||
+            cache_params.mode == SD_CACHE_TAYLORSEER ||
+            cache_params.mode == SD_CACHE_CACHE_DIT) {
+            if (!scm_mask.empty()) {
+                cache_params.scm_mask = scm_mask.c_str();
+            }
+            cache_params.scm_policy_dynamic = scm_policy_dynamic;
         }
 
         sample_params.guidance.slg.layers                 = skip_layers.data();
@@ -1765,12 +1957,13 @@ struct SDGenerationParams {
             << "  high_noise_skip_layers: " << vec_to_string(high_noise_skip_layers) << ",\n"
             << "  high_noise_sample_params: " << high_noise_sample_params_str << ",\n"
             << "  custom_sigmas: " << vec_to_string(custom_sigmas) << ",\n"
-            << "  easycache_option: \"" << easycache_option << "\",\n"
-            << "  easycache: "
-            << (easycache_params.enabled ? "enabled" : "disabled")
-            << " (threshold=" << easycache_params.reuse_threshold
-            << ", start=" << easycache_params.start_percent
-            << ", end=" << easycache_params.end_percent << "),\n"
+            << "  cache_mode: \"" << cache_mode << "\",\n"
+            << "  cache_option: \"" << cache_option << "\",\n"
+            << "  cache: "
+            << (cache_params.mode != SD_CACHE_DISABLED ? "enabled" : "disabled")
+            << " (threshold=" << cache_params.reuse_threshold
+            << ", start=" << cache_params.start_percent
+            << ", end=" << cache_params.end_percent << "),\n"
             << "  moe_boundary: " << moe_boundary << ",\n"
             << "  video_frames: " << video_frames << ",\n"
             << "  fps: " << fps << ",\n"
@@ -1901,6 +2094,22 @@ uint8_t* load_image_from_file(const char* image_path,
                               int expected_height  = 0,
                               int expected_channel = 3) {
     return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
+}
+
+bool load_sd_image_from_file(sd_image_t* image,
+                             const char* image_path,
+                             int expected_width   = 0,
+                             int expected_height  = 0,
+                             int expected_channel = 3) {
+    int width;
+    int height;
+    image->data = load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
+    if (image->data == nullptr) {
+        return false;
+    }
+    image->width  = width;
+    image->height = height;
+    return true;
 }
 
 uint8_t* load_image_from_memory(const char* image_bytes,
