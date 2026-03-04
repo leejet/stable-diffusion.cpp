@@ -269,8 +269,8 @@ struct LoraEntry {
     std::string fullpath;
 };
 
-void free_results(sd_image_t* results, int num_results) {
-    if (results) {
+void free_results(sd_image_t* result_images, int num_results) {
+    if (result_images) {
         for (int i = 0; i < num_results; ++i) {
             if (result_images[i].data) {
                 stbi_image_free(result_images[i].data);
