@@ -269,6 +269,18 @@ struct LoraEntry {
     std::string fullpath;
 };
 
+void free_results(sd_image_t* result_images, int num_results) {
+    if (result_images) {
+        for (int i = 0; i < num_results; ++i) {
+            if (result_images[i].data) {
+                stbi_image_free(result_images[i].data);
+                result_images[i].data = nullptr;
+            }
+        }
+    }
+    free(result_images);
+}
+
 int main(int argc, const char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--version") {
         std::cout << version_string() << "\n";
@@ -537,6 +549,7 @@ int main(int argc, const char** argv) {
                 item["b64_json"] = b64;
                 out["data"].push_back(item);
             }
+            free_results(results, num_results);
 
             res.set_content(out.dump(), "application/json");
             res.status = 200;
@@ -781,6 +794,7 @@ int main(int argc, const char** argv) {
                 item["b64_json"] = b64;
                 out["data"].push_back(item);
             }
+            free_results(results, num_results);
 
             res.set_content(out.dump(), "application/json");
             res.status = 200;
@@ -1101,6 +1115,7 @@ int main(int argc, const char** argv) {
                 std::string b64 = base64_encode(image_bytes);
                 out["images"].push_back(b64);
             }
+            free_results(results, num_results);
 
             res.set_content(out.dump(), "application/json");
             res.status = 200;
