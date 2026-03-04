@@ -796,7 +796,6 @@ namespace ZImage {
                                            circular_y_enabled,
                                            circular_x_enabled,
                                            z_image_params.axes_dim);
-
             // For ZImage with refiners, we'll execute refiners with global,
             // then stream main layers one at a time
             // This is a simplified approach - refiners are usually small
@@ -865,7 +864,13 @@ namespace ZImage {
 
                     // Concat for main layers
                     txt_img_output = ggml_concat(compute_ctx, txt, img, 1);
-                    t_emb_output = t_emb;
+
+                    // Create explicit copy of t_emb to prevent buffer aliasing
+                    // The allocator may reuse t_emb's buffer after noise refiners use it
+                    auto t_emb_copy = ggml_new_tensor(compute_ctx, t_emb->type, ggml_n_dims(t_emb), t_emb->ne);
+                    t_emb_copy = ggml_cpy(compute_ctx, t_emb, t_emb_copy);
+                    ggml_set_name(t_emb_copy, "t_emb_output_copy");
+                    t_emb_output = t_emb_copy;
 
                     ggml_build_forward_expand(gf, txt_img_output);
                     ggml_build_forward_expand(gf, t_emb_output);
@@ -919,7 +924,18 @@ namespace ZImage {
             }
 
             // Stage 2: Main layers (one at a time)
-            for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
+            // Debug: limit layers if env var set (to isolate where grid pattern appears)
+            const char* limit_layers_env = std::getenv("SDCPP_LIMIT_MAIN_LAYERS");
+            int layers_to_run = num_layers;
+            if (limit_layers_env) {
+                int limit = std::atoi(limit_layers_env);
+                if (limit >= 0 && limit < num_layers) {
+                    layers_to_run = limit;
+                    LOG_WARN("SDCPP_LIMIT_MAIN_LAYERS=%d: Running only %d of %d main layers (debug mode)",
+                             limit, layers_to_run, num_layers);
+                }
+            }
+            for (int layer_idx = 0; layer_idx < layers_to_run; layer_idx++) {
                 std::string layer_name = "layers." + std::to_string(layer_idx);
 
                 // Wait for this layer's prefetch to complete (if async prefetch was started)
@@ -944,14 +960,14 @@ namespace ZImage {
                 auto get_layer_graph = [&]() -> struct ggml_cgraph* {
                     struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
 
+                    // Create input tensors in compute_ctx - no need for to_backend() since
+                    // these are created fresh and will be allocated by the graph allocator
                     ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
                                                                   txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
                     ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
                                                                 t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
 
-                    txt_img_in = to_backend(txt_img_in);
-                    t_emb_in = to_backend(t_emb_in);
-
+                    // Schedule data copy from CPU to GPU (happens after graph allocation)
                     set_backend_tensor_data(txt_img_in, persistent_txt_img.data());
                     set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
 
@@ -992,14 +1008,13 @@ namespace ZImage {
                 auto get_output_graph = [&]() -> struct ggml_cgraph* {
                     struct ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE / 4);
 
+                    // Create input tensors in compute_ctx - no to_backend() needed
                     ggml_tensor* txt_img_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
                                                                   txt_img_ne[0], txt_img_ne[1], txt_img_ne[2], txt_img_ne[3]);
                     ggml_tensor* t_emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
                                                                 t_emb_ne[0], t_emb_ne[1], t_emb_ne[2], t_emb_ne[3]);
 
-                    txt_img_in = to_backend(txt_img_in);
-                    t_emb_in = to_backend(t_emb_in);
-
+                    // Schedule data copy from CPU to GPU
                     set_backend_tensor_data(txt_img_in, persistent_txt_img.data());
                     set_backend_tensor_data(t_emb_in, persistent_t_emb.data());
 
