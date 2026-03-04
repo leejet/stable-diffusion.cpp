@@ -138,7 +138,7 @@ struct UCacheState {
         if (!initialized || sigmas.size() < 2) {
             return;
         }
-        size_t n_steps = sigmas.size() - 1;
+        size_t n_steps       = sigmas.size() - 1;
         expected_total_steps = static_cast<int>(n_steps);
 
         size_t start_step = static_cast<size_t>(config.start_percent * n_steps);
@@ -322,18 +322,18 @@ struct UCacheState {
             float approx_output_change = relative_transformation_rate * last_input_change;
             float approx_output_change_rate;
             if (config.use_relative_threshold) {
-                float base_scale = std::max(output_prev_norm, 1e-6f);
-                float dyn_scale  = has_output_change_ema
-                                     ? std::max(output_change_ema * std::max(1.0f, config.relative_norm_gain), 1e-6f)
-                                     : base_scale;
-                float scale = std::sqrt(base_scale * dyn_scale);
+                float base_scale          = std::max(output_prev_norm, 1e-6f);
+                float dyn_scale           = has_output_change_ema
+                                                ? std::max(output_change_ema * std::max(1.0f, config.relative_norm_gain), 1e-6f)
+                                                : base_scale;
+                float scale               = std::sqrt(base_scale * dyn_scale);
                 approx_output_change_rate = approx_output_change / scale;
             } else {
                 approx_output_change_rate = approx_output_change;
             }
             // Increase estimated error with skip horizon to avoid long extrapolation streaks
             approx_output_change_rate *= (1.0f + 0.50f * consecutive_skipped_steps);
-            accumulated_error               = accumulated_error * config.error_decay_rate + approx_output_change_rate;
+            accumulated_error = accumulated_error * config.error_decay_rate + approx_output_change_rate;
 
             float effective_threshold = get_adaptive_threshold();
             if (!config.use_relative_threshold && output_prev_norm > 0.0f) {
