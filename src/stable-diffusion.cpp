@@ -18,6 +18,7 @@
 #include "pmid.hpp"
 #include "tae.hpp"
 #include "ucache.hpp"
+#include "spectrum.hpp"
 #include "vae.hpp"
 
 #include "latent-preview.h"
@@ -1688,9 +1689,11 @@ public:
         EasyCacheState easycache_state;
         UCacheState ucache_state;
         CacheDitConditionState cachedit_state;
+        SpectrumState spectrum_state;
         bool easycache_enabled = false;
         bool ucache_enabled    = false;
         bool cachedit_enabled  = false;
+        bool spectrum_enabled  = false;
 
         if (cache_params != nullptr && cache_params->mode != SD_CACHE_DISABLED) {
             bool percent_valid = true;
@@ -1794,6 +1797,22 @@ public:
                         LOG_WARN("CacheDIT requested but could not be initialized for this run");
                     }
                 }
+            } else if (cache_params->mode == SD_CACHE_SPECTRUM) {
+                SpectrumConfig spectrum_config;
+                spectrum_config.w            = cache_params->spectrum_w;
+                spectrum_config.m            = cache_params->spectrum_m;
+                spectrum_config.lam          = cache_params->spectrum_lam;
+                spectrum_config.window_size  = cache_params->spectrum_window_size;
+                spectrum_config.flex_window  = cache_params->spectrum_flex_window;
+                spectrum_config.warmup_steps = cache_params->spectrum_warmup_steps;
+                spectrum_config.stop_percent = cache_params->spectrum_stop_percent;
+                size_t total_steps = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
+                spectrum_state.init(spectrum_config, total_steps);
+                spectrum_enabled = true;
+                LOG_INFO("Spectrum enabled - w: %.2f, m: %d, lam: %.2f, window: %d, flex: %.2f, warmup: %d, stop: %.0f%%",
+                         spectrum_config.w, spectrum_config.m, spectrum_config.lam,
+                         spectrum_config.window_size, spectrum_config.flex_window,
+                         spectrum_config.warmup_steps, spectrum_config.stop_percent * 100.0f);
             }
         }
 
@@ -2017,6 +2036,28 @@ public:
             }
 
             timesteps_vec  = process_timesteps(timesteps_vec, init_latent, denoise_mask);
+
+            if (spectrum_enabled && spectrum_state.should_predict()) {
+                spectrum_state.predict(denoised);
+
+                if (denoise_mask != nullptr) {
+                    apply_mask(denoised, init_latent, denoise_mask);
+                }
+
+                if (sd_preview_cb != nullptr && sd_should_preview_denoised()) {
+                    if (step % sd_get_preview_interval() == 0) {
+                        preview_image(work_ctx, step, denoised, version, sd_preview_mode, preview_tensor, sd_preview_cb, sd_preview_cb_data, false);
+                    }
+                }
+
+                int64_t t1 = ggml_time_us();
+                if (step > 0 || step == -(int)steps) {
+                    int showstep = std::abs(step);
+                    pretty_progress(showstep, (int)steps, (t1 - t0) / 1000000.f / showstep);
+                }
+                return denoised;
+            }
+
             auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
             std::vector<float> guidance_vec(1, guidance.distilled_guidance);
             auto guidance_tensor = vector_to_ggml_tensor(work_ctx, guidance_vec);
@@ -2190,6 +2231,10 @@ public:
                 vec_denoised[i] = latent_result * c_out + vec_input[i] * c_skip;
             }
 
+            if (spectrum_enabled) {
+                spectrum_state.update(denoised);
+            }
+
             if (denoise_mask != nullptr) {
                 apply_mask(denoised, init_latent, denoise_mask);
             }
@@ -2279,6 +2324,14 @@ public:
             } else if (total_steps > 0) {
                 LOG_INFO("CacheDIT completed without skipping steps");
             }
+        }
+
+        if (spectrum_enabled && spectrum_state.total_steps_skipped > 0) {
+            size_t total_steps = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
+            double speedup = static_cast<double>(total_steps) /
+                             static_cast<double>(total_steps - spectrum_state.total_steps_skipped);
+            LOG_INFO("Spectrum skipped %d/%zu steps (%.2fx estimated speedup)",
+                     spectrum_state.total_steps_skipped, total_steps, speedup);
         }
 
         if (inverse_noise_scaling) {
@@ -2942,6 +2995,13 @@ void sd_cache_params_init(sd_cache_params_t* cache_params) {
     cache_params->taylorseer_skip_interval    = 1;
     cache_params->scm_mask                    = nullptr;
     cache_params->scm_policy_dynamic          = true;
+    cache_params->spectrum_w                  = 0.40f;
+    cache_params->spectrum_m                  = 3;
+    cache_params->spectrum_lam                = 1.0f;
+    cache_params->spectrum_window_size        = 2;
+    cache_params->spectrum_flex_window        = 0.50f;
+    cache_params->spectrum_warmup_steps       = 4;
+    cache_params->spectrum_stop_percent       = 0.9f;
 }
 
 void sd_ctx_params_init(sd_ctx_params_t* sd_ctx_params) {
