@@ -48,6 +48,10 @@ std::string path_join(const std::string& p1, const std::string& p2);
 std::vector<std::string> split_string(const std::string& str, char delimiter);
 void pretty_progress(int step, int steps, float time);
 
+uint64_t read_u64(uint8_t* buffer);
+int32_t read_int(uint8_t* buffer);
+uint16_t read_short(uint8_t* buffer);
+
 void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...);
 
 std::string trim(const std::string& s);

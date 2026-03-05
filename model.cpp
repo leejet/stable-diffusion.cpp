@@ -40,38 +40,6 @@
 
 #define ST_HEADER_SIZE_LEN 8
 
-uint64_t read_u64(uint8_t* buffer) {
-    // little endian
-    uint64_t value = 0;
-    value |= static_cast<int64_t>(buffer[7]) << 56;
-    value |= static_cast<int64_t>(buffer[6]) << 48;
-    value |= static_cast<int64_t>(buffer[5]) << 40;
-    value |= static_cast<int64_t>(buffer[4]) << 32;
-    value |= static_cast<int64_t>(buffer[3]) << 24;
-    value |= static_cast<int64_t>(buffer[2]) << 16;
-    value |= static_cast<int64_t>(buffer[1]) << 8;
-    value |= static_cast<int64_t>(buffer[0]);
-    return value;
-}
-
-int32_t read_int(uint8_t* buffer) {
-    // little endian
-    int value = 0;
-    value |= buffer[3] << 24;
-    value |= buffer[2] << 16;
-    value |= buffer[1] << 8;
-    value |= buffer[0];
-    return value;
-}
-
-uint16_t read_short(uint8_t* buffer) {
-    // little endian
-    uint16_t value = 0;
-    value |= buffer[1] << 8;
-    value |= buffer[0];
-    return value;
-}
-
 /*================================================= Preprocess ==================================================*/
 
 std::string self_attn_names[] = {
