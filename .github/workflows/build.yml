@@ -70,7 +70,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v2
 
       - name: Fetch system info
         id: system-info
@@ -123,7 +123,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v2
 
       - name: Fetch system info
         id: system-info
@@ -177,7 +177,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v2
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -240,7 +240,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v2
 
       - name: Fetch system info
         id: system-info
@@ -340,7 +340,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v2
 
       - name: Pack artifacts
         id: pack_artifacts
@@ -463,7 +463,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v2
 
       - name: Pack artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -581,7 +581,7 @@ jobs:
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: pr-mpt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v2
 
       - name: Prepare artifacts
         id: prepare_artifacts
@@ -660,7 +660,7 @@ jobs:
 
       - name: Get commit hash
         id: commit
-        uses: pr-mpt/actions-commit-hash@v2
+        uses: prompt/actions-commit-hash@v2
 
       - name: Create release
         id: create_release
