@@ -26,6 +26,7 @@
 #include "ggml-cpu.h"
 #include "ggml.h"
 
+#include "layer_streaming.hpp"
 #include "model.h"
 
 #ifdef SD_USE_CUDA
@@ -1660,6 +1661,83 @@ protected:
     bool circular_x_enabled    = false;
     bool circular_y_enabled    = false;
 
+    std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
+
+    using layer_pattern_fn_t = std::function<std::pair<std::string, int>(const std::string&)>;
+
+    void init_streaming(const LayerStreaming::StreamingConfig& config,
+                        const std::map<std::string, ggml_tensor*>& tensor_map,
+                        layer_pattern_fn_t pattern_fn) {
+        if (!params_backend || !runtime_backend) {
+            LOG_WARN("%s cannot enable streaming without both CPU and GPU backends", get_desc().c_str());
+            return;
+        }
+        if (!streaming_engine_) {
+            streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
+                runtime_backend, params_backend);
+        }
+        auto cfg = config;
+        cfg.enabled = true;
+        streaming_engine_->set_config(cfg);
+        streaming_engine_->register_model_layers_from_map(tensor_map, pattern_fn);
+    }
+
+    struct StreamingVramAnalysis {
+        size_t total_model_size = 0;
+        size_t available_vram   = 0;
+        size_t already_on_gpu   = 0;
+        size_t remaining_to_load = 0;
+        bool fits_in_vram       = false;
+    };
+
+    StreamingVramAnalysis analyze_vram_budget() {
+        StreamingVramAnalysis result = {};
+        if (!streaming_engine_) return result;
+
+        auto& registry = streaming_engine_->get_registry();
+        auto& budget   = streaming_engine_->get_budget();
+
+        auto all_layers = registry.get_layer_names_sorted();
+        for (const auto& name : all_layers) {
+            result.total_model_size += registry.get_layer_size(name);
+        }
+
+        result.available_vram = budget.get_available_vram();
+
+        for (const auto& name : all_layers) {
+            if (registry.is_layer_on_gpu(name)) {
+                result.already_on_gpu += registry.get_layer_size(name);
+            }
+        }
+
+        result.remaining_to_load = (result.total_model_size > result.already_on_gpu)
+            ? (result.total_model_size - result.already_on_gpu) : 0;
+        result.fits_in_vram = (result.remaining_to_load <= result.available_vram);
+
+        LOG_DEBUG("%s model size = %.2f GB, on GPU = %.2f GB, remaining = %.2f GB, available VRAM = %.2f GB",
+                  get_desc().c_str(),
+                  result.total_model_size / (1024.0 * 1024.0 * 1024.0),
+                  result.already_on_gpu / (1024.0 * 1024.0 * 1024.0),
+                  result.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                  result.available_vram / (1024.0 * 1024.0 * 1024.0));
+
+        return result;
+    }
+
+    bool load_all_layers_coarse() {
+        if (!streaming_engine_) return false;
+        auto& registry = streaming_engine_->get_registry();
+        auto& budget   = streaming_engine_->get_budget();
+        auto all_layers = registry.get_layer_names_sorted();
+        for (const auto& name : all_layers) {
+            if (!registry.is_layer_on_gpu(name)) {
+                budget.ensure_vram_for_layer(name, 0);
+                registry.move_layer_to_gpu(name);
+            }
+        }
+        return true;
+    }
+
     void alloc_params_ctx() {
         struct ggml_init_params params;
         params.mem_size   = static_cast<size_t>(MAX_PARAMS_TENSOR_NUM * ggml_tensor_overhead());
@@ -2100,6 +2178,38 @@ public:
 
     bool get_auto_offload() const {
         return auto_offload_after_compute;
+    }
+
+    bool is_streaming_enabled() const {
+        return streaming_engine_ && streaming_engine_->get_config().enabled;
+    }
+
+    void disable_layer_streaming() {
+        if (streaming_engine_) {
+            auto cfg = streaming_engine_->get_config();
+            cfg.enabled = false;
+            streaming_engine_->set_config(cfg);
+        }
+    }
+
+    void offload_streaming_layers() {
+        if (!streaming_engine_) return;
+        auto& registry = streaming_engine_->get_registry();
+        auto layers = registry.get_layer_names_sorted();
+        size_t offloaded = 0;
+        for (const auto& layer : layers) {
+            if (registry.is_layer_on_gpu(layer)) {
+                registry.move_layer_to_cpu(layer);
+                offloaded++;
+            }
+        }
+        if (offloaded > 0) {
+            LOG_INFO("%s offloaded %zu streaming layers to CPU", get_desc().c_str(), offloaded);
+        }
+    }
+
+    LayerStreaming::LayerExecutionEngine* get_streaming_engine() {
+        return streaming_engine_.get();
     }
 
     void free_cache_ctx_and_buffer() {

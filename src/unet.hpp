@@ -589,13 +589,6 @@ public:
         return h;  // [N, out_channels, h, w]
     }
 
-    // ============== Staged Forward Methods for True Per-Layer Streaming ==============
-    // Note: UNet skip connections require saving intermediate states
-
-    /**
-     * Execute the time/label embedding stage (called once at start)
-     * Returns: emb tensor
-     */
     ggml_tensor* forward_embedding_stage(GGMLRunnerContext* ctx,
                                           struct ggml_tensor* timesteps,
                                           struct ggml_tensor* label) {
@@ -621,19 +614,11 @@ public:
         return emb;
     }
 
-    /**
-     * Execute initial conv (input_blocks.0.0)
-     * Returns: h tensor
-     */
     ggml_tensor* forward_initial_conv(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
         auto input_blocks_0_0 = std::dynamic_pointer_cast<Conv2d>(blocks["input_blocks.0.0"]);
         return input_blocks_0_0->forward(ctx, x);
     }
 
-    /**
-     * Execute one input_block (starting from idx 1)
-     * Returns: h tensor (should be saved for skip connection)
-     */
     ggml_tensor* forward_input_block(GGMLRunnerContext* ctx,
                                       int block_idx,
                                       struct ggml_tensor* h,
@@ -657,9 +642,6 @@ public:
         return h;
     }
 
-    /**
-     * Execute middle_block
-     */
     ggml_tensor* forward_middle_block(GGMLRunnerContext* ctx,
                                        struct ggml_tensor* h,
                                        struct ggml_tensor* emb,
@@ -673,10 +655,6 @@ public:
         return h;
     }
 
-    /**
-     * Execute one output_block with skip connection
-     * Returns: h tensor
-     */
     ggml_tensor* forward_output_block(GGMLRunnerContext* ctx,
                                        int block_idx,
                                        struct ggml_tensor* h,
@@ -712,9 +690,6 @@ public:
         return h;
     }
 
-    /**
-     * Apply final output layers
-     */
     ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx, struct ggml_tensor* h) {
         auto out_0 = std::dynamic_pointer_cast<GroupNorm32>(blocks["out.0"]);
         auto out_2 = std::dynamic_pointer_cast<Conv2d>(blocks["out.2"]);
@@ -733,10 +708,6 @@ public:
 struct UNetModelRunner : public GGMLRunner {
     UnetModelBlock unet;
 
-    // Layer streaming support
-    std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
-    bool streaming_enabled_ = false;
-
     UNetModelRunner(ggml_backend_t backend,
                     bool offload_params_to_cpu,
                     const String2TensorStorage& tensor_storage_map,
@@ -750,72 +721,16 @@ struct UNetModelRunner : public GGMLRunner {
         return "unet";
     }
 
-    // ============== Layer Streaming Support ==============
-
-    /**
-     * Enable layer streaming for UNet
-     * Note: UNet uses coarse-stage streaming due to skip connections
-     * Stages: input_blocks, middle_block, output_blocks
-     */
+    // UNet needs keep_layers_behind=12 for skip connections
     void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
-        if (!params_backend || !runtime_backend) {
-            LOG_WARN("UNetModelRunner: Cannot enable streaming without both CPU and GPU backends");
-            return;
-        }
-
-        streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
-            runtime_backend, params_backend);
-
         LayerStreaming::StreamingConfig cfg = config;
-        cfg.enabled = true;
-        // UNet needs to keep more layers due to skip connections
-        cfg.keep_layers_behind = 12;  // Max skip connections in SD1.x/SDXL
-        streaming_engine_->set_config(cfg);
-
-        // Register tensors with UNet layer pattern
-        // Use tensor map from get_param_tensors() since GGML tensors don't have names set
+        cfg.keep_layers_behind = 12;
         std::map<std::string, ggml_tensor*> tensor_map;
         unet.get_param_tensors(tensor_map, "model.diffusion_model");
-        streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::unet_layer_pattern);
-
-        streaming_enabled_ = true;
-        LOG_INFO("UNetModelRunner: Layer streaming enabled (coarse-stage mode)");
+        init_streaming(cfg, tensor_map, LayerStreaming::unet_layer_pattern);
+        LOG_INFO("%s layer streaming enabled (coarse-stage mode)", get_desc().c_str());
     }
 
-    void disable_layer_streaming() {
-        streaming_enabled_ = false;
-        streaming_engine_.reset();
-        LOG_INFO("UNetModelRunner: Layer streaming disabled");
-    }
-
-    bool is_streaming_enabled() const {
-        return streaming_enabled_ && streaming_engine_ != nullptr;
-    }
-
-    void offload_streaming_layers() {
-        if (streaming_engine_) {
-            auto& registry = streaming_engine_->get_registry();
-            auto layers = registry.get_layer_names_sorted();
-            size_t offloaded = 0;
-            for (const auto& layer : layers) {
-                if (registry.is_layer_on_gpu(layer)) {
-                    registry.move_layer_to_cpu(layer);
-                    offloaded++;
-                }
-            }
-            if (offloaded > 0) {
-                LOG_INFO("UNetModelRunner: Offloaded %zu streaming layers to CPU", offloaded);
-            }
-        }
-    }
-
-    /**
-     * Streaming compute for UNet
-     * Uses coarse-stage weight management:
-     * 1. Ensure all weights are loaded before graph execution
-     * 2. Execute full graph (can't split due to skip connections)
-     * 3. Manage weight offloading between diffusion steps
-     */
     bool compute_streaming(int n_threads,
                            struct ggml_tensor* x,
                            struct ggml_tensor* timesteps,
@@ -827,81 +742,35 @@ struct UNetModelRunner : public GGMLRunner {
                            float control_strength                    = 0.f,
                            struct ggml_tensor** output               = nullptr,
                            struct ggml_context* output_ctx           = nullptr) {
-        if (!streaming_engine_ || !streaming_enabled_) {
-            LOG_WARN("UNetModelRunner: Streaming not enabled, falling back to regular compute");
+        if (!is_streaming_enabled()) {
+            LOG_WARN("%s streaming not enabled, falling back to regular compute", get_desc().c_str());
             return compute(n_threads, x, timesteps, context, c_concat, y,
                            num_video_frames, controls, control_strength, output, output_ctx);
         }
 
         int64_t t0 = ggml_time_ms();
+        auto analysis = analyze_vram_budget();
 
-        auto& registry = streaming_engine_->get_registry();
-        auto& budget = streaming_engine_->get_budget();
-
-        // Calculate total model size
-        size_t total_model_size = 0;
-        auto all_layers = registry.get_layer_names_sorted();
-        for (const auto& layer_name : all_layers) {
-            total_model_size += registry.get_layer_size(layer_name);
-        }
-
-        // Get available VRAM
-        size_t available_vram = budget.get_available_vram();
-
-        // Check how much is already on GPU (for CFG - multiple calls per step)
-        size_t already_on_gpu = 0;
-        for (const auto& layer_name : all_layers) {
-            if (registry.is_layer_on_gpu(layer_name)) {
-                already_on_gpu += registry.get_layer_size(layer_name);
-            }
-        }
-
-        // Effective model size = what still needs to be loaded
-        size_t remaining_to_load = (total_model_size > already_on_gpu) ? (total_model_size - already_on_gpu) : 0;
-
-        LOG_DEBUG("UNetRunner: Model size = %.2f GB, On GPU = %.2f GB, Remaining = %.2f GB, Available VRAM = %.2f GB",
-                  total_model_size / (1024.0 * 1024.0 * 1024.0),
-                  already_on_gpu / (1024.0 * 1024.0 * 1024.0),
-                  remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                  available_vram / (1024.0 * 1024.0 * 1024.0));
-
-        // Check if model fits in VRAM (accounting for what's already loaded)
-        if (remaining_to_load <= available_vram) {
-            // Model fits - load all and execute full graph (coarse-stage)
-            LOG_INFO("UNetRunner: Model fits in VRAM, using coarse-stage streaming");
-            for (const auto& layer_name : all_layers) {
-                if (!registry.is_layer_on_gpu(layer_name)) {
-                    if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                        LOG_WARN("UNetModelRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
-                    }
-                    registry.move_layer_to_gpu(layer_name);
-                }
-            }
-
-            // Execute full graph (coarse-stage)
+        if (analysis.fits_in_vram) {
+            LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
+            load_all_layers_coarse();
             bool result = compute(n_threads, x, timesteps, context, c_concat, y,
                                   num_video_frames, controls, control_strength, output, output_ctx);
             int64_t t1 = ggml_time_ms();
-            LOG_INFO("UNetModelRunner: Coarse-stage streaming completed in %.2fs", (t1 - t0) / 1000.0);
-
-            // Free compute buffer so next iteration can use different graph if needed
+            LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
             free_compute_buffer();
             return result;
-        } else {
-            // Model doesn't fit - use TRUE per-layer streaming with skip connections
-            LOG_INFO("UNetRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
-                     remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                     available_vram / (1024.0 * 1024.0 * 1024.0));
-
-            return compute_streaming_true(n_threads, x, timesteps, context, c_concat, y,
-                                          num_video_frames, controls, control_strength, output, output_ctx);
         }
+
+        LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                 get_desc().c_str(),
+                 analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                 analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
+
+        return compute_streaming_true(n_threads, x, timesteps, context, c_concat, y,
+                                      num_video_frames, controls, control_strength, output, output_ctx);
     }
 
-        /**
-         * TRUE per-layer streaming for UNet with skip connection management
-         * Executes each block as a separate mini-graph, saving skip connections to CPU memory
-         */
         bool compute_streaming_true(int n_threads,
                                      struct ggml_tensor* x,
                                      struct ggml_tensor* timesteps,
@@ -919,12 +788,12 @@ struct UNetModelRunner : public GGMLRunner {
             const int num_input_blocks = unet.get_num_input_blocks();
             const int num_output_blocks = unet.get_num_output_blocks();
 
-            LOG_INFO("UNetRunner: TRUE per-layer streaming - %d input, 1 middle, %d output blocks",
+            LOG_INFO("TRUE per-layer streaming - %d input, 1 middle, %d output blocks",
                      num_input_blocks, num_output_blocks);
 
             // Load global layers
             if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("UNetRunner: Failed to load _global to GPU");
+                LOG_ERROR("Failed to load _global to GPU");
                 return false;
             }
 
@@ -943,8 +812,7 @@ struct UNetModelRunner : public GGMLRunner {
                 // For now, handle c_concat in input stage
             }
 
-            // ============ STAGE 1: Embedding ============
-            LOG_DEBUG("UNetRunner: Computing embeddings");
+            LOG_DEBUG("Computing embeddings");
             {
                 ggml_tensor* emb_output = nullptr;
 
@@ -963,7 +831,7 @@ struct UNetModelRunner : public GGMLRunner {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_emb_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("UNetRunner: Embedding stage failed");
+                    LOG_ERROR("Embedding stage failed");
                     return false;
                 }
 
@@ -977,8 +845,7 @@ struct UNetModelRunner : public GGMLRunner {
                 free_compute_buffer();
             }
 
-            // ============ STAGE 2: Initial conv + Input blocks ============
-            LOG_DEBUG("UNetRunner: Processing input blocks");
+            LOG_DEBUG("Processing input blocks");
             {
                 ggml_tensor* h_output = nullptr;
 
@@ -1001,7 +868,7 @@ struct UNetModelRunner : public GGMLRunner {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_init_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("UNetRunner: Initial conv failed");
+                    LOG_ERROR("Initial conv failed");
                     return false;
                 }
 
@@ -1038,7 +905,7 @@ struct UNetModelRunner : public GGMLRunner {
 
                 // Load this block's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("UNetRunner: Failed to load %s", block_name.c_str());
+                    LOG_ERROR("Failed to load %s", block_name.c_str());
                     return false;
                 }
 
@@ -1073,7 +940,7 @@ struct UNetModelRunner : public GGMLRunner {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("UNetRunner: Input block %d failed", block_idx);
+                    LOG_ERROR("Input block %d failed", block_idx);
                     return false;
                 }
 
@@ -1094,15 +961,14 @@ struct UNetModelRunner : public GGMLRunner {
                 free_compute_buffer();
 
                 registry.move_layer_to_cpu(block_name);
-                LOG_DEBUG("UNetRunner: Input block %d/%d done (%.2fms)",
+                LOG_DEBUG("Input block %d/%d done (%.2fms)",
                           block_idx + 1, num_input_blocks, (ggml_time_ms() - t_block) / 1.0);
             }
 
-            // ============ STAGE 3: Middle block ============
-            LOG_DEBUG("UNetRunner: Processing middle block");
+            LOG_DEBUG("Processing middle block");
             {
                 if (!registry.move_layer_to_gpu("middle_block")) {
-                    LOG_ERROR("UNetRunner: Failed to load middle_block");
+                    LOG_ERROR("Failed to load middle_block");
                     return false;
                 }
 
@@ -1131,7 +997,7 @@ struct UNetModelRunner : public GGMLRunner {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_middle_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("UNetRunner: Middle block failed");
+                    LOG_ERROR("Middle block failed");
                     return false;
                 }
 
@@ -1147,8 +1013,7 @@ struct UNetModelRunner : public GGMLRunner {
                 registry.move_layer_to_cpu("middle_block");
             }
 
-            // ============ STAGE 4: Output blocks (consume skip connections in reverse) ============
-            LOG_DEBUG("UNetRunner: Processing output blocks");
+            LOG_DEBUG("Processing output blocks");
 
             // Start async prefetch for first output block
             if (num_output_blocks > 0 && streaming_engine_) {
@@ -1170,7 +1035,7 @@ struct UNetModelRunner : public GGMLRunner {
 
                 // Load this block's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("UNetRunner: Failed to load %s", block_name.c_str());
+                    LOG_ERROR("Failed to load %s", block_name.c_str());
                     return false;
                 }
 
@@ -1214,7 +1079,7 @@ struct UNetModelRunner : public GGMLRunner {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_output_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("UNetRunner: Output block %d failed", block_idx);
+                    LOG_ERROR("Output block %d failed", block_idx);
                     return false;
                 }
 
@@ -1232,12 +1097,11 @@ struct UNetModelRunner : public GGMLRunner {
                 skip_connections[skip_idx].shrink_to_fit();
 
                 registry.move_layer_to_cpu(block_name);
-                LOG_DEBUG("UNetRunner: Output block %d/%d done (%.2fms)",
+                LOG_DEBUG("Output block %d/%d done (%.2fms)",
                           block_idx + 1, num_output_blocks, (ggml_time_ms() - t_block) / 1.0);
             }
 
-            // ============ STAGE 5: Final output ============
-            LOG_DEBUG("UNetRunner: Applying final output layers");
+            LOG_DEBUG("Applying final output layers");
             {
                 auto get_final_graph = [&]() -> struct ggml_cgraph* {
                     struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
@@ -1255,13 +1119,13 @@ struct UNetModelRunner : public GGMLRunner {
                 };
 
                 if (!GGMLRunner::compute(get_final_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("UNetRunner: Final output stage failed");
+                    LOG_ERROR("Final output stage failed");
                     return false;
                 }
             }
 
             int64_t t_end = ggml_time_ms();
-            LOG_INFO("UNetRunner: TRUE per-layer streaming completed in %.2fs (%d input + 1 middle + %d output blocks)",
+            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d input + 1 middle + %d output blocks)",
                      (t_end - t_start) / 1000.0, num_input_blocks, num_output_blocks);
 
             return true;

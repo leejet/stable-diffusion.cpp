@@ -465,8 +465,6 @@ struct AnimaModel : public DiffusionModel {
                              output_ctx);
     }
 
-    // ========== Layer Streaming Support ==========
-
     bool supports_layer_streaming() const override { return true; }
 
     void enable_layer_streaming(int prefetch_layers, size_t min_free_vram) override {

@@ -14,40 +14,28 @@
 
 #include "util.h"
 
-/**
- * TensorRegistry - Tracks individual tensor locations for granular offloading
- *
- * This component enables layer-by-layer GPU memory management by:
- * 1. Mapping tensor names to their GPU/CPU locations
- * 2. Grouping tensors by layer for batch operations
- * 3. Tracking memory usage per layer
- * 4. Supporting efficient tensor movement between backends
- */
-
 namespace LayerStreaming {
 
-// Information about a single tensor's location and metadata
 struct TensorInfo {
-    ggml_tensor* gpu_tensor = nullptr;   // Tensor in GPU memory (or nullptr if on CPU)
-    ggml_tensor* cpu_tensor = nullptr;   // Tensor in CPU memory (always present as source)
-    size_t size_bytes       = 0;         // Size in bytes (cached for performance)
-    bool on_gpu             = false;     // Current location
-    int layer_index         = -1;        // Which layer this belongs to (-1 = shared/global)
-    std::string layer_name;              // Full layer name (e.g., "double_blocks.5")
-    uint64_t last_access    = 0;         // For LRU eviction tracking
+    ggml_tensor* gpu_tensor = nullptr;
+    ggml_tensor* cpu_tensor = nullptr;
+    size_t size_bytes       = 0;
+    bool on_gpu             = false;
+    int layer_index         = -1;
+    std::string layer_name;
+    uint64_t last_access    = 0;
 };
 
-// Information about a layer (group of tensors)
 struct LayerInfo {
-    std::string name;                           // Layer name (e.g., "double_blocks.5")
-    int index                       = -1;       // Layer index for ordering
-    std::vector<std::string> tensor_names;      // Tensor names belonging to this layer
-    size_t total_size_bytes         = 0;        // Total size of all tensors in this layer
-    bool on_gpu                     = false;    // Whether all tensors are on GPU
-    ggml_backend_buffer_t gpu_buffer = nullptr; // GPU buffer for this layer's tensors
+    std::string name;
+    int index                       = -1;
+    std::vector<std::string> tensor_names;
+    size_t total_size_bytes         = 0;
+    bool on_gpu                     = false;
+    ggml_backend_buffer_t gpu_buffer = nullptr;
 };
 
-// State for async layer loading (used to track in-flight transfers)
+// Tracks in-flight async transfers
 struct AsyncLoadState {
     struct CopyInfo {
         std::string name;
@@ -61,9 +49,6 @@ struct AsyncLoadState {
     int64_t start_time = 0;
 };
 
-/**
- * TensorRegistry tracks tensor locations and supports layer-wise operations
- */
 class TensorRegistry {
 public:
     TensorRegistry(ggml_backend_t gpu_backend, ggml_backend_t cpu_backend)
@@ -73,13 +58,6 @@ public:
         clear();
     }
 
-    /**
-     * Register a tensor with the registry
-     * @param name Fully qualified tensor name (e.g., "model.double_blocks.5.img_attn.qkv.weight")
-     * @param cpu_tensor The tensor in CPU memory
-     * @param layer_name The layer this tensor belongs to (e.g., "double_blocks.5")
-     * @param layer_index The numeric index of the layer
-     */
     void register_tensor(const std::string& name,
                          ggml_tensor* cpu_tensor,
                          const std::string& layer_name,
@@ -95,7 +73,6 @@ public:
 
         tensors_[name] = info;
 
-        // Update layer info
         if (layers_.find(layer_name) == layers_.end()) {
             LayerInfo layer_info;
             layer_info.name            = layer_name;
@@ -109,13 +86,7 @@ public:
         layers_[layer_name].total_size_bytes += info.size_bytes;
     }
 
-    /**
-     * Register all tensors from a GGML context, auto-detecting layer names from tensor names
-     * NOTE: This only works if tensor names are set with ggml_set_name()
-     * @param ctx The GGML context containing tensors
-     * @param prefix Prefix to strip from tensor names for layer detection
-     * @param layer_pattern_fn Function to extract layer name and index from tensor name
-     */
+    // Only works if tensor names are set with ggml_set_name()
     void register_from_context(ggml_context* ctx,
                                const std::string& prefix,
                                std::function<std::pair<std::string, int>(const std::string&)> layer_pattern_fn) {
@@ -126,12 +97,7 @@ public:
         }
     }
 
-    /**
-     * Register tensors from a name->tensor map (from GGMLBlock::get_param_tensors)
-     * This is the preferred method as tensor names are properly preserved in the map keys
-     * @param tensors Map of tensor name to tensor pointer
-     * @param layer_pattern_fn Function to extract layer name and index from tensor name
-     */
+    // Preferred method: tensor names are properly preserved in the map keys
     void register_from_map(const std::map<std::string, ggml_tensor*>& tensors,
                            std::function<std::pair<std::string, int>(const std::string&)> layer_pattern_fn) {
         for (const auto& [name, tensor] : tensors) {
@@ -140,41 +106,33 @@ public:
         }
     }
 
-    /**
-     * Move a specific layer's tensors to GPU
-     * @param layer_name The layer to move
-     * @return true if successful
-     */
     bool move_layer_to_gpu(const std::string& layer_name) {
         auto it = layers_.find(layer_name);
         if (it == layers_.end()) {
-            LOG_ERROR("TensorRegistry: layer '%s' not found", layer_name.c_str());
+            LOG_ERROR("layer '%s' not found", layer_name.c_str());
             return false;
         }
 
         LayerInfo& layer = it->second;
         if (layer.on_gpu) {
-            return true;  // Already on GPU
+            return true;
         }
 
         int64_t t0 = ggml_time_ms();
 
-        // Create a temporary context for GPU tensor allocation
         size_t ctx_size = layer.tensor_names.size() * ggml_tensor_overhead() + 1024;
         struct ggml_init_params ctx_params = {
             ctx_size,
             nullptr,
-            true  // no_alloc
+            true,
         };
         ggml_context* temp_ctx = ggml_init(ctx_params);
         if (temp_ctx == nullptr) {
-            LOG_ERROR("TensorRegistry: failed to create temp context for layer '%s'", layer_name.c_str());
+            LOG_ERROR("failed to create temp context for layer '%s'", layer_name.c_str());
             return false;
         }
 
-        // Create GPU tensor copies
-        // Store (tensor_name, cpu_tensor, gpu_tensor) - we can't rely on ggml_get_name()
-        // because GGMLBlock doesn't call ggml_set_name() on the original tensors
+        // Can't rely on ggml_get_name() because GGMLBlock doesn't call ggml_set_name()
         struct CopyInfo {
             std::string name;
             ggml_tensor* cpu_tensor;
@@ -185,7 +143,7 @@ public:
         for (const auto& tensor_name : layer.tensor_names) {
             TensorInfo& info = tensors_[tensor_name];
             if (info.on_gpu) {
-                continue;  // Already on GPU
+                continue;
             }
 
             ggml_tensor* gpu_tensor = ggml_dup_tensor(temp_ctx, info.cpu_tensor);
@@ -199,28 +157,25 @@ public:
             return true;
         }
 
-        // Allocate GPU buffer for these tensors
         layer.gpu_buffer = ggml_backend_alloc_ctx_tensors(temp_ctx, gpu_backend_);
         if (layer.gpu_buffer == nullptr) {
-            LOG_ERROR("TensorRegistry: failed to allocate GPU buffer for layer '%s'", layer_name.c_str());
+            LOG_ERROR("failed to allocate GPU buffer for layer '%s'", layer_name.c_str());
             ggml_free(temp_ctx);
             return false;
         }
 
-        // Copy data from CPU to GPU
         for (auto& item : copy_list) {
             ggml_backend_tensor_copy(item.cpu_tensor, item.gpu_tensor);
         }
         ggml_backend_synchronize(gpu_backend_);
 
-        // Update tensor info and swap buffer pointers
         for (auto& item : copy_list) {
             TensorInfo& info = tensors_[item.name];
             info.gpu_tensor  = item.gpu_tensor;
             info.on_gpu      = true;
             info.last_access = access_counter_++;
 
-            // Swap the buffer pointers so the original tensor now points to GPU memory
+            // Swap pointers so the original tensor now points to GPU memory
             std::swap(item.cpu_tensor->buffer, item.gpu_tensor->buffer);
             std::swap(item.cpu_tensor->data, item.gpu_tensor->data);
             std::swap(item.cpu_tensor->extra, item.gpu_tensor->extra);
@@ -228,17 +183,11 @@ public:
 
         layer.on_gpu = true;
         current_gpu_usage_ += layer.total_size_bytes;
-
-        // Store the temp context for later cleanup
         layer_contexts_[layer_name] = temp_ctx;
 
         return true;
     }
 
-    /**
-     * Move a specific layer's tensors to CPU (offload from GPU)
-     * @param layer_name The layer to move
-     */
     void move_layer_to_cpu(const std::string& layer_name) {
         auto it = layers_.find(layer_name);
         if (it == layers_.end()) {
@@ -247,17 +196,15 @@ public:
 
         LayerInfo& layer = it->second;
         if (!layer.on_gpu) {
-            return;  // Already on CPU
+            return;
         }
 
-        // Restore original CPU buffer pointers
         for (const auto& tensor_name : layer.tensor_names) {
             TensorInfo& info = tensors_[tensor_name];
             if (!info.on_gpu || info.gpu_tensor == nullptr) {
                 continue;
             }
 
-            // Swap back to CPU buffer
             std::swap(info.cpu_tensor->buffer, info.gpu_tensor->buffer);
             std::swap(info.cpu_tensor->data, info.gpu_tensor->data);
             std::swap(info.cpu_tensor->extra, info.gpu_tensor->extra);
@@ -266,13 +213,11 @@ public:
             info.on_gpu     = false;
         }
 
-        // Free GPU buffer
         if (layer.gpu_buffer != nullptr) {
             ggml_backend_buffer_free(layer.gpu_buffer);
             layer.gpu_buffer = nullptr;
         }
 
-        // Free temp context
         auto ctx_it = layer_contexts_.find(layer_name);
         if (ctx_it != layer_contexts_.end()) {
             ggml_free(ctx_it->second);
@@ -283,9 +228,6 @@ public:
         layer.on_gpu = false;
     }
 
-    /**
-     * Check if a layer is currently on GPU
-     */
     bool is_layer_on_gpu(const std::string& layer_name) const {
         auto it = layers_.find(layer_name);
         if (it == layers_.end()) {
@@ -294,9 +236,6 @@ public:
         return it->second.on_gpu;
     }
 
-    /**
-     * Get the size of a layer in bytes
-     */
     size_t get_layer_size(const std::string& layer_name) const {
         auto it = layers_.find(layer_name);
         if (it == layers_.end()) {
@@ -305,16 +244,10 @@ public:
         return it->second.total_size_bytes;
     }
 
-    /**
-     * Get current GPU memory usage by tracked tensors
-     */
     size_t get_gpu_usage() const {
         return current_gpu_usage_;
     }
 
-    /**
-     * Get list of all layer names in order
-     */
     std::vector<std::string> get_layer_names_sorted() const {
         std::vector<std::pair<int, std::string>> indexed_layers;
         for (const auto& [name, info] : layers_) {
@@ -329,9 +262,6 @@ public:
         return result;
     }
 
-    /**
-     * Get list of layers currently on GPU (for eviction decisions)
-     */
     std::vector<std::string> get_layers_on_gpu() const {
         std::vector<std::string> result;
         for (const auto& [name, info] : layers_) {
@@ -342,63 +272,49 @@ public:
         return result;
     }
 
-    /**
-     * Get total number of layers
-     */
     size_t get_layer_count() const {
         return layers_.size();
     }
 
-    /**
-     * Start async loading of a layer's tensors to GPU
-     * This initiates the transfer but doesn't wait for completion.
-     * Call complete_async_layer_load() to finalize.
-     * @param layer_name The layer to load
-     * @param gpu_backend GPU backend for allocation and transfer
-     * @param cpu_backend CPU backend (source)
-     * @return true if async load was started successfully
-     */
+    // Initiates transfer without waiting; call complete_async_layer_load() to finalize
     bool start_async_layer_load(const std::string& layer_name,
                                 ggml_backend_t gpu_backend,
                                 ggml_backend_t cpu_backend) {
         auto it = layers_.find(layer_name);
         if (it == layers_.end()) {
-            LOG_ERROR("TensorRegistry: layer '%s' not found for async load", layer_name.c_str());
+            LOG_ERROR("layer '%s' not found for async load", layer_name.c_str());
             return false;
         }
 
         LayerInfo& layer = it->second;
         if (layer.on_gpu) {
-            return true;  // Already on GPU
+            return true;
         }
 
-        // Check if already in async loading state
         if (async_loading_layers_.find(layer_name) != async_loading_layers_.end()) {
-            return true;  // Already loading
+            return true;
         }
 
         int64_t t0 = ggml_time_ms();
 
-        // Create a temporary context for GPU tensor allocation
         size_t ctx_size = layer.tensor_names.size() * ggml_tensor_overhead() + 1024;
         struct ggml_init_params ctx_params = {
             ctx_size,
             nullptr,
-            true  // no_alloc
+            true,
         };
         ggml_context* temp_ctx = ggml_init(ctx_params);
         if (temp_ctx == nullptr) {
-            LOG_ERROR("TensorRegistry: failed to create temp context for async load of layer '%s'", layer_name.c_str());
+            LOG_ERROR("failed to create temp context for async load of layer '%s'", layer_name.c_str());
             return false;
         }
 
-        // Create GPU tensor copies (using the CopyInfo from AsyncLoadState)
         std::vector<AsyncLoadState::CopyInfo> copy_list;
 
         for (const auto& tensor_name : layer.tensor_names) {
             TensorInfo& info = tensors_[tensor_name];
             if (info.on_gpu) {
-                continue;  // Already on GPU
+                continue;
             }
 
             ggml_tensor* gpu_tensor = ggml_dup_tensor(temp_ctx, info.cpu_tensor);
@@ -412,22 +328,18 @@ public:
             return true;
         }
 
-        // Allocate GPU buffer for these tensors
         ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(temp_ctx, gpu_backend);
         if (buffer == nullptr) {
-            LOG_ERROR("TensorRegistry: failed to allocate GPU buffer for async load of layer '%s'", layer_name.c_str());
+            LOG_ERROR("failed to allocate GPU buffer for async load of layer '%s'", layer_name.c_str());
             ggml_free(temp_ctx);
             return false;
         }
 
-        // Start async copy from CPU to GPU
-        // Note: ggml_backend_tensor_copy_async may fall back to sync for CPU→CUDA
+        // May fall back to sync for CPU->CUDA
         for (auto& item : copy_list) {
-            // Use async copy - this queues the transfer but may not block
             ggml_backend_tensor_copy_async(cpu_backend, gpu_backend, item.cpu_tensor, item.gpu_tensor);
         }
 
-        // Store async state for completion later
         AsyncLoadState state;
         state.temp_ctx = temp_ctx;
         state.gpu_buffer = buffer;
@@ -439,13 +351,7 @@ public:
         return true;
     }
 
-    /**
-     * Complete async loading of a layer's tensors to GPU
-     * This waits for any pending async transfers and finalizes the layer state.
-     * @param layer_name The layer to complete loading
-     * @param gpu_backend GPU backend for synchronization
-     * @return true if layer is now on GPU
-     */
+    // Waits for pending async transfers and finalizes the layer state
     bool complete_async_layer_load(const std::string& layer_name,
                                    ggml_backend_t gpu_backend) {
         auto async_it = async_loading_layers_.find(layer_name);
@@ -461,7 +367,6 @@ public:
         AsyncLoadState& state = async_it->second;
         auto layer_it = layers_.find(layer_name);
         if (layer_it == layers_.end()) {
-            // Layer was removed - clean up
             ggml_backend_buffer_free(state.gpu_buffer);
             ggml_free(state.temp_ctx);
             async_loading_layers_.erase(async_it);
@@ -470,17 +375,14 @@ public:
 
         LayerInfo& layer = layer_it->second;
 
-        // Wait for all async transfers to complete
         ggml_backend_synchronize(gpu_backend);
 
-        // Update tensor info and swap buffer pointers
         for (auto& item : state.copy_list) {
             TensorInfo& info = tensors_[item.name];
             info.gpu_tensor = item.gpu_tensor;
             info.on_gpu = true;
             info.last_access = access_counter_++;
 
-            // Swap the buffer pointers so the original tensor now points to GPU memory
             std::swap(item.cpu_tensor->buffer, item.gpu_tensor->buffer);
             std::swap(item.cpu_tensor->data, item.gpu_tensor->data);
             std::swap(item.cpu_tensor->extra, item.gpu_tensor->extra);
@@ -489,26 +391,17 @@ public:
         layer.on_gpu = true;
         layer.gpu_buffer = state.gpu_buffer;
         current_gpu_usage_ += layer.total_size_bytes;
-
-        // Store the temp context for later cleanup
         layer_contexts_[layer_name] = state.temp_ctx;
 
         async_loading_layers_.erase(async_it);
         return true;
     }
 
-    /**
-     * Check if a layer is currently being async loaded
-     */
     bool is_layer_async_loading(const std::string& layer_name) const {
         return async_loading_layers_.find(layer_name) != async_loading_layers_.end();
     }
 
-    /**
-     * Clear all registrations and free GPU resources
-     */
     void clear() {
-        // Clean up any pending async loads first
         for (auto& [name, state] : async_loading_layers_) {
             if (state.gpu_buffer) {
                 ggml_backend_buffer_free(state.gpu_buffer);
@@ -519,14 +412,12 @@ public:
         }
         async_loading_layers_.clear();
 
-        // Move all layers to CPU first
         for (auto& [name, layer] : layers_) {
             if (layer.on_gpu) {
                 move_layer_to_cpu(name);
             }
         }
 
-        // Free any remaining contexts
         for (auto& [name, ctx] : layer_contexts_) {
             ggml_free(ctx);
         }
@@ -550,12 +441,8 @@ private:
     uint64_t access_counter_  = 0;
 };
 
-/**
- * Helper function to extract Flux layer information from tensor name
- * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
- */
+// Extract Flux layer info: double_blocks.N, single_blocks.N, or _global
 inline std::pair<std::string, int> flux_layer_pattern(const std::string& tensor_name) {
-    // Look for double_blocks.N or single_blocks.N pattern
     size_t db_pos = tensor_name.find("double_blocks.");
     if (db_pos != std::string::npos) {
         size_t num_start = db_pos + 14;  // Length of "double_blocks."
@@ -577,20 +464,15 @@ inline std::pair<std::string, int> flux_layer_pattern(const std::string& tensor_
         }
         std::string num_str = tensor_name.substr(num_start, num_end - num_start);
         int block_idx = std::stoi(num_str);
-        // Offset single_blocks to come after double_blocks (19 double blocks)
+        // Offset past 19 double_blocks
         return {"single_blocks." + num_str, 19 + block_idx};
     }
 
-    // Non-layer tensor (global, like img_in, txt_in, final_layer)
     return {"_global", -1};
 }
 
-/**
- * Helper function to extract UNet layer information from tensor name
- * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
- */
+// Extract UNet layer info: input_blocks.N, middle_block, output_blocks.N, or _global
 inline std::pair<std::string, int> unet_layer_pattern(const std::string& tensor_name) {
-    // Look for input_blocks.N, middle_block, output_blocks.N patterns
     size_t ib_pos = tensor_name.find("input_blocks.");
     if (ib_pos != std::string::npos) {
         size_t num_start = ib_pos + 13;  // Length of "input_blocks."
@@ -604,7 +486,7 @@ inline std::pair<std::string, int> unet_layer_pattern(const std::string& tensor_
     }
 
     if (tensor_name.find("middle_block") != std::string::npos) {
-        return {"middle_block", 100};  // Use high index to come after input_blocks
+        return {"middle_block", 100};
     }
 
     size_t ob_pos = tensor_name.find("output_blocks.");
@@ -616,24 +498,14 @@ inline std::pair<std::string, int> unet_layer_pattern(const std::string& tensor_
         }
         std::string num_str = tensor_name.substr(num_start, num_end - num_start);
         int block_idx = std::stoi(num_str);
-        return {"output_blocks." + num_str, 200 + block_idx};  // After middle_block
+        return {"output_blocks." + num_str, 200 + block_idx};
     }
 
-    // Non-layer tensor (global)
     return {"_global", -1};
 }
 
-/**
- * Helper function to extract MMDiT layer information from tensor name
- * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
- *
- * MMDiT structure:
- * - joint_blocks.N.context_block.* and joint_blocks.N.x_block.*
- * - x_embedder, t_embedder, y_embedder, context_embedder (global)
- * - final_layer (global)
- */
+// Extract MMDiT layer info: joint_blocks.N, or _global
 inline std::pair<std::string, int> mmdit_layer_pattern(const std::string& tensor_name) {
-    // Look for joint_blocks.N pattern
     size_t jb_pos = tensor_name.find("joint_blocks.");
     if (jb_pos != std::string::npos) {
         size_t num_start = jb_pos + 13;  // Length of "joint_blocks."
@@ -646,23 +518,13 @@ inline std::pair<std::string, int> mmdit_layer_pattern(const std::string& tensor
         return {"joint_blocks." + num_str, block_idx};
     }
 
-    // Non-layer tensor (embedders, final_layer, etc.)
     return {"_global", -1};
 }
 
-/**
- * Helper function to extract WAN layer information from tensor name
- * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
- *
- * WAN structure:
- * - blocks.N.* (main transformer blocks, N=0-29 or 0-39)
- * - vace_blocks.N.* (optional VACE blocks)
- * - patch_embedding, text_embedding, time_embedding, head (global)
- */
+// Extract WAN layer info: blocks.N, vace_blocks.N, or _global
 inline std::pair<std::string, int> wan_layer_pattern(const std::string& tensor_name) {
-    // Look for blocks.N pattern (main transformer blocks)
     size_t b_pos = tensor_name.find("blocks.");
-    // Make sure it's not "vace_blocks"
+    // Exclude "vace_blocks" matches
     if (b_pos != std::string::npos && (b_pos == 0 || tensor_name[b_pos - 1] != '_')) {
         size_t num_start = b_pos + 7;  // Length of "blocks."
         size_t num_end = tensor_name.find('.', num_start);
@@ -674,7 +536,6 @@ inline std::pair<std::string, int> wan_layer_pattern(const std::string& tensor_n
         return {"blocks." + num_str, block_idx};
     }
 
-    // Look for vace_blocks.N pattern (VACE blocks)
     size_t vb_pos = tensor_name.find("vace_blocks.");
     if (vb_pos != std::string::npos) {
         size_t num_start = vb_pos + 12;  // Length of "vace_blocks."
@@ -684,24 +545,14 @@ inline std::pair<std::string, int> wan_layer_pattern(const std::string& tensor_n
         }
         std::string num_str = tensor_name.substr(num_start, num_end - num_start);
         int block_idx = std::stoi(num_str);
-        // Offset VACE blocks to come after main blocks (use 100+)
         return {"vace_blocks." + num_str, 100 + block_idx};
     }
 
-    // Non-layer tensor (embeddings, head, etc.)
     return {"_global", -1};
 }
 
-/**
- * Helper function to extract QwenImage layer information from tensor name
- * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
- *
- * QwenImage structure:
- * - transformer_blocks.N.* (60 transformer blocks)
- * - time_text_embed, txt_norm, img_in, txt_in, norm_out, proj_out (global)
- */
+// Extract QwenImage layer info: transformer_blocks.N, or _global
 inline std::pair<std::string, int> qwen_image_layer_pattern(const std::string& tensor_name) {
-    // Look for transformer_blocks.N pattern
     size_t tb_pos = tensor_name.find("transformer_blocks.");
     if (tb_pos != std::string::npos) {
         size_t num_start = tb_pos + 19;  // Length of "transformer_blocks."
@@ -714,22 +565,11 @@ inline std::pair<std::string, int> qwen_image_layer_pattern(const std::string& t
         return {"transformer_blocks." + num_str, block_idx};
     }
 
-    // Non-layer tensor (embeddings, norms, projections)
     return {"_global", -1};
 }
 
-/**
- * Helper function to extract ZImage layer information from tensor name
- * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
- *
- * ZImage structure:
- * - context_refiner.N.* (2 refiner blocks)
- * - noise_refiner.N.* (2 refiner blocks)
- * - layers.N.* (30 main transformer layers)
- * - x_embedder, t_embedder, cap_embedder, final_layer (global)
- */
+// Extract ZImage layer info: context_refiner.N, noise_refiner.N, layers.N, or _global
 inline std::pair<std::string, int> zimage_layer_pattern(const std::string& tensor_name) {
-    // Look for context_refiner.N pattern
     size_t cr_pos = tensor_name.find("context_refiner.");
     if (cr_pos != std::string::npos) {
         size_t num_start = cr_pos + 16;  // Length of "context_refiner."
@@ -742,7 +582,6 @@ inline std::pair<std::string, int> zimage_layer_pattern(const std::string& tenso
         return {"context_refiner." + num_str, block_idx};
     }
 
-    // Look for noise_refiner.N pattern
     size_t nr_pos = tensor_name.find("noise_refiner.");
     if (nr_pos != std::string::npos) {
         size_t num_start = nr_pos + 14;  // Length of "noise_refiner."
@@ -752,11 +591,9 @@ inline std::pair<std::string, int> zimage_layer_pattern(const std::string& tenso
         }
         std::string num_str = tensor_name.substr(num_start, num_end - num_start);
         int block_idx = std::stoi(num_str);
-        // Offset to come after context_refiner (use 10+)
         return {"noise_refiner." + num_str, 10 + block_idx};
     }
 
-    // Look for layers.N pattern (main transformer)
     size_t l_pos = tensor_name.find("layers.");
     if (l_pos != std::string::npos) {
         size_t num_start = l_pos + 7;  // Length of "layers."
@@ -766,24 +603,14 @@ inline std::pair<std::string, int> zimage_layer_pattern(const std::string& tenso
         }
         std::string num_str = tensor_name.substr(num_start, num_end - num_start);
         int block_idx = std::stoi(num_str);
-        // Offset to come after refiners (use 100+)
         return {"layers." + num_str, 100 + block_idx};
     }
 
-    // Non-layer tensor (embedders, final_layer)
     return {"_global", -1};
 }
 
-/**
- * Helper function to extract Anima layer information from tensor name
- * Returns (layer_name, layer_index) or ("_global", -1) for non-layer tensors
- *
- * Anima structure:
- * - net.blocks.N.* (28 transformer blocks by default)
- * - net.x_embedder, net.t_embedder, net.final_layer (global)
- */
+// Extract Anima layer info: blocks.N (from net.blocks.N), or _global
 inline std::pair<std::string, int> anima_layer_pattern(const std::string& tensor_name) {
-    // Look for net.blocks.N pattern
     size_t nb_pos = tensor_name.find("net.blocks.");
     if (nb_pos != std::string::npos) {
         size_t num_start = nb_pos + 11;  // Length of "net.blocks."
@@ -796,7 +623,6 @@ inline std::pair<std::string, int> anima_layer_pattern(const std::string& tensor
         return {"blocks." + num_str, block_idx};
     }
 
-    // Non-layer tensor (embedders, final_layer, etc.)
     return {"_global", -1};
 }
 

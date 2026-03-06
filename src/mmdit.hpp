@@ -747,21 +747,12 @@ public:
         return spatial_pos_embed;
     }
 
-    // ============== Staged Forward Methods for True Per-Layer Streaming ==============
-
-    /**
-     * Input stage result structure
-     */
     struct StreamingInputResult {
         ggml_tensor* x;        // [N, H*W, hidden_size]
         ggml_tensor* context;  // [N, L, hidden_size]
         ggml_tensor* c_mod;    // [N, hidden_size]
     };
 
-    /**
-     * Input stage: compute x_embed, t_embed, y_embed, context_embed
-     * Returns: {x, context, c_mod}
-     */
     StreamingInputResult forward_input_stage(GGMLRunnerContext* ctx,
                                               struct ggml_tensor* x,
                                               struct ggml_tensor* t,
@@ -795,10 +786,6 @@ public:
         return {x, context, c};
     }
 
-    /**
-     * Execute one joint_block
-     * Returns: {context, x}
-     */
     std::pair<ggml_tensor*, ggml_tensor*> forward_joint_block(GGMLRunnerContext* ctx,
                                                                int block_idx,
                                                                struct ggml_tensor* context,
@@ -808,10 +795,6 @@ public:
         return block->forward(ctx, context, x, c_mod);
     }
 
-    /**
-     * Output stage: apply final_layer
-     * Returns: final output tensor (before unpatchify)
-     */
     ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
                                        struct ggml_tensor* x,
                                        struct ggml_tensor* c_mod) {
@@ -897,10 +880,6 @@ public:
 struct MMDiTRunner : public GGMLRunner {
     MMDiT mmdit;
 
-    // Layer streaming support
-    std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
-    bool streaming_enabled_ = false;
-
     MMDiTRunner(ggml_backend_t backend,
                 bool offload_params_to_cpu,
                 const String2TensorStorage& tensor_storage_map = {},
@@ -917,69 +896,14 @@ struct MMDiTRunner : public GGMLRunner {
         mmdit.get_param_tensors(tensors, prefix);
     }
 
-    // ============== Layer Streaming Support ==============
-
-    /**
-     * Enable layer streaming for MMDiT
-     * MMDiT has no skip connections, so each joint_block is independent.
-     * Uses coarse-stage streaming: load all weights before graph execution.
-     */
     void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
-        if (!params_backend || !runtime_backend) {
-            LOG_WARN("MMDiTRunner: Cannot enable streaming without both CPU and GPU backends");
-            return;
-        }
-
-        streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
-            runtime_backend, params_backend);
-
-        LayerStreaming::StreamingConfig cfg = config;
-        cfg.enabled = true;
-        // MMDiT has no skip connections, so we only need to keep the current layer
-        cfg.keep_layers_behind = 0;
-        streaming_engine_->set_config(cfg);
-
-        // Register tensors with MMDiT layer pattern
         std::map<std::string, ggml_tensor*> tensor_map;
         mmdit.get_param_tensors(tensor_map, "model.diffusion_model");
-        streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::mmdit_layer_pattern);
-
-        streaming_enabled_ = true;
-        LOG_INFO("MMDiTRunner: Layer streaming enabled (%zu layers)",
-                 streaming_engine_->get_registry().get_layer_count());
+        init_streaming(config, tensor_map, LayerStreaming::mmdit_layer_pattern);
+        LOG_INFO("%s layer streaming enabled (%zu layers)",
+                 get_desc().c_str(), streaming_engine_->get_registry().get_layer_count());
     }
 
-    void disable_layer_streaming() {
-        streaming_enabled_ = false;
-        streaming_engine_.reset();
-        LOG_INFO("MMDiTRunner: Layer streaming disabled");
-    }
-
-    bool is_streaming_enabled() const {
-        return streaming_enabled_ && streaming_engine_ != nullptr;
-    }
-
-    void offload_streaming_layers() {
-        if (streaming_engine_) {
-            auto& registry = streaming_engine_->get_registry();
-            auto layers = registry.get_layer_names_sorted();
-            size_t offloaded = 0;
-            for (const auto& layer : layers) {
-                if (registry.is_layer_on_gpu(layer)) {
-                    registry.move_layer_to_cpu(layer);
-                    offloaded++;
-                }
-            }
-            if (offloaded > 0) {
-                LOG_INFO("MMDiTRunner: Offloaded %zu streaming layers to CPU", offloaded);
-            }
-        }
-    }
-
-    /**
-     * Streaming compute for MMDiT
-     * Since MMDiT has no skip connections, we load all joint_blocks before execution.
-     */
     bool compute_streaming(int n_threads,
                            struct ggml_tensor* x,
                            struct ggml_tensor* timesteps,
@@ -988,79 +912,32 @@ struct MMDiTRunner : public GGMLRunner {
                            struct ggml_tensor** output     = nullptr,
                            struct ggml_context* output_ctx = nullptr,
                            std::vector<int> skip_layers    = std::vector<int>()) {
-        if (!streaming_engine_) {
-            LOG_ERROR("MMDiTRunner: Streaming not enabled");
+        if (!is_streaming_enabled()) {
+            LOG_ERROR("%s streaming not enabled", get_desc().c_str());
             return false;
         }
 
         int64_t t0 = ggml_time_ms();
+        auto analysis = analyze_vram_budget();
 
-        auto& registry = streaming_engine_->get_registry();
-        auto& budget = streaming_engine_->get_budget();
-
-        // Calculate total model size
-        size_t total_model_size = 0;
-        auto all_layers = registry.get_layer_names_sorted();
-        for (const auto& layer_name : all_layers) {
-            total_model_size += registry.get_layer_size(layer_name);
-        }
-
-        // Get available VRAM
-        size_t available_vram = budget.get_available_vram();
-
-        // Check how much is already on GPU (for CFG - multiple calls per step)
-        size_t already_on_gpu = 0;
-        for (const auto& layer_name : all_layers) {
-            if (registry.is_layer_on_gpu(layer_name)) {
-                already_on_gpu += registry.get_layer_size(layer_name);
-            }
-        }
-
-        // Effective model size = what still needs to be loaded
-        size_t remaining_to_load = (total_model_size > already_on_gpu) ? (total_model_size - already_on_gpu) : 0;
-
-        LOG_DEBUG("MMDiTRunner: Model size = %.2f GB, On GPU = %.2f GB, Remaining = %.2f GB, Available VRAM = %.2f GB",
-                  total_model_size / (1024.0 * 1024.0 * 1024.0),
-                  already_on_gpu / (1024.0 * 1024.0 * 1024.0),
-                  remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                  available_vram / (1024.0 * 1024.0 * 1024.0));
-
-        // Check if model fits in VRAM (accounting for what's already loaded)
-        if (remaining_to_load <= available_vram) {
-            // Model fits - load all and compute
-            LOG_INFO("MMDiTRunner: Model fits in VRAM, using coarse-stage streaming");
-            for (const auto& layer_name : all_layers) {
-                if (!registry.is_layer_on_gpu(layer_name)) {
-                    if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                        LOG_WARN("MMDiTRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
-                    }
-                    registry.move_layer_to_gpu(layer_name);
-                }
-            }
-            // Execute full graph
-            bool result = compute(n_threads, x, timesteps, context, y, output, output_ctx, skip_layers,
-                                  true /* skip_param_offload */);
-
+        if (analysis.fits_in_vram) {
+            LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
+            load_all_layers_coarse();
+            bool result = compute(n_threads, x, timesteps, context, y, output, output_ctx, skip_layers, true);
             int64_t t1 = ggml_time_ms();
-            LOG_INFO("MMDiTRunner: Coarse-stage streaming completed in %.2fs", (t1 - t0) / 1000.0);
-
-            // Free compute buffer so next iteration can use different graph if needed
+            LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
             free_compute_buffer();
             return result;
         }
 
-        // Model doesn't fit - use TRUE per-layer streaming
-        LOG_INFO("MMDiTRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
-                 remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                 available_vram / (1024.0 * 1024.0 * 1024.0));
+        LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                 get_desc().c_str(),
+                 analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                 analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
 
         return compute_streaming_true(n_threads, x, timesteps, context, y, output, output_ctx, skip_layers);
     }
 
-    /**
-     * TRUE per-layer streaming for MMDiT
-     * Executes each joint_block as a separate mini-graph to minimize VRAM usage
-     */
     bool compute_streaming_true(int n_threads,
                                  struct ggml_tensor* x,
                                  struct ggml_tensor* timesteps,
@@ -1077,12 +954,12 @@ struct MMDiTRunner : public GGMLRunner {
         const int64_t W = x->ne[0];
         const int64_t H = x->ne[1];
 
-        LOG_INFO("MMDiTRunner: TRUE per-layer streaming - %d joint_blocks", num_blocks);
+        LOG_INFO("TRUE per-layer streaming - %d joint_blocks", num_blocks);
 
         // Load global layers
-        LOG_DEBUG("MMDiTRunner: Loading global layers");
+        LOG_DEBUG("Loading global layers");
         if (!registry.move_layer_to_gpu("_global")) {
-            LOG_ERROR("MMDiTRunner: Failed to load _global to GPU");
+            LOG_ERROR("Failed to load _global to GPU");
             return false;
         }
 
@@ -1092,8 +969,7 @@ struct MMDiTRunner : public GGMLRunner {
         std::vector<float> persistent_c_mod;
         int64_t x_ne[4], context_ne[4], c_mod_ne[4];
 
-        // ============ STAGE 1: Input projections ============
-        LOG_DEBUG("MMDiTRunner: Executing input stage");
+        LOG_DEBUG("Executing input stage");
         {
             ggml_tensor* x_output = nullptr;
             ggml_tensor* context_output = nullptr;
@@ -1124,7 +1000,7 @@ struct MMDiTRunner : public GGMLRunner {
 
             // Don't free compute buffer immediately - we need to read outputs first
             if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
-                LOG_ERROR("MMDiTRunner: Input stage failed");
+                LOG_ERROR("Input stage failed");
                 return false;
             }
 
@@ -1153,7 +1029,7 @@ struct MMDiTRunner : public GGMLRunner {
                     }
                 }
             } else {
-                LOG_ERROR("MMDiTRunner: Failed to get input stage outputs");
+                LOG_ERROR("Failed to get input stage outputs");
                 free_compute_buffer();
                 return false;
             }
@@ -1162,9 +1038,8 @@ struct MMDiTRunner : public GGMLRunner {
             free_compute_buffer();
         }
 
-        LOG_DEBUG("MMDiTRunner: Input stage done, x=%ldx%ldx%ld", x_ne[0], x_ne[1], x_ne[2]);
+        LOG_DEBUG("Input stage done, x=%ldx%ldx%ld", x_ne[0], x_ne[1], x_ne[2]);
 
-        // ============ STAGE 2: Joint blocks (one at a time) ============
         // Start async prefetch for first block
         if (num_blocks > 0 && streaming_engine_) {
             std::string first_block = "joint_blocks.0";
@@ -1174,7 +1049,7 @@ struct MMDiTRunner : public GGMLRunner {
         for (int block_idx = 0; block_idx < num_blocks; block_idx++) {
             // Check skip_layers
             if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), block_idx) != skip_layers.end()) {
-                LOG_DEBUG("MMDiTRunner: Skipping joint_block %d", block_idx);
+                LOG_DEBUG("Skipping joint_block %d", block_idx);
                 continue;
             }
 
@@ -1188,7 +1063,7 @@ struct MMDiTRunner : public GGMLRunner {
 
             // Load this block's weights (sync load if prefetch didn't happen)
             if (!registry.move_layer_to_gpu(block_name)) {
-                LOG_ERROR("MMDiTRunner: Failed to load %s", block_name.c_str());
+                LOG_ERROR("Failed to load %s", block_name.c_str());
                 return false;
             }
 
@@ -1235,7 +1110,7 @@ struct MMDiTRunner : public GGMLRunner {
 
             // Don't free compute buffer immediately - we need to read outputs first
             if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
-                LOG_ERROR("MMDiTRunner: Joint block %d execution failed", block_idx);
+                LOG_ERROR("Joint block %d execution failed", block_idx);
                 return false;
             }
 
@@ -1259,12 +1134,11 @@ struct MMDiTRunner : public GGMLRunner {
             // Offload this block
             registry.move_layer_to_cpu(block_name);
 
-            LOG_DEBUG("MMDiTRunner: Joint block %d/%d done (%.2fms)",
+            LOG_DEBUG("Joint block %d/%d done (%.2fms)",
                       block_idx + 1, num_blocks, (ggml_time_ms() - t_block_start) / 1.0);
         }
 
-        // ============ STAGE 3: Output stage ============
-        LOG_DEBUG("MMDiTRunner: Executing output stage");
+        LOG_DEBUG("Executing output stage");
         {
             auto get_output_graph = [&]() -> struct ggml_cgraph* {
                 struct ggml_cgraph* gf = new_graph_custom(MMDIT_GRAPH_SIZE / 4);
@@ -1290,13 +1164,13 @@ struct MMDiTRunner : public GGMLRunner {
             };
 
             if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
-                LOG_ERROR("MMDiTRunner: Output stage failed");
+                LOG_ERROR("Output stage failed");
                 return false;
             }
         }
 
         int64_t t_end = ggml_time_ms();
-        LOG_INFO("MMDiTRunner: TRUE per-layer streaming completed in %.2fs (%d joint_blocks)",
+        LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d joint_blocks)",
                  (t_end - t_start) / 1000.0, num_blocks);
 
         return true;

@@ -848,11 +848,6 @@ namespace Flux {
             }
         }
 
-        // ============== Staged Forward Methods for True Per-Layer Streaming ==============
-
-        /**
-         * Input stage result structure
-         */
         struct StreamingInputResult {
             ggml_tensor* img;
             ggml_tensor* txt;
@@ -864,10 +859,6 @@ namespace Flux {
             int64_t n_txt_tokens;
         };
 
-        /**
-         * Input stage: compute img_in, txt_in, vec embeddings
-         * Returns: {img, txt, vec, modulations}
-         */
         StreamingInputResult forward_input_stage(GGMLRunnerContext* ctx,
                                                   struct ggml_tensor* img,
                                                   struct ggml_tensor* txt,
@@ -944,10 +935,6 @@ namespace Flux {
             return {img, txt, vec, txt_img_mask, ds_img_mods, ds_txt_mods, ss_mods, n_txt_tokens};
         }
 
-        /**
-         * Execute one double_block
-         * Returns: {img, txt}
-         */
         std::pair<ggml_tensor*, ggml_tensor*> forward_double_block(GGMLRunnerContext* ctx,
                                                                     int block_idx,
                                                                     struct ggml_tensor* img,
@@ -962,10 +949,6 @@ namespace Flux {
             return img_txt;
         }
 
-        /**
-         * Execute one single_block
-         * Returns: txt_img (concatenated)
-         */
         ggml_tensor* forward_single_block(GGMLRunnerContext* ctx,
                                            int block_idx,
                                            struct ggml_tensor* txt_img,
@@ -977,10 +960,6 @@ namespace Flux {
             return block->forward(ctx, txt_img, vec, pe, txt_img_mask, ss_mods);
         }
 
-        /**
-         * Output stage: extract img from txt_img and apply final_layer
-         * Returns: final output tensor
-         */
         ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
                                            struct ggml_tensor* txt_img,
                                            struct ggml_tensor* vec,
@@ -1328,11 +1307,6 @@ namespace Flux {
             }
         }
 
-        // ========== Streaming Execution Support ==========
-
-        /**
-         * Streaming execution context - holds intermediate state between block executions
-         */
         struct StreamingContext {
             // Intermediate tensors (persist across blocks)
             ggml_tensor* img = nullptr;            // Image features
@@ -1369,10 +1343,6 @@ namespace Flux {
             }
         };
 
-        /**
-         * Execute preprocessing (input projections, embeddings, modulations)
-         * Call this once before streaming blocks
-         */
         void forward_preprocessing(GGMLRunnerContext* ctx,
                                    StreamingContext& stream_ctx,
                                    ggml_tensor* img,
@@ -1457,11 +1427,6 @@ namespace Flux {
             stream_ctx.current_single_block = 0;
         }
 
-        /**
-         * Execute a single double_block
-         * @param block_idx Index of the block to execute (0 to params.depth-1)
-         * @return true if this was the last double block
-         */
         bool forward_double_block(GGMLRunnerContext* ctx,
                                   StreamingContext& stream_ctx,
                                   int block_idx) {
@@ -1485,11 +1450,6 @@ namespace Flux {
             return false;
         }
 
-        /**
-         * Execute a single single_block
-         * @param block_idx Index of the block to execute (0 to params.depth_single_blocks-1)
-         * @return true if this was the last single block
-         */
         bool forward_single_block(GGMLRunnerContext* ctx,
                                   StreamingContext& stream_ctx,
                                   int block_idx) {
@@ -1508,10 +1468,6 @@ namespace Flux {
             return false;
         }
 
-        /**
-         * Execute postprocessing (final layer)
-         * Call this after all blocks are done
-         */
         ggml_tensor* forward_postprocessing(GGMLRunnerContext* ctx,
                                             StreamingContext& stream_ctx) {
             GGML_ASSERT(stream_ctx.single_blocks_done);
@@ -1932,94 +1888,14 @@ namespace Flux {
             flux->test();
         }
 
-        // ========== Layer Streaming Support ==========
-
-        /**
-         * Enable layer streaming for memory-efficient execution
-         * @param config Streaming configuration
-         */
         void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
-            if (!streaming_engine_) {
-                // Get backends from GGMLRunner
-                ggml_backend_t gpu = runtime_backend;
-                ggml_backend_t cpu = params_backend;
-
-                streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(gpu, cpu);
-            }
-
-            auto cfg = config;
-            cfg.enabled = true;
-            streaming_engine_->set_config(cfg);
-
-            // Register model layers with the streaming engine using tensor map
-            // This is critical: GGMLBlock stores tensor names in the params map, but
-            // ggml_set_name() is never called on the actual GGML tensors. So we must
-            // use get_param_tensors() which preserves the proper tensor name hierarchy.
             std::map<std::string, ggml_tensor*> tensor_map;
             flux.get_param_tensors(tensor_map, "model.diffusion_model");
-            streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::flux_layer_pattern);
-
-            LOG_INFO("FluxRunner: layer streaming enabled with %zu layers",
-                     streaming_engine_->get_registry().get_layer_count());
+            init_streaming(config, tensor_map, LayerStreaming::flux_layer_pattern);
+            LOG_INFO("%s layer streaming enabled with %zu layers",
+                     get_desc().c_str(), streaming_engine_->get_registry().get_layer_count());
         }
 
-        /**
-         * Disable layer streaming
-         */
-        void disable_layer_streaming() {
-            if (streaming_engine_) {
-                auto cfg = streaming_engine_->get_config();
-                cfg.enabled = false;
-                streaming_engine_->set_config(cfg);
-            }
-        }
-
-        /**
-         * Check if layer streaming is enabled
-         */
-        bool is_streaming_enabled() const {
-            return streaming_engine_ && streaming_engine_->get_config().enabled;
-        }
-
-        /**
-         * Offload all streaming layers to CPU (free GPU memory)
-         */
-        void offload_streaming_layers() {
-            if (streaming_engine_) {
-                auto& registry = streaming_engine_->get_registry();
-                auto layers = registry.get_layer_names_sorted();
-                size_t offloaded = 0;
-                for (const auto& layer : layers) {
-                    if (registry.is_layer_on_gpu(layer)) {
-                        registry.move_layer_to_cpu(layer);
-                        offloaded++;
-                    }
-                }
-                if (offloaded > 0) {
-                    LOG_INFO("FluxRunner: Offloaded %zu streaming layers to CPU", offloaded);
-                }
-            }
-        }
-
-        /**
-         * Get the streaming engine (for advanced configuration)
-         */
-        LayerStreaming::LayerExecutionEngine* get_streaming_engine() {
-            return streaming_engine_.get();
-        }
-
-        /**
-         * Compute with layer streaming - coarse-stage approach
-         *
-         * This method uses a working coarse-stage strategy:
-         * 1. Load all model weights to GPU via streaming engine
-         * 2. Execute full compute graph with skip_param_offload=true
-         * 3. Optionally offload weights after completion
-         *
-         * Note: True per-layer mini-graph execution is not feasible with GGML
-         * because tensors are bound to their compute context and cannot be
-         * passed between separate graphs.
-         */
         bool compute_streaming(int n_threads,
                                struct ggml_tensor* x,
                                struct ggml_tensor* timesteps,
@@ -2032,91 +1908,37 @@ namespace Flux {
                                struct ggml_tensor** output           = nullptr,
                                struct ggml_context* output_ctx       = nullptr,
                                std::vector<int> skip_layers          = std::vector<int>()) {
-            if (!streaming_engine_ || !streaming_engine_->get_config().enabled) {
-                LOG_ERROR("FluxRunner: streaming not enabled, call enable_layer_streaming() first");
+            if (!is_streaming_enabled()) {
+                LOG_ERROR("%s streaming not enabled", get_desc().c_str());
                 return false;
             }
 
             int64_t t0 = ggml_time_ms();
-            auto& registry = streaming_engine_->get_registry();
-            auto& budget = streaming_engine_->get_budget();
+            auto analysis = analyze_vram_budget();
 
-            // Calculate total model size
-            size_t total_model_size = 0;
-            auto all_layers = registry.get_layer_names_sorted();
-            for (const auto& layer_name : all_layers) {
-                total_model_size += registry.get_layer_size(layer_name);
-            }
-
-            // Get available VRAM
-            size_t available_vram = budget.get_available_vram();
-
-            // Check how much is already on GPU (for CFG - multiple calls per step)
-            size_t already_on_gpu = 0;
-            for (const auto& layer_name : all_layers) {
-                if (registry.is_layer_on_gpu(layer_name)) {
-                    already_on_gpu += registry.get_layer_size(layer_name);
-                }
-            }
-
-            // Effective model size = what still needs to be loaded
-            size_t remaining_to_load = (total_model_size > already_on_gpu) ? (total_model_size - already_on_gpu) : 0;
-
-            LOG_DEBUG("FluxRunner: Model size = %.2f GB, On GPU = %.2f GB, Remaining = %.2f GB, Available VRAM = %.2f GB",
-                      total_model_size / (1024.0 * 1024.0 * 1024.0),
-                      already_on_gpu / (1024.0 * 1024.0 * 1024.0),
-                      remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                      available_vram / (1024.0 * 1024.0 * 1024.0));
-
-            // Check if model fits in VRAM (accounting for what's already loaded)
-            if (remaining_to_load <= available_vram) {
-                // Model fits - use coarse-stage (load all, compute once)
-                LOG_INFO("FluxRunner: Model fits in VRAM, using coarse-stage streaming");
-
-                // Load global layers
-                registry.move_layer_to_gpu("_global");
-
-                // Load all double blocks
-                for (int i = 0; i < flux_params.depth; i++) {
-                    std::string layer_name = "double_blocks." + std::to_string(i);
-                    registry.move_layer_to_gpu(layer_name);
-                }
-
-                // Load all single blocks
-                for (int i = 0; i < flux_params.depth_single_blocks; i++) {
-                    std::string layer_name = "single_blocks." + std::to_string(i);
-                    registry.move_layer_to_gpu(layer_name);
-                }
-
-                int64_t t1 = ggml_time_ms();
-                LOG_DEBUG("FluxRunner streaming: weights loaded in %.2fs", (t1 - t0) / 1000.0);
+            if (analysis.fits_in_vram) {
+                LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
+                load_all_layers_coarse();
 
                 bool result = compute(n_threads, x, timesteps, context, c_concat, y, guidance,
                                       ref_latents, increase_ref_index, output, output_ctx,
-                                      skip_layers, true /* skip_param_offload */);
+                                      skip_layers, true);
 
-                int64_t t2 = ggml_time_ms();
-                LOG_INFO("FluxRunner streaming: total execution time %.2fs (load: %.2fs, compute: %.2fs)",
-                         (t2 - t0) / 1000.0, (t1 - t0) / 1000.0, (t2 - t1) / 1000.0);
-
-                // Free compute buffer so next iteration can use different graph if needed
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
                 free_compute_buffer();
                 return result;
             }
 
-            // Model doesn't fit - use TRUE per-layer streaming
-            LOG_INFO("FluxRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
-                     remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                     available_vram / (1024.0 * 1024.0 * 1024.0));
+            LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                     get_desc().c_str(),
+                     analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                     analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
 
             return compute_streaming_true(n_threads, x, timesteps, context, c_concat, y, guidance,
                                           ref_latents, increase_ref_index, output, output_ctx, skip_layers);
         }
 
-        /**
-         * TRUE per-layer streaming for Flux
-         * Executes each block as a separate mini-graph to minimize VRAM usage
-         */
         bool compute_streaming_true(int n_threads,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* timesteps,
@@ -2134,16 +1956,16 @@ namespace Flux {
 
             const int num_double_blocks = flux_params.depth;
             const int num_single_blocks = flux_params.depth_single_blocks;
-            LOG_INFO("FluxRunner: TRUE per-layer streaming - %d double + %d single blocks",
+            LOG_INFO("TRUE per-layer streaming - %d double + %d single blocks",
                      num_double_blocks, num_single_blocks);
 
             // Load global layers (_global contains input projections, final_layer, etc)
-            LOG_DEBUG("FluxRunner: Loading global layers");
+            LOG_DEBUG("Loading global layers");
             if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("FluxRunner: Failed to load _global to GPU");
+                LOG_ERROR("Failed to load _global to GPU");
                 return false;
             }
-            LOG_DEBUG("FluxRunner: _global loaded successfully");
+            LOG_DEBUG("_global loaded successfully");
 
             // Set up txt_arange_dims based on version
             std::set<int> txt_arange_dims;
@@ -2169,7 +1991,7 @@ namespace Flux {
                                        circular_x_enabled,
                                        flux_params.axes_dim);
 
-            LOG_DEBUG("FluxRunner: PE generated");
+            LOG_DEBUG("PE generated");
 
             // Pre-generate mod_index_arange for Chroma
             if (flux_params.is_chroma) {
@@ -2179,7 +2001,7 @@ namespace Flux {
                 }
             }
 
-            LOG_DEBUG("FluxRunner: About to execute input stage");
+            LOG_DEBUG("About to execute input stage");
 
             // Persistent storage for intermediate tensors
             std::vector<float> persistent_img;
@@ -2190,8 +2012,7 @@ namespace Flux {
             int64_t n_txt_tokens = 0;
             int64_t n_img_tokens = 0;
 
-            // ============ STAGE 1: Input projections ============
-            LOG_DEBUG("FluxRunner: Executing input stage");
+            LOG_DEBUG("Executing input stage");
             {
                 ggml_tensor* img_output = nullptr;
                 ggml_tensor* txt_output = nullptr;
@@ -2241,7 +2062,7 @@ namespace Flux {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("FluxRunner: Input stage failed");
+                    LOG_ERROR("Input stage failed");
                     return false;
                 }
 
@@ -2265,7 +2086,7 @@ namespace Flux {
                         vec_ne[i] = vec_output->ne[i];
                     }
                 } else {
-                    LOG_ERROR("FluxRunner: Failed to get input stage outputs");
+                    LOG_ERROR("Failed to get input stage outputs");
                     free_compute_buffer();
                     return false;
                 }
@@ -2274,10 +2095,9 @@ namespace Flux {
                 free_compute_buffer();
             }
 
-            LOG_DEBUG("FluxRunner: Input stage done, img=%ldx%ldx%ld, txt=%ldx%ldx%ld",
+            LOG_DEBUG("Input stage done, img=%ldx%ldx%ld, txt=%ldx%ldx%ld",
                       img_ne[0], img_ne[1], img_ne[2], txt_ne[0], txt_ne[1], txt_ne[2]);
 
-            // ============ STAGE 2a: Double blocks (one at a time) ============
             // Start async prefetch for first double block
             if (num_double_blocks > 0 && streaming_engine_) {
                 std::string first_block = "double_blocks.0";
@@ -2287,7 +2107,7 @@ namespace Flux {
             for (int block_idx = 0; block_idx < num_double_blocks; block_idx++) {
                 // Check skip_layers
                 if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), block_idx) != skip_layers.end()) {
-                    LOG_DEBUG("FluxRunner: Skipping double_block %d", block_idx);
+                    LOG_DEBUG("Skipping double_block %d", block_idx);
                     continue;
                 }
 
@@ -2301,7 +2121,7 @@ namespace Flux {
 
                 // Load this block's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("FluxRunner: Failed to load %s", block_name.c_str());
+                    LOG_ERROR("Failed to load %s", block_name.c_str());
                     return false;
                 }
 
@@ -2351,7 +2171,7 @@ namespace Flux {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("FluxRunner: Double block %d execution failed", block_idx);
+                    LOG_ERROR("Double block %d execution failed", block_idx);
                     return false;
                 }
 
@@ -2372,11 +2192,10 @@ namespace Flux {
                 // Offload this block
                 registry.move_layer_to_cpu(block_name);
 
-                LOG_DEBUG("FluxRunner: Double block %d/%d done (%.2fms)",
+                LOG_DEBUG("Double block %d/%d done (%.2fms)",
                           block_idx + 1, num_double_blocks, (ggml_time_ms() - t_block_start) / 1.0);
             }
 
-            // ============ Concatenate txt + img for single blocks ============
             {
                 // Concatenate txt and img into txt_img
                 size_t txt_img_size = persistent_txt.size() + persistent_img.size();
@@ -2396,7 +2215,6 @@ namespace Flux {
                 txt_img_ne[3] = 1;
             }
 
-            // ============ STAGE 2b: Single blocks (one at a time) ============
             // Start async prefetch for first single block
             if (num_single_blocks > 0 && streaming_engine_) {
                 std::string first_block = "single_blocks.0";
@@ -2407,7 +2225,7 @@ namespace Flux {
                 // Check skip_layers (single blocks start at depth offset)
                 int skip_idx = block_idx + flux_params.depth;
                 if (skip_layers.size() > 0 && std::find(skip_layers.begin(), skip_layers.end(), skip_idx) != skip_layers.end()) {
-                    LOG_DEBUG("FluxRunner: Skipping single_block %d", block_idx);
+                    LOG_DEBUG("Skipping single_block %d", block_idx);
                     continue;
                 }
 
@@ -2421,7 +2239,7 @@ namespace Flux {
 
                 // Load this block's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("FluxRunner: Failed to load %s", block_name.c_str());
+                    LOG_ERROR("Failed to load %s", block_name.c_str());
                     return false;
                 }
 
@@ -2464,7 +2282,7 @@ namespace Flux {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("FluxRunner: Single block %d execution failed", block_idx);
+                    LOG_ERROR("Single block %d execution failed", block_idx);
                     return false;
                 }
 
@@ -2483,12 +2301,11 @@ namespace Flux {
                 // Offload this block
                 registry.move_layer_to_cpu(block_name);
 
-                LOG_DEBUG("FluxRunner: Single block %d/%d done (%.2fms)",
+                LOG_DEBUG("Single block %d/%d done (%.2fms)",
                           block_idx + 1, num_single_blocks, (ggml_time_ms() - t_block_start) / 1.0);
             }
 
-            // ============ STAGE 3: Output stage ============
-            LOG_DEBUG("FluxRunner: Executing output stage");
+            LOG_DEBUG("Executing output stage");
             {
                 auto get_output_graph = [&]() -> struct ggml_cgraph* {
                     struct ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE / 4);
@@ -2517,20 +2334,19 @@ namespace Flux {
                 };
 
                 if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("FluxRunner: Output stage failed");
+                    LOG_ERROR("Output stage failed");
                     return false;
                 }
             }
 
             int64_t t_end = ggml_time_ms();
-            LOG_INFO("FluxRunner: TRUE per-layer streaming completed in %.2fs (%d double + %d single blocks)",
+            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d double + %d single blocks)",
                      (t_end - t_start) / 1000.0, num_double_blocks, num_single_blocks);
 
             return true;
         }
 
     private:
-        std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
         Flux::StreamingContext streaming_ctx_;
     };
 

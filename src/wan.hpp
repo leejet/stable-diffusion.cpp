@@ -2006,11 +2006,6 @@ namespace WAN {
             return out;
         }
 
-        // ============== Staged Forward Methods for True Per-Layer Streaming ==============
-
-        /**
-         * Input stage result structure
-         */
         struct StreamingInputResult {
             ggml_tensor* x;            // [N, t_len*h_len*w_len, dim]
             ggml_tensor* x_orig;       // Original x for vace
@@ -2022,10 +2017,6 @@ namespace WAN {
             int64_t context_img_len;
         };
 
-        /**
-         * Execute one main block (and optionally its paired vace_block)
-         * Returns: x after block (and c if vace)
-         */
         std::pair<ggml_tensor*, ggml_tensor*> forward_block(GGMLRunnerContext* ctx,
                                                              int block_idx,
                                                              struct ggml_tensor* x,
@@ -2054,9 +2045,6 @@ namespace WAN {
             return {x, c};
         }
 
-        /**
-         * Output stage: apply head
-         */
         ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
                                            struct ggml_tensor* x,
                                            struct ggml_tensor* e) {
@@ -2195,71 +2183,15 @@ namespace WAN {
             wan.get_param_tensors(tensors, prefix);
         }
 
-        // ============== Layer Streaming Support ==============
-    private:
-        std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
-        bool streaming_enabled_ = false;
-
     public:
-        /**
-         * Enable layer streaming for WAN
-         * WAN has sequential transformer blocks with no cross-layer dependencies.
-         */
         void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
-            if (!params_backend || !runtime_backend) {
-                LOG_WARN("WanRunner: Cannot enable streaming without both CPU and GPU backends");
-                return;
-            }
-
-            streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
-                runtime_backend, params_backend);
-
-            LayerStreaming::StreamingConfig cfg = config;
-            cfg.enabled = true;
-            cfg.keep_layers_behind = 0;  // No skip connections
-            streaming_engine_->set_config(cfg);
-
-            // Register tensors with WAN layer pattern
             std::map<std::string, ggml_tensor*> tensor_map;
             wan.get_param_tensors(tensor_map, "model.diffusion_model");
-            streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::wan_layer_pattern);
-
-            streaming_enabled_ = true;
-            LOG_INFO("WanRunner: Layer streaming enabled (%zu layers)",
-                     streaming_engine_->get_registry().get_layer_count());
+            init_streaming(config, tensor_map, LayerStreaming::wan_layer_pattern);
+            LOG_INFO("%s layer streaming enabled (%zu layers)",
+                     get_desc().c_str(), streaming_engine_->get_registry().get_layer_count());
         }
 
-        void disable_layer_streaming() {
-            streaming_enabled_ = false;
-            streaming_engine_.reset();
-            LOG_INFO("WanRunner: Layer streaming disabled");
-        }
-
-        bool is_streaming_enabled() const {
-            return streaming_enabled_ && streaming_engine_ != nullptr;
-        }
-
-        void offload_streaming_layers() {
-            if (streaming_engine_) {
-                auto& registry = streaming_engine_->get_registry();
-                auto layers = registry.get_layer_names_sorted();
-                size_t offloaded = 0;
-                for (const auto& layer : layers) {
-                    if (registry.is_layer_on_gpu(layer)) {
-                        registry.move_layer_to_cpu(layer);
-                        offloaded++;
-                    }
-                }
-                if (offloaded > 0) {
-                    LOG_INFO("WanRunner: Offloaded %zu streaming layers to CPU", offloaded);
-                }
-            }
-        }
-
-        /**
-         * Streaming compute for WAN
-         * Loads all blocks before execution (coarse-stage streaming).
-         */
         bool compute_streaming(int n_threads,
                                struct ggml_tensor* x,
                                struct ggml_tensor* timesteps,
@@ -2271,81 +2203,34 @@ namespace WAN {
                                float vace_strength                 = 1.f,
                                struct ggml_tensor** output         = nullptr,
                                struct ggml_context* output_ctx     = nullptr) {
-            if (!streaming_engine_) {
-                LOG_ERROR("WanRunner: Streaming not enabled");
+            if (!is_streaming_enabled()) {
+                LOG_ERROR("%s streaming not enabled", get_desc().c_str());
                 return false;
             }
 
             int64_t t0 = ggml_time_ms();
+            auto analysis = analyze_vram_budget();
 
-            auto& registry = streaming_engine_->get_registry();
-            auto& budget = streaming_engine_->get_budget();
-
-            // Calculate total model size
-            size_t total_model_size = 0;
-            auto all_layers = registry.get_layer_names_sorted();
-            for (const auto& layer_name : all_layers) {
-                total_model_size += registry.get_layer_size(layer_name);
-            }
-
-            // Get available VRAM
-            size_t available_vram = budget.get_available_vram();
-
-            // Check how much is already on GPU (for CFG - multiple calls per step)
-            size_t already_on_gpu = 0;
-            for (const auto& layer_name : all_layers) {
-                if (registry.is_layer_on_gpu(layer_name)) {
-                    already_on_gpu += registry.get_layer_size(layer_name);
-                }
-            }
-
-            // Effective model size = what still needs to be loaded
-            size_t remaining_to_load = (total_model_size > already_on_gpu) ? (total_model_size - already_on_gpu) : 0;
-
-            LOG_DEBUG("WanRunner: Model size = %.2f GB, On GPU = %.2f GB, Remaining = %.2f GB, Available VRAM = %.2f GB",
-                      total_model_size / (1024.0 * 1024.0 * 1024.0),
-                      already_on_gpu / (1024.0 * 1024.0 * 1024.0),
-                      remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                      available_vram / (1024.0 * 1024.0 * 1024.0));
-
-            // Check if model fits in VRAM (accounting for what's already loaded)
-            if (remaining_to_load <= available_vram) {
-                // Model fits - load all
-                LOG_INFO("WanRunner: Model fits in VRAM, using coarse-stage streaming");
-                for (const auto& layer_name : all_layers) {
-                    if (!registry.is_layer_on_gpu(layer_name)) {
-                        if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                            LOG_WARN("WanRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
-                        }
-                        registry.move_layer_to_gpu(layer_name);
-                    }
-                }
-                // Execute full graph (coarse-stage)
+            if (analysis.fits_in_vram) {
+                LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
+                load_all_layers_coarse();
                 bool result = compute(n_threads, x, timesteps, context, clip_fea, c_concat,
-                                      time_dim_concat, vace_context, vace_strength, output, output_ctx,
-                                      true /* skip_param_offload */);
+                                      time_dim_concat, vace_context, vace_strength, output, output_ctx, true);
                 int64_t t1 = ggml_time_ms();
-                LOG_INFO("WanRunner: Coarse-stage streaming completed in %.2fs", (t1 - t0) / 1000.0);
-
-                // Free compute buffer so next iteration can use different graph if needed
+                LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
                 free_compute_buffer();
                 return result;
             }
 
-            // Model doesn't fit - use TRUE per-layer streaming
-            LOG_INFO("WanRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
-                     remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                     available_vram / (1024.0 * 1024.0 * 1024.0));
+            LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                     get_desc().c_str(),
+                     analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                     analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
 
             return compute_streaming_true(n_threads, x, timesteps, context, clip_fea, c_concat,
                                           time_dim_concat, vace_context, vace_strength, output, output_ctx);
         }
 
-        /**
-         * TRUE per-layer streaming for WAN
-         * Executes each block as a separate mini-graph to minimize VRAM usage
-         * Note: WAN is complex with video dimensions and interleaved vace_blocks
-         */
         bool compute_streaming_true(int n_threads,
                                      struct ggml_tensor* x,
                                      struct ggml_tensor* timesteps,
@@ -2366,11 +2251,11 @@ namespace WAN {
             const int64_t H = x->ne[1];
             const int64_t T = x->ne[2];
 
-            LOG_INFO("WanRunner: TRUE per-layer streaming - %d blocks", num_blocks);
+            LOG_INFO("TRUE per-layer streaming - %d blocks", num_blocks);
 
             // Load global layers (includes embedders)
             if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("WanRunner: Failed to load _global to GPU");
+                LOG_ERROR("Failed to load _global to GPU");
                 return false;
             }
 
@@ -2403,7 +2288,7 @@ namespace WAN {
             int64_t t_len = 0, h_len = 0, w_len = 0;
 
             // Stage 1: Input stage - this is complex, run full input pipeline
-            LOG_DEBUG("WanRunner: Executing input stage");
+            LOG_DEBUG("Executing input stage");
             {
                 ggml_tensor* x_output = nullptr;
                 ggml_tensor* x_orig_output = nullptr;
@@ -2464,13 +2349,13 @@ namespace WAN {
                 // Due to WAN complexity with video, execute full graph
                 // True per-layer streaming would require more extensive refactoring
                 if (!GGMLRunner::compute(get_input_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("WanRunner: Compute failed");
+                    LOG_ERROR("Compute failed");
                     return false;
                 }
             }
 
             int64_t t_end = ggml_time_ms();
-            LOG_INFO("WanRunner: Streaming completed in %.2fs (%d blocks)",
+            LOG_INFO("Streaming completed in %.2fs (%d blocks)",
                      (t_end - t_start) / 1000.0, num_blocks);
 
             return true;

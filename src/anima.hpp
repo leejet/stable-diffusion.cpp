@@ -512,11 +512,6 @@ namespace Anima {
             return x;
         }
 
-        // ============== Staged Forward Methods for True Per-Layer Streaming ==============
-
-        /**
-         * Input stage result structure
-         */
         struct StreamingInputResult {
             ggml_tensor* x;                        // [N, h*w, hidden_size]
             ggml_tensor* encoder_hidden_states;   // [N, 512, hidden_size]
@@ -524,10 +519,6 @@ namespace Anima {
             ggml_tensor* temb;                    // [N, hidden_size * 3]
         };
 
-        /**
-         * Input stage: compute x_embed, t_embed, llm_adapter
-         * Returns: {x, encoder_hidden_states, embedded_timestep, temb}
-         */
         StreamingInputResult forward_input_stage(GGMLRunnerContext* ctx,
                                                   struct ggml_tensor* x,
                                                   struct ggml_tensor* timestep,
@@ -580,10 +571,6 @@ namespace Anima {
             return {x, encoder_hidden_states, embedded_timestep, temb};
         }
 
-        /**
-         * Execute one transformer block
-         * Returns: x
-         */
         ggml_tensor* forward_block(GGMLRunnerContext* ctx,
                                     int block_idx,
                                     struct ggml_tensor* x,
@@ -595,10 +582,6 @@ namespace Anima {
             return block->forward(ctx, x, encoder_hidden_states, embedded_timestep, temb, image_pe);
         }
 
-        /**
-         * Output stage: apply final_layer (before unpatchify)
-         * Returns: final output tensor
-         */
         ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
                                            struct ggml_tensor* x,
                                            struct ggml_tensor* embedded_timestep,
@@ -618,9 +601,6 @@ namespace Anima {
         std::vector<float> adapter_k_pe_vec;
         AnimaNet net;
         int64_t num_layers_ = 28;  // Store for streaming
-
-    private:
-        std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
 
     public:
 
@@ -788,80 +768,14 @@ namespace Anima {
             return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx, skip_param_offload);
         }
 
-        // ========== Layer Streaming Support ==========
-
-        /**
-         * Enable layer streaming for memory-efficient execution
-         * @param config Streaming configuration
-         */
         void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
-            if (!streaming_engine_) {
-                ggml_backend_t gpu = runtime_backend;
-                ggml_backend_t cpu = params_backend;
-                streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(gpu, cpu);
-            }
-
-            auto cfg = config;
-            cfg.enabled = true;
-            streaming_engine_->set_config(cfg);
-
-            // Register model layers with the streaming engine
             std::map<std::string, ggml_tensor*> tensor_map;
             net.get_param_tensors(tensor_map, "model.diffusion_model.net");
-            streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::anima_layer_pattern);
-
-            LOG_INFO("AnimaRunner: layer streaming enabled with %zu layers",
-                     streaming_engine_->get_registry().get_layer_count());
+            init_streaming(config, tensor_map, LayerStreaming::anima_layer_pattern);
+            LOG_INFO("%s layer streaming enabled with %zu layers",
+                     get_desc().c_str(), streaming_engine_->get_registry().get_layer_count());
         }
 
-        /**
-         * Disable layer streaming
-         */
-        void disable_layer_streaming() {
-            if (streaming_engine_) {
-                auto cfg = streaming_engine_->get_config();
-                cfg.enabled = false;
-                streaming_engine_->set_config(cfg);
-            }
-        }
-
-        /**
-         * Check if layer streaming is enabled
-         */
-        bool is_streaming_enabled() const {
-            return streaming_engine_ && streaming_engine_->get_config().enabled;
-        }
-
-        /**
-         * Offload all streaming layers to CPU (free GPU memory)
-         */
-        void offload_streaming_layers() {
-            if (streaming_engine_) {
-                auto& registry = streaming_engine_->get_registry();
-                auto layers = registry.get_layer_names_sorted();
-                size_t offloaded = 0;
-                for (const auto& layer : layers) {
-                    if (registry.is_layer_on_gpu(layer)) {
-                        registry.move_layer_to_cpu(layer);
-                        offloaded++;
-                    }
-                }
-                if (offloaded > 0) {
-                    LOG_INFO("AnimaRunner: Offloaded %zu streaming layers to CPU", offloaded);
-                }
-            }
-        }
-
-        /**
-         * Get the streaming engine (for advanced configuration)
-         */
-        LayerStreaming::LayerExecutionEngine* get_streaming_engine() {
-            return streaming_engine_.get();
-        }
-
-        /**
-         * Compute with layer streaming - coarse-stage approach
-         */
         bool compute_streaming(int n_threads,
                                struct ggml_tensor* x,
                                struct ggml_tensor* timesteps,
@@ -870,75 +784,33 @@ namespace Anima {
                                struct ggml_tensor* t5_weights  = nullptr,
                                struct ggml_tensor** output     = nullptr,
                                struct ggml_context* output_ctx = nullptr) {
-            if (!streaming_engine_ || !streaming_engine_->get_config().enabled) {
-                LOG_ERROR("AnimaRunner: streaming not enabled, call enable_layer_streaming() first");
+            if (!is_streaming_enabled()) {
+                LOG_ERROR("%s streaming not enabled", get_desc().c_str());
                 return false;
             }
 
             int64_t t0 = ggml_time_ms();
-            auto& registry = streaming_engine_->get_registry();
-            auto& budget = streaming_engine_->get_budget();
+            auto analysis = analyze_vram_budget();
 
-            // Calculate total model size
-            size_t total_model_size = 0;
-            auto all_layers = registry.get_layer_names_sorted();
-            for (const auto& layer_name : all_layers) {
-                total_model_size += registry.get_layer_size(layer_name);
-            }
-
-            // Get available VRAM
-            size_t available_vram = budget.get_available_vram();
-
-            // Check how much is already on GPU (for CFG - multiple calls per step)
-            size_t already_on_gpu = 0;
-            for (const auto& layer_name : all_layers) {
-                if (registry.is_layer_on_gpu(layer_name)) {
-                    already_on_gpu += registry.get_layer_size(layer_name);
-                }
-            }
-
-            // Effective model size = what still needs to be loaded
-            size_t remaining_to_load = (total_model_size > already_on_gpu) ? (total_model_size - already_on_gpu) : 0;
-
-            LOG_DEBUG("AnimaRunner: Model size = %.2f GB, On GPU = %.2f GB, Remaining = %.2f GB, Available VRAM = %.2f GB",
-                      total_model_size / (1024.0 * 1024.0 * 1024.0),
-                      already_on_gpu / (1024.0 * 1024.0 * 1024.0),
-                      remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                      available_vram / (1024.0 * 1024.0 * 1024.0));
-
-            // Check if model fits in VRAM (accounting for what's already loaded)
-            if (remaining_to_load <= available_vram) {
-                // Model fits - load all
-                LOG_INFO("AnimaRunner: Model fits in VRAM, using coarse-stage streaming");
-                registry.move_layer_to_gpu("_global");
-                for (int64_t i = 0; i < num_layers_; i++) {
-                    std::string layer_name = "blocks." + std::to_string(i);
-                    registry.move_layer_to_gpu(layer_name);
-                }
-                // Execute full compute graph
-                int64_t t1 = ggml_time_ms();
+            if (analysis.fits_in_vram) {
+                LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
+                load_all_layers_coarse();
                 bool result = compute(n_threads, x, timesteps, context, t5_ids, t5_weights,
-                                      output, output_ctx, true /* skip_param_offload */);
-                int64_t t2 = ggml_time_ms();
-                LOG_INFO("AnimaRunner: Coarse-stage streaming completed in %.2fs", (t2 - t0) / 1000.0);
-
-                // Free compute buffer so next iteration can use different graph if needed
+                                      output, output_ctx, true);
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
                 free_compute_buffer();
                 return result;
             }
 
-            // Model doesn't fit - use TRUE per-layer streaming
-            LOG_INFO("AnimaRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
-                     remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                     available_vram / (1024.0 * 1024.0 * 1024.0));
+            LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                     get_desc().c_str(),
+                     analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                     analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
 
             return compute_streaming_true(n_threads, x, timesteps, context, t5_ids, t5_weights, output, output_ctx);
         }
 
-        /**
-         * TRUE per-layer streaming for Anima
-         * Executes each transformer block as a separate mini-graph to minimize VRAM usage
-         */
         bool compute_streaming_true(int n_threads,
                                      struct ggml_tensor* x,
                                      struct ggml_tensor* timesteps,
@@ -955,12 +827,12 @@ namespace Anima {
             const int64_t W = x->ne[0];
             const int64_t H = x->ne[1];
 
-            LOG_INFO("AnimaRunner: TRUE per-layer streaming - %lld blocks", num_blocks);
+            LOG_INFO("TRUE per-layer streaming - %lld blocks", num_blocks);
 
             // Load global layers
-            LOG_DEBUG("AnimaRunner: Loading global layers");
+            LOG_DEBUG("Loading global layers");
             if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("AnimaRunner: Failed to load _global to GPU");
+                LOG_ERROR("Failed to load _global to GPU");
                 return false;
             }
 
@@ -986,8 +858,7 @@ namespace Anima {
             std::vector<float> persistent_temb;
             int64_t x_ne[4], context_ne[4], embedded_ts_ne[4], temb_ne[4];
 
-            // ============ STAGE 1: Input projections ============
-            LOG_DEBUG("AnimaRunner: Executing input stage");
+            LOG_DEBUG("Executing input stage");
             {
                 ggml_tensor* x_output = nullptr;
                 ggml_tensor* context_output = nullptr;
@@ -1033,7 +904,7 @@ namespace Anima {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("AnimaRunner: Input stage failed");
+                    LOG_ERROR("Input stage failed");
                     return false;
                 }
 
@@ -1066,7 +937,7 @@ namespace Anima {
                         }
                     }
                 } else {
-                    LOG_ERROR("AnimaRunner: Failed to get input stage outputs");
+                    LOG_ERROR("Failed to get input stage outputs");
                     free_compute_buffer();
                     return false;
                 }
@@ -1075,9 +946,8 @@ namespace Anima {
                 free_compute_buffer();
             }
 
-            LOG_DEBUG("AnimaRunner: Input stage done, x=%ldx%ldx%ld", x_ne[0], x_ne[1], x_ne[2]);
+            LOG_DEBUG("Input stage done, x=%ldx%ldx%ld", x_ne[0], x_ne[1], x_ne[2]);
 
-            // ============ STAGE 2: Transformer blocks (one at a time) ============
             // Start async prefetch for first block
             if (num_blocks > 0 && streaming_engine_) {
                 std::string first_block = "blocks.0";
@@ -1095,7 +965,7 @@ namespace Anima {
 
                 // Load this block's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("AnimaRunner: Failed to load %s", block_name.c_str());
+                    LOG_ERROR("Failed to load %s", block_name.c_str());
                     return false;
                 }
 
@@ -1146,7 +1016,7 @@ namespace Anima {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("AnimaRunner: Block %lld execution failed", block_idx);
+                    LOG_ERROR("Block %lld execution failed", block_idx);
                     return false;
                 }
 
@@ -1164,12 +1034,11 @@ namespace Anima {
                 // Offload this block
                 registry.move_layer_to_cpu(block_name);
 
-                LOG_DEBUG("AnimaRunner: Block %lld/%lld done (%.2fms)",
+                LOG_DEBUG("Block %lld/%lld done (%.2fms)",
                           block_idx + 1, num_blocks, (ggml_time_ms() - t_block_start) / 1.0);
             }
 
-            // ============ STAGE 3: Output stage ============
-            LOG_DEBUG("AnimaRunner: Executing output stage");
+            LOG_DEBUG("Executing output stage");
             {
                 auto get_output_graph = [&]() -> struct ggml_cgraph* {
                     struct ggml_cgraph* gf = new_graph_custom(ANIMA_GRAPH_SIZE / 4);
@@ -1198,13 +1067,13 @@ namespace Anima {
                 };
 
                 if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("AnimaRunner: Output stage failed");
+                    LOG_ERROR("Output stage failed");
                     return false;
                 }
             }
 
             int64_t t_end = ggml_time_ms();
-            LOG_INFO("AnimaRunner: TRUE per-layer streaming completed in %.2fs (%lld blocks)",
+            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%lld blocks)",
                      (t_end - t_start) / 1000.0, num_blocks);
 
             return true;

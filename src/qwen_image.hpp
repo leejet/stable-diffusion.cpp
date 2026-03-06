@@ -430,12 +430,6 @@ namespace Qwen {
             return img;
         }
 
-        // ============== Staged Forward Methods for True Per-Layer Streaming ==============
-
-        /**
-         * Input stage: compute time embedding, img_in, txt_in projections
-         * Returns: {img, txt, t_emb} tensors
-         */
         struct StreamingInputResult {
             ggml_tensor* img;
             ggml_tensor* txt;
@@ -482,10 +476,6 @@ namespace Qwen {
             return {img, txt, t_emb};
         }
 
-        /**
-         * Single block forward: compute one transformer block
-         * Returns: {img_out, txt_out}
-         */
         std::pair<ggml_tensor*, ggml_tensor*> forward_single_block(GGMLRunnerContext* ctx,
                                                                     int block_idx,
                                                                     struct ggml_tensor* img,
@@ -497,10 +487,6 @@ namespace Qwen {
             return block->forward(ctx, img, txt, t_emb, pe, modulate_index);
         }
 
-        /**
-         * Output stage: compute norm_out, proj_out, and unpatchify
-         * Returns: final output tensor [N, C, H, W]
-         */
         struct ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
                                                   struct ggml_tensor* img,
                                                   struct ggml_tensor* t_emb,
@@ -626,60 +612,13 @@ namespace Qwen {
             qwen_image.get_param_tensors(tensors, prefix);
         }
 
-        // ============== Layer Streaming Support ==============
-    private:
-        std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
-        bool streaming_enabled_ = false;
-
     public:
         void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
-            if (!params_backend || !runtime_backend) {
-                LOG_WARN("QwenImageRunner: Cannot enable streaming without both CPU and GPU backends");
-                return;
-            }
-
-            streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
-                runtime_backend, params_backend);
-
-            LayerStreaming::StreamingConfig cfg = config;
-            cfg.enabled = true;
-            cfg.keep_layers_behind = 0;
-            streaming_engine_->set_config(cfg);
-
             std::map<std::string, ggml_tensor*> tensor_map;
             qwen_image.get_param_tensors(tensor_map, "model.diffusion_model");
-            streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::qwen_image_layer_pattern);
-
-            streaming_enabled_ = true;
-            LOG_INFO("QwenImageRunner: Layer streaming enabled (%zu layers)",
-                     streaming_engine_->get_registry().get_layer_count());
-        }
-
-        void disable_layer_streaming() {
-            streaming_enabled_ = false;
-            streaming_engine_.reset();
-            LOG_INFO("QwenImageRunner: Layer streaming disabled");
-        }
-
-        bool is_streaming_enabled() const {
-            return streaming_enabled_ && streaming_engine_ != nullptr;
-        }
-
-        void offload_streaming_layers() {
-            if (streaming_engine_) {
-                auto& registry = streaming_engine_->get_registry();
-                auto layers = registry.get_layer_names_sorted();
-                size_t offloaded = 0;
-                for (const auto& layer : layers) {
-                    if (registry.is_layer_on_gpu(layer)) {
-                        registry.move_layer_to_cpu(layer);
-                        offloaded++;
-                    }
-                }
-                if (offloaded > 0) {
-                    LOG_INFO("QwenImageRunner: Offloaded %zu streaming layers to CPU", offloaded);
-                }
-            }
+            init_streaming(config, tensor_map, LayerStreaming::qwen_image_layer_pattern);
+            LOG_INFO("%s layer streaming enabled (%zu layers)",
+                     get_desc().c_str(), streaming_engine_->get_registry().get_layer_count());
         }
 
         bool compute_streaming(int n_threads,
@@ -690,73 +629,29 @@ namespace Qwen {
                                bool increase_ref_index               = false,
                                struct ggml_tensor** output           = nullptr,
                                struct ggml_context* output_ctx       = nullptr) {
-            if (!streaming_engine_) {
-                LOG_ERROR("QwenImageRunner: Streaming not enabled");
+            if (!is_streaming_enabled()) {
+                LOG_ERROR("%s streaming not enabled", get_desc().c_str());
                 return false;
             }
 
             int64_t t0 = ggml_time_ms();
+            auto analysis = analyze_vram_budget();
 
-            auto& registry = streaming_engine_->get_registry();
-            auto& budget = streaming_engine_->get_budget();
-
-            // Calculate total model size
-            size_t total_model_size = 0;
-            auto all_layers = registry.get_layer_names_sorted();
-            for (const auto& layer_name : all_layers) {
-                total_model_size += registry.get_layer_size(layer_name);
-            }
-
-            // Get available VRAM (with safety margin)
-            size_t available_vram = budget.get_available_vram();
-
-            // Check how much is already on GPU
-            size_t already_on_gpu = 0;
-            for (const auto& layer_name : all_layers) {
-                if (registry.is_layer_on_gpu(layer_name)) {
-                    already_on_gpu += registry.get_layer_size(layer_name);
-                }
-            }
-
-            // Effective model size = what still needs to be loaded
-            size_t remaining_to_load = (total_model_size > already_on_gpu) ? (total_model_size - already_on_gpu) : 0;
-
-            LOG_DEBUG("QwenImageRunner: Model size = %.2f GB, On GPU = %.2f GB, Remaining = %.2f GB, Available VRAM = %.2f GB",
-                      total_model_size / (1024.0 * 1024.0 * 1024.0),
-                      already_on_gpu / (1024.0 * 1024.0 * 1024.0),
-                      remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                      available_vram / (1024.0 * 1024.0 * 1024.0));
-
-            // Check if model fits in VRAM (accounting for what's already loaded)
-            if (remaining_to_load <= available_vram) {
-                // Model fits - use coarse-stage (load all, compute once)
-                LOG_INFO("QwenImageRunner: Model fits in VRAM, using coarse-stage streaming");
-                for (const auto& layer_name : all_layers) {
-                    if (!registry.is_layer_on_gpu(layer_name)) {
-                        if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                            LOG_WARN("QwenImageRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
-                        }
-                        registry.move_layer_to_gpu(layer_name);
-                    }
-                }
-
+            if (analysis.fits_in_vram) {
+                LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
+                load_all_layers_coarse();
                 bool result = compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
-                                      output, output_ctx, true /* skip_param_offload */);
-
+                                      output, output_ctx, true);
                 int64_t t1 = ggml_time_ms();
-                if (streaming_engine_->get_config().log_operations) {
-                    LOG_DEBUG("QwenImageRunner: Coarse-stage streaming completed in %.2fs", (t1 - t0) / 1000.0);
-                }
-
-                // Free compute buffer so next iteration can use different graph if needed
+                LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
                 free_compute_buffer();
                 return result;
             }
 
-            // Model doesn't fit - use true per-layer streaming
-            LOG_INFO("QwenImageRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
-                     remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                     available_vram / (1024.0 * 1024.0 * 1024.0));
+            LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                     get_desc().c_str(),
+                     analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                     analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
 
             return compute_streaming_true(n_threads, x, timesteps, context, ref_latents, increase_ref_index, output, output_ctx);
         }
@@ -779,9 +674,6 @@ namespace Qwen {
             bool has_modulate_index = false;
         };
 
-        /**
-         * Copy tensor data to persistent storage
-         */
         void copy_tensor_to_storage(ggml_tensor* tensor, std::vector<float>& storage, int64_t* ne) {
             size_t nelements = ggml_nelements(tensor);
             storage.resize(nelements);
@@ -795,9 +687,6 @@ namespace Qwen {
             }
         }
 
-        /**
-         * Create tensor in context from persistent storage
-         */
         ggml_tensor* create_tensor_from_storage(ggml_context* ctx, const std::vector<float>& storage,
                                                  const int64_t* ne, const char* name) {
             ggml_tensor* tensor = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
@@ -805,19 +694,6 @@ namespace Qwen {
             return tensor;
         }
 
-        /**
-         * True per-layer streaming: execute one transformer block at a time
-         * This enables running models larger than VRAM by only keeping one block on GPU at a time.
-         *
-         * The approach:
-         * 1. Execute input stage (time_text_embed, img_in, txt_in) - store results
-         * 2. For each transformer block:
-         *    - Load block weights to GPU
-         *    - Build mini-graph for just this block
-         *    - Execute and store results
-         *    - Offload block weights to CPU
-         * 3. Execute output stage (norm_out, proj_out) - get final result
-         */
         bool compute_streaming_true(int n_threads,
                                     struct ggml_tensor* x,
                                     struct ggml_tensor* timesteps,
@@ -830,12 +706,12 @@ namespace Qwen {
             int64_t t_start = ggml_time_ms();
 
             const int num_layers = qwen_image_params.num_layers;
-            LOG_INFO("QwenImageRunner: TRUE per-layer streaming - %d blocks (one at a time)", num_layers);
+            LOG_INFO("TRUE per-layer streaming - %d blocks (one at a time)", num_layers);
 
             // Phase 1: Load global layers (_global contains input/output projections)
-            LOG_DEBUG("QwenImageRunner: Loading global layers");
+            LOG_DEBUG("Loading global layers");
             if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("QwenImageRunner: Failed to load _global to GPU");
+                LOG_ERROR("Failed to load _global to GPU");
                 return false;
             }
 
@@ -886,8 +762,7 @@ namespace Qwen {
             int64_t img_ne[4], txt_ne[4], t_emb_ne[4];
             int64_t img_tokens_count = 0;
 
-            // ============ STAGE 1: Input projections ============
-            LOG_DEBUG("QwenImageRunner: Executing input stage");
+            LOG_DEBUG("Executing input stage");
             {
                 // Build mini-graph for input projections only
                 struct ggml_cgraph* input_graph = nullptr;
@@ -928,7 +803,7 @@ namespace Qwen {
 
                 // Execute input stage - don't free compute buffer immediately
                 if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("QwenImageRunner: Input stage failed");
+                    LOG_ERROR("Input stage failed");
                     return false;
                 }
 
@@ -955,7 +830,7 @@ namespace Qwen {
                         t_emb_ne[i] = t_emb_output->ne[i];
                     }
                 } else {
-                    LOG_ERROR("QwenImageRunner: Failed to get input stage outputs");
+                    LOG_ERROR("Failed to get input stage outputs");
                     free_compute_buffer();
                     return false;
                 }
@@ -964,12 +839,9 @@ namespace Qwen {
                 free_compute_buffer();
             }
 
-            LOG_DEBUG("QwenImageRunner: Input stage done, img=%ldx%ldx%ldx%ld, txt=%ldx%ldx%ldx%ld",
+            LOG_DEBUG("Input stage done, img=%ldx%ldx%ldx%ld, txt=%ldx%ldx%ldx%ld",
                       img_ne[0], img_ne[1], img_ne[2], img_ne[3],
                       txt_ne[0], txt_ne[1], txt_ne[2], txt_ne[3]);
-
-            // ============ STAGE 2: Transformer blocks (one at a time) ============
-            // With async prefetching: while computing block N, prefetch block N+1
 
             // Start prefetching the first block
             std::string first_block_name = "transformer_blocks.0";
@@ -984,7 +856,7 @@ namespace Qwen {
 
                 // Load this block's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("QwenImageRunner: Failed to load block %d", block_idx);
+                    LOG_ERROR("Failed to load block %d", block_idx);
                     return false;
                 }
 
@@ -1043,7 +915,7 @@ namespace Qwen {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_block_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("QwenImageRunner: Block %d execution failed", block_idx);
+                    LOG_ERROR("Block %d execution failed", block_idx);
                     return false;
                 }
 
@@ -1064,12 +936,11 @@ namespace Qwen {
                 // Offload this block
                 registry.move_layer_to_cpu(block_name);
 
-                LOG_DEBUG("QwenImageRunner: Block %d/%d done (%.2fms)",
+                LOG_DEBUG("Block %d/%d done (%.2fms)",
                           block_idx + 1, num_layers, (ggml_time_ms() - t_block_start) / 1.0);
             }
 
-            // ============ STAGE 3: Output projections ============
-            LOG_DEBUG("QwenImageRunner: Executing output stage");
+            LOG_DEBUG("Executing output stage");
             {
                 ggml_tensor* final_out = nullptr;
 
@@ -1096,13 +967,13 @@ namespace Qwen {
                 };
 
                 if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("QwenImageRunner: Output stage failed");
+                    LOG_ERROR("Output stage failed");
                     return false;
                 }
             }
 
             int64_t t_end = ggml_time_ms();
-            LOG_INFO("QwenImageRunner: TRUE per-layer streaming completed in %.2fs (%d blocks)",
+            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d blocks)",
                      (t_end - t_start) / 1000.0, num_layers);
 
             return true;

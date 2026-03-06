@@ -456,11 +456,6 @@ namespace ZImage {
             return out;
         }
 
-        // ============== Staged Forward Methods for True Per-Layer Streaming ==============
-
-        /**
-         * Input stage result structure
-         */
         struct StreamingInputResult {
             ggml_tensor* txt;       // [N, n_txt_token + n_txt_pad_token, hidden_size]
             ggml_tensor* img;       // [N, n_img_token + n_img_pad_token, hidden_size]
@@ -473,9 +468,6 @@ namespace ZImage {
             int64_t n_img_token;
         };
 
-        /**
-         * Input stage: compute embeddings and initial projections
-         */
         StreamingInputResult forward_input_stage(GGMLRunnerContext* ctx,
                                                   struct ggml_tensor* x,
                                                   struct ggml_tensor* timestep,
@@ -516,9 +508,6 @@ namespace ZImage {
             return {txt, img, t_emb, txt_pe, img_pe, pe, n_txt_token, n_txt_pad_token, n_img_token};
         }
 
-        /**
-         * Execute one context_refiner block
-         */
         ggml_tensor* forward_context_refiner_block(GGMLRunnerContext* ctx,
                                                     int block_idx,
                                                     struct ggml_tensor* txt,
@@ -527,9 +516,6 @@ namespace ZImage {
             return block->forward(ctx, txt, txt_pe, nullptr, nullptr);
         }
 
-        /**
-         * Execute one noise_refiner block
-         */
         ggml_tensor* forward_noise_refiner_block(GGMLRunnerContext* ctx,
                                                   int block_idx,
                                                   struct ggml_tensor* img,
@@ -539,9 +525,6 @@ namespace ZImage {
             return block->forward(ctx, img, img_pe, nullptr, t_emb);
         }
 
-        /**
-         * Execute one main layer block
-         */
         ggml_tensor* forward_layer_block(GGMLRunnerContext* ctx,
                                           int block_idx,
                                           struct ggml_tensor* txt_img,
@@ -551,9 +534,6 @@ namespace ZImage {
             return block->forward(ctx, txt_img, pe, nullptr, t_emb);
         }
 
-        /**
-         * Output stage: apply final_layer
-         */
         ggml_tensor* forward_output_stage(GGMLRunnerContext* ctx,
                                            struct ggml_tensor* txt_img,
                                            struct ggml_tensor* t_emb) {
@@ -573,10 +553,6 @@ namespace ZImage {
         std::vector<float> pe_vec;
         std::vector<float> timestep_vec;
         SDVersion version;
-
-        // Layer streaming support
-        std::unique_ptr<LayerStreaming::LayerExecutionEngine> streaming_engine_;
-        bool streaming_enabled_ = false;
 
     public:
 
@@ -598,46 +574,12 @@ namespace ZImage {
             z_image.get_param_tensors(tensors, prefix);
         }
 
-        // Layer streaming methods
         void enable_layer_streaming(const LayerStreaming::StreamingConfig& config = {}) {
-            streaming_engine_ = std::make_unique<LayerStreaming::LayerExecutionEngine>(
-                runtime_backend, params_backend);
-            streaming_engine_->set_config(config);
-
             std::map<std::string, ggml_tensor*> tensor_map;
             z_image.get_param_tensors(tensor_map, "model.diffusion_model");
-            streaming_engine_->register_model_layers_from_map(tensor_map, LayerStreaming::zimage_layer_pattern);
-
-            streaming_enabled_ = true;
-            LOG_INFO("ZImageRunner: Layer streaming enabled (%zu layers)",
-                     streaming_engine_->get_registry().get_layer_count());
-        }
-
-        void disable_layer_streaming() {
-            streaming_enabled_ = false;
-            streaming_engine_.reset();
-            LOG_INFO("ZImageRunner: Layer streaming disabled");
-        }
-
-        bool is_streaming_enabled() const {
-            return streaming_enabled_ && streaming_engine_ != nullptr;
-        }
-
-        void offload_streaming_layers() {
-            if (streaming_engine_) {
-                auto& registry = streaming_engine_->get_registry();
-                auto layers = registry.get_layer_names_sorted();
-                size_t offloaded = 0;
-                for (const auto& layer : layers) {
-                    if (registry.is_layer_on_gpu(layer)) {
-                        registry.move_layer_to_cpu(layer);
-                        offloaded++;
-                    }
-                }
-                if (offloaded > 0) {
-                    LOG_INFO("ZImageRunner: Offloaded %zu streaming layers to CPU", offloaded);
-                }
-            }
+            init_streaming(config, tensor_map, LayerStreaming::zimage_layer_pattern);
+            LOG_INFO("%s layer streaming enabled (%zu layers)",
+                     get_desc().c_str(), streaming_engine_->get_registry().get_layer_count());
         }
 
         bool compute_streaming(int n_threads,
@@ -648,102 +590,34 @@ namespace ZImage {
                                bool increase_ref_index               = false,
                                struct ggml_tensor** output           = nullptr,
                                struct ggml_context* output_ctx       = nullptr) {
-            if (!streaming_engine_) {
-                LOG_ERROR("ZImageRunner: Streaming not enabled");
+            if (!is_streaming_enabled()) {
+                LOG_ERROR("%s streaming not enabled", get_desc().c_str());
                 return false;
             }
 
             int64_t t0 = ggml_time_ms();
+            auto analysis = analyze_vram_budget();
 
-            auto& registry = streaming_engine_->get_registry();
-            auto& budget = streaming_engine_->get_budget();
-
-            // Calculate total model size
-            size_t total_model_size = 0;
-            auto all_layers = registry.get_layer_names_sorted();
-            for (const auto& layer_name : all_layers) {
-                total_model_size += registry.get_layer_size(layer_name);
-            }
-
-            // Get available VRAM
-            size_t available_vram = budget.get_available_vram();
-
-            // Check how much is already on GPU (for CFG - multiple calls per step)
-            size_t already_on_gpu = 0;
-            for (const auto& layer_name : all_layers) {
-                if (registry.is_layer_on_gpu(layer_name)) {
-                    already_on_gpu += registry.get_layer_size(layer_name);
-                }
-            }
-
-            // Effective model size = what still needs to be loaded
-            size_t remaining_to_load = (total_model_size > already_on_gpu) ? (total_model_size - already_on_gpu) : 0;
-
-            LOG_DEBUG("ZImageRunner: Model size = %.2f GB, On GPU = %.2f GB, Remaining = %.2f GB, Available VRAM = %.2f GB",
-                      total_model_size / (1024.0 * 1024.0 * 1024.0),
-                      already_on_gpu / (1024.0 * 1024.0 * 1024.0),
-                      remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                      available_vram / (1024.0 * 1024.0 * 1024.0));
-
-            // Check if model fits in VRAM (accounting for what's already loaded)
-            // Environment variable to force TRUE streaming for debugging
-            const char* force_true_streaming = std::getenv("SDCPP_FORCE_TRUE_STREAMING");
-            bool force_true = force_true_streaming && std::string(force_true_streaming) == "1";
-
-            if (!force_true && remaining_to_load <= available_vram) {
-                // Model fits - load all
-                LOG_INFO("ZImageRunner: Model fits in VRAM, using coarse-stage streaming");
-                for (const auto& layer_name : all_layers) {
-                    if (!registry.is_layer_on_gpu(layer_name)) {
-                        if (!budget.ensure_vram_for_layer(layer_name, 0)) {
-                            LOG_WARN("ZImageRunner: Could not ensure VRAM for layer %s", layer_name.c_str());
-                        }
-                        registry.move_layer_to_gpu(layer_name);
-                    }
-                }
-                // Run compute with coarse-stage
-                bool result = compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
-                                      output, output_ctx, true /* skip_param_offload */);
-                int64_t t1 = ggml_time_ms();
-                LOG_INFO("ZImageRunner: Coarse-stage streaming completed in %.2fs", (t1 - t0) / 1000.0);
-
-                // Free compute buffer so next iteration can use different graph if needed
-                free_compute_buffer();
-                return result;
-            }
-
-            // Model doesn't fit - use TRUE per-layer streaming
-            // Environment variable to force coarse-stage for debugging (may OOM)
-            const char* force_coarse = std::getenv("SDCPP_FORCE_COARSE_STREAMING");
-            if (force_coarse && std::string(force_coarse) == "1") {
-                LOG_WARN("ZImageRunner: SDCPP_FORCE_COARSE_STREAMING=1, forcing coarse-stage (may OOM!)");
-                for (const auto& layer_name : all_layers) {
-                    if (!registry.is_layer_on_gpu(layer_name)) {
-                        registry.move_layer_to_gpu(layer_name);
-                    }
-                }
+            if (analysis.fits_in_vram) {
+                LOG_INFO("%s model fits in VRAM, using coarse-stage streaming", get_desc().c_str());
+                load_all_layers_coarse();
                 bool result = compute(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
                                       output, output_ctx, true);
+                int64_t t1 = ggml_time_ms();
+                LOG_INFO("%s coarse-stage streaming completed in %.2fs", get_desc().c_str(), (t1 - t0) / 1000.0);
                 free_compute_buffer();
                 return result;
             }
 
-            if (force_true) {
-                LOG_WARN("ZImageRunner: SDCPP_FORCE_TRUE_STREAMING=1, forcing TRUE per-layer streaming");
-            } else {
-                LOG_INFO("ZImageRunner: Remaining to load (%.2f GB) exceeds available VRAM (%.2f GB), using TRUE per-layer streaming",
-                         remaining_to_load / (1024.0 * 1024.0 * 1024.0),
-                         available_vram / (1024.0 * 1024.0 * 1024.0));
-            }
+            LOG_INFO("%s remaining %.2f GB exceeds available %.2f GB, using per-layer streaming",
+                     get_desc().c_str(),
+                     analysis.remaining_to_load / (1024.0 * 1024.0 * 1024.0),
+                     analysis.available_vram / (1024.0 * 1024.0 * 1024.0));
 
             return compute_streaming_true(n_threads, x, timesteps, context, ref_latents, increase_ref_index,
                                           output, output_ctx);
         }
 
-        /**
-         * TRUE per-layer streaming for ZImage
-         * Executes each block as a separate mini-graph to minimize VRAM usage
-         */
         bool compute_streaming_true(int n_threads,
                                      struct ggml_tensor* x,
                                      struct ggml_tensor* timesteps,
@@ -761,12 +635,12 @@ namespace ZImage {
             const int64_t W = x->ne[0];
             const int64_t H = x->ne[1];
 
-            LOG_INFO("ZImageRunner: TRUE per-layer streaming - %d refiners + %d layers",
+            LOG_INFO("TRUE per-layer streaming - %d refiners + %d layers",
                      num_refiner_layers, num_layers);
 
             // Load global layers
             if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("ZImageRunner: Failed to load _global to GPU");
+                LOG_ERROR("Failed to load _global to GPU");
                 return false;
             }
 
@@ -775,11 +649,11 @@ namespace ZImage {
                 std::string cr_name = "context_refiner." + std::to_string(i);
                 std::string nr_name = "noise_refiner." + std::to_string(i);
                 if (!registry.move_layer_to_gpu(cr_name)) {
-                    LOG_ERROR("ZImageRunner: Failed to load %s to GPU", cr_name.c_str());
+                    LOG_ERROR("Failed to load %s to GPU", cr_name.c_str());
                     return false;
                 }
                 if (!registry.move_layer_to_gpu(nr_name)) {
-                    LOG_ERROR("ZImageRunner: Failed to load %s to GPU", nr_name.c_str());
+                    LOG_ERROR("Failed to load %s to GPU", nr_name.c_str());
                     return false;
                 }
             }
@@ -880,7 +754,7 @@ namespace ZImage {
 
                 // Don't free compute buffer immediately - we need to read outputs first
                 if (!GGMLRunner::compute(get_refiner_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("ZImageRunner: Refiner stage failed");
+                    LOG_ERROR("Refiner stage failed");
                     return false;
                 }
 
@@ -900,7 +774,7 @@ namespace ZImage {
                         t_emb_ne[i] = t_emb_output->ne[i];
                     }
                 } else {
-                    LOG_ERROR("ZImageRunner: Failed to get refiner stage outputs");
+                    LOG_ERROR("Failed to get refiner stage outputs");
                     free_compute_buffer();
                     return false;
                 }
@@ -945,7 +819,7 @@ namespace ZImage {
 
                 // Load this layer's weights (sync load if prefetch didn't happen)
                 if (!registry.move_layer_to_gpu(layer_name)) {
-                    LOG_ERROR("ZImageRunner: Failed to load %s", layer_name.c_str());
+                    LOG_ERROR("Failed to load %s", layer_name.c_str());
                     return false;
                 }
 
@@ -985,7 +859,7 @@ namespace ZImage {
                 };
 
                 if (!GGMLRunner::compute(get_layer_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("ZImageRunner: Layer %d execution failed", layer_idx);
+                    LOG_ERROR("Layer %d execution failed", layer_idx);
                     return false;
                 }
 
@@ -1036,13 +910,13 @@ namespace ZImage {
                 };
 
                 if (!GGMLRunner::compute(get_output_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("ZImageRunner: Output stage failed");
+                    LOG_ERROR("Output stage failed");
                     return false;
                 }
             }
 
             int64_t t_end = ggml_time_ms();
-            LOG_INFO("ZImageRunner: TRUE per-layer streaming completed in %.2fs (%d refiners + %d layers)",
+            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d refiners + %d layers)",
                      (t_end - t_start) / 1000.0, num_refiner_layers, num_layers);
 
             return true;
