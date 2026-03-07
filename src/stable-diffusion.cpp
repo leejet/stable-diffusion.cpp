@@ -2646,7 +2646,7 @@ public:
         } else {
             latent = gaussian_latent_sample(work_ctx, vae_output);
         }
-        if (!use_tiny_autoencoder) {
+        if (!use_tiny_autoencoder && version != VERSION_SD1_PIX2PIX) {
             process_latent_in(latent);
         }
         if (sd_version_is_qwen_image(version) || sd_version_is_anima(version)) {
