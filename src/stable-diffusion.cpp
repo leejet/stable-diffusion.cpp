@@ -4268,3 +4268,315 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
 
     return result_images;
 }
+
+// --- Streaming API Extensions Implementations ---
+
+struct sd_condition_t {
+    struct ggml_context* storage_ctx = nullptr;
+    SDCondition cond;
+    SDCondition uncond;
+
+    ~sd_condition_t() {
+        if (storage_ctx) ggml_free(storage_ctx);
+    }
+};
+
+struct sd_image_latent_t {
+    struct ggml_context* storage_ctx = nullptr;
+    struct ggml_tensor* latent = nullptr;
+
+    ~sd_image_latent_t() {
+        if (storage_ctx) ggml_free(storage_ctx);
+    }
+};
+
+static ggml_tensor* duplicate_tensor_to_ctx(struct ggml_context* ctx, struct ggml_tensor* src) {
+    if (!src) return nullptr;
+    struct ggml_tensor* dst = ggml_dup_tensor(ctx, src);
+    if (src->data && dst->data) {
+        memcpy(dst->data, src->data, ggml_nbytes(src));
+    }
+    ggml_set_name(dst, src->name);
+    return dst;
+}
+
+static size_t calculate_condition_storage_size(const SDCondition& cond) {
+    size_t size = 0;
+    if (cond.c_crossattn) size += ggml_nbytes(cond.c_crossattn) + ggml_tensor_overhead();
+    if (cond.c_concat)    size += ggml_nbytes(cond.c_concat)    + ggml_tensor_overhead();
+    if (cond.c_vector)    size += ggml_nbytes(cond.c_vector)    + ggml_tensor_overhead();
+    return size;
+}
+
+static void copy_sd_condition(struct ggml_context* storage_ctx, SDCondition& dst, const SDCondition& src) {
+    dst.c_crossattn = duplicate_tensor_to_ctx(storage_ctx, src.c_crossattn);
+    dst.c_concat    = duplicate_tensor_to_ctx(storage_ctx, src.c_concat);
+    dst.c_vector    = duplicate_tensor_to_ctx(storage_ctx, src.c_vector);
+}
+
+SD_API sd_condition_t* sd_encode_condition(
+    sd_ctx_t*   sd_ctx,
+    const char* prompt,
+    const char* negative_prompt
+) {
+    if (!sd_ctx || !sd_ctx->sd || !sd_ctx->sd->cond_stage_model) {
+        return nullptr;
+    }
+
+    struct ggml_init_params work_params;
+    work_params.mem_size   = 256 * 1024 * 1024;
+    work_params.mem_buffer = nullptr;
+    work_params.no_alloc   = false;
+    struct ggml_context* work_ctx = ggml_init(work_params);
+
+    if (!work_ctx) {
+        LOG_ERROR("ggml_init() failed in sd_encode_condition");
+        return nullptr;
+    }
+
+    ConditionerParams condition_params;
+    condition_params.text            = prompt ? prompt : "";
+    condition_params.clip_skip       = -1;
+    condition_params.width           = 1024;
+    condition_params.height          = 1024;
+    condition_params.adm_in_channels = static_cast<int>(sd_ctx->sd->diffusion_model->get_adm_in_channels());
+    condition_params.zero_out_masked = false;
+
+    SDCondition temp_cond = sd_ctx->sd->cond_stage_model->get_learned_condition(
+        work_ctx,
+        sd_ctx->sd->n_threads,
+        condition_params
+    );
+
+    SDCondition temp_uncond = {nullptr, nullptr, nullptr};
+    if (negative_prompt && strlen(negative_prompt) > 0) {
+        condition_params.text = negative_prompt;
+        temp_uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(
+            work_ctx,
+            sd_ctx->sd->n_threads,
+            condition_params
+        );
+    }
+
+    size_t required_storage_size = calculate_condition_storage_size(temp_cond) + 
+                                   calculate_condition_storage_size(temp_uncond) +
+                                   ggml_tensor_overhead() * 2;
+
+    struct ggml_init_params storage_params = { required_storage_size, nullptr, false };
+    struct ggml_context* storage_ctx = ggml_init(storage_params);
+    if (!storage_ctx) {
+        LOG_ERROR("ggml_init() for storage_ctx failed");
+        ggml_free(work_ctx);
+        return nullptr;
+    }
+
+    sd_condition_t* res = new sd_condition_t();
+    res->storage_ctx = storage_ctx;
+
+    copy_sd_condition(res->storage_ctx, res->cond, temp_cond);
+    copy_sd_condition(res->storage_ctx, res->uncond, temp_uncond);
+
+    ggml_free(work_ctx);
+
+    return res;
+}
+
+SD_API void sd_free_condition(sd_condition_t* cond) {
+    if (cond) {
+        delete cond;
+    }
+}
+
+SD_API sd_image_latent_t* sd_encode_ref_image(
+    sd_ctx_t*         sd_ctx,
+    const sd_image_t* image
+) {
+    if (!sd_ctx || !sd_ctx->sd || !image) {
+        return nullptr;
+    }
+
+    struct ggml_init_params work_params;
+    work_params.mem_size   = 256 * 1024 * 1024;
+    work_params.mem_buffer = nullptr;
+    work_params.no_alloc   = false;
+    struct ggml_context* work_ctx = ggml_init(work_params);
+
+    if (!work_ctx) {
+        LOG_ERROR("ggml_init() failed in sd_encode_ref_image");
+        return nullptr;
+    }
+
+    struct ggml_tensor* img = ggml_new_tensor_4d(work_ctx,
+                                                 GGML_TYPE_F32,
+                                                 image->width,
+                                                 image->height,
+                                                 3,
+                                                 1);
+    if (!img) {
+        ggml_free(work_ctx);
+        return nullptr;
+    }
+
+    sd_image_to_ggml_tensor(*image, img);
+
+    ggml_tensor* temp_latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
+
+    size_t required_storage_size = ggml_nbytes(temp_latent) + ggml_tensor_overhead() * 2;
+    struct ggml_init_params storage_params = { required_storage_size, nullptr, false };
+    struct ggml_context* storage_ctx = ggml_init(storage_params);
+    if (!storage_ctx) {
+        LOG_ERROR("ggml_init() for storage_ctx failed");
+        ggml_free(work_ctx);
+        return nullptr;
+    }
+
+    sd_image_latent_t* res = new sd_image_latent_t();
+    res->storage_ctx = storage_ctx;
+    res->latent = duplicate_tensor_to_ctx(storage_ctx, temp_latent);
+
+    ggml_free(work_ctx);
+
+    return res;
+}
+
+SD_API void sd_free_image_latent(sd_image_latent_t* latent) {
+    if (latent) {
+        delete latent;
+    }
+}
+
+SD_API sd_image_t sd_img2img_with_cond(
+    sd_ctx_t*          sd_ctx,
+    sd_image_t         input_frame,
+    sd_condition_t*    cond,
+    sd_image_latent_t** ref_latents,
+    int                n_ref_latents,
+    float              strength,
+    int                sample_steps,
+    float              cfg_scale,
+    long long int      seed
+) {
+    sd_image_t result = {0, 0, 0, nullptr};
+    if (!sd_ctx || !sd_ctx->sd || !cond || !input_frame.data) {
+        return result;
+    }
+
+    int width = input_frame.width;
+    int height = input_frame.height;
+
+    int vae_scale_factor = sd_ctx->sd->get_vae_scale_factor();
+    int diffusion_model_down_factor = sd_ctx->sd->get_diffusion_model_down_factor();
+    int spatial_multiple = vae_scale_factor * diffusion_model_down_factor;
+
+    int width_offset  = align_up_offset(width, spatial_multiple);
+    int height_offset = align_up_offset(height, spatial_multiple);
+    if (width_offset > 0 || height_offset > 0) {
+        width += width_offset;
+        height += height_offset;
+        LOG_WARN("align up %dx%d to %dx%d (multiple=%d)", input_frame.width, input_frame.height, width, height, spatial_multiple);
+    }
+
+    size_t compute_mem_size = 128ull * 1024 * 1024; // computation margin
+    compute_mem_size += static_cast<size_t>(width) * height * 3 * sizeof(float) * 2;
+    compute_mem_size += static_cast<size_t>(width / vae_scale_factor) * (height / vae_scale_factor) * 4 * sizeof(float) * 2;
+    if (n_ref_latents > 0) {
+        compute_mem_size += static_cast<size_t>(width / vae_scale_factor) * (height / vae_scale_factor) * 4 * sizeof(float) * n_ref_latents;
+    }
+
+    struct ggml_init_params params;
+    params.mem_size   = compute_mem_size;
+    params.mem_buffer = nullptr;
+    params.no_alloc   = false;
+
+    struct ggml_context* work_ctx = ggml_init(params);
+    if (!work_ctx) {
+        LOG_ERROR("ggml_init() failed in sd_img2img_with_cond");
+        return result;
+    }
+
+    if (seed < 0) {
+        srand((int)time(nullptr));
+        seed = rand();
+    }
+    sd_ctx->sd->rng->manual_seed(seed);
+    sd_ctx->sd->sampler_rng->manual_seed(seed);
+
+    enum sample_method_t sample_method = sd_get_default_sample_method(sd_ctx);
+    scheduler_t scheduler = sd_get_default_scheduler(sd_ctx, sample_method);
+
+    std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
+                                              sd_ctx->sd->get_image_seq_len(height, width),
+                                              scheduler,
+                                              sd_ctx->sd->version);
+
+    size_t t_enc = static_cast<size_t>(sample_steps * strength);
+    if (t_enc == sample_steps) t_enc--;
+    std::vector<float> sigma_sched;
+    sigma_sched.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
+    sigmas = sigma_sched;
+
+    ggml_tensor* init_img = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, width, height, 3, 1);
+    sd_image_to_ggml_tensor(input_frame, init_img);
+
+    ggml_tensor* init_latent = sd_ctx->sd->encode_first_stage(work_ctx, init_img);
+
+    std::vector<ggml_tensor*> refs;
+    for (int i = 0; i < n_ref_latents; i++) {
+        if (ref_latents[i] && ref_latents[i]->latent) {
+            refs.push_back(ref_latents[i]->latent);
+        }
+    }
+
+    struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 
+                                                   init_latent->ne[0], init_latent->ne[1], init_latent->ne[2], 1);
+    ggml_ext_im_set_randn_f32(noise, sd_ctx->sd->rng);
+
+    sd_guidance_params_t guidance;
+    guidance.txt_cfg = cfg_scale;
+    guidance.img_cfg = cfg_scale;
+    guidance.distilled_guidance = 3.5f;
+    guidance.slg.layer_count = 0;
+    guidance.slg.layer_start = 0.01f;
+    guidance.slg.layer_end = 0.2f;
+    guidance.slg.scale = 0.f;
+
+    SDCondition img_cond;
+    SDCondition id_cond;
+
+    struct ggml_tensor* x_0 = sd_ctx->sd->sample(work_ctx,
+                                                 sd_ctx->sd->diffusion_model,
+                                                 true,
+                                                 init_latent,
+                                                 noise,
+                                                 cond->cond,
+                                                 cond->uncond,
+                                                 img_cond,
+                                                 nullptr,
+                                                 0.f,
+                                                 guidance,
+                                                 0.f, // eta
+                                                 0, // shifted_timestep
+                                                 sample_method,
+                                                 sigmas,
+                                                 -1, // start_merge_step
+                                                 id_cond,
+                                                 refs,
+                                                 false, // increase_ref_index
+                                                 nullptr, // denoise_mask
+                                                 nullptr, // vace_context
+                                                 1.0f, // vace_strength
+                                                 nullptr); // cache_params
+
+    if (x_0) {
+        struct ggml_tensor* decoded = sd_ctx->sd->decode_first_stage(work_ctx, x_0);
+        if (decoded) {
+            result.width = width;
+            result.height = height;
+            result.channel = 3;
+            result.data = ggml_tensor_to_sd_image(decoded);
+        }
+    }
+
+    ggml_free(work_ctx);
+    return result;
+}

@@ -375,6 +375,40 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
 SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, int* num_frames_out);
 
+// --- Streaming API Extensions ---
+
+typedef struct sd_condition_t sd_condition_t;
+typedef struct sd_image_latent_t sd_image_latent_t;
+
+SD_API sd_condition_t* sd_encode_condition(
+    sd_ctx_t*   sd_ctx,
+    const char* prompt,
+    const char* negative_prompt
+);
+
+SD_API void sd_free_condition(sd_condition_t* cond);
+
+SD_API sd_image_latent_t* sd_encode_ref_image(
+    sd_ctx_t*         sd_ctx,
+    const sd_image_t* image
+);
+
+SD_API void sd_free_image_latent(sd_image_latent_t* latent);
+
+SD_API sd_image_t sd_img2img_with_cond(
+    sd_ctx_t*          sd_ctx,
+    sd_image_t         input_frame,
+    sd_condition_t*    cond,
+    sd_image_latent_t** ref_latents,
+    int                n_ref_latents,
+    float              strength,
+    int                sample_steps,
+    float              cfg_scale,
+    long long int      seed
+);
+
+// --- End of Streaming API Extensions ---
+
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
 SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
