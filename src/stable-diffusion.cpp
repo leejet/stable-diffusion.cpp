@@ -1798,21 +1798,26 @@ public:
                     }
                 }
             } else if (cache_params->mode == SD_CACHE_SPECTRUM) {
-                SpectrumConfig spectrum_config;
-                spectrum_config.w            = cache_params->spectrum_w;
-                spectrum_config.m            = cache_params->spectrum_m;
-                spectrum_config.lam          = cache_params->spectrum_lam;
-                spectrum_config.window_size  = cache_params->spectrum_window_size;
-                spectrum_config.flex_window  = cache_params->spectrum_flex_window;
-                spectrum_config.warmup_steps = cache_params->spectrum_warmup_steps;
-                spectrum_config.stop_percent = cache_params->spectrum_stop_percent;
-                size_t total_steps = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
-                spectrum_state.init(spectrum_config, total_steps);
-                spectrum_enabled = true;
-                LOG_INFO("Spectrum enabled - w: %.2f, m: %d, lam: %.2f, window: %d, flex: %.2f, warmup: %d, stop: %.0f%%",
-                         spectrum_config.w, spectrum_config.m, spectrum_config.lam,
-                         spectrum_config.window_size, spectrum_config.flex_window,
-                         spectrum_config.warmup_steps, spectrum_config.stop_percent * 100.0f);
+                bool spectrum_supported = sd_version_is_unet(version);
+                if (!spectrum_supported) {
+                    LOG_WARN("Spectrum requested but not supported for this model type (only UNET models)");
+                } else {
+                    SpectrumConfig spectrum_config;
+                    spectrum_config.w            = cache_params->spectrum_w;
+                    spectrum_config.m            = cache_params->spectrum_m;
+                    spectrum_config.lam          = cache_params->spectrum_lam;
+                    spectrum_config.window_size  = cache_params->spectrum_window_size;
+                    spectrum_config.flex_window  = cache_params->spectrum_flex_window;
+                    spectrum_config.warmup_steps = cache_params->spectrum_warmup_steps;
+                    spectrum_config.stop_percent = cache_params->spectrum_stop_percent;
+                    size_t total_steps = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
+                    spectrum_state.init(spectrum_config, total_steps);
+                    spectrum_enabled = true;
+                    LOG_INFO("Spectrum enabled - w: %.2f, m: %d, lam: %.2f, window: %d, flex: %.2f, warmup: %d, stop: %.0f%%",
+                             spectrum_config.w, spectrum_config.m, spectrum_config.lam,
+                             spectrum_config.window_size, spectrum_config.flex_window,
+                             spectrum_config.warmup_steps, spectrum_config.stop_percent * 100.0f);
+                }
             }
         }
 
