@@ -15,8 +15,10 @@ By leveraging this fork's C API extensions, you can cache prompt conditions and 
 
 ## 🚀 What's New in this Fork?
 
-We added the **Streaming API Extensions** to the C API. 
+We added the **Streaming API Extensions** to the C API.
 These functions allow you to encode text conditions and reference images exactly once, preserving them in a persistent GGML context. The cached representations can then be looped through `sd_img2img_with_cond` to radically increase Video-to-Video throughput.
+
+Note: `sd_encode_condition` requires `width` and `height` parameters to match the output resolution of the subsequent `sd_img2img_with_cond()` call. These values are used for positional embeddings in SDXL/SD3 architectures and are unused but still required for Flux.
 
 - For details on the architecture and caching mechanism: [Streaming API Design](./docs/streaming_api_design.md)
 
@@ -49,13 +51,15 @@ This fork retains 100% compatibility with all the amazing features developed by 
 
 ### 1. Build from Source
 
-Since you will likely integrate this as a backend for another project, we recommend building from source. For full instructions, see the [Build Guide](./docs/build.md).
+Since you will likely integrate this as a backend for another project, we recommend building from source. For full instructions, see the upstream [Build Guide](./docs/build.md).
 
 ```sh
-# Example: Building with CUDA acceleration and Shared Libraries (C API)
+# Example: Building with Vulkan acceleration and Shared Libraries (C API)
 mkdir build && cd build
 cmake .. -DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON
 cmake --build . --config Release
+# After a successful build, the CLI binary is at: build/bin/sd-cli
+# The shared library is at: build/stable-diffusion.dll (Windows) or build/libstable-diffusion.so (Linux)
 ```
 
 ### 2. Standard CLI Usage
@@ -67,6 +71,41 @@ Download a core model file (e.g., `v1-5-pruned-emaonly.safetensors` from Hugging
 ```
 
 For detailed arguments and use-cases (like img2img or LoRA), check out the [CLI Guide](./docs/cli_reference.md).
+
+### 3. Streaming API Quick Start (C/C++)
+
+The key benefit of this fork is condition caching. Here is a minimal example:
+
+```cpp
+#include "stable-diffusion.h"
+
+// 1. Initialize context (once)
+sd_ctx_params_t ctx_params;
+sd_ctx_params_init(&ctx_params);
+ctx_params.diffusion_model_path = "flux-2-klein-4b.gguf";
+ctx_params.vae_path = "ae.safetensors";
+ctx_params.llm_path = "qwen3-4b.gguf";
+ctx_params.flash_attn = true;
+sd_ctx_t* ctx = new_sd_ctx(&ctx_params);
+
+// 2. Encode prompt ONCE (the expensive LLM step)
+sd_condition_t* cond = sd_encode_condition(ctx, "cinematic oil painting", "", 512, 512);
+
+// 3. Process each video frame cheaply (no re-encoding)
+while (streaming) {
+    sd_image_t frame = get_next_frame();
+    sd_image_t result = sd_img2img_with_cond(ctx, frame, cond, NULL, 0, 0.75f, 4, 1.0f, -1);
+    render(result);
+    free(result.data);
+    free(frame.data);
+}
+
+// 4. Cleanup
+sd_free_condition(cond);
+free_sd_ctx(ctx);
+```
+
+For a full working example including reference image caching, see [`examples/stream_img2img/main.cpp`](./examples/stream_img2img/main.cpp).
 
 ## References
 

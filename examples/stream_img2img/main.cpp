@@ -52,7 +52,9 @@ int main(int argc, char** argv) {
     clock_t start = clock();
     sd_condition_t* cond = sd_encode_condition(ctx,
         "cinematic style, oil painting, beautiful landscape",  // positive prompt
-        ""                                                     // negative prompt
+        "",                                                    // negative prompt
+        512,                                                   // width
+        512                                                    // height
     );
     clock_t end = clock();
     printf("Prompt encoded in %.3f seconds.\n", (double)(end - start) / CLOCKS_PER_SEC);

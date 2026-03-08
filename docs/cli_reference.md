@@ -12,29 +12,33 @@ This guide provides a structured overview of the `sd-cli` parameters and common 
 
 ### Basic Options
 
-*   `-m`, `--model <path>`: The path to the standalone diffusion model (`.safetensors`, `.gguf`, etc.). This is **required** or must be paired with specific network weights (like `--diffusion-model`).
+*   `-m`, `--model <path>`: The path to the standalone diffusion model (`.safetensors`, `.gguf`, etc.). This is **required** unless you are using `--diffusion-model` instead.
 *   `-p`, `--prompt "<text>"`: The text description of the image you want to generate.
 *   `-n`, `--negative-prompt "<text>"`: Text description of what you *do not* want (default: empty).
-*   `-o`, `--output <path>`: Path to write the output image (default: `./output.png`). For video sequences, you can use format specifiers like `output_%03d.png`.
+*   `-o`, `--output <path>`: Path to write the output image (default: `./output.png`). For image sequences (when `--batch-count > 1`), use a printf-style format specifier like `output_%03d.png`.
 *   `-H`, `--height <pixels>`: The height of the generated image (default: 512).
 *   `-W`, `--width <pixels>`: The width of the generated image (default: 512).
+*   `-s`, `--seed <int>`: RNG seed for reproducibility (default: 42). Use a negative value for a random seed.
+*   `-b`, `--batch-count <int>`: Number of images to generate in a single run (default: 1).
 *   `--steps <int>`: Number of sampling denoising steps (default: 20). Higher usually means better quality but slower.
-*   `--cfg-scale <float>`: Unconditional guidance scale or Classifier-Free Guidance. Controls how strongly the image should follow the prompt (default: 7.0).
+*   `--cfg-scale <float>`: Classifier-Free Guidance scale. Controls how strongly the image should follow the prompt (default: 7.0). Use `1.0` for distilled models like Flux.
+*   `--guidance <float>`: Distilled guidance scale for models with a guidance input (default: 3.5). Applies to Flux and similar architectures.
 
 ### Advanced Components (Text Encoders, LLMs, and VAEs)
 
-Some models require loading their encoders and auto-encoders separated from the base standalone diffusion model:
+Some models require loading their encoders and auto-encoders separately from the base diffusion model:
 
 *   `--clip_l <path>` / `--clip_g <path>` / `--t5xxl <path>`: Path to individual text encoders (often used by SD3 or Flux).
-*   `--llm <path>`: Path to a generic LLM text encoder (e.g., `qwenvl2.5` for Qwen-Image or `mistral-small3.2` for Flux2).
+*   `--llm <path>`: Path to a generic LLM text encoder (e.g., for Qwen-Image or Flux.2-klein with Mistral/Qwen).
 *   `--vae <path>`: Path to a standalone VAE model if it is not embedded in the main model.
 *   `--taesd <path>`: Path to a Tiny AutoEncoder for significantly faster, but lower quality, image decoding. Useful for fast previews.
 
 ### Hardware & Execution Modes
 
-*   `-t`, `--threads <int>`: Number of CPU threads to use during computation. Default is `-1` (auto-detect physical cores).
+*   `-t`, `--threads <int>`: Number of CPU threads to use during computation (default: `-1`, auto-detect physical cores).
 *   `--offload-to-cpu`: Store weights in RAM and load them to VRAM on demand (useful for low VRAM systems).
-*   `--fa`: Enable Flash Attention to aggressively save VRAM during generation (highly recommended).
+*   `--fa`: Enable Flash Attention for the entire model to aggressively save VRAM during generation (highly recommended).
+*   `--diffusion-fa`: Enable Flash Attention **only for the diffusion model** (DiT/UNet). Use this when you want FA benefits on the diffusion transformer but need to keep the VAE or text encoder in standard attention mode.
 *   `--type <type>`: Override weight precision type. E.g., `f32`, `f16`, `q4_0`, `q8_0`.
 
 ## Common Workflows
@@ -42,7 +46,9 @@ Some models require loading their encoders and auto-encoders separated from the 
 ### 1. Generating a Single Image (txt2img)
 
 ```bash
-./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a highly detailed photorealistic futuristic city"
+./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors \
+  -p "a highly detailed photorealistic futuristic city" \
+  -s 42
 ```
 
 ### 2. Image-to-Image (img2img)
@@ -50,7 +56,7 @@ Some models require loading their encoders and auto-encoders separated from the 
 To modify an existing image rather than generating from scratch.
 
 *   `-i`, `--init-img <path>`: Path to the base image to modify.
-*   `--strength <float>`: The strength of the unnoising process. `0.0` leaves the image entirely unchanged, and `1.0` destroys all previous pixel information to generate a brand new image based on the prompt (default: 0.75).
+*   `--strength <float>`: The strength of the denoising process. `0.0` leaves the image entirely unchanged, and `1.0` destroys all previous pixel information to generate a brand new image based on the prompt (default: 0.75).
 
 ```bash
 ./bin/sd-cli -m models/v1-5.safetensors -i my_photo.png -p "a cyberpunk city" --strength 0.6
@@ -69,7 +75,7 @@ You can apply multiple Low-Rank Adaptation (LoRA) models on top of your main mod
 
 ### 4. Flux & SD3 Usage
 
-For larger models like SD3 or Flux, architecture requires supplying individual encoder weights and reducing CFG scale or steps based on distillation.
+For larger models like SD3 or Flux, the architecture requires supplying individual encoder weights and adjusting CFG scale or steps based on distillation.
 
 ```bash
 # Example for Flux.1 Schnell
@@ -85,6 +91,20 @@ For larger models like SD3 or Flux, architecture requires supplying individual e
   --sampling-method euler
 ```
 
+```bash
+# Flux.2-klein-4B (distilled, 4 steps, LLM text encoder)
+./bin/sd-cli \
+  --diffusion-model ./models/flux-2-klein-4b.gguf \
+  --vae ./models/ae.safetensors \
+  --llm ./models/qwen3-4b.gguf \
+  -p "a cinematic portrait, oil painting" \
+  -W 512 -H 512 \
+  --steps 4 \
+  --cfg-scale 1.0 \
+  --sampling-method euler \
+  --fa
+```
+
 ### 5. ControlNets
 
 ControlNets allow you to constrain generation using structural features like edges or depth maps.
@@ -98,7 +118,12 @@ ControlNets allow you to constrain generation using structural features like edg
 
 ## Advanced Samplers & Schedulers
 
-*   `--sampling-method <name>`: Sampler algorithm. Favorites include `euler_a`, `dpm++2m`, `lcm` (default depends on the architecture).
-*   `--scheduler <name>`: Define how the denoising schedule steps are distributed (e.g., `discrete`, `karras`, `exponential`, `sgm_uniform`).
+*   `--sampling-method <name>`: Sampler algorithm. Must be one of:
+    `euler`, `euler_a`, `heun`, `dpm2`, `dpm++2s_a`, `dpm++2m`, `dpm++2mv2`, `ipndm`, `ipndm_v`, `lcm`, `ddim_trailing`, `tcd`, `res_multistep`, `res_2s`
+    *(default: `euler` for Flux/SD3/Wan, `euler_a` otherwise)*
+
+*   `--scheduler <name>`: Defines how the denoising schedule steps are distributed. Must be one of:
+    `discrete`, `karras`, `exponential`, `ays`, `gits`, `smoothstep`, `sgm_uniform`, `simple`, `kl_optimal`, `lcm`, `bong_tangent`
+    *(default: `discrete`)*
 
 To view the complete, raw list of CLI flags and fallback behaviors, run `./bin/sd-cli --help`.

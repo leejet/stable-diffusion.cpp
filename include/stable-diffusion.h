@@ -383,7 +383,9 @@ typedef struct sd_image_latent_t sd_image_latent_t;
 SD_API sd_condition_t* sd_encode_condition(
     sd_ctx_t*   sd_ctx,
     const char* prompt,
-    const char* negative_prompt
+    const char* negative_prompt,
+    int         width,
+    int         height
 );
 
 SD_API void sd_free_condition(sd_condition_t* cond);

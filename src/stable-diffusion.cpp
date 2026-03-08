@@ -4317,7 +4317,9 @@ static void copy_sd_condition(struct ggml_context* storage_ctx, SDCondition& dst
 SD_API sd_condition_t* sd_encode_condition(
     sd_ctx_t*   sd_ctx,
     const char* prompt,
-    const char* negative_prompt
+    const char* negative_prompt,
+    int         width,
+    int         height
 ) {
     if (!sd_ctx || !sd_ctx->sd || !sd_ctx->sd->cond_stage_model) {
         return nullptr;
@@ -4337,8 +4339,8 @@ SD_API sd_condition_t* sd_encode_condition(
     ConditionerParams condition_params;
     condition_params.text            = prompt ? prompt : "";
     condition_params.clip_skip       = -1;
-    condition_params.width           = 1024;
-    condition_params.height          = 1024;
+    condition_params.width           = width;
+    condition_params.height          = height;
     condition_params.adm_in_channels = static_cast<int>(sd_ctx->sd->diffusion_model->get_adm_in_channels());
     condition_params.zero_out_masked = false;
 
@@ -4351,6 +4353,13 @@ SD_API sd_condition_t* sd_encode_condition(
     SDCondition temp_uncond = {nullptr, nullptr, nullptr};
     if (negative_prompt && strlen(negative_prompt) > 0) {
         condition_params.text = negative_prompt;
+        temp_uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(
+            work_ctx,
+            sd_ctx->sd->n_threads,
+            condition_params
+        );
+    } else {
+        condition_params.text = "";
         temp_uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(
             work_ctx,
             sd_ctx->sd->n_threads,
@@ -4476,7 +4485,7 @@ SD_API sd_image_t sd_img2img_with_cond(
         LOG_WARN("align up %dx%d to %dx%d (multiple=%d)", input_frame.width, input_frame.height, width, height, spatial_multiple);
     }
 
-    size_t compute_mem_size = 128ull * 1024 * 1024; // computation margin
+    size_t compute_mem_size = static_cast<size_t>(1024 * 1024) * 1024;  // 1GB (same as generate_image)
     compute_mem_size += static_cast<size_t>(width) * height * 3 * sizeof(float) * 2;
     compute_mem_size += static_cast<size_t>(width / vae_scale_factor) * (height / vae_scale_factor) * 4 * sizeof(float) * 2;
     if (n_ref_latents > 0) {

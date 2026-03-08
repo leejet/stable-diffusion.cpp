@@ -1,7 +1,8 @@
 # Streaming API Extension: Design & Motivation
 
-This document summarizes the context, motivation, and design decisions behind the **Streaming API Extensions** added to this fork of `stable-diffusion.cpp`. 
-It is intended to serve as a guide for future developers and AI agents who will maintain, extend, or merge upstream changes into this repository.
+This document summarizes the context, motivation, and design decisions behind the **Streaming API Extensions** added to this fork of `stable-diffusion.cpp`.
+
+> **Target audience:** This document is written for **developers and AI agents** who will maintain, extend, or merge upstream changes into this repository. If you are looking for usage instructions and code examples, see [`docs/c_api_reference.md`](./c_api_reference.md) instead.
 
 ## 1. Background & The Core Problem
 
@@ -55,7 +56,16 @@ You can find the full API signature in `include/stable-diffusion.h` under the `/
 
 - `sd_condition_t`: Opaque struct holding cached prompt embeddings.
 - `sd_image_latent_t`: Opaque struct holding cached reference image latents.
-- `sd_encode_condition()`: Encodes prompts into a cacheable object.
+- `sd_encode_condition(sd_ctx, prompt, negative_prompt, width, height)`: Encodes prompts into a cacheable object. The `width` and `height` parameters are required for architectures (SDXL, SD3) that bake resolution into positional embeddings during text encoding. They must match the output resolution passed to the subsequent `sd_img2img_with_cond()` call. These parameters have no effect on Flux architectures but must still be provided.
 - `sd_encode_ref_image()`: Encodes images into a cacheable object.
 - `sd_img2img_with_cond()`: The hot-loop function that takes cached conditions and an input frame, running only the diffusion and decode steps.
 - `sd_free_condition()` / `sd_free_image_latent()`: Memory cleanup handlers.
+
+## 6. Known Limitations
+
+The current Streaming API has a few hardcoded defaults to prioritize performance and simplify the initial implementation. These limitations may be addressed in future updates:
+
+- **Distilled Guidance (Flux-specific hardcoding):** `guidance.distilled_guidance` is currently hardcoded to `3.5f` inside `sd_img2img_with_cond()`. For **Flux** models this is the intended operating value. For **non-Flux models** (SD1.5, SDXL, SD3), the `distilled_guidance` field is not consumed by those architectures' diffusion logic, so it has no practical effect—the function is still usable with those models. However, `sd_img2img_with_cond()` is primarily designed and tested for Flux. Use with other architectures may have untested edge cases.
+- **Fixed Samplers:** The hot-loop function `sd_img2img_with_cond()` always uses the model's default `sample_method` and `scheduler` (via `sd_get_default_sample_method()` / `sd_get_default_scheduler()`). Custom samplers like `lcm` cannot currently be injected via the C API for this specific function.
+- **Negative Prompt Null/Empty Handling:** If `negative_prompt` is `NULL` or an empty string `""`, the API encodes an empty string to generate the `uncond` embeddings. Internally, both paths encode the empty string identically—there is no behavioral difference between `NULL` and `""`. This correctly prevents crashes with CFG > 1.0.
+- **Width/Height Dependency:** The `width` and `height` parameters passed to `sd_encode_condition()` must match the dimensions of `input_frame` passed to `sd_img2img_with_cond()`. See [`docs/c_api_reference.md`](./c_api_reference.md) for the full explanation of when this matters (SDXL, SD3) and when it doesn't (Flux).
