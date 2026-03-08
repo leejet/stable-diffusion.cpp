@@ -2,190 +2,77 @@
   <img src="./assets/logo.png" width="360x">
 </p>
 
-# stable-diffusion.cpp
+# Cacheable stable-diffusion.cpp (Fork for Streaming API)
 
-<div align="center">
-<a href="https://trendshift.io/repositories/9714" target="_blank"><img src="https://trendshift.io/api/badge/repositories/9714" alt="leejet%2Fstable-diffusion.cpp | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</div>
+**Diffusion model (SD, Flux, Wan, ...) inference in pure C/C++**
 
-Diffusion model(SD,Flux,Wan,...) inference in pure C/C++
+This repository is a fork of [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), modified to introduce a **Condition Caching (Streaming API)**.
+While the upstream repo excels at stateless generation, this fork is specifically enhanced for **real-time video generation** and **high-throughput img2img streaming applications** where heavy text encoder re-evaluations (e.g., Qwen/LLM for Flux.2) become devastating bottlenecks.
 
-***Note that this project is under active development. \
-API and command-line option may change frequently.***
+By leveraging this fork's C API extensions, you can cache prompt conditions and reference images, skipping the LLM layers entirely on subsequent frames.
 
-## 🔥Important News
+---
 
-* **2026/01/18** 🚀 stable-diffusion.cpp now supports **FLUX.2-klein**  
-  👉 Details: [PR #1193](https://github.com/leejet/stable-diffusion.cpp/pull/1193)
+## 🚀 What's New in this Fork?
 
-* **2025/12/01** 🚀 stable-diffusion.cpp now supports **Z-Image**  
-  👉 Details: [PR #1020](https://github.com/leejet/stable-diffusion.cpp/pull/1020)
+We added the **Streaming API Extensions** to the C API. 
+These functions allow you to encode text conditions and reference images exactly once, preserving them in a persistent GGML context. The cached representations can then be looped through `sd_img2img_with_cond` to radically increase Video-to-Video throughput.
 
-* **2025/11/30** 🚀 stable-diffusion.cpp now supports **FLUX.2-dev**  
-  👉 Details: [PR #1016](https://github.com/leejet/stable-diffusion.cpp/pull/1016)
+- For details on the architecture and caching mechanism: [Streaming API Design](./docs/streaming_api_design.md)
 
-* **2025/10/13** 🚀 stable-diffusion.cpp now supports **Qwen-Image-Edit / Qwen-Image-Edit 2509**  
-  👉 Details: [PR #877](https://github.com/leejet/stable-diffusion.cpp/pull/877)
+## 📚 Documentation
 
-* **2025/10/12** 🚀 stable-diffusion.cpp now supports **Qwen-Image**  
-  👉 Details: [PR #851](https://github.com/leejet/stable-diffusion.cpp/pull/851)
+Detailed documentation tailored for using this repository in your own projects:
 
-* **2025/09/14** 🚀 stable-diffusion.cpp now supports **Wan2.1 Vace**  
-  👉 Details: [PR #819](https://github.com/leejet/stable-diffusion.cpp/pull/819)
+- 💻 **[C API & Streaming API Reference](./docs/c_api_reference.md)**: How to integrate the library into C/C++ projects, and full usage of the Condition Caching API.
+- 🐚 **[Command-Line Interface (CLI) Guide](./docs/cli_reference.md)**: A complete reference guide for the `sd-cli` tool.
+- ⚙️ **[Build Guide](./docs/build.md)**: Instructions on how to compile the project (CMake, CUDA, Vulkan, Metal).
+- ⚡ **[Performance Optimization](./docs/performance.md)**: Tips for reducing VRAM and increasing generation speed.
 
-* **2025/09/06** 🚀 stable-diffusion.cpp now supports **Wan2.1 / Wan2.2**  
-  👉 Details: [PR #778](https://github.com/leejet/stable-diffusion.cpp/pull/778)
+*(Note: Additional model-specific documentation from the upstream repository is available in the `docs/` folder, such as `flux.md`, `sd3.md`, `lora.md`, etc.)*
 
-## Features
+---
 
-- Plain C/C++ implementation based on [ggml](https://github.com/ggml-org/ggml), working in the same way as [llama.cpp](https://github.com/ggml-org/llama.cpp)
-- Super lightweight and without external dependencies
-- Supported models
-  - Image Models
-    - SD1.x, SD2.x, [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo)
-    - SDXL, [SDXL-Turbo](https://huggingface.co/stabilityai/sdxl-turbo)
-    - [Some SD1.x and SDXL distilled models](./docs/distilled_sd.md)
-    - [SD3/SD3.5](./docs/sd3.md)
-    - [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
-    - [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
-    - [Chroma](./docs/chroma.md)
-    - [Chroma1-Radiance](./docs/chroma_radiance.md)
-    - [Qwen Image](./docs/qwen_image.md)
-    - [Z-Image](./docs/z_image.md)
-    - [Ovis-Image](./docs/ovis_image.md)
-    - [Anima](./docs/anima.md)
-  - Image Edit Models
-    - [FLUX.1-Kontext-dev](./docs/kontext.md)
-    - [Qwen Image Edit series](./docs/qwen_image_edit.md)
-  - Video Models
-    - [Wan2.1/Wan2.2](./docs/wan.md)
-  - [PhotoMaker](https://github.com/TencentARC/PhotoMaker) support.
-  - Control Net support with SD 1.5
-  - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
-  - Latent Consistency Models support (LCM/LCM-LoRA)
-  - Faster and memory efficient latent decoding with [TAESD](https://github.com/madebyollin/taesd)
-  - Upscale images generated with [ESRGAN](https://github.com/xinntao/Real-ESRGAN)
-- Supported backends
-  - CPU (AVX, AVX2 and AVX512 support for x86 architectures)
-  - CUDA
-  - Vulkan
-  - Metal
-  - OpenCL
-  - SYCL
-- Supported weight formats
-  - Pytorch checkpoint (`.ckpt` or `.pth`)
-  - Safetensors (`.safetensors`)
-  - GGUF (`.gguf`)
-- Supported platforms
-    - Linux
-    - Mac OS
-    - Windows
-    - Android (via Termux, [Local Diffusion](https://github.com/rmatif/Local-Diffusion))
-- Flash Attention for memory usage optimization
-- Negative prompt
-- [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) style tokenizer (not all the features, only token weighting for now)
-- VAE tiling processing for reduce memory usage
-- Sampling method
-    - `Euler A`
-    - `Euler`
-    - `Heun`
-    - `DPM2`
-    - `DPM++ 2M`
-    - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
-    - `DPM++ 2S a`
-    - [`LCM`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13952)
-- Cross-platform reproducibility
-    - `--rng cuda`, default, consistent with the `stable-diffusion-webui GPU RNG`
-    - `--rng cpu`, consistent with the `comfyui RNG`
-- Embedds generation parameters into png output as webui-compatible text string
+## Upstream Features
+
+This fork retains 100% compatibility with all the amazing features developed by the original `stable-diffusion.cpp` contributors:
+
+- Plain C/C++ implementation based on [ggml](https://github.com/ggml-org/ggml), working similarly to llama.cpp.
+- Super lightweight and without external dependencies.
+- **Supported Models**: SD1.x, SD2.x, SDXL, SD3, FLUX.1/FLUX.2, Qwen-Image, Z-Image, Wan2.1/2.2, PhotoMaker, and more.
+- **Supported Backends**: CPU (AVX2/AVX512), CUDA, Vulkan, Metal, OpenCL, SYCL.
+- **Supported Formats**: Pytorch checkpoints (`.ckpt`/`.pth`), Safetensors (`.safetensors`), GGUF (`.gguf`).
+- Flash Attention for aggressive memory usage optimization.
+- LoRA support, ControlNet, LCM, ESRGAN upscaling, and TAESD faster latent decoding.
 
 ## Quick Start
 
-### Get the sd executable
+### 1. Build from Source
 
-- Download pre-built binaries from the [releases page](https://github.com/leejet/stable-diffusion.cpp/releases)
-- Or build from source by following the [build guide](./docs/build.md)
+Since you will likely integrate this as a backend for another project, we recommend building from source. For full instructions, see the [Build Guide](./docs/build.md).
 
-### Download model weights
+```sh
+# Example: Building with CUDA acceleration and Shared Libraries (C API)
+mkdir build && cd build
+cmake .. -DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON
+cmake --build . --config Release
+```
 
-- download weights(.ckpt or .safetensors or .gguf). For example
-    - Stable Diffusion v1.5 from https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5 
+### 2. Standard CLI Usage
 
-    ```sh
-    curl -L -O https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
-    ```
-
-### Generate an image with just one command
+Download a core model file (e.g., `v1-5-pruned-emaonly.safetensors` from Hugging Face).
 
 ```sh
 ./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors -p "a lovely cat"
 ```
 
-***For detailed command-line arguments, check out [cli doc](./examples/cli/README.md).***
-
-## Performance
-
-If you want to improve performance or reduce VRAM/RAM usage, please refer to [performance guide](./docs/performance.md).
-
-## More Guides
-
-- [SD1.x/SD2.x/SDXL](./docs/sd.md)
-- [SD3/SD3.5](./docs/sd3.md)
-- [FLUX.1-dev/FLUX.1-schnell](./docs/flux.md)
-- [FLUX.2-dev/FLUX.2-klein](./docs/flux2.md)
-- [FLUX.1-Kontext-dev](./docs/kontext.md)
-- [Chroma](./docs/chroma.md)
-- [🔥Qwen Image](./docs/qwen_image.md)
-- [🔥Qwen Image Edit series](./docs/qwen_image_edit.md)
-- [🔥Wan2.1/Wan2.2](./docs/wan.md)
-- [🔥Z-Image](./docs/z_image.md)
-- [Ovis-Image](./docs/ovis_image.md)
-- [Anima](./docs/anima.md)
-- [LoRA](./docs/lora.md)
-- [LCM/LCM-LoRA](./docs/lcm.md)
-- [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)
-- [Using ESRGAN to upscale results](./docs/esrgan.md)
-- [Using TAESD to faster decoding](./docs/taesd.md)
-- [Docker](./docs/docker.md)
-- [Quantization and GGUF](./docs/quantization_and_gguf.md)
-- [Inference acceleration via caching](./docs/caching.md)
-
-## Bindings
-
-These projects wrap `stable-diffusion.cpp` for easier use in other languages/frameworks.
-
-* Golang (non-cgo): [seasonjs/stable-diffusion](https://github.com/seasonjs/stable-diffusion)
-* Golang (cgo): [Binozo/GoStableDiffusion](https://github.com/Binozo/GoStableDiffusion)
-* C#: [DarthAffe/StableDiffusion.NET](https://github.com/DarthAffe/StableDiffusion.NET)
-* Python: [william-murray1204/stable-diffusion-cpp-python](https://github.com/william-murray1204/stable-diffusion-cpp-python)
-* Rust: [newfla/diffusion-rs](https://github.com/newfla/diffusion-rs)
-* Flutter/Dart: [rmatif/Local-Diffusion](https://github.com/rmatif/Local-Diffusion)
-
-## UIs
-
-These projects use `stable-diffusion.cpp` as a backend for their image generation.
-
-- [Jellybox](https://jellybox.com)
-- [Stable Diffusion GUI](https://github.com/fszontagh/sd.cpp.gui.wx)
-- [Stable Diffusion CLI-GUI](https://github.com/piallai/stable-diffusion.cpp)
-- [Local Diffusion](https://github.com/rmatif/Local-Diffusion)
-- [sd.cpp-webui](https://github.com/daniandtheweb/sd.cpp-webui)
-- [LocalAI](https://github.com/mudler/LocalAI)
-- [Neural-Pixel](https://github.com/Luiz-Alcantara/Neural-Pixel)
-- [KoboldCpp](https://github.com/LostRuins/koboldcpp)
-
-## Contributors
-
-Thank you to all the people who have already contributed to stable-diffusion.cpp!
-
-[![Contributors](https://contrib.rocks/image?repo=leejet/stable-diffusion.cpp)](https://github.com/leejet/stable-diffusion.cpp/graphs/contributors)
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=leejet/stable-diffusion.cpp&type=Date)](https://star-history.com/#leejet/stable-diffusion.cpp&Date)
+For detailed arguments and use-cases (like img2img or LoRA), check out the [CLI Guide](./docs/cli_reference.md).
 
 ## References
 
+As this is a fork, all credits for the base architecture belong to the respective original project creators:
+
+- [leejet/stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp)
 - [ggml](https://github.com/ggml-org/ggml)
 - [diffusers](https://github.com/huggingface/diffusers)
 - [stable-diffusion](https://github.com/CompVis/stable-diffusion)
