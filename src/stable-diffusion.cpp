@@ -2526,14 +2526,14 @@ public:
         tile_size_y = get_tile_size(params.tile_size_y, params.rel_size_y, latent_y);
     }
 
-    ggml_tensor* vae_encode(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
+    ggml_tensor* vae_encode(ggml_context* work_ctx, ggml_tensor* x) {
         int64_t t0                 = ggml_time_ms();
         ggml_tensor* result        = nullptr;
         const int vae_scale_factor = get_vae_scale_factor();
         int64_t W                  = x->ne[0] / vae_scale_factor;
         int64_t H                  = x->ne[1] / vae_scale_factor;
         int64_t C                  = get_latent_channel();
-        if (vae_tiling_params.enabled && !encode_video) {
+        if (vae_tiling_params.enabled) {
             // TODO wan2.2 vae support?
             int64_t ne2;
             int64_t ne3;
@@ -2561,7 +2561,7 @@ public:
 
         if (!use_tiny_autoencoder) {
             process_vae_input_tensor(x);
-            if (vae_tiling_params.enabled && !encode_video) {
+            if (vae_tiling_params.enabled) {
                 float tile_overlap;
                 int tile_size_x, tile_size_y;
                 // multiply tile size for encode to keep the compute buffer size consistent
@@ -2578,7 +2578,7 @@ public:
             }
             first_stage_model->free_compute_buffer();
         } else {
-            if (vae_tiling_params.enabled && !encode_video) {
+            if (vae_tiling_params.enabled) {
                 // split latent in 32x32 tiles and compute in several steps
                 auto on_tiling = [&](ggml_tensor* in, ggml_tensor* out, bool init) {
                     return tae_first_stage->compute(n_threads, in, false, &out, nullptr);
@@ -2654,8 +2654,8 @@ public:
         return latent;
     }
 
-    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x, bool encode_video = false) {
-        ggml_tensor* vae_output = vae_encode(work_ctx, x, encode_video);
+    ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x) {
+        ggml_tensor* vae_output = vae_encode(work_ctx, x);
         return get_first_stage_encoding(work_ctx, vae_output);
     }
 
