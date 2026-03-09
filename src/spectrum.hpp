@@ -8,34 +8,34 @@
 #include "ggml_extend.hpp"
 
 struct SpectrumConfig {
-    float w           = 0.40f;
-    int m             = 3;
-    float lam         = 1.0f;
-    int window_size   = 2;
-    float flex_window = 0.50f;
-    int warmup_steps  = 4;
+    float w            = 0.40f;
+    int m              = 3;
+    float lam          = 1.0f;
+    int window_size    = 2;
+    float flex_window  = 0.50f;
+    int warmup_steps   = 4;
     float stop_percent = 0.9f;
 };
 
 struct SpectrumState {
     SpectrumConfig config;
-    int cnt               = 0;
-    int num_cached        = 0;
-    float curr_ws         = 2.0f;
-    int K                 = 6;
-    int stop_step         = 0;
+    int cnt                 = 0;
+    int num_cached          = 0;
+    float curr_ws           = 2.0f;
+    int K                   = 6;
+    int stop_step           = 0;
     int total_steps_skipped = 0;
 
     std::vector<std::vector<float>> H_buf;
     std::vector<float> T_buf;
 
     void init(const SpectrumConfig& cfg, size_t total_steps) {
-        config  = cfg;
-        cnt     = 0;
-        num_cached = 0;
-        curr_ws = (float)cfg.window_size;
-        K       = std::max(cfg.m + 1, 6);
-        stop_step = (int)(cfg.stop_percent * (float)total_steps);
+        config              = cfg;
+        cnt                 = 0;
+        num_cached          = 0;
+        curr_ws             = (float)cfg.window_size;
+        K                   = std::max(cfg.m + 1, 6);
+        stop_step           = (int)(cfg.stop_percent * (float)total_steps);
         total_steps_skipped = 0;
         H_buf.clear();
         T_buf.clear();
@@ -58,7 +58,7 @@ struct SpectrumState {
     }
 
     void update(const struct ggml_tensor* denoised) {
-        int64_t ne = ggml_nelements(denoised);
+        int64_t ne        = ggml_nelements(denoised);
         const float* data = (const float*)denoised->data;
 
         H_buf.emplace_back(data, data + ne);

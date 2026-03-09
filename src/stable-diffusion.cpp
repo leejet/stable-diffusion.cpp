@@ -16,9 +16,9 @@
 #include "esrgan.hpp"
 #include "lora.hpp"
 #include "pmid.hpp"
+#include "spectrum.hpp"
 #include "tae.hpp"
 #include "ucache.hpp"
-#include "spectrum.hpp"
 #include "vae.hpp"
 
 #include "latent-preview.h"
@@ -1810,7 +1810,7 @@ public:
                     spectrum_config.flex_window  = cache_params->spectrum_flex_window;
                     spectrum_config.warmup_steps = cache_params->spectrum_warmup_steps;
                     spectrum_config.stop_percent = cache_params->spectrum_stop_percent;
-                    size_t total_steps = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
+                    size_t total_steps           = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
                     spectrum_state.init(spectrum_config, total_steps);
                     spectrum_enabled = true;
                     LOG_INFO("Spectrum enabled - w: %.2f, m: %d, lam: %.2f, window: %d, flex: %.2f, warmup: %d, stop: %.0f%%",
@@ -2040,7 +2040,7 @@ public:
                 timesteps_vec.assign(1, t);
             }
 
-            timesteps_vec  = process_timesteps(timesteps_vec, init_latent, denoise_mask);
+            timesteps_vec = process_timesteps(timesteps_vec, init_latent, denoise_mask);
 
             if (spectrum_enabled && spectrum_state.should_predict()) {
                 spectrum_state.predict(denoised);
@@ -2333,7 +2333,7 @@ public:
 
         if (spectrum_enabled && spectrum_state.total_steps_skipped > 0) {
             size_t total_steps = sigmas.size() > 0 ? sigmas.size() - 1 : 0;
-            double speedup = static_cast<double>(total_steps) /
+            double speedup     = static_cast<double>(total_steps) /
                              static_cast<double>(total_steps - spectrum_state.total_steps_skipped);
             LOG_INFO("Spectrum skipped %d/%zu steps (%.2fx estimated speedup)",
                      spectrum_state.total_steps_skipped, total_steps, speedup);
