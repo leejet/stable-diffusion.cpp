@@ -1047,7 +1047,6 @@ struct SDGenerationParams {
 
     std::string cache_mode;
     std::string cache_option;
-    std::string cache_preset;
     std::string scm_mask;
     bool scm_policy_dynamic = true;
     sd_cache_params_t cache_params{};
@@ -1461,21 +1460,6 @@ struct SDGenerationParams {
             return 1;
         };
 
-        auto on_cache_preset_arg = [&](int argc, const char** argv, int index) {
-            if (++index >= argc) {
-                return -1;
-            }
-            cache_preset = argv_to_utf8(index, argv);
-            if (cache_preset != "slow" && cache_preset != "s" && cache_preset != "S" &&
-                cache_preset != "medium" && cache_preset != "m" && cache_preset != "M" &&
-                cache_preset != "fast" && cache_preset != "f" && cache_preset != "F" &&
-                cache_preset != "ultra" && cache_preset != "u" && cache_preset != "U") {
-                fprintf(stderr, "error: invalid cache preset '%s', must be 'slow'/'s', 'medium'/'m', 'fast'/'f', or 'ultra'/'u'\n", cache_preset.c_str());
-                return -1;
-            }
-            return 1;
-        };
-
         options.manual_options = {
             {"-s",
              "--seed",
@@ -1519,10 +1503,6 @@ struct SDGenerationParams {
              "--cache-option",
              "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
              on_cache_option_arg},
-            {"",
-             "--cache-preset",
-             "cache-dit preset: 'slow'/'s', 'medium'/'m', 'fast'/'f', 'ultra'/'u'",
-             on_cache_preset_arg},
             {"",
              "--scm-mask",
              "SCM steps mask for cache-dit: comma-separated 0/1 (e.g., \"1,1,1,0,0,1,0,0,1,0\") - 1=compute, 0=can cache",
@@ -1575,7 +1555,6 @@ struct SDGenerationParams {
         load_if_exists("negative_prompt", negative_prompt);
         load_if_exists("cache_mode", cache_mode);
         load_if_exists("cache_option", cache_option);
-        load_if_exists("cache_preset", cache_preset);
         load_if_exists("scm_mask", scm_mask);
 
         load_if_exists("clip_skip", clip_skip);

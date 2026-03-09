@@ -80,7 +80,7 @@ Uses Taylor series approximation to predict block outputs:
 Combines DBCache and TaylorSeer:
 
 ```bash
---cache-mode cache-dit --cache-preset fast
+--cache-mode cache-dit
 ```
 
 #### Parameters
@@ -91,14 +91,6 @@ Combines DBCache and TaylorSeer:
 | `Bn` | Back blocks to always compute | 0 |
 | `threshold` | L1 residual difference threshold | 0.08 |
 | `warmup` | Steps before caching starts | 8 |
-
-#### Presets
-
-Available presets: `slow`, `medium`, `fast`, `ultra` (or `s`, `m`, `f`, `u`).
-
-```bash
---cache-mode cache-dit --cache-preset fast
-```
 
 #### SCM Options
 

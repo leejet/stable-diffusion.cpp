@@ -144,7 +144,6 @@ Generation Options:
                                            threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=;
                                            spectrum: w=,m=,lam=,window=,flex=,warmup=,stop=. Examples:
                                            "threshold=0.25" or "threshold=1.5,reset=0" or "w=0.4,window=2"
-  --cache-preset                           cache-dit preset: 'slow'/'s', 'medium'/'m', 'fast'/'f', 'ultra'/'u'
   --scm-mask                               SCM steps mask for cache-dit: comma-separated 0/1 (e.g., "1,1,1,0,0,1,0,0,1,0") - 1=compute, 0=can cache
   --scm-policy                             SCM policy: 'dynamic' (default) or 'static'
 ```
