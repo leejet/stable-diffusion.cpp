@@ -750,7 +750,7 @@ int main(int argc, const char* argv[]) {
                     gen_params.pm_id_embed_path.c_str(),
                     gen_params.pm_style_strength,
                 },  // pm_params
-                ctx_params.vae_tiling_params,
+                gen_params.vae_tiling_params,
                 gen_params.cache_params,
             };
 
@@ -776,7 +776,7 @@ int main(int argc, const char* argv[]) {
                 gen_params.seed,
                 gen_params.video_frames,
                 gen_params.vace_strength,
-                ctx_params.vae_tiling_params,
+                gen_params.vae_tiling_params,
                 gen_params.cache_params,
             };
 
