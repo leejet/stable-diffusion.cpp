@@ -266,7 +266,20 @@ void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
 struct LoraEntry {
     std::string name;
     std::string path;
+    std::string fullpath;
 };
+
+void free_results(sd_image_t* result_images, int num_results) {
+    if (result_images) {
+        for (int i = 0; i < num_results; ++i) {
+            if (result_images[i].data) {
+                stbi_image_free(result_images[i].data);
+                result_images[i].data = nullptr;
+            }
+        }
+    }
+    free(result_images);
+}
 
 int main(int argc, const char** argv) {
     if (argc > 1 && std::string(argv[1]) == "--version") {
@@ -321,7 +334,8 @@ int main(int argc, const char** argv) {
 
                 LoraEntry e;
                 e.name          = p.stem().u8string();
-                std::string rel = fs::relative(p, lora_dir).u8string();
+                e.fullpath      = p.u8string();
+                std::string rel = p.lexically_relative(lora_dir).u8string();
                 std::replace(rel.begin(), rel.end(), '\\', '/');
                 e.path = rel;
 
@@ -340,10 +354,11 @@ int main(int argc, const char** argv) {
         }
     };
 
-    auto is_valid_lora_path = [&](const std::string& path) -> bool {
+    auto get_lora_full_path = [&](const std::string& path) -> std::string {
         std::lock_guard<std::mutex> lock(lora_mutex);
-        return std::any_of(lora_cache.begin(), lora_cache.end(),
-                           [&](const LoraEntry& e) { return e.path == path; });
+        auto it = std::find_if(lora_cache.begin(), lora_cache.end(),
+                               [&](const LoraEntry& e) { return e.path == path; });
+        return (it != lora_cache.end()) ? it->fullpath : "";
     };
 
     httplib::Server svr;
@@ -404,8 +419,8 @@ int main(int argc, const char** argv) {
             std::string size          = j.value("size", "");
             std::string output_format = j.value("output_format", "png");
             int output_compression    = j.value("output_compression", 100);
-            int width                 = 512;
-            int height                = 512;
+            int width                 = default_gen_params.width > 0 ? default_gen_params.width : 512;
+            int height                = default_gen_params.width > 0 ? default_gen_params.height : 512;
             if (!size.empty()) {
                 auto pos = size.find('x');
                 if (pos != std::string::npos) {
@@ -534,6 +549,7 @@ int main(int argc, const char** argv) {
                 item["b64_json"] = b64;
                 out["data"].push_back(item);
             }
+            free_results(results, num_results);
 
             res.set_content(out.dump(), "application/json");
             res.status = 200;
@@ -564,8 +580,9 @@ int main(int argc, const char** argv) {
 
             std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(prompt);
 
-            size_t image_count = req.form.get_file_count("image[]");
-            if (image_count == 0) {
+            size_t image_count    = req.form.get_file_count("image[]");
+            bool has_legacy_image = req.form.has_file("image");
+            if (image_count == 0 && !has_legacy_image) {
                 res.status = 400;
                 res.set_content(R"({"error":"at least one image[] required"})", "application/json");
                 return;
@@ -574,6 +591,10 @@ int main(int argc, const char** argv) {
             std::vector<std::vector<uint8_t>> images_bytes;
             for (size_t i = 0; i < image_count; i++) {
                 auto file = req.form.get_file("image[]", i);
+                images_bytes.emplace_back(file.content.begin(), file.content.end());
+            }
+            if (image_count == 0 && has_legacy_image) {
+                auto file = req.form.get_file("image");
                 images_bytes.emplace_back(file.content.begin(), file.content.end());
             }
 
@@ -593,7 +614,7 @@ int main(int argc, const char** argv) {
             n = std::clamp(n, 1, 8);
 
             std::string size = req.form.get_field("size");
-            int width = 512, height = 512;
+            int width = -1, height = -1;
             if (!size.empty()) {
                 auto pos = size.find('x');
                 if (pos != std::string::npos) {
@@ -650,15 +671,31 @@ int main(int argc, const char** argv) {
 
             LOG_DEBUG("%s\n", gen_params.to_string().c_str());
 
-            sd_image_t init_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-            sd_image_t control_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
+            sd_image_t init_image    = {0, 0, 3, nullptr};
+            sd_image_t control_image = {0, 0, 3, nullptr};
             std::vector<sd_image_t> pmid_images;
+
+            auto get_resolved_width = [&gen_params, &default_gen_params]() -> int {
+                if (gen_params.width > 0)
+                    return gen_params.width;
+                if (default_gen_params.width > 0)
+                    return default_gen_params.width;
+                return 512;
+            };
+            auto get_resolved_height = [&gen_params, &default_gen_params]() -> int {
+                if (gen_params.height > 0)
+                    return gen_params.height;
+                if (default_gen_params.height > 0)
+                    return default_gen_params.height;
+                return 512;
+            };
 
             std::vector<sd_image_t> ref_images;
             ref_images.reserve(images_bytes.size());
             for (auto& bytes : images_bytes) {
-                int img_w           = width;
-                int img_h           = height;
+                int img_w;
+                int img_h;
+
                 uint8_t* raw_pixels = load_image_from_memory(
                     reinterpret_cast<const char*>(bytes.data()),
                     static_cast<int>(bytes.size()),
@@ -670,22 +707,31 @@ int main(int argc, const char** argv) {
                 }
 
                 sd_image_t img{(uint32_t)img_w, (uint32_t)img_h, 3, raw_pixels};
+                gen_params.set_width_and_height_if_unset(img.width, img.height);
                 ref_images.push_back(img);
             }
 
             sd_image_t mask_image = {0};
             if (!mask_bytes.empty()) {
-                int mask_w        = width;
-                int mask_h        = height;
+                int expected_width  = 0;
+                int expected_height = 0;
+                if (gen_params.width_and_height_are_set()) {
+                    expected_width  = gen_params.width;
+                    expected_height = gen_params.height;
+                }
+                int mask_w;
+                int mask_h;
+
                 uint8_t* mask_raw = load_image_from_memory(
                     reinterpret_cast<const char*>(mask_bytes.data()),
                     static_cast<int>(mask_bytes.size()),
                     mask_w, mask_h,
-                    width, height, 1);
+                    expected_width, expected_height, 1);
                 mask_image = {(uint32_t)mask_w, (uint32_t)mask_h, 1, mask_raw};
+                gen_params.set_width_and_height_if_unset(mask_image.width, mask_image.height);
             } else {
-                mask_image.width   = width;
-                mask_image.height  = height;
+                mask_image.width   = get_resolved_width();
+                mask_image.height  = get_resolved_height();
                 mask_image.channel = 1;
                 mask_image.data    = nullptr;
             }
@@ -702,8 +748,8 @@ int main(int argc, const char** argv) {
                 gen_params.auto_resize_ref_image,
                 gen_params.increase_ref_index,
                 mask_image,
-                gen_params.width,
-                gen_params.height,
+                get_resolved_width(),
+                get_resolved_height(),
                 gen_params.sample_params,
                 gen_params.strength,
                 gen_params.seed,
@@ -748,6 +794,7 @@ int main(int argc, const char** argv) {
                 item["b64_json"] = b64;
                 out["data"].push_back(item);
             }
+            free_results(results, num_results);
 
             res.set_content(out.dump(), "application/json");
             res.status = 200;
@@ -786,8 +833,8 @@ int main(int argc, const char** argv) {
             std::string negative_prompt = j.value("negative_prompt", "");
             int width                   = j.value("width", 512);
             int height                  = j.value("height", 512);
-            int steps                   = j.value("steps", -1);
-            float cfg_scale             = j.value("cfg_scale", 7.f);
+            int steps                   = j.value("steps", default_gen_params.sample_params.sample_steps);
+            float cfg_scale             = j.value("cfg_scale", default_gen_params.sample_params.guidance.txt_cfg);
             int64_t seed                = j.value("seed", -1);
             int batch_size              = j.value("batch_size", 1);
             int clip_skip               = j.value("clip_skip", -1);
@@ -837,11 +884,12 @@ int main(int argc, const char** argv) {
                         return bad("lora.path required");
                     }
 
-                    if (!is_valid_lora_path(path)) {
+                    std::string fullpath = get_lora_full_path(path);
+                    if (fullpath.empty()) {
                         return bad("invalid lora path: " + path);
                     }
 
-                    lora_path_storage.push_back(path);
+                    lora_path_storage.push_back(fullpath);
                     sd_lora_t l;
                     l.is_high_noise = is_high_noise;
                     l.multiplier    = multiplier;
@@ -883,16 +931,13 @@ int main(int argc, const char** argv) {
 
             enum scheduler_t scheduler = str_to_scheduler(scheduler_name.c_str());
 
-            // avoid excessive resource usage
-
-            SDGenerationParams gen_params         = default_gen_params;
-            gen_params.prompt                     = prompt;
-            gen_params.negative_prompt            = negative_prompt;
-            gen_params.width                      = width;
-            gen_params.height                     = height;
-            gen_params.seed                       = seed;
-            gen_params.sample_params.sample_steps = steps;
-            gen_params.batch_count                = batch_size;
+            SDGenerationParams gen_params             = default_gen_params;
+            gen_params.prompt                         = prompt;
+            gen_params.negative_prompt                = negative_prompt;
+            gen_params.seed                           = seed;
+            gen_params.sample_params.sample_steps     = steps;
+            gen_params.batch_count                    = batch_size;
+            gen_params.sample_params.guidance.txt_cfg = cfg_scale;
 
             if (clip_skip > 0) {
                 gen_params.clip_skip = clip_skip;
@@ -906,38 +951,66 @@ int main(int argc, const char** argv) {
                 gen_params.sample_params.scheduler = scheduler;
             }
 
+            // re-read to avoid applying 512 as default before the provided
+            // images and/or server command-line
+            gen_params.width  = j.value("width", -1);
+            gen_params.height = j.value("height", -1);
+
             LOG_DEBUG("%s\n", gen_params.to_string().c_str());
 
-            sd_image_t init_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-            sd_image_t control_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-            sd_image_t mask_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 1, nullptr};
+            sd_image_t init_image    = {0, 0, 3, nullptr};
+            sd_image_t control_image = {0, 0, 3, nullptr};
+            sd_image_t mask_image    = {0, 0, 1, nullptr};
             std::vector<uint8_t> mask_data;
             std::vector<sd_image_t> pmid_images;
             std::vector<sd_image_t> ref_images;
 
-            if (img2img) {
-                auto decode_image = [](sd_image_t& image, std::string encoded) -> bool {
-                    // remove data URI prefix if present ("data:image/png;base64,")
-                    auto comma_pos = encoded.find(',');
-                    if (comma_pos != std::string::npos) {
-                        encoded = encoded.substr(comma_pos + 1);
-                    }
-                    std::vector<uint8_t> img_data = base64_decode(encoded);
-                    if (!img_data.empty()) {
-                        int img_w         = image.width;
-                        int img_h         = image.height;
-                        uint8_t* raw_data = load_image_from_memory(
-                            (const char*)img_data.data(), (int)img_data.size(),
-                            img_w, img_h,
-                            image.width, image.height, image.channel);
-                        if (raw_data) {
-                            image = {(uint32_t)img_w, (uint32_t)img_h, image.channel, raw_data};
-                            return true;
-                        }
-                    }
-                    return false;
-                };
+            auto get_resolved_width = [&gen_params, &default_gen_params]() -> int {
+                if (gen_params.width > 0)
+                    return gen_params.width;
+                if (default_gen_params.width > 0)
+                    return default_gen_params.width;
+                return 512;
+            };
+            auto get_resolved_height = [&gen_params, &default_gen_params]() -> int {
+                if (gen_params.height > 0)
+                    return gen_params.height;
+                if (default_gen_params.height > 0)
+                    return default_gen_params.height;
+                return 512;
+            };
 
+            auto decode_image = [&gen_params](sd_image_t& image, std::string encoded) -> bool {
+                // remove data URI prefix if present ("data:image/png;base64,")
+                auto comma_pos = encoded.find(',');
+                if (comma_pos != std::string::npos) {
+                    encoded = encoded.substr(comma_pos + 1);
+                }
+                std::vector<uint8_t> img_data = base64_decode(encoded);
+                if (!img_data.empty()) {
+                    int expected_width  = 0;
+                    int expected_height = 0;
+                    if (gen_params.width_and_height_are_set()) {
+                        expected_width  = gen_params.width;
+                        expected_height = gen_params.height;
+                    }
+                    int img_w;
+                    int img_h;
+
+                    uint8_t* raw_data = load_image_from_memory(
+                        (const char*)img_data.data(), (int)img_data.size(),
+                        img_w, img_h,
+                        expected_width, expected_height, image.channel);
+                    if (raw_data) {
+                        image = {(uint32_t)img_w, (uint32_t)img_h, image.channel, raw_data};
+                        gen_params.set_width_and_height_if_unset(image.width, image.height);
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            if (img2img) {
                 if (j.contains("init_images") && j["init_images"].is_array() && !j["init_images"].empty()) {
                     std::string encoded = j["init_images"][0].get<std::string>();
                     decode_image(init_image, encoded);
@@ -953,27 +1026,29 @@ int main(int argc, const char** argv) {
                         }
                     }
                 } else {
-                    mask_data          = std::vector<uint8_t>(width * height, 255);
-                    mask_image.width   = width;
-                    mask_image.height  = height;
+                    int m_width        = get_resolved_width();
+                    int m_height       = get_resolved_height();
+                    mask_data          = std::vector<uint8_t>(m_width * m_height, 255);
+                    mask_image.width   = m_width;
+                    mask_image.height  = m_height;
                     mask_image.channel = 1;
                     mask_image.data    = mask_data.data();
-                }
-
-                if (j.contains("extra_images") && j["extra_images"].is_array()) {
-                    for (auto extra_image : j["extra_images"]) {
-                        std::string encoded  = extra_image.get<std::string>();
-                        sd_image_t tmp_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-                        if (decode_image(tmp_image, encoded)) {
-                            ref_images.push_back(tmp_image);
-                        }
-                    }
                 }
 
                 float denoising_strength = j.value("denoising_strength", -1.f);
                 if (denoising_strength >= 0.f) {
                     denoising_strength  = std::min(denoising_strength, 1.0f);
                     gen_params.strength = denoising_strength;
+                }
+            }
+
+            if (j.contains("extra_images") && j["extra_images"].is_array()) {
+                for (auto extra_image : j["extra_images"]) {
+                    std::string encoded  = extra_image.get<std::string>();
+                    sd_image_t tmp_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
+                    if (decode_image(tmp_image, encoded)) {
+                        ref_images.push_back(tmp_image);
+                    }
                 }
             }
 
@@ -989,8 +1064,8 @@ int main(int argc, const char** argv) {
                 gen_params.auto_resize_ref_image,
                 gen_params.increase_ref_index,
                 mask_image,
-                gen_params.width,
-                gen_params.height,
+                get_resolved_width(),
+                get_resolved_height(),
                 gen_params.sample_params,
                 gen_params.strength,
                 gen_params.seed,
@@ -1040,6 +1115,7 @@ int main(int argc, const char** argv) {
                 std::string b64 = base64_encode(image_bytes);
                 out["images"].push_back(b64);
             }
+            free_results(results, num_results);
 
             res.set_content(out.dump(), "application/json");
             res.status = 200;

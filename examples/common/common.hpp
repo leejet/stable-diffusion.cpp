@@ -581,10 +581,6 @@ struct SDContextParams {
              "--vae-tile-overlap",
              "tile overlap for vae tiling, in fraction of tile size (default: 0.5)",
              &vae_tiling_params.target_overlap},
-            {"",
-             "--flow-shift",
-             "shift value for Flow models like SD3.x or WAN (default: auto)",
-             &flow_shift},
         };
 
         options.bool_options = {
@@ -903,7 +899,6 @@ struct SDContextParams {
             << "  photo_maker_path: \"" << photo_maker_path << "\",\n"
             << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
             << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
-            << "  flow_shift: " << (std::isinf(flow_shift) ? "INF" : std::to_string(flow_shift)) << "\n"
             << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
             << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
             << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
@@ -986,7 +981,6 @@ struct SDContextParams {
             chroma_use_t5_mask,
             chroma_t5_mask_pad,
             qwen_image_zero_cond_t,
-            flow_shift,
         };
         return sd_ctx_params;
     }
@@ -1207,6 +1201,10 @@ struct SDGenerationParams {
              "eta in DDIM, only for DDIM and TCD (default: 0)",
              &sample_params.eta},
             {"",
+             "--flow-shift",
+             "shift value for Flow models like SD3.x or WAN (default: auto)",
+             &sample_params.flow_shift},
+            {"",
              "--high-noise-cfg-scale",
              "(high noise) unconditional guidance scale: (default: 7.0)",
              &high_noise_sample_params.guidance.txt_cfg},
@@ -1424,8 +1422,8 @@ struct SDGenerationParams {
             }
             cache_mode = argv_to_utf8(index, argv);
             if (cache_mode != "easycache" && cache_mode != "ucache" &&
-                cache_mode != "dbcache" && cache_mode != "taylorseer" && cache_mode != "cache-dit") {
-                fprintf(stderr, "error: invalid cache mode '%s', must be 'easycache', 'ucache', 'dbcache', 'taylorseer', or 'cache-dit'\n", cache_mode.c_str());
+                cache_mode != "dbcache" && cache_mode != "taylorseer" && cache_mode != "cache-dit" && cache_mode != "spectrum") {
+                fprintf(stderr, "error: invalid cache mode '%s', must be 'easycache', 'ucache', 'dbcache', 'taylorseer', 'cache-dit', or 'spectrum'\n", cache_mode.c_str());
                 return -1;
             }
             return 1;
@@ -1606,6 +1604,7 @@ struct SDGenerationParams {
         load_if_exists("cfg_scale", sample_params.guidance.txt_cfg);
         load_if_exists("img_cfg_scale", sample_params.guidance.img_cfg);
         load_if_exists("guidance", sample_params.guidance.distilled_guidance);
+        load_if_exists("flow_shift", sample_params.flow_shift);
 
         auto load_sampler_if_exists = [&](const char* key, enum sample_method_t& out) {
             if (j.contains(key) && j[key].is_string()) {
@@ -1780,7 +1779,23 @@ struct SDGenerationParams {
                     } else if (key == "Bn" || key == "bn") {
                         cache_params.Bn_compute_blocks = std::stoi(val);
                     } else if (key == "warmup") {
-                        cache_params.max_warmup_steps = std::stoi(val);
+                        if (cache_mode == "spectrum") {
+                            cache_params.spectrum_warmup_steps = std::stoi(val);
+                        } else {
+                            cache_params.max_warmup_steps = std::stoi(val);
+                        }
+                    } else if (key == "w") {
+                        cache_params.spectrum_w = std::stof(val);
+                    } else if (key == "m") {
+                        cache_params.spectrum_m = std::stoi(val);
+                    } else if (key == "lam") {
+                        cache_params.spectrum_lam = std::stof(val);
+                    } else if (key == "window") {
+                        cache_params.spectrum_window_size = std::stoi(val);
+                    } else if (key == "flex") {
+                        cache_params.spectrum_flex_window = std::stof(val);
+                    } else if (key == "stop") {
+                        cache_params.spectrum_stop_percent = std::stof(val);
                     } else {
                         LOG_ERROR("error: unknown cache parameter '%s'", key.c_str());
                         return false;
@@ -1828,6 +1843,15 @@ struct SDGenerationParams {
                 cache_params.Bn_compute_blocks       = 0;
                 cache_params.residual_diff_threshold = 0.08f;
                 cache_params.max_warmup_steps        = 8;
+            } else if (cache_mode == "spectrum") {
+                cache_params.mode                  = SD_CACHE_SPECTRUM;
+                cache_params.spectrum_w            = 0.40f;
+                cache_params.spectrum_m            = 3;
+                cache_params.spectrum_lam          = 1.0f;
+                cache_params.spectrum_window_size  = 2;
+                cache_params.spectrum_flex_window  = 0.50f;
+                cache_params.spectrum_warmup_steps = 4;
+                cache_params.spectrum_stop_percent = 0.9f;
             }
 
             if (!cache_option.empty()) {

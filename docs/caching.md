@@ -11,6 +11,7 @@ Caching methods accelerate diffusion inference by reusing intermediate computati
 | `dbcache` | DiT models | Block-level L1 residual threshold |
 | `taylorseer` | DiT models | Taylor series approximation |
 | `cache-dit` | DiT models | Combined DBCache + TaylorSeer |
+| `spectrum` | UNET models | Chebyshev + Taylor output forecasting |
 
 ### UCache (UNET Models)
 
@@ -116,6 +117,28 @@ Mask values: `1` = compute, `0` = can cache.
 
 ```bash
 --scm-policy dynamic
+```
+
+### Spectrum (UNET Models)
+
+Spectrum uses Chebyshev polynomial fitting blended with Taylor extrapolation to predict denoised outputs, skipping entire UNet forward passes. Based on the paper [Spectrum: Adaptive Spectral Feature Forecasting for Efficient Diffusion Sampling](https://github.com/tingyu215/Spectrum).
+
+```bash
+sd-cli -m model.safetensors -p "a cat" --cache-mode spectrum
+```
+
+#### Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `w` | Chebyshev vs Taylor blend weight (0=Taylor, 1=Chebyshev) | 0.40 |
+| `m` | Chebyshev polynomial degree | 3 |
+| `lam` | Ridge regression regularization | 1.0 |
+| `window` | Initial window size (compute every N steps) | 2 |
+| `flex` | Window growth per computed step after warmup | 0.50 |
+| `warmup` | Steps to always compute before caching starts | 4 |
+| `stop` | Stop caching at this fraction of total steps | 0.9 |
+
 ```
 
 ### Performance Tips
