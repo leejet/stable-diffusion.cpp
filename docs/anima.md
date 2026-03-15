@@ -5,6 +5,7 @@
 - Download Anima
     - safetensors: https://huggingface.co/circlestone-labs/Anima/tree/main/split_files/diffusion_models
     - gguf: https://huggingface.co/Bedovyy/Anima-GGUF/tree/main
+    - gguf Anima2: https://huggingface.co/JusteLeo/Anima2-GGUF/tree/main
 - Download vae
     - safetensors: https://huggingface.co/circlestone-labs/Anima/tree/main/split_files/vae
 - Download Qwen3-0.6B-Base
