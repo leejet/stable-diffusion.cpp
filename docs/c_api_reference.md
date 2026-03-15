@@ -159,7 +159,7 @@ Use `sd_img2img_with_cond` to perform diffusion on the incoming video frame usin
 
 ```cpp
 // Without reference images (pass NULL and 0):
-// sd_image_t output = sd_img2img_with_cond(sd_ctx, frame, cond, NULL, 0, ...);
+// sd_image_t output = sd_img2img_with_cond(sd_ctx, frame, cond, NULL, 0, 0.75f, 4, 1.0f, -1, NULL);
 
 // With one or more reference images:
 sd_image_latent_t* ref_latents[] = { ref_latent };
@@ -177,7 +177,8 @@ while (streaming) {
         0.75f,                   // Strength (0.0 = input image, 1.0 = full generation)
         4,                       // Sample steps (keep low for speed, e.g. 4 for Flux.2-klein)
         1.0f,                    // CFG Scale
-        42                       // RNG Seed (-1 for random)
+        42,                      // RNG Seed (-1 for random)
+        NULL                     // Cache params pointer (use sd_cache_params_t* if caching)
     );
 
     if (output_frame.data) {

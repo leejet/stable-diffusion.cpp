@@ -94,7 +94,7 @@ sd_condition_t* cond = sd_encode_condition(ctx, "cinematic oil painting", "", 51
 // 3. Process each video frame cheaply (no re-encoding)
 while (streaming) {
     sd_image_t frame = get_next_frame();
-    sd_image_t result = sd_img2img_with_cond(ctx, frame, cond, NULL, 0, 0.75f, 4, 1.0f, -1);
+    sd_image_t result = sd_img2img_with_cond(ctx, frame, cond, NULL, 0, 0.75f, 4, 1.0f, -1, NULL);
     render(result);
     free(result.data);
     free(frame.data);
