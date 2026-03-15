@@ -443,10 +443,12 @@ protected:
     SDVersion version;
 
 public:
+    int z_channels = 16;
+
+public:
     TAEHV(bool decode_only = true, SDVersion version = VERSION_WAN2)
         : decode_only(decode_only), version(version) {
-        int z_channels = 16;
-        int patch      = 1;
+        int patch = 1;
         if (version == VERSION_WAN2_2_TI2V) {
             z_channels = 48;
             patch      = 2;
@@ -495,9 +497,11 @@ protected:
     bool taef2 = false;
 
 public:
+    int z_channels = 4;
+
+public:
     TAESD(bool decode_only = true, SDVersion version = VERSION_SD1)
         : decode_only(decode_only) {
-        int z_channels       = 4;
         bool use_midblock_gn = false;
         taef2                = sd_version_is_flux2(version);
 
@@ -533,20 +537,7 @@ public:
     }
 };
 
-struct TinyAutoEncoder : public GGMLRunner {
-    TinyAutoEncoder(ggml_backend_t backend, bool offload_params_to_cpu)
-        : GGMLRunner(backend, offload_params_to_cpu) {}
-    virtual bool compute(const int n_threads,
-                         struct ggml_tensor* z,
-                         bool decode_graph,
-                         struct ggml_tensor** output,
-                         struct ggml_context* output_ctx = nullptr) = 0;
-
-    virtual bool load_from_file(const std::string& file_path, int n_threads)                                      = 0;
-    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) = 0;
-};
-
-struct TinyImageAutoEncoder : public TinyAutoEncoder {
+struct TinyImageAutoEncoder : public VAE {
     TAESD taesd;
     bool decode_only = false;
 
@@ -558,7 +549,8 @@ struct TinyImageAutoEncoder : public TinyAutoEncoder {
                          SDVersion version = VERSION_SD1)
         : decode_only(decoder_only),
           taesd(decoder_only, version),
-          TinyAutoEncoder(backend, offload_params_to_cpu) {
+          VAE(version, backend, offload_params_to_cpu) {
+        scale_input = false;
         taesd.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -566,35 +558,24 @@ struct TinyImageAutoEncoder : public TinyAutoEncoder {
         return "taesd";
     }
 
-    bool load_from_file(const std::string& file_path, int n_threads) {
-        LOG_INFO("loading taesd from '%s', decode_only = %s", file_path.c_str(), decode_only ? "true" : "false");
-        alloc_params_buffer();
-        std::map<std::string, ggml_tensor*> taesd_tensors;
-        taesd.get_param_tensors(taesd_tensors);
-        std::set<std::string> ignore_tensors;
-        if (decode_only) {
-            ignore_tensors.insert("encoder.");
-        }
-
-        ModelLoader model_loader;
-        if (!model_loader.init_from_file_and_convert_name(file_path)) {
-            LOG_ERROR("init taesd model loader from file failed: '%s'", file_path.c_str());
-            return false;
-        }
-
-        bool success = model_loader.load_tensors(taesd_tensors, ignore_tensors, n_threads);
-
-        if (!success) {
-            LOG_ERROR("load tae tensors from model loader failed");
-            return false;
-        }
-
-        LOG_INFO("taesd model loaded");
-        return success;
-    }
-
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         taesd.get_param_tensors(tensors, prefix);
+    }
+
+    ggml_tensor* vae_output_to_latents(ggml_context* work_ctx, ggml_tensor* vae_output, std::shared_ptr<RNG> rng) {
+        return vae_output;
+    }
+
+    ggml_tensor* diffusion_to_vae_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+        return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
+    }
+
+    ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+        return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
+    }
+
+    int get_encoder_output_channels(int input_channels) {
+        return taesd.z_channels;
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
@@ -606,11 +587,11 @@ struct TinyImageAutoEncoder : public TinyAutoEncoder {
         return gf;
     }
 
-    bool compute(const int n_threads,
-                 struct ggml_tensor* z,
-                 bool decode_graph,
-                 struct ggml_tensor** output,
-                 struct ggml_context* output_ctx = nullptr) {
+    bool _compute(const int n_threads,
+                  struct ggml_tensor* z,
+                  bool decode_graph,
+                  struct ggml_tensor** output,
+                  struct ggml_context* output_ctx = nullptr) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
@@ -619,7 +600,7 @@ struct TinyImageAutoEncoder : public TinyAutoEncoder {
     }
 };
 
-struct TinyVideoAutoEncoder : public TinyAutoEncoder {
+struct TinyVideoAutoEncoder : public VAE {
     TAEHV taehv;
     bool decode_only = false;
 
@@ -631,7 +612,8 @@ struct TinyVideoAutoEncoder : public TinyAutoEncoder {
                          SDVersion version = VERSION_WAN2)
         : decode_only(decoder_only),
           taehv(decoder_only, version),
-          TinyAutoEncoder(backend, offload_params_to_cpu) {
+          VAE(version, backend, offload_params_to_cpu) {
+        scale_input = false;
         taehv.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -639,35 +621,24 @@ struct TinyVideoAutoEncoder : public TinyAutoEncoder {
         return "taehv";
     }
 
-    bool load_from_file(const std::string& file_path, int n_threads) {
-        LOG_INFO("loading taehv from '%s', decode_only = %s", file_path.c_str(), decode_only ? "true" : "false");
-        alloc_params_buffer();
-        std::map<std::string, ggml_tensor*> taehv_tensors;
-        taehv.get_param_tensors(taehv_tensors);
-        std::set<std::string> ignore_tensors;
-        if (decode_only) {
-            ignore_tensors.insert("encoder.");
-        }
-
-        ModelLoader model_loader;
-        if (!model_loader.init_from_file(file_path)) {
-            LOG_ERROR("init taehv model loader from file failed: '%s'", file_path.c_str());
-            return false;
-        }
-
-        bool success = model_loader.load_tensors(taehv_tensors, ignore_tensors, n_threads);
-
-        if (!success) {
-            LOG_ERROR("load tae tensors from model loader failed");
-            return false;
-        }
-
-        LOG_INFO("taehv model loaded");
-        return success;
-    }
-
     void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
         taehv.get_param_tensors(tensors, prefix);
+    }
+
+    ggml_tensor* vae_output_to_latents(ggml_context* work_ctx, ggml_tensor* vae_output, std::shared_ptr<RNG> rng) {
+        return vae_output;
+    }
+
+    ggml_tensor* diffusion_to_vae_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+        return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
+    }
+
+    ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+        return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
+    }
+
+    int get_encoder_output_channels(int input_channels) {
+        return taehv.z_channels;
     }
 
     struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
@@ -679,11 +650,11 @@ struct TinyVideoAutoEncoder : public TinyAutoEncoder {
         return gf;
     }
 
-    bool compute(const int n_threads,
-                 struct ggml_tensor* z,
-                 bool decode_graph,
-                 struct ggml_tensor** output,
-                 struct ggml_context* output_ctx = nullptr) {
+    bool _compute(const int n_threads,
+                  struct ggml_tensor* z,
+                  bool decode_graph,
+                  struct ggml_tensor** output,
+                  struct ggml_context* output_ctx = nullptr) {
         auto get_graph = [&]() -> struct ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
