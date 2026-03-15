@@ -377,6 +377,12 @@ __STATIC_INLINE__ void copy_ggml_tensor(struct ggml_tensor* dst, struct ggml_ten
     ggml_free(ctx);
 }
 
+__STATIC_INLINE__ ggml_tensor* ggml_ext_dup_and_cpy_tensor(ggml_context* ctx, ggml_tensor* src) {
+    ggml_tensor* dup = ggml_dup_tensor(ctx, src);
+    copy_ggml_tensor(dup, src);
+    return dup;
+}
+
 __STATIC_INLINE__ float sigmoid(float x) {
     return 1 / (1.0f + expf(-x));
 }
@@ -637,7 +643,7 @@ __STATIC_INLINE__ struct ggml_tensor* ggml_ext_tensor_concat(struct ggml_context
 }
 
 // convert values from [0, 1] to [-1, 1]
-__STATIC_INLINE__ void process_vae_input_tensor(struct ggml_tensor* src) {
+__STATIC_INLINE__ void scale_to_minus1_1(struct ggml_tensor* src) {
     int64_t nelements = ggml_nelements(src);
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
@@ -647,7 +653,7 @@ __STATIC_INLINE__ void process_vae_input_tensor(struct ggml_tensor* src) {
 }
 
 // convert values from [-1, 1] to [0, 1]
-__STATIC_INLINE__ void process_vae_output_tensor(struct ggml_tensor* src) {
+__STATIC_INLINE__ void scale_to_0_1(struct ggml_tensor* src) {
     int64_t nelements = ggml_nelements(src);
     float* data       = (float*)src->data;
     for (int i = 0; i < nelements; i++) {
@@ -834,7 +840,8 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
                                             const float tile_overlap_factor,
                                             const bool circular_x,
                                             const bool circular_y,
-                                            on_tile_process on_processing) {
+                                            on_tile_process on_processing,
+                                            bool slient = false) {
     output = ggml_set_f32(output, 0);
 
     int input_width   = (int)input->ne[0];
@@ -864,8 +871,10 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     float tile_overlap_factor_y;
     sd_tiling_calc_tiles(num_tiles_y, tile_overlap_factor_y, small_height, p_tile_size_y, tile_overlap_factor, circular_y);
 
-    LOG_DEBUG("num tiles : %d, %d ", num_tiles_x, num_tiles_y);
-    LOG_DEBUG("optimal overlap : %f, %f (targeting %f)", tile_overlap_factor_x, tile_overlap_factor_y, tile_overlap_factor);
+    if (!slient) {
+        LOG_DEBUG("num tiles : %d, %d ", num_tiles_x, num_tiles_y);
+        LOG_DEBUG("optimal overlap : %f, %f (targeting %f)", tile_overlap_factor_x, tile_overlap_factor_y, tile_overlap_factor);
+    }
 
     int tile_overlap_x     = (int32_t)(p_tile_size_x * tile_overlap_factor_x);
     int non_tile_overlap_x = p_tile_size_x - tile_overlap_x;
@@ -896,7 +905,9 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     params.mem_buffer = nullptr;
     params.no_alloc   = false;
 
-    LOG_DEBUG("tile work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
+    if (!slient) {
+        LOG_DEBUG("tile work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
+    }
 
     // draft context
     struct ggml_context* tiles_ctx = ggml_init(params);
@@ -909,8 +920,10 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, input_tile_size_x, input_tile_size_y, input->ne[2], input->ne[3]);
     ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, output_tile_size_x, output_tile_size_y, output->ne[2], output->ne[3]);
     int num_tiles            = num_tiles_x * num_tiles_y;
-    LOG_DEBUG("processing %i tiles", num_tiles);
-    pretty_progress(0, num_tiles, 0.0f);
+    if (!slient) {
+        LOG_DEBUG("processing %i tiles", num_tiles);
+        pretty_progress(0, num_tiles, 0.0f);
+    }
     int tile_count = 1;
     bool last_y = false, last_x = false;
     float last_time = 0.0f;
@@ -960,8 +973,10 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
         }
         last_x = false;
     }
-    if (tile_count < num_tiles) {
-        pretty_progress(num_tiles, num_tiles, last_time);
+    if (!slient) {
+        if (tile_count < num_tiles) {
+            pretty_progress(num_tiles, num_tiles, last_time);
+        }
     }
     ggml_free(tiles_ctx);
 }

@@ -1109,7 +1109,8 @@ namespace WAN {
     };
 
     struct WanVAERunner : public VAE {
-        bool decode_only = true;
+        float scale_factor = 1.0f;
+        bool decode_only   = true;
         WanVAE ae;
 
         WanVAERunner(ggml_backend_t backend,
@@ -1118,7 +1119,7 @@ namespace WAN {
                      const std::string prefix                       = "",
                      bool decode_only                               = false,
                      SDVersion version                              = VERSION_WAN2)
-            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(backend, offload_params_to_cpu) {
+            : decode_only(decode_only), ae(decode_only, version == VERSION_WAN2_2_TI2V), VAE(version, backend, offload_params_to_cpu) {
             ae.init(params_ctx, tensor_storage_map, prefix);
         }
 
@@ -1128,6 +1129,101 @@ namespace WAN {
 
         void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) override {
             ae.get_param_tensors(tensors, prefix);
+        }
+
+        ggml_tensor* vae_output_to_latents(ggml_context* work_ctx, ggml_tensor* vae_output, std::shared_ptr<RNG> rng) {
+            return vae_output;
+        }
+
+        void get_latents_mean_std_vec(ggml_tensor* latents, int channel_dim, std::vector<float>& latents_mean_vec, std::vector<float>& latents_std_vec) {
+            GGML_ASSERT(latents->ne[channel_dim] == 16 || latents->ne[channel_dim] == 48);
+            if (latents->ne[channel_dim] == 16) {  // Wan2.1 VAE
+                latents_mean_vec = {-0.7571f, -0.7089f, -0.9113f, 0.1075f, -0.1745f, 0.9653f, -0.1517f, 1.5508f,
+                                    0.4134f, -0.0715f, 0.5517f, -0.3632f, -0.1922f, -0.9497f, 0.2503f, -0.2921f};
+                latents_std_vec  = {2.8184f, 1.4541f, 2.3275f, 2.6558f, 1.2196f, 1.7708f, 2.6052f, 2.0743f,
+                                    3.2687f, 2.1526f, 2.8652f, 1.5579f, 1.6382f, 1.1253f, 2.8251f, 1.9160f};
+            } else if (latents->ne[channel_dim] == 48) {  // Wan2.2 VAE
+                latents_mean_vec = {-0.2289f, -0.0052f, -0.1323f, -0.2339f, -0.2799f, 0.0174f, 0.1838f, 0.1557f,
+                                    -0.1382f, 0.0542f, 0.2813f, 0.0891f, 0.1570f, -0.0098f, 0.0375f, -0.1825f,
+                                    -0.2246f, -0.1207f, -0.0698f, 0.5109f, 0.2665f, -0.2108f, -0.2158f, 0.2502f,
+                                    -0.2055f, -0.0322f, 0.1109f, 0.1567f, -0.0729f, 0.0899f, -0.2799f, -0.1230f,
+                                    -0.0313f, -0.1649f, 0.0117f, 0.0723f, -0.2839f, -0.2083f, -0.0520f, 0.3748f,
+                                    0.0152f, 0.1957f, 0.1433f, -0.2944f, 0.3573f, -0.0548f, -0.1681f, -0.0667f};
+                latents_std_vec  = {
+                     0.4765f, 1.0364f, 0.4514f, 1.1677f, 0.5313f, 0.4990f, 0.4818f, 0.5013f,
+                     0.8158f, 1.0344f, 0.5894f, 1.0901f, 0.6885f, 0.6165f, 0.8454f, 0.4978f,
+                     0.5759f, 0.3523f, 0.7135f, 0.6804f, 0.5833f, 1.4146f, 0.8986f, 0.5659f,
+                     0.7069f, 0.5338f, 0.4889f, 0.4917f, 0.4069f, 0.4999f, 0.6866f, 0.4093f,
+                     0.5709f, 0.6065f, 0.6415f, 0.4944f, 0.5726f, 1.2042f, 0.5458f, 1.6887f,
+                     0.3971f, 1.0600f, 0.3943f, 0.5537f, 0.5444f, 0.4089f, 0.7468f, 0.7744f};
+            }
+        }
+
+        ggml_tensor* diffusion_to_vae_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+            ggml_tensor* vae_latents = ggml_dup(work_ctx, latents);
+            int channel_dim          = sd_version_is_wan(version) ? 3 : 2;
+            std::vector<float> latents_mean_vec;
+            std::vector<float> latents_std_vec;
+            get_latents_mean_std_vec(latents, channel_dim, latents_mean_vec, latents_std_vec);
+
+            float mean;
+            float std_;
+            for (int i = 0; i < latents->ne[3]; i++) {
+                if (channel_dim == 3) {
+                    mean = latents_mean_vec[i];
+                    std_ = latents_std_vec[i];
+                }
+                for (int j = 0; j < latents->ne[2]; j++) {
+                    if (channel_dim == 2) {
+                        mean = latents_mean_vec[j];
+                        std_ = latents_std_vec[j];
+                    }
+                    for (int k = 0; k < latents->ne[1]; k++) {
+                        for (int l = 0; l < latents->ne[0]; l++) {
+                            float value = ggml_ext_tensor_get_f32(latents, l, k, j, i);
+                            value       = value * std_ / scale_factor + mean;
+                            ggml_ext_tensor_set_f32(vae_latents, value, l, k, j, i);
+                        }
+                    }
+                }
+            }
+
+            return vae_latents;
+        }
+
+        ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+            ggml_tensor* diffusion_latents = ggml_dup(work_ctx, latents);
+            int channel_dim                = sd_version_is_wan(version) ? 3 : 2;
+            std::vector<float> latents_mean_vec;
+            std::vector<float> latents_std_vec;
+            get_latents_mean_std_vec(latents, channel_dim, latents_mean_vec, latents_std_vec);
+
+            float mean;
+            float std_;
+            for (int i = 0; i < latents->ne[3]; i++) {
+                if (channel_dim == 3) {
+                    mean = latents_mean_vec[i];
+                    std_ = latents_std_vec[i];
+                }
+                for (int j = 0; j < latents->ne[2]; j++) {
+                    if (channel_dim == 2) {
+                        mean = latents_mean_vec[j];
+                        std_ = latents_std_vec[j];
+                    }
+                    for (int k = 0; k < latents->ne[1]; k++) {
+                        for (int l = 0; l < latents->ne[0]; l++) {
+                            float value = ggml_ext_tensor_get_f32(latents, l, k, j, i);
+                            value       = (value - mean) * scale_factor / std_;
+                            ggml_ext_tensor_set_f32(diffusion_latents, value, l, k, j, i);
+                        }
+                    }
+                }
+            }
+            return diffusion_latents;
+        }
+
+        int get_encoder_output_channels(int input_channels) {
+            return static_cast<int>(ae.z_dim);
         }
 
         struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
@@ -1173,11 +1269,11 @@ namespace WAN {
             return gf;
         }
 
-        bool compute(const int n_threads,
-                     struct ggml_tensor* z,
-                     bool decode_graph,
-                     struct ggml_tensor** output,
-                     struct ggml_context* output_ctx = nullptr) override {
+        bool _compute(const int n_threads,
+                      struct ggml_tensor* z,
+                      bool decode_graph,
+                      struct ggml_tensor** output,
+                      struct ggml_context* output_ctx = nullptr) override {
             if (true) {
                 auto get_graph = [&]() -> struct ggml_cgraph* {
                     return build_graph(z, decode_graph);
@@ -1249,7 +1345,7 @@ namespace WAN {
                 struct ggml_tensor* out = nullptr;
 
                 int64_t t0 = ggml_time_ms();
-                compute(8, z, true, &out, work_ctx);
+                _compute(8, z, true, &out, work_ctx);
                 int64_t t1 = ggml_time_ms();
 
                 print_ggml_tensor(out);

@@ -1104,10 +1104,12 @@ SDVersion ModelLoader::get_sd_version() {
             tensor_storage.name.find("unet.mid_block.resnets.1.") != std::string::npos) {
             has_middle_block_1 = true;
         }
-        if (tensor_storage.name.find("model.diffusion_model.output_blocks.3.1.transformer_blocks.1") != std::string::npos) {
+        if (tensor_storage.name.find("model.diffusion_model.output_blocks.3.1.transformer_blocks.1") != std::string::npos ||
+            tensor_storage.name.find("unet.up_blocks.1.attentions.0.transformer_blocks.1") != std::string::npos) {
             has_output_block_311 = true;
         }
-        if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1") != std::string::npos) {
+        if (tensor_storage.name.find("model.diffusion_model.output_blocks.7.1") != std::string::npos ||
+            tensor_storage.name.find("unet.up_blocks.2.attentions.1") != std::string::npos) {
             has_output_block_71 = true;
         }
         if (tensor_storage.name == "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight" ||
