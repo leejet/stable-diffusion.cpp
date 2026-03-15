@@ -1,0 +1,29 @@
+ARG UBUNTU_VERSION=22.04
+# This needs to generally match the container host's environment.
+ARG CUDA_VERSION=12.4.0
+# Target the CUDA build image
+ARG BASE_CUDA_DEV_CONTAINER=nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
+
+ARG BASE_CUDA_RUN_CONTAINER=nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
+
+FROM ${BASE_CUDA_DEV_CONTAINER} AS build
+
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential git cmake
+
+WORKDIR /sd.cpp
+
+COPY . .
+
+RUN cmake . -B ./build -DSD_CUDA=ON
+RUN cmake --build ./build --config Release --parallel
+
+FROM ${BASE_CUDA_RUN_CONTAINER} AS runtime
+
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends libgomp1 && \
+    apt-get clean
+
+COPY --from=build /sd.cpp/build/bin/sd-cli /sd-cli
+COPY --from=build /sd.cpp/build/bin/sd-server /sd-server
+
+ENTRYPOINT [ "/sd-cli" ]
