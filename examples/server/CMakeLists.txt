@@ -1,14 +1,49 @@
 set(TARGET sd-server)
 
-set(GENERATED_HTML_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/frontend/dist/gen_index_html.h")
+option(SD_SERVER_BUILD_FRONTEND "Build server frontend with pnpm" ON)
 
-if(EXISTS ${GENERATED_HTML_HEADER})
-    message(STATUS "Found generated header: ${GENERATED_HTML_HEADER}")
-    add_executable(${TARGET} main.cpp ${GENERATED_HTML_HEADER})
-    target_compile_definitions(${TARGET} PRIVATE HAVE_INDEX_HTML)
+set(FRONTEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/frontend")
+set(GENERATED_HTML_HEADER "${FRONTEND_DIR}/dist/gen_index_html.h")
+
+set(HAVE_FRONTEND_BUILD OFF)
+
+if(SD_SERVER_BUILD_FRONTEND AND EXISTS "${FRONTEND_DIR}")
+    if(WIN32)
+        find_program(PNPM_EXECUTABLE NAMES pnpm.cmd pnpm)
+    else()
+        find_program(PNPM_EXECUTABLE NAMES pnpm)
+    endif()
+
+    if(PNPM_EXECUTABLE)
+        message(STATUS "Frontend dir found: ${FRONTEND_DIR}")
+        message(STATUS "pnpm found: ${PNPM_EXECUTABLE}")
+
+        set(HAVE_FRONTEND_BUILD ON)
+
+        add_custom_target(${TARGET}_frontend
+            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" install
+            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" build
+            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" build:header
+            COMMENT "Building frontend and generating gen_index_html.h"
+            VERBATIM
+        )
+    else()
+        message(WARNING "pnpm not found, frontend build disabled")
+    endif()
 else()
-    message(WARNING "Header ${GENERATED_HTML_HEADER} not found. Skipping index_html inclusion.")
-    add_executable(${TARGET} main.cpp)
+    message(STATUS "Frontend disabled or directory not found: ${FRONTEND_DIR}")
+endif()
+
+add_executable(${TARGET} main.cpp)
+
+if(HAVE_FRONTEND_BUILD)
+    add_dependencies(${TARGET} ${TARGET}_frontend)
+    target_sources(${TARGET} PRIVATE "${GENERATED_HTML_HEADER}")
+    target_include_directories(${TARGET} PRIVATE "${FRONTEND_DIR}/dist")
+    target_compile_definitions(${TARGET} PRIVATE HAVE_INDEX_HTML)
+    message(STATUS "HAVE_INDEX_HTML enabled")
+else()
+    message(STATUS "HAVE_INDEX_HTML disabled")
 endif()
 
 install(TARGETS ${TARGET} RUNTIME)
