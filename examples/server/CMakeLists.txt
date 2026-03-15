@@ -20,13 +20,35 @@ if(SD_SERVER_BUILD_FRONTEND AND EXISTS "${FRONTEND_DIR}")
 
         set(HAVE_FRONTEND_BUILD ON)
 
-        add_custom_target(${TARGET}_frontend
+        add_custom_target(${TARGET}_frontend_install
             COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" install
-            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" build
-            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" build:header
-            COMMENT "Building frontend and generating gen_index_html.h"
+            WORKING_DIRECTORY "${FRONTEND_DIR}"
+            COMMENT "Installing frontend dependencies"
             VERBATIM
         )
+
+        add_custom_target(${TARGET}_frontend_build
+            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" run build
+            WORKING_DIRECTORY "${FRONTEND_DIR}"
+            COMMENT "Building frontend"
+            VERBATIM
+        )
+
+        add_custom_target(${TARGET}_frontend_header
+            COMMAND "${PNPM_EXECUTABLE}" -C "${FRONTEND_DIR}" run build:header
+            WORKING_DIRECTORY "${FRONTEND_DIR}"
+            COMMENT "Generating gen_index_html.h"
+            VERBATIM
+        )
+
+        add_dependencies(${TARGET}_frontend_build ${TARGET}_frontend_install)
+        add_dependencies(${TARGET}_frontend_header ${TARGET}_frontend_build)
+
+        add_custom_target(${TARGET}_frontend
+            DEPENDS ${TARGET}_frontend_header
+        )
+
+        set_source_files_properties("${GENERATED_HTML_HEADER}" PROPERTIES GENERATED TRUE)
     else()
         message(WARNING "pnpm not found, frontend build disabled")
     endif()
