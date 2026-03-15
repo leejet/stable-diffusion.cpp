@@ -414,7 +414,8 @@ SD_API sd_image_t sd_img2img_with_cond(
     float              strength,
     int                sample_steps,
     float              cfg_scale,
-    long long int      seed
+    long long int      seed,
+    sd_cache_params_t* cache_params
 );
 
 // --- End of Streaming API Extensions ---

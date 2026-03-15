@@ -4178,7 +4178,8 @@ SD_API sd_image_t sd_img2img_with_cond(
     float              strength,
     int                sample_steps,
     float              cfg_scale,
-    long long int      seed
+    long long int      seed,
+    sd_cache_params_t* cache_params
 ) {
     sd_image_t result = {0, 0, 0, nullptr};
     if (!sd_ctx || !sd_ctx->sd || !cond || !input_frame.data) {
@@ -4289,10 +4290,19 @@ SD_API sd_image_t sd_img2img_with_cond(
                                                  nullptr, // denoise_mask
                                                  nullptr, // vace_context
                                                  1.0f, // vace_strength
-                                                 nullptr); // cache_params
+                                                 cache_params);
+
+    if (sd_ctx->sd->free_params_immediately) {
+        sd_ctx->sd->diffusion_model->free_params_buffer();
+    }
 
     if (x_0) {
         struct ggml_tensor* decoded = sd_ctx->sd->decode_first_stage(work_ctx, x_0);
+
+        if (sd_ctx->sd->free_params_immediately) {
+            sd_ctx->sd->first_stage_model->free_params_buffer();
+        }
+
         if (decoded) {
             result.width = width;
             result.height = height;
