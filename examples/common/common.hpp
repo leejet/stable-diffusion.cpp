@@ -1657,12 +1657,18 @@ struct SDGenerationParams {
                 is_high_noise = true;
             }
 
-            fs::path final_path;
+            // Security: reject absolute paths from user input to prevent
+            // arbitrary file access.
             if (is_absolute_path(raw_path)) {
-                final_path = raw_path;
-            } else {
-                final_path = fs::path(lora_model_dir) / raw_path;
+                LOG_WARN("lora path must be relative: %s", raw_path.c_str());
+                tmp    = m.suffix().str();
+                prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                continue;
             }
+
+            // Resolve relative to the configured lora directory.
+            fs::path final_path = fs::path(lora_model_dir) / raw_path;
+
             if (!fs::exists(final_path)) {
                 bool found = false;
                 for (const auto& ext : valid_ext) {
@@ -1682,7 +1688,19 @@ struct SDGenerationParams {
                 }
             }
 
-            const std::string key = final_path.lexically_normal().string();
+            // Security: ensure the resolved path is within lora_model_dir
+            // to prevent path traversal (e.g. "../../etc/passwd").
+            const fs::path canon_dir  = fs::canonical(lora_model_dir);
+            const fs::path canon_path = fs::canonical(final_path);
+            const std::string dir_str = canon_dir.string() + std::string(1, fs::path::preferred_separator);
+            if (canon_path.string().rfind(dir_str, 0) != 0 && canon_path != canon_dir) {
+                LOG_WARN("lora path escapes lora_model_dir: %s", raw_path.c_str());
+                tmp    = m.suffix().str();
+                prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                continue;
+            }
+
+            const std::string key = canon_path.string();
 
             if (is_high_noise)
                 high_noise_lora_map[key] += mul;
