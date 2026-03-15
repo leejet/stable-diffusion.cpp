@@ -139,7 +139,7 @@ Generation Options:
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)
   --cache-mode                             caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level),
-                                           'spectrum' (UNET Chebyshev+Taylor forecasting)
+                                           'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)
   --cache-option                           named cache params (key=value format, comma-separated). easycache/ucache:
                                            threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=;
                                            spectrum: w=,m=,lam=,window=,flex=,warmup=,stop=. Examples:

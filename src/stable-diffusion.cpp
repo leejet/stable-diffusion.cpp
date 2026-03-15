@@ -1797,9 +1797,9 @@ public:
                     }
                 }
             } else if (cache_params->mode == SD_CACHE_SPECTRUM) {
-                bool spectrum_supported = sd_version_is_unet(version);
+                bool spectrum_supported = sd_version_is_unet(version) || sd_version_is_dit(version);
                 if (!spectrum_supported) {
-                    LOG_WARN("Spectrum requested but not supported for this model type (only UNET models)");
+                    LOG_WARN("Spectrum requested but not supported for this model type (only UNET and DiT models)");
                 } else {
                     SpectrumConfig spectrum_config;
                     spectrum_config.w            = cache_params->spectrum_w;
