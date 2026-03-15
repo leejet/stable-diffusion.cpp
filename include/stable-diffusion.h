@@ -184,6 +184,7 @@ typedef struct {
     enum rng_type_t sampler_rng_type;
     enum prediction_t prediction;
     enum lora_apply_mode_t lora_apply_mode;
+    int version_override;  // SDVersion enum value, VERSION_COUNT = auto-detect
     bool offload_params_to_cpu;
     bool enable_mmap;
     bool keep_clip_on_cpu;
