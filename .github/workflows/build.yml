@@ -486,80 +486,71 @@ jobs:
             sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-x64.zip
 
   ubuntu-latest-rocm:
-    runs-on: ubuntu-latest
-    container: rocm/dev-ubuntu-24.04:7.2
+    runs-on: ubuntu-24.04
 
     env:
-      ROCM_VERSION: "7.2"
       UBUNTU_VERSION: "24.04"
-      GPU_TARGETS: "gfx1151;gfx1150;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201"
+
+    strategy:
+      matrix:
+        include:
+          - ROCM_VERSION: "7.2"
+            gpu_targets: "gfx908;gfx90a;gfx942;gfx1100;gfx1101;gfx1151;gfx1150;gfx1200;gfx1201"
+            build: 'x64'
+          - ROCM_VERSION: "7.11.0"
+            gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+            build: x64
 
     steps:
-      - run: apt-get update && apt-get install -y git
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Free disk space
-        run: |
-          # Remove preinstalled SDKs and caches not needed for this job
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/.ghcup || true
-          sudo rm -rf /opt/hostedtoolcache || true
-
-          # Remove old package lists and caches
-          sudo rm -rf /var/lib/apt/lists/* || true
-          sudo apt clean
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          evict-old-files: 1d
 
       - name: Dependencies
         id: depends
         run: |
-          sudo apt-get update
-          sudo apt install -y \
-            cmake \
-            hip-dev \
-            hipblas-dev \
-            ninja-build \
-            rocm-dev \
-            zip
-          # Clean apt caches to recover disk space
-          sudo apt clean
-          sudo rm -rf /var/lib/apt/lists/* || true
+          sudo apt install -y build-essential cmake wget zip ninja-build
 
-      - name: Setup ROCm Environment
+      - name: Setup Legacy ROCm
+        if: matrix.ROCM_VERSION == '7.2'
+        id: legacy_env
         run: |
-          # Add ROCm to PATH for current session
-          echo "/opt/rocm/bin" >> $GITHUB_PATH
+          sudo mkdir --parents --mode=0755 /etc/apt/keyrings
+          wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | \
+            gpg --dearmor | sudo tee /etc/apt/keyrings/rocm.gpg > /dev/null
 
-          # Build regex pattern from ${{ env.GPU_TARGETS }} (match target as substring)
-          TARGET_REGEX="($(printf '%s' "${{ env.GPU_TARGETS }}" | sed 's/;/|/g'))"
+          sudo tee /etc/apt/sources.list.d/rocm.list << EOF
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${{ matrix.ROCM_VERSION }} noble main
+          EOF
 
-          # Remove library files for architectures we're not building for to save disk space
-          echo "Cleaning up unneeded architecture files..."
-          cd /opt/rocm/lib/rocblas/library
-          # Keep only our target architectures
-          for file in *; do
-            if printf '%s' "$file" | grep -q 'gfx'; then
-              if ! printf '%s' "$file" | grep -Eq "$TARGET_REGEX"; then
-                echo "Removing $file" &&
-                sudo rm -f "$file";
-              fi
-            fi
-          done
+          sudo tee /etc/apt/preferences.d/rocm-pin-600 << EOF
+          Package: *
+          Pin: release o=repo.radeon.com
+          Pin-Priority: 600
+          EOF
 
-          cd /opt/rocm/lib/hipblaslt/library
-          for file in *; do
-            if printf '%s' "$file" | grep -q 'gfx'; then
-              if ! printf '%s' "$file" | grep -Eq "$TARGET_REGEX"; then
-                echo "Removing $file" &&
-                sudo rm -f "$file";
-              fi
-            fi
-          done
+          sudo apt update
+          sudo apt-get install -y libssl-dev rocm-hip-sdk
+
+      - name: Setup TheRock
+        if: matrix.ROCM_VERSION != '7.2'
+        id: therock_env
+        run: |
+          wget https://repo.amd.com/rocm/tarball/therock-dist-linux-gfx1151-${{ matrix.ROCM_VERSION }}.tar.gz
+          mkdir install
+          tar -xf *.tar.gz -C install
+          export ROCM_PATH=$(pwd)/install
+          echo ROCM_PATH=$ROCM_PATH >> $GITHUB_ENV
+          echo PATH=$PATH:$ROCM_PATH/bin >> $GITHUB_ENV
+          echo LD_LIBRARY_PATH=$ROCM_PATH/lib:$ROCM_PATH/llvm/lib:$ROCM_PATH/lib/rocprofiler-systems >> $GITHUB_ENV
 
       - name: Build
         id: cmake_build
@@ -567,12 +558,12 @@ jobs:
           mkdir build
           cd build
           cmake .. -G Ninja \
-            -DCMAKE_CXX_COMPILER=amdclang++ \
-            -DCMAKE_C_COMPILER=amdclang \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DCMAKE_HIP_FLAGS="-mllvm --amdgpu-unroll-threshold-local=600" \
             -DCMAKE_BUILD_TYPE=Release \
             -DSD_HIPBLAS=ON \
-            -DGPU_TARGETS="${{ env.GPU_TARGETS }}" \
-            -DAMDGPU_TARGETS="${{ env.GPU_TARGETS }}" \
+            -DHIP_PLATFORM=amd \
+            -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DSD_BUILD_SHARED_LIBS=ON
@@ -591,16 +582,6 @@ jobs:
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
 
-          # Move ROCm runtime libraries (to avoid double space consumption)
-          sudo mv /opt/rocm/lib/librocsparse.so* ./build/bin/
-          sudo mv /opt/rocm/lib/libhsa-runtime64.so* ./build/bin/
-          sudo mv /opt/rocm/lib/libamdhip64.so* ./build/bin/
-          sudo mv /opt/rocm/lib/libhipblas.so* ./build/bin/
-          sudo mv /opt/rocm/lib/libhipblaslt.so* ./build/bin/
-          sudo mv /opt/rocm/lib/librocblas.so* ./build/bin/
-          sudo mv /opt/rocm/lib/rocblas/ ./build/bin/
-          sudo mv /opt/rocm/lib/hipblaslt/ ./build/bin/
-
       - name: Fetch system info
         id: system-info
         run: |
@@ -615,15 +596,15 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          zip -y -r sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm.zip ./build/bin
+          zip -y -r sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip ./build/bin
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm.zip
+          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip
           path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm.zip
+            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm-${{ matrix.ROCM_VERSION }}.zip
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
