@@ -98,6 +98,19 @@ void suppress_pp(int step, int steps, float time, void* data) {
     return;
 }
 
+static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
+    float reuse_threshold = params.reuse_threshold;
+    if (reuse_threshold == INFINITY) {
+        if (params.mode == SD_CACHE_EASYCACHE) {
+            reuse_threshold = 0.2;
+        }
+        else if (params.mode == SD_CACHE_UCACHE) {
+            reuse_threshold = 1.0;
+        }
+    }
+    return std::max(0.0f, reuse_threshold);
+}
+
 /*=============================================== StableDiffusionGGML ================================================*/
 
 class StableDiffusionGGML {
@@ -1715,7 +1728,7 @@ public:
                 } else {
                     EasyCacheConfig easycache_config;
                     easycache_config.enabled         = true;
-                    easycache_config.reuse_threshold = std::max(0.0f, cache_params->reuse_threshold);
+                    easycache_config.reuse_threshold = get_cache_reuse_threshold(*cache_params);
                     easycache_config.start_percent   = cache_params->start_percent;
                     easycache_config.end_percent     = cache_params->end_percent;
                     easycache_state.init(easycache_config, denoiser.get());
@@ -1736,7 +1749,7 @@ public:
                 } else {
                     UCacheConfig ucache_config;
                     ucache_config.enabled                = true;
-                    ucache_config.reuse_threshold        = std::max(0.0f, cache_params->reuse_threshold);
+                    ucache_config.reuse_threshold        = get_cache_reuse_threshold(*cache_params);
                     ucache_config.start_percent          = cache_params->start_percent;
                     ucache_config.end_percent            = cache_params->end_percent;
                     ucache_config.error_decay_rate       = std::max(0.0f, std::min(1.0f, cache_params->error_decay_rate));
@@ -2983,7 +2996,7 @@ enum lora_apply_mode_t str_to_lora_apply_mode(const char* str) {
 void sd_cache_params_init(sd_cache_params_t* cache_params) {
     *cache_params                             = {};
     cache_params->mode                        = SD_CACHE_DISABLED;
-    cache_params->reuse_threshold             = 1.0f;
+    cache_params->reuse_threshold             = INFINITY;
     cache_params->start_percent               = 0.15f;
     cache_params->end_percent                 = 0.95f;
     cache_params->error_decay_rate            = 1.0f;
@@ -3229,7 +3242,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
     snprintf(buf + strlen(buf), 4096 - strlen(buf),
              "cache: %s (threshold=%.3f, start=%.2f, end=%.2f)\n",
              cache_mode_str,
-             sd_img_gen_params->cache.reuse_threshold,
+             get_cache_reuse_threshold(sd_img_gen_params->cache),
              sd_img_gen_params->cache.start_percent,
              sd_img_gen_params->cache.end_percent);
     free(sample_params_str);
