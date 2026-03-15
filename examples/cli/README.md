@@ -4,11 +4,12 @@
 usage: ./bin/sd-cli  [options]
 
 CLI Options:
-  -o, --output <string>       path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)
-  --output-begin-idx <int>    starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)
+  -o, --output <string>       path to write result image to. you can use printf-style %d format specifiers for image sequences (default:
+                              ./output.png) (eg. output_%03d.png)
   --preview-path <string>     path to write preview image to (default: ./preview.png)
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
+  --output-begin-idx <int>    starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)
   --canny                     apply canny preprocessor (edge detection)
   --convert-name              convert tensor name (for convert mode)
   -v, --verbose               print extra info
@@ -44,7 +45,6 @@ Context Options:
                                            CPU physical cores
   --chroma-t5-mask-pad <int>               t5 mask pad size of chroma
   --vae-tile-overlap <float>               tile overlap for vae tiling, in fraction of tile size (default: 0.5)
-  --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --vae-tiling                             process vae in tiles to reduce memory usage
   --force-sdxl-vae-conv-scale              force use of conv scale on sdxl vae
   --offload-to-cpu                         place the weights in RAM to save VRAM, and automatically load them into VRAM when needed
@@ -52,13 +52,15 @@ Context Options:
   --control-net-cpu                        keep controlnet in cpu (for low vram)
   --clip-on-cpu                            keep clip in cpu (for low vram)
   --vae-on-cpu                             keep vae in cpu (for low vram)
-  --diffusion-fa                           use flash attention in the diffusion model
+  --fa                                     use flash attention
+  --diffusion-fa                           use flash attention in the diffusion model only
   --diffusion-conv-direct                  use ggml_conv2d_direct in the diffusion model
   --vae-conv-direct                        use ggml_conv2d_direct in the vae model
   --circular                               enable circular padding for convolutions
   --circularx                              enable circular RoPE wrapping on x-axis (width) only
   --circulary                              enable circular RoPE wrapping on y-axis (height) only
   --chroma-disable-dit-mask                disable dit mask for chroma
+  --qwen-image-zero-cond-t                 enable zero_cond_t for qwen image
   --chroma-enable-t5-mask                  enable t5 mask for chroma
   --type                                   weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). If not specified, the default is the
                                            type of the weight file
@@ -108,6 +110,7 @@ Generation Options:
   --skip-layer-start <float>               SLG enabling point (default: 0.01)
   --skip-layer-end <float>                 SLG disabling point (default: 0.2)
   --eta <float>                            eta in DDIM, only for DDIM and TCD (default: 0)
+  --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --high-noise-cfg-scale <float>           (high noise) unconditional guidance scale: (default: 7.0)
   --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or instruct-pix2pix models (default: same as --cfg-scale)
   --high-noise-guidance <float>            (high noise) distilled guidance scale for models with guidance input (default: 3.5)
@@ -124,20 +127,23 @@ Generation Options:
   --disable-auto-resize-ref-image          disable auto resize of ref images
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
-                                           tcd] (default: euler for Flux/SD3/Wan, euler_a otherwise)
+                                           tcd, res_multistep, res_2s] (default: euler for Flux/SD3/Wan, euler_a
+                                           otherwise)
   --high-noise-sampling-method             (high noise) sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm,
-                                           ddim_trailing, tcd] default: euler for Flux/SD3/Wan, euler_a otherwise
+                                           ddim_trailing, tcd, res_multistep, res_2s] default: euler for Flux/SD3/Wan,
+                                           euler_a otherwise
   --scheduler                              denoiser sigma scheduler, one of [discrete, karras, exponential, ays, gits, smoothstep, sgm_uniform, simple,
-                                           kl_optimal, lcm], default: discrete
+                                           kl_optimal, lcm, bong_tangent], default: discrete
   --sigmas                                 custom sigma values for the sampler, comma-separated (e.g., "14.61,7.8,3.5,0.0").
   --skip-layers                            layers to skip for SLG steps (default: [7,8,9])
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)
-  --cache-mode                             caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)
+  --cache-mode                             caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level),
+                                           'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)
   --cache-option                           named cache params (key=value format, comma-separated). easycache/ucache:
-                                           threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples:
-                                           "threshold=0.25" or "threshold=1.5,reset=0"
-  --cache-preset                           cache-dit preset: 'slow'/'s', 'medium'/'m', 'fast'/'f', 'ultra'/'u'
+                                           threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=;
+                                           spectrum: w=,m=,lam=,window=,flex=,warmup=,stop=. Examples:
+                                           "threshold=0.25" or "threshold=1.5,reset=0" or "w=0.4,window=2"
   --scm-mask                               SCM steps mask for cache-dit: comma-separated 0/1 (e.g., "1,1,1,0,0,1,0,0,1,0") - 1=compute, 0=can cache
   --scm-policy                             SCM policy: 'dynamic' (default) or 'static'
 ```

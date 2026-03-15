@@ -15,6 +15,9 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
+* **2026/01/18** 🚀 stable-diffusion.cpp now supports **FLUX.2-klein**  
+  👉 Details: [PR #1193](https://github.com/leejet/stable-diffusion.cpp/pull/1193)
+
 * **2025/12/01** 🚀 stable-diffusion.cpp now supports **Z-Image**  
   👉 Details: [PR #1020](https://github.com/leejet/stable-diffusion.cpp/pull/1020)
 
@@ -50,6 +53,7 @@ API and command-line option may change frequently.***
     - [Qwen Image](./docs/qwen_image.md)
     - [Z-Image](./docs/z_image.md)
     - [Ovis-Image](./docs/ovis_image.md)
+    - [Anima](./docs/anima.md)
   - Image Edit Models
     - [FLUX.1-Kontext-dev](./docs/kontext.md)
     - [Qwen Image Edit series](./docs/qwen_image_edit.md)
@@ -136,6 +140,7 @@ If you want to improve performance or reduce VRAM/RAM usage, please refer to [pe
 - [🔥Wan2.1/Wan2.2](./docs/wan.md)
 - [🔥Z-Image](./docs/z_image.md)
 - [Ovis-Image](./docs/ovis_image.md)
+- [Anima](./docs/anima.md)
 - [LoRA](./docs/lora.md)
 - [LCM/LCM-LoRA](./docs/lcm.md)
 - [Using PhotoMaker to personalize image generation](./docs/photo_maker.md)

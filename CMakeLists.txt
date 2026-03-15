@@ -36,7 +36,6 @@ option(SD_VULKAN                     "sd: vulkan backend" OFF)
 option(SD_OPENCL                     "sd: opencl backend" OFF)
 option(SD_SYCL                       "sd: sycl backend" OFF)
 option(SD_MUSA                       "sd: musa backend" OFF)
-option(SD_FAST_SOFTMAX               "sd: x1.5 faster softmax, indeterministic (sometimes, same seed don't generate same image), cuda only" OFF)
 option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
 option(SD_BUILD_SHARED_GGML_LIB      "sd: build ggml as a separate shared lib" OFF)
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
@@ -70,26 +69,22 @@ if (SD_HIPBLAS)
     message("-- Use HIPBLAS as backend stable-diffusion")
     set(GGML_HIP ON)
     add_definitions(-DSD_USE_CUDA)
-    if(SD_FAST_SOFTMAX)
-        set(GGML_CUDA_FAST_SOFTMAX ON)
-    endif()
 endif ()
 
 if(SD_MUSA)
     message("-- Use MUSA as backend stable-diffusion")
     set(GGML_MUSA ON)
     add_definitions(-DSD_USE_CUDA)
-    if(SD_FAST_SOFTMAX)
-        set(GGML_CUDA_FAST_SOFTMAX ON)
-    endif()
 endif()
 
 set(SD_LIB stable-diffusion)
 
 file(GLOB SD_LIB_SOURCES
-    "*.h"
-    "*.cpp"
-    "*.hpp"
+    "src/*.h"
+    "src/*.cpp"
+    "src/*.hpp"
+    "src/vocab/*.h"
+    "src/vocab/*.cpp"
 )
 
 find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
@@ -119,7 +114,7 @@ endif()
 message(STATUS "stable-diffusion.cpp commit ${SDCPP_BUILD_COMMIT}")
 
 set_property(
-  SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/version.cpp
+  SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/src/version.cpp
   APPEND PROPERTY COMPILE_DEFINITIONS
   SDCPP_BUILD_COMMIT=${SDCPP_BUILD_COMMIT} SDCPP_BUILD_VERSION=${SDCPP_BUILD_VERSION}
 )
@@ -182,6 +177,7 @@ endif()
 add_subdirectory(thirdparty)
 
 target_link_libraries(${SD_LIB} PUBLIC ggml zip)
+target_include_directories(${SD_LIB} PUBLIC . include)
 target_include_directories(${SD_LIB} PUBLIC . thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
 
@@ -190,7 +186,7 @@ if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-set(SD_PUBLIC_HEADERS stable-diffusion.h)
+set(SD_PUBLIC_HEADERS include/stable-diffusion.h)
 set_target_properties(${SD_LIB} PROPERTIES PUBLIC_HEADER "${SD_PUBLIC_HEADERS}")
 
 install(TARGETS ${SD_LIB} LIBRARY PUBLIC_HEADER)
