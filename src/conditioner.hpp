@@ -2,8 +2,11 @@
 #define __CONDITIONER_HPP__
 
 #include "clip.hpp"
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
 #include "llm.hpp"
 #include "t5.hpp"
+#include "util.h"
 
 struct SDCondition {
     struct ggml_tensor* c_crossattn = nullptr;  // aka context
@@ -68,7 +71,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     std::vector<uint8_t> token_embed_custom;
     std::map<std::string, std::pair<int, int>> embedding_pos_map;
 
-    FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
+    FrozenCLIPEmbedderWithCustomWords(std::vector<ggml_backend_t> backends,
                                       bool offload_params_to_cpu,
                                       const String2TensorStorage& tensor_storage_map,
                                       const std::map<std::string, std::string>& orig_embedding_map,
@@ -82,13 +85,27 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             tokenizer.add_special_token(name);
         }
         bool force_clip_f32 = !embedding_map.empty();
+
+        ggml_backend_t clip_backend = backends[0];
+
         if (sd_version_is_sd1(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32);
+            LOG_INFO("CLIP-L: using %s backend", ggml_backend_name(clip_backend));
+            text_model = std::make_shared<CLIPTextModelRunner>(clip_backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, true, force_clip_f32);
         } else if (sd_version_is_sd2(version)) {
-            text_model = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, true, force_clip_f32);
+            LOG_INFO("CLIP-H: using %s backend", ggml_backend_name(clip_backend));
+            text_model = std::make_shared<CLIPTextModelRunner>(clip_backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, true, force_clip_f32);
         } else if (sd_version_is_sdxl(version)) {
-            text_model  = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false, force_clip_f32);
-            text_model2 = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false, force_clip_f32);
+            ggml_backend_t clip_g_backend = clip_backend;
+            if (backends.size() >= 2){
+                clip_g_backend = backends[1];
+                if (backends.size() > 2) {
+                    LOG_WARN("More than 2 clip backends provided, but the model only supports 2 text encoders. Ignoring the rest.");
+                }
+            }
+            LOG_INFO("CLIP-L: using %s backend", ggml_backend_name(clip_backend));
+            LOG_INFO("CLIP-G: using %s backend", ggml_backend_name(clip_g_backend));
+            text_model  = std::make_shared<CLIPTextModelRunner>(clip_backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPENAI_CLIP_VIT_L_14, false, force_clip_f32);
+            text_model2 = std::make_shared<CLIPTextModelRunner>(clip_g_backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.1.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false, force_clip_f32);
         }
     }
 
@@ -715,13 +732,29 @@ struct SD3CLIPEmbedder : public Conditioner {
     std::shared_ptr<CLIPTextModelRunner> clip_g;
     std::shared_ptr<T5Runner> t5;
 
-    SD3CLIPEmbedder(ggml_backend_t backend,
+    SD3CLIPEmbedder(std::vector<ggml_backend_t> backends,
                     bool offload_params_to_cpu,
                     const String2TensorStorage& tensor_storage_map = {})
         : clip_g_tokenizer(0) {
         bool use_clip_l = false;
         bool use_clip_g = false;
         bool use_t5     = false;
+
+        ggml_backend_t clip_l_backend, clip_g_backend, t5_backend;
+        if (backends.size() == 1) {
+            clip_l_backend = clip_g_backend = t5_backend = backends[0];
+        } else if (backends.size() == 2) {
+            clip_l_backend = clip_g_backend = backends[0];
+            t5_backend = backends[1];
+        } else if (backends.size() >= 3) {
+            clip_l_backend = backends[0];
+            clip_g_backend = backends[1];
+            t5_backend     = backends[2];
+            if (backends.size() > 3) {
+                LOG_WARN("More than 3 clip backends provided, but the model only supports 3 text encoders. Ignoring the rest.");
+            }
+        }
+
         for (auto pair : tensor_storage_map) {
             if (pair.first.find("text_encoders.clip_l") != std::string::npos) {
                 use_clip_l = true;
@@ -736,13 +769,16 @@ struct SD3CLIPEmbedder : public Conditioner {
             return;
         }
         if (use_clip_l) {
-            clip_l = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
+            LOG_INFO("CLIP-L: using %s backend", ggml_backend_name(clip_l_backend));
+            clip_l = std::make_shared<CLIPTextModelRunner>(clip_l_backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, false);
         }
         if (use_clip_g) {
-            clip_g = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
+            LOG_INFO("CLIP-G: using %s backend", ggml_backend_name(clip_g_backend));
+            clip_g = std::make_shared<CLIPTextModelRunner>(clip_g_backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.clip_g.transformer.text_model", OPEN_CLIP_VIT_BIGG_14, false);
         }
         if (use_t5) {
-            t5 = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.t5xxl.transformer");
+            LOG_INFO("T5-XXL: using %s backend", ggml_backend_name(t5_backend));
+            t5 = std::make_shared<T5Runner>(t5_backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.t5xxl.transformer");
         }
     }
 
@@ -1148,11 +1184,25 @@ struct FluxCLIPEmbedder : public Conditioner {
     std::shared_ptr<T5Runner> t5;
     size_t chunk_len = 256;
 
-    FluxCLIPEmbedder(ggml_backend_t backend,
+    FluxCLIPEmbedder(std::vector<ggml_backend_t> backends,
                      bool offload_params_to_cpu,
                      const String2TensorStorage& tensor_storage_map = {}) {
         bool use_clip_l = false;
         bool use_t5     = false;
+
+
+        ggml_backend_t clip_l_backend, t5_backend;
+        if (backends.size() == 1) {
+            clip_l_backend = t5_backend = backends[0];
+        } else if (backends.size() >= 2) {
+            clip_l_backend = backends[0];
+            t5_backend = backends[1];
+            if (backends.size() > 2) {
+                LOG_WARN("More than 2 clip backends provided, but the model only supports 2 text encoders. Ignoring the rest.");
+            }
+        }
+
+
         for (auto pair : tensor_storage_map) {
             if (pair.first.find("text_encoders.clip_l") != std::string::npos) {
                 use_clip_l = true;
@@ -1167,12 +1217,14 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
 
         if (use_clip_l) {
-            clip_l = std::make_shared<CLIPTextModelRunner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true);
+            LOG_INFO("CLIP-L: using %s backend", ggml_backend_name(clip_l_backend));
+            clip_l = std::make_shared<CLIPTextModelRunner>(clip_l_backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.clip_l.transformer.text_model", OPENAI_CLIP_VIT_L_14, true);
         } else {
             LOG_WARN("clip_l text encoder not found! Prompt adherence might be degraded.");
         }
         if (use_t5) {
-            t5 = std::make_shared<T5Runner>(backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.t5xxl.transformer");
+            LOG_INFO("T5-XXL: using %s backend", ggml_backend_name(clip_l_backend));
+            t5 = std::make_shared<T5Runner>(t5_backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.t5xxl.transformer");
         } else {
             LOG_WARN("t5xxl text encoder not found! Prompt adherence might be degraded.");
         }
