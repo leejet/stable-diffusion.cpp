@@ -613,6 +613,9 @@ public:
 
     int get_encoder_output_channels() {
         int factor = dd_config.double_z ? 2 : 1;
+        if (sd_version_is_flux2(version)) {
+            return dd_config.z_channels * 4;
+        }
         return dd_config.z_channels * factor;
     }
 };
