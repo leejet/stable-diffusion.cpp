@@ -522,7 +522,7 @@ namespace LLM {
             blocks["down_proj"] = std::shared_ptr<GGMLBlock>(new Linear(intermediate_size, hidden_size, bias));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             // x: [N, n_token, hidden_size]
             auto gate_proj = std::dynamic_pointer_cast<Linear>(blocks["gate_proj"]);
             auto up_proj   = std::dynamic_pointer_cast<Linear>(blocks["up_proj"]);
@@ -582,7 +582,7 @@ namespace LLM {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             // x: [N*grid_t*grid_h*grid_w, in_channels, temporal_patch_size*patch_size*patch_size]
             // return: [N*grid_t*grid_h*grid_w, embed_dim]
             x = ggml_reshape_4d(ctx->ggml_ctx,
@@ -631,7 +631,7 @@ namespace LLM {
             blocks["mlp.2"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, dim));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto ln_q  = std::dynamic_pointer_cast<RMSNorm>(blocks["ln_q"]);
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
@@ -668,10 +668,10 @@ namespace LLM {
             blocks["proj"] = std::shared_ptr<GGMLBlock>(new Linear(hidden_size, hidden_size));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* pe,
-                                    struct ggml_tensor* mask = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* pe,
+                             ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
@@ -718,10 +718,10 @@ namespace LLM {
             blocks["norm2"] = std::shared_ptr<GGMLBlock>(new RMSNorm(hidden_size, eps));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* pe,
-                                    struct ggml_tensor* mask = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* pe,
+                             ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
             auto attn  = std::dynamic_pointer_cast<VisionAttention>(blocks["attn"]);
             auto mlp   = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
@@ -778,12 +778,12 @@ namespace LLM {
             blocks["merger"] = std::shared_ptr<GGMLBlock>(new PatchMerger(out_hidden_size, hidden_size, spatial_merge_size));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* pixel_values,
-                                    struct ggml_tensor* pe,
-                                    struct ggml_tensor* window_index,
-                                    struct ggml_tensor* window_inverse_index,
-                                    struct ggml_tensor* window_mask) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* pixel_values,
+                             ggml_tensor* pe,
+                             ggml_tensor* window_index,
+                             ggml_tensor* window_inverse_index,
+                             ggml_tensor* window_mask) {
             // pixel_values: [grid_t*(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw]
             // window_index: [grid_t*(H/mh/ph)*(W/mw/pw)]
             // window_inverse_index: [grid_t*(H/mh/ph)*(W/mw/pw)]
@@ -836,10 +836,10 @@ namespace LLM {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask = nullptr) {
             // x: [N, n_token, hidden_size]
             int64_t n_token = x->ne[1];
             int64_t N       = x->ne[2];
@@ -898,10 +898,10 @@ namespace LLM {
             blocks["post_attention_layernorm"] = std::make_shared<RMSNorm>(params.hidden_size, params.rms_norm_eps);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask = nullptr) {
             // x: [N, n_token, hidden_size]
             auto self_attn                = std::dynamic_pointer_cast<Attention>(blocks["self_attn"]);
             auto mlp                      = std::dynamic_pointer_cast<MLP>(blocks["mlp"]);
@@ -936,12 +936,12 @@ namespace LLM {
             blocks["norm"] = std::shared_ptr<GGMLBlock>(new RMSNorm(params.hidden_size, params.rms_norm_eps));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask,
-                                    std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                                    std::set<int> out_layers) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* input_ids,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask,
+                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+                             std::set<int> out_layers) {
             // input_ids: [N, n_token]
             // return: [N, n_token, hidden_size]
 
@@ -1037,12 +1037,12 @@ namespace LLM {
             }
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask,
-                                    std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                                    std::set<int> out_layers) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* input_ids,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask,
+                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+                             std::set<int> out_layers) {
             // input_ids: [N, n_token]
             auto model = std::dynamic_pointer_cast<TextModel>(blocks["model"]);
 
@@ -1050,12 +1050,12 @@ namespace LLM {
             return x;
         }
 
-        struct ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
-                                           struct ggml_tensor* pixel_values,
-                                           struct ggml_tensor* pe,
-                                           struct ggml_tensor* window_index,
-                                           struct ggml_tensor* window_inverse_index,
-                                           struct ggml_tensor* window_mask) {
+        ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
+                                    ggml_tensor* pixel_values,
+                                    ggml_tensor* pe,
+                                    ggml_tensor* window_index,
+                                    ggml_tensor* window_inverse_index,
+                                    ggml_tensor* window_mask) {
             GGML_ASSERT(enable_vision);
             auto vision_model = std::dynamic_pointer_cast<VisionModel>(blocks["visual"]);
             return vision_model->forward(ctx, pixel_values, pe, window_index, window_inverse_index, window_mask);
@@ -1156,35 +1156,35 @@ namespace LLM {
             return llm_arch_to_str[static_cast<int>(params.arch)];
         }
 
-        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
             model.get_param_tensors(tensors, prefix);
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* input_ids,
-                                    struct ggml_tensor* input_pos,
-                                    struct ggml_tensor* attention_mask,
-                                    std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                                    std::set<int> out_layers) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* input_ids,
+                             ggml_tensor* input_pos,
+                             ggml_tensor* attention_mask,
+                             std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+                             std::set<int> out_layers) {
             auto hidden_states = model.forward(ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);  // [N, n_token, hidden_size]
             return hidden_states;
         }
 
-        struct ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
-                                           struct ggml_tensor* pixel_values,
-                                           struct ggml_tensor* input_pos,
-                                           struct ggml_tensor* window_index,
-                                           struct ggml_tensor* window_inverse_index,
-                                           struct ggml_tensor* window_mask) {
+        ggml_tensor* vision_forward(GGMLRunnerContext* ctx,
+                                    ggml_tensor* pixel_values,
+                                    ggml_tensor* input_pos,
+                                    ggml_tensor* window_index,
+                                    ggml_tensor* window_inverse_index,
+                                    ggml_tensor* window_mask) {
             auto hidden_states = model.vision_forward(ctx, pixel_values, input_pos, window_index, window_inverse_index, window_mask);
             return hidden_states;
         }
 
-        struct ggml_cgraph* build_graph(struct ggml_tensor* input_ids,
-                                        struct ggml_tensor* attention_mask,
-                                        std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                                        std::set<int> out_layers) {
-            struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
+        ggml_cgraph* build_graph(ggml_tensor* input_ids,
+                                 ggml_tensor* attention_mask,
+                                 std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+                                 std::set<int> out_layers) {
+            ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
             input_ids = to_backend(input_ids);
 
@@ -1232,7 +1232,7 @@ namespace LLM {
 
             auto runner_ctx = get_context();
 
-            struct ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);
+            ggml_tensor* hidden_states = forward(&runner_ctx, input_ids, input_pos, attention_mask, image_embeds, out_layers);
 
             ggml_build_forward_expand(gf, hidden_states);
 
@@ -1240,13 +1240,13 @@ namespace LLM {
         }
 
         bool compute(const int n_threads,
-                     struct ggml_tensor* input_ids,
-                     struct ggml_tensor* attention_mask,
+                     ggml_tensor* input_ids,
+                     ggml_tensor* attention_mask,
                      std::vector<std::pair<int, ggml_tensor*>> image_embeds,
                      std::set<int> out_layers,
                      ggml_tensor** output,
                      ggml_context* output_ctx = nullptr) {
-            auto get_graph = [&]() -> struct ggml_cgraph* {
+            auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input_ids, attention_mask, image_embeds, out_layers);
             };
             return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
@@ -1261,7 +1261,7 @@ namespace LLM {
             return grid_t * grid_h * grid_w;
         }
 
-        struct ggml_tensor* process_image(struct ggml_context* ctx, struct ggml_tensor* image) {
+        ggml_tensor* process_image(ggml_context* ctx, ggml_tensor* image) {
             // image: [C, H, W]
             // return: [grid_t*(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw], grid_t == 1
             int64_t C  = image->ne[2];
@@ -1288,8 +1288,8 @@ namespace LLM {
             return image;
         }
 
-        struct ggml_cgraph* build_encode_image_graph(struct ggml_tensor* image) {
-            struct ggml_cgraph* gf = new_graph_custom(LLM_GRAPH_SIZE);
+        ggml_cgraph* build_encode_image_graph(ggml_tensor* image) {
+            ggml_cgraph* gf = new_graph_custom(LLM_GRAPH_SIZE);
 
             GGML_ASSERT(image->ne[1] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
             GGML_ASSERT(image->ne[0] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
@@ -1399,23 +1399,23 @@ namespace LLM {
             // pe->data = nullptr;
             set_backend_tensor_data(pe, pe_vec.data());
 
-            auto runnter_ctx                  = get_context();
-            struct ggml_tensor* hidden_states = vision_forward(&runnter_ctx,
-                                                               pixel_values,
-                                                               pe,
-                                                               window_index,
-                                                               window_inverse_index,
-                                                               window_mask);
+            auto runnter_ctx           = get_context();
+            ggml_tensor* hidden_states = vision_forward(&runnter_ctx,
+                                                        pixel_values,
+                                                        pe,
+                                                        window_index,
+                                                        window_inverse_index,
+                                                        window_mask);
             ggml_build_forward_expand(gf, hidden_states);
 
             return gf;
         }
 
         void encode_image(const int n_threads,
-                          struct ggml_tensor* image,
+                          ggml_tensor* image,
                           ggml_tensor** output,
                           ggml_context* output_ctx = nullptr) {
-            auto get_graph = [&]() -> struct ggml_cgraph* {
+            auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
             GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
@@ -1440,7 +1440,7 @@ namespace LLM {
             }
         }
 
-        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
             model.get_param_tensors(tensors, prefix);
         }
 
@@ -1492,12 +1492,12 @@ namespace LLM {
         }
 
         void test() {
-            struct ggml_init_params params;
+            ggml_init_params params;
             params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1GB
             params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
-            struct ggml_context* work_ctx = ggml_init(params);
+            ggml_context* work_ctx = ggml_init(params);
             GGML_ASSERT(work_ctx != nullptr);
             bool test_mistral          = false;
             bool test_qwen3            = true;
@@ -1509,7 +1509,7 @@ namespace LLM {
                 {
                     auto image = load_tensor_from_file(work_ctx, "qwen2vl_normalized.bin");
                     print_ggml_tensor(image, false, "image");
-                    struct ggml_tensor* out = nullptr;
+                    ggml_tensor* out = nullptr;
 
                     int64_t t0 = ggml_time_ms();
                     model.encode_image(8, image, &out, work_ctx);
@@ -1547,8 +1547,8 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                struct ggml_tensor* out = nullptr;
+                auto input_ids   = vector_to_ggml_tensor_i32(work_ctx, tokens);
+                ggml_tensor* out = nullptr;
 
                 int64_t t0 = ggml_time_ms();
                 model.compute(8, input_ids, nullptr, image_embeds, {}, &out, work_ctx);
@@ -1561,7 +1561,7 @@ namespace LLM {
                 // ggml_set_f32(image, 0.f);
                 auto image = load_tensor_from_file(work_ctx, "qwen2vl_normalized.bin");
                 print_ggml_tensor(image, false, "image");
-                struct ggml_tensor* out = nullptr;
+                ggml_tensor* out = nullptr;
 
                 int64_t t0 = ggml_time_ms();
                 model.encode_image(8, image, &out, work_ctx);
@@ -1587,8 +1587,8 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                struct ggml_tensor* out = nullptr;
+                auto input_ids   = vector_to_ggml_tensor_i32(work_ctx, tokens);
+                ggml_tensor* out = nullptr;
 
                 int64_t t0 = ggml_time_ms();
                 model.compute(8, input_ids, nullptr, {}, {10, 20, 30}, &out, work_ctx);
@@ -1610,8 +1610,8 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                struct ggml_tensor* out = nullptr;
+                auto input_ids   = vector_to_ggml_tensor_i32(work_ctx, tokens);
+                ggml_tensor* out = nullptr;
 
                 int64_t t0 = ggml_time_ms();
                 model.compute(8, input_ids, nullptr, {}, {35}, &out, work_ctx);
@@ -1633,8 +1633,8 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                struct ggml_tensor* out = nullptr;
+                auto input_ids   = vector_to_ggml_tensor_i32(work_ctx, tokens);
+                ggml_tensor* out = nullptr;
 
                 int64_t t0 = ggml_time_ms();
                 model.compute(8, input_ids, nullptr, {}, {}, &out, work_ctx);

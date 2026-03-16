@@ -6,12 +6,12 @@
 struct VAE : public GGMLRunner {
 protected:
     SDVersion version;
-    bool scale_input                                       = true;
+    bool scale_input                                = true;
     virtual bool _compute(const int n_threads,
-                          struct ggml_tensor* z,
+                          ggml_tensor* z,
                           bool decode_graph,
-                          struct ggml_tensor** output,
-                          struct ggml_context* output_ctx) = 0;
+                          ggml_tensor** output,
+                          ggml_context* output_ctx) = 0;
 
 public:
     VAE(SDVersion version, ggml_backend_t backend, bool offload_params_to_cpu)
@@ -186,7 +186,7 @@ public:
     virtual ggml_tensor* vae_output_to_latents(ggml_context* work_ctx, ggml_tensor* vae_output, std::shared_ptr<RNG> rng) = 0;
     virtual ggml_tensor* diffusion_to_vae_latents(ggml_context* work_ctx, ggml_tensor* latents)                           = 0;
     virtual ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents)                           = 0;
-    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix)         = 0;
+    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix)                = 0;
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
 };
 
@@ -199,10 +199,10 @@ struct FakeVAE : public VAE {
     }
 
     bool _compute(const int n_threads,
-                  struct ggml_tensor* z,
+                  ggml_tensor* z,
                   bool decode_graph,
-                  struct ggml_tensor** output,
-                  struct ggml_context* output_ctx) override {
+                  ggml_tensor** output,
+                  ggml_context* output_ctx) override {
         if (*output == nullptr && output_ctx != nullptr) {
             *output = ggml_dup_tensor(output_ctx, z);
         }
@@ -225,7 +225,7 @@ struct FakeVAE : public VAE {
         return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) override {}
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {}
 
     std::string get_desc() override {
         return "fake_vae";

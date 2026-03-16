@@ -6,17 +6,17 @@
 #include "t5.hpp"
 
 struct SDCondition {
-    struct ggml_tensor* c_crossattn = nullptr;  // aka context
-    struct ggml_tensor* c_vector    = nullptr;  // aka y
-    struct ggml_tensor* c_concat    = nullptr;
+    ggml_tensor* c_crossattn = nullptr;  // aka context
+    ggml_tensor* c_vector    = nullptr;  // aka y
+    ggml_tensor* c_concat    = nullptr;
 
-    std::vector<struct ggml_tensor*> extra_c_crossattns;
+    std::vector<ggml_tensor*> extra_c_crossattns;
 
     SDCondition() = default;
-    SDCondition(struct ggml_tensor* c_crossattn,
-                struct ggml_tensor* c_vector,
-                struct ggml_tensor* c_concat,
-                const std::vector<struct ggml_tensor*>& extra_c_crossattns = {})
+    SDCondition(ggml_tensor* c_crossattn,
+                ggml_tensor* c_vector,
+                ggml_tensor* c_concat,
+                const std::vector<ggml_tensor*>& extra_c_crossattns = {})
         : c_crossattn(c_crossattn), c_vector(c_vector), c_concat(c_concat), extra_c_crossattns(extra_c_crossattns) {}
 };
 
@@ -37,7 +37,7 @@ struct Conditioner {
                                               const ConditionerParams& conditioner_params) = 0;
     virtual void alloc_params_buffer()                                                     = 0;
     virtual void free_params_buffer()                                                      = 0;
-    virtual void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors)    = 0;
+    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)           = 0;
     virtual size_t get_params_buffer_size()                                                = 0;
     virtual void set_flash_attention_enabled(bool enabled)                                 = 0;
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
@@ -92,7 +92,7 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         text_model->get_param_tensors(tensors, "cond_stage_model.transformer.text_model");
         if (sd_version_is_sdxl(version)) {
             text_model2->get_param_tensors(tensors, "cond_stage_model.1.transformer.text_model");
@@ -149,14 +149,14 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             }
             return true;
         }
-        struct ggml_init_params params;
-        params.mem_size               = 100 * 1024 * 1024;  // max for custom embeddings 100 MB
-        params.mem_buffer             = nullptr;
-        params.no_alloc               = false;
-        struct ggml_context* embd_ctx = ggml_init(params);
-        struct ggml_tensor* embd      = nullptr;
-        struct ggml_tensor* embd2     = nullptr;
-        auto on_load                  = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) {
+        ggml_init_params params;
+        params.mem_size        = 100 * 1024 * 1024;  // max for custom embeddings 100 MB
+        params.mem_buffer      = nullptr;
+        params.no_alloc        = false;
+        ggml_context* embd_ctx = ggml_init(params);
+        ggml_tensor* embd      = nullptr;
+        ggml_tensor* embd2     = nullptr;
+        auto on_load           = [&](const TensorStorage& tensor_storage, ggml_tensor** dst_tensor) {
             if (tensor_storage.ne[0] != text_model->model.hidden_size) {
                 if (text_model2) {
                     if (tensor_storage.ne[0] == text_model2->model.hidden_size) {
@@ -435,12 +435,12 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                              int height,
                                              int adm_in_channels  = -1,
                                              bool zero_out_masked = false) {
-        int64_t t0                               = ggml_time_ms();
-        struct ggml_tensor* hidden_states        = nullptr;  // [N, n_token, hidden_size]
-        struct ggml_tensor* chunk_hidden_states  = nullptr;  // [n_token, hidden_size] or [n_token, hidden_size + hidden_size2]
-        struct ggml_tensor* chunk_hidden_states1 = nullptr;  // [n_token, hidden_size]
-        struct ggml_tensor* chunk_hidden_states2 = nullptr;  // [n_token, hidden_size2]
-        struct ggml_tensor* pooled               = nullptr;
+        int64_t t0                        = ggml_time_ms();
+        ggml_tensor* hidden_states        = nullptr;  // [N, n_token, hidden_size]
+        ggml_tensor* chunk_hidden_states  = nullptr;  // [n_token, hidden_size] or [n_token, hidden_size + hidden_size2]
+        ggml_tensor* chunk_hidden_states1 = nullptr;  // [n_token, hidden_size]
+        ggml_tensor* chunk_hidden_states2 = nullptr;  // [n_token, hidden_size2]
+        ggml_tensor* pooled               = nullptr;
         std::vector<float> hidden_states_vec;
 
         if (clip_skip <= 0) {
@@ -455,9 +455,9 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             std::vector<float> chunk_weights(weights.begin() + chunk_idx * chunk_len,
                                              weights.begin() + (chunk_idx + 1) * chunk_len);
 
-            auto input_ids                 = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
-            struct ggml_tensor* input_ids2 = nullptr;
-            size_t max_token_idx           = 0;
+            auto input_ids          = vector_to_ggml_tensor_i32(work_ctx, chunk_tokens);
+            ggml_tensor* input_ids2 = nullptr;
+            size_t max_token_idx    = 0;
             if (sd_version_is_sdxl(version)) {
                 auto it = std::find(chunk_tokens.begin(), chunk_tokens.end(), tokenizer.EOS_TOKEN_ID);
                 if (it != chunk_tokens.end()) {
@@ -676,18 +676,18 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
         return "clip_vision";
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
         vision_model.get_param_tensors(tensors, "cond_stage_model.transformer");
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_tensor* pixel_values, bool return_pooled, int clip_skip) {
-        struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
+    ggml_cgraph* build_graph(ggml_tensor* pixel_values, bool return_pooled, int clip_skip) {
+        ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
         pixel_values = to_backend(pixel_values);
 
         auto runner_ctx = get_context();
 
-        struct ggml_tensor* hidden_states = vision_model.forward(&runner_ctx, pixel_values, return_pooled, clip_skip);
+        ggml_tensor* hidden_states = vision_model.forward(&runner_ctx, pixel_values, return_pooled, clip_skip);
 
         ggml_build_forward_expand(gf, hidden_states);
 
@@ -700,7 +700,7 @@ struct FrozenCLIPVisionEmbedder : public GGMLRunner {
                  int clip_skip,
                  ggml_tensor** output,
                  ggml_context* output_ctx) {
-        auto get_graph = [&]() -> struct ggml_cgraph* {
+        auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(pixel_values, return_pooled, clip_skip);
         };
         return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
@@ -746,7 +746,7 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         if (clip_l) {
             clip_l->get_param_tensors(tensors, "text_encoders.clip_l.transformer.text_model");
         }
@@ -909,15 +909,15 @@ struct SD3CLIPEmbedder : public Conditioner {
             clip_skip = 2;
         }
 
-        int64_t t0                                 = ggml_time_ms();
-        struct ggml_tensor* hidden_states          = nullptr;  // [N, n_token*2, 4096]
-        struct ggml_tensor* chunk_hidden_states    = nullptr;  // [n_token*2, 4096]
-        struct ggml_tensor* chunk_hidden_states_l  = nullptr;  // [n_token, hidden_size_l]
-        struct ggml_tensor* chunk_hidden_states_g  = nullptr;  // [n_token, hidden_size_g]
-        struct ggml_tensor* chunk_hidden_states_t5 = nullptr;  // [n_token, hidden_size_t5]
-        struct ggml_tensor* pooled                 = nullptr;
-        struct ggml_tensor* pooled_l               = nullptr;  // [768,]
-        struct ggml_tensor* pooled_g               = nullptr;  // [1280,]
+        int64_t t0                          = ggml_time_ms();
+        ggml_tensor* hidden_states          = nullptr;  // [N, n_token*2, 4096]
+        ggml_tensor* chunk_hidden_states    = nullptr;  // [n_token*2, 4096]
+        ggml_tensor* chunk_hidden_states_l  = nullptr;  // [n_token, hidden_size_l]
+        ggml_tensor* chunk_hidden_states_g  = nullptr;  // [n_token, hidden_size_g]
+        ggml_tensor* chunk_hidden_states_t5 = nullptr;  // [n_token, hidden_size_t5]
+        ggml_tensor* pooled                 = nullptr;
+        ggml_tensor* pooled_l               = nullptr;  // [768,]
+        ggml_tensor* pooled_g               = nullptr;  // [1280,]
         std::vector<float> hidden_states_vec;
 
         size_t chunk_len   = 77;
@@ -1178,7 +1178,7 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         if (clip_l) {
             clip_l->get_param_tensors(tensors, "text_encoders.clip_l.transformer.text_model");
         }
@@ -1306,10 +1306,10 @@ struct FluxCLIPEmbedder : public Conditioner {
             clip_skip = 2;
         }
 
-        int64_t t0                              = ggml_time_ms();
-        struct ggml_tensor* hidden_states       = nullptr;  // [N, n_token, 4096]
-        struct ggml_tensor* chunk_hidden_states = nullptr;  // [n_token, 4096]
-        struct ggml_tensor* pooled              = nullptr;  // [768,]
+        int64_t t0                       = ggml_time_ms();
+        ggml_tensor* hidden_states       = nullptr;  // [N, n_token, 4096]
+        ggml_tensor* chunk_hidden_states = nullptr;  // [n_token, 4096]
+        ggml_tensor* pooled              = nullptr;  // [768,]
         std::vector<float> hidden_states_vec;
 
         size_t chunk_count = std::max(clip_l_tokens.size() > 0 ? chunk_len : 0, t5_tokens.size()) / chunk_len;
@@ -1448,7 +1448,7 @@ struct T5CLIPEmbedder : public Conditioner {
         }
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         if (t5) {
             t5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
         }
@@ -1523,7 +1523,7 @@ struct T5CLIPEmbedder : public Conditioner {
         return {t5_tokens, t5_weights, t5_mask};
     }
 
-    void modify_mask_to_attend_padding(struct ggml_tensor* mask, int max_seq_length, int num_extra_padding = 8) {
+    void modify_mask_to_attend_padding(ggml_tensor* mask, int max_seq_length, int num_extra_padding = 8) {
         float* mask_data = (float*)mask->data;
         int num_pad      = 0;
         for (int64_t i = 0; i < max_seq_length; i++) {
@@ -1554,11 +1554,11 @@ struct T5CLIPEmbedder : public Conditioner {
         auto& t5_weights       = std::get<1>(token_and_weights);
         auto& t5_attn_mask_vec = std::get<2>(token_and_weights);
 
-        int64_t t0                              = ggml_time_ms();
-        struct ggml_tensor* hidden_states       = nullptr;  // [N, n_token, 4096]
-        struct ggml_tensor* chunk_hidden_states = nullptr;  // [n_token, 4096]
-        struct ggml_tensor* pooled              = nullptr;
-        struct ggml_tensor* t5_attn_mask        = vector_to_ggml_tensor(work_ctx, t5_attn_mask_vec);  // [n_token]
+        int64_t t0                       = ggml_time_ms();
+        ggml_tensor* hidden_states       = nullptr;  // [N, n_token, 4096]
+        ggml_tensor* chunk_hidden_states = nullptr;  // [n_token, 4096]
+        ggml_tensor* pooled              = nullptr;
+        ggml_tensor* t5_attn_mask        = vector_to_ggml_tensor(work_ctx, t5_attn_mask_vec);  // [n_token]
 
         std::vector<float> hidden_states_vec;
 
@@ -1658,7 +1658,7 @@ struct AnimaConditioner : public Conditioner {
                                                false);
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
@@ -1736,7 +1736,7 @@ struct AnimaConditioner : public Conditioner {
 
         auto input_ids = vector_to_ggml_tensor_i32(work_ctx, qwen_tokens);
 
-        struct ggml_tensor* hidden_states = nullptr;  // [N, n_token, 1024]
+        ggml_tensor* hidden_states = nullptr;  // [N, n_token, 1024]
         llm->compute(n_threads,
                      input_ids,
                      nullptr,
@@ -1763,8 +1763,8 @@ struct AnimaConditioner : public Conditioner {
             }
         }
 
-        struct ggml_tensor* t5_ids_tensor    = nullptr;
-        struct ggml_tensor* t5_weight_tensor = nullptr;
+        ggml_tensor* t5_ids_tensor    = nullptr;
+        ggml_tensor* t5_weight_tensor = nullptr;
         if (!t5_tokens.empty()) {
             t5_ids_tensor    = vector_to_ggml_tensor_i32(work_ctx, t5_tokens);
             t5_weight_tensor = vector_to_ggml_tensor(work_ctx, t5_weights);
@@ -1808,7 +1808,7 @@ struct LLMEmbedder : public Conditioner {
                                                enable_vision);
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
@@ -1904,7 +1904,7 @@ struct LLMEmbedder : public Conditioner {
             tokenizer->pad_tokens(tokens, weights, max_length, true);
         }
 
-        struct ggml_tensor* hidden_states = nullptr;  // [N, n_token, hidden_size]
+        ggml_tensor* hidden_states = nullptr;  // [N, n_token, hidden_size]
 
         auto input_ids = vector_to_ggml_tensor_i32(work_ctx, tokens);
 

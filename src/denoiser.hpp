@@ -773,8 +773,8 @@ static bool sample_k_diffusion(sample_method_t method,
     // sample_euler_ancestral
     switch (method) {
         case EULER_A_SAMPLE_METHOD: {
-            struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
                 float sigma = sigmas[i];
@@ -830,7 +830,7 @@ static bool sample_k_diffusion(sample_method_t method,
         } break;
         case EULER_SAMPLE_METHOD:  // Implemented without any sigma churn
         {
-            struct ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
                 float sigma = sigmas[i];
@@ -865,8 +865,8 @@ static bool sample_k_diffusion(sample_method_t method,
             }
         } break;
         case HEUN_SAMPLE_METHOD: {
-            struct ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
                 // denoise
@@ -921,8 +921,8 @@ static bool sample_k_diffusion(sample_method_t method,
             }
         } break;
         case DPM2_SAMPLE_METHOD: {
-            struct ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
                 // denoise
@@ -979,8 +979,8 @@ static bool sample_k_diffusion(sample_method_t method,
 
         } break;
         case DPMPP2S_A_SAMPLE_METHOD: {
-            struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
                 // denoise
@@ -1050,7 +1050,7 @@ static bool sample_k_diffusion(sample_method_t method,
         } break;
         case DPMPP2M_SAMPLE_METHOD:  // DPM++ (2M) from Karras et al (2022)
         {
-            struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
             auto t_fn = [](float sigma) -> float { return -log(sigma); };
 
@@ -1092,7 +1092,7 @@ static bool sample_k_diffusion(sample_method_t method,
         } break;
         case DPMPP2Mv2_SAMPLE_METHOD:  // Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
         {
-            struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
             auto t_fn = [](float sigma) -> float { return -log(sigma); };
 
@@ -1157,8 +1157,8 @@ static bool sample_k_diffusion(sample_method_t method,
                 }
                 float* vec_denoised = (float*)denoised->data;
                 // d_cur = (x_cur - denoised) / sigma
-                struct ggml_tensor* d_cur = ggml_dup_tensor(work_ctx, x_cur);
-                float* vec_d_cur          = (float*)d_cur->data;
+                ggml_tensor* d_cur = ggml_dup_tensor(work_ctx, x_cur);
+                float* vec_d_cur   = (float*)d_cur->data;
 
                 for (int j = 0; j < ggml_nelements(d_cur); j++) {
                     vec_d_cur[j] = (vec_x_cur[j] - vec_denoised[j]) / sigma;
@@ -1225,11 +1225,11 @@ static bool sample_k_diffusion(sample_method_t method,
                 float t_next = sigmas[i + 1];
 
                 // Denoising step
-                ggml_tensor* denoised     = model(x, sigma, i + 1);
-                float* vec_denoised       = (float*)denoised->data;
-                struct ggml_tensor* d_cur = ggml_dup_tensor(work_ctx, x);
-                float* vec_d_cur          = (float*)d_cur->data;
-                float* vec_x              = (float*)x->data;
+                ggml_tensor* denoised = model(x, sigma, i + 1);
+                float* vec_denoised   = (float*)denoised->data;
+                ggml_tensor* d_cur    = ggml_dup_tensor(work_ctx, x);
+                float* vec_d_cur      = (float*)d_cur->data;
+                float* vec_x          = (float*)x->data;
 
                 // d_cur = (x - denoised) / sigma
                 for (int j = 0; j < ggml_nelements(d_cur); j++) {
@@ -1290,8 +1290,8 @@ static bool sample_k_diffusion(sample_method_t method,
         } break;
         case LCM_SAMPLE_METHOD:  // Latent Consistency Models
         {
-            struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
                 float sigma = sigmas[i];
@@ -1358,9 +1358,9 @@ static bool sample_k_diffusion(sample_method_t method,
                               alphas_cumprod[i]);
             }
 
-            struct ggml_tensor* pred_original_sample =
+            ggml_tensor* pred_original_sample =
                 ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* variance_noise =
+            ggml_tensor* variance_noise =
                 ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
@@ -1422,7 +1422,7 @@ static bool sample_k_diffusion(sample_method_t method,
                 // model_output = model() is the D(x, sigma) as
                 // defined in Karras et al. (2022), p. 3, Table 1 and
                 // p. 8 (7), compare also p. 38 (226) therein.
-                struct ggml_tensor* model_output =
+                ggml_tensor* model_output =
                     model(x, sigma, i + 1);
                 // Here model_output is still the k-diffusion denoiser
                 // output, not the U-net output F_theta(c_in(sigma) x;
@@ -1545,9 +1545,9 @@ static bool sample_k_diffusion(sample_method_t method,
             }
             int original_steps = 50;
 
-            struct ggml_tensor* pred_original_sample =
+            ggml_tensor* pred_original_sample =
                 ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* noise =
+            ggml_tensor* noise =
                 ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
@@ -1581,7 +1581,7 @@ static bool sample_k_diffusion(sample_method_t method,
                         vec_x[j] *= std::sqrt(sigma * sigma + 1);
                     }
                 }
-                struct ggml_tensor* model_output =
+                ggml_tensor* model_output =
                     model(x, sigma, i + 1);
                 {
                     float* vec_x = (float*)x->data;
@@ -1689,8 +1689,8 @@ static bool sample_k_diffusion(sample_method_t method,
         } break;
         case RES_MULTISTEP_SAMPLE_METHOD:  // Res Multistep sampler
         {
-            struct ggml_tensor* noise        = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* noise        = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
             bool have_old_sigma  = false;
             float old_sigma_down = 0.0f;
@@ -1797,9 +1797,9 @@ static bool sample_k_diffusion(sample_method_t method,
         } break;
         case RES_2S_SAMPLE_METHOD:  // Res 2s sampler
         {
-            struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* x0    = ggml_dup_tensor(work_ctx, x);
-            struct ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* x0    = ggml_dup_tensor(work_ctx, x);
+            ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
             const float c2 = 0.5f;
             auto t_fn      = [](float sigma) -> float { return -logf(sigma); };

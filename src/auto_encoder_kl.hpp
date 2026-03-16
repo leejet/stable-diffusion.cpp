@@ -29,7 +29,7 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         // x: [N, in_channels, h, w]
         // t_emb is always None
         auto norm1 = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm1"]);
@@ -65,7 +65,7 @@ protected:
     int64_t in_channels;
     bool use_linear;
 
-    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
+    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") {
         auto iter = tensor_storage_map.find(prefix + "proj_out.weight");
         if (iter != tensor_storage_map.end()) {
             if (iter->second.n_dims == 4 && use_linear) {
@@ -101,7 +101,7 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         // x: [N, in_channels, h, w]
         auto norm     = std::dynamic_pointer_cast<GroupNorm32>(blocks["norm"]);
         auto q_proj   = std::dynamic_pointer_cast<UnaryBlock>(blocks["q"]);
@@ -178,8 +178,8 @@ public:
                                                                         {kernel_padding, 0, 0}));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* x) override {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* x) override {
         // timesteps always None
         // skip_video always False
         // x: [N, IC, IH, IW]
@@ -208,7 +208,7 @@ public:
 
 class VideoResnetBlock : public ResnetBlock {
 protected:
-    void init_params(struct ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
         enum ggml_type wtype = get_type(prefix + "mix_factor", tensor_storage_map, GGML_TYPE_F32);
         params["mix_factor"] = ggml_new_tensor_1d(ctx, wtype, 1);
     }
@@ -227,7 +227,7 @@ public:
         blocks["time_stack"] = std::shared_ptr<GGMLBlock>(new ResBlock(out_channels, 0, out_channels, {video_kernel_size, 1}, 3, false, true));
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) override {
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         // x: [N, in_channels, h, w] aka [b*t, in_channels, h, w]
         // return: [N, out_channels, h, w] aka [b*t, out_channels, h, w]
         // t_emb is always None
@@ -317,7 +317,7 @@ public:
         blocks["conv_out"] = std::shared_ptr<GGMLBlock>(new Conv2d(block_in, double_z ? z_channels * 2 : z_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+    virtual ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         // x: [N, in_channels, h, w]
 
         auto conv_in     = std::dynamic_pointer_cast<Conv2d>(blocks["conv_in"]);
@@ -435,7 +435,7 @@ public:
         blocks["conv_out"] = get_conv_out(block_in, out_ch, {3, 3}, {1, 1}, {1, 1});
     }
 
-    virtual struct ggml_tensor* forward(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
+    virtual ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* z) {
         // z: [N, z_channels, h, w]
         // alpha is always 0
         // merge_strategy is always learned
@@ -549,7 +549,7 @@ public:
         }
     }
 
-    struct ggml_tensor* decode(GGMLRunnerContext* ctx, struct ggml_tensor* z) {
+    ggml_tensor* decode(GGMLRunnerContext* ctx, ggml_tensor* z) {
         // z: [N, z_channels, h, w]
         if (sd_version_is_flux2(version)) {
             // [N, C*p*p, h, w] -> [N, C, h*p, w*p]
@@ -581,7 +581,7 @@ public:
         return h;
     }
 
-    struct ggml_tensor* encode(GGMLRunnerContext* ctx, struct ggml_tensor* x) {
+    ggml_tensor* encode(GGMLRunnerContext* ctx, ggml_tensor* x) {
         // x: [N, in_channels, h, w]
         auto encoder = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
 
@@ -681,18 +681,18 @@ struct AutoEncoderKL : public VAE {
         return "vae";
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) override {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) override {
         ae.get_param_tensors(tensors, prefix);
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
-        struct ggml_cgraph* gf = ggml_new_graph(compute_ctx);
+    ggml_cgraph* build_graph(ggml_tensor* z, bool decode_graph) {
+        ggml_cgraph* gf = ggml_new_graph(compute_ctx);
 
         z = to_backend(z);
 
         auto runner_ctx = get_context();
 
-        struct ggml_tensor* out = decode_graph ? ae.decode(&runner_ctx, z) : ae.encode(&runner_ctx, z);
+        ggml_tensor* out = decode_graph ? ae.decode(&runner_ctx, z) : ae.encode(&runner_ctx, z);
 
         ggml_build_forward_expand(gf, out);
 
@@ -700,12 +700,12 @@ struct AutoEncoderKL : public VAE {
     }
 
     bool _compute(const int n_threads,
-                  struct ggml_tensor* z,
+                  ggml_tensor* z,
                   bool decode_graph,
-                  struct ggml_tensor** output,
-                  struct ggml_context* output_ctx = nullptr) override {
+                  ggml_tensor** output,
+                  ggml_context* output_ctx = nullptr) override {
         GGML_ASSERT(!decode_only || decode_graph);
-        auto get_graph = [&]() -> struct ggml_cgraph* {
+        auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(z, decode_graph);
         };
         // ggml_set_f32(z, 0.5f);
@@ -715,8 +715,8 @@ struct AutoEncoderKL : public VAE {
 
     ggml_tensor* gaussian_latent_sample(ggml_context* work_ctx, ggml_tensor* moments, std::shared_ptr<RNG> rng) {
         // ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample
-        ggml_tensor* latents      = ggml_new_tensor_4d(work_ctx, moments->type, moments->ne[0], moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
-        struct ggml_tensor* noise = ggml_dup_tensor(work_ctx, latents);
+        ggml_tensor* latents = ggml_new_tensor_4d(work_ctx, moments->type, moments->ne[0], moments->ne[1], moments->ne[2] / 2, moments->ne[3]);
+        ggml_tensor* noise   = ggml_dup_tensor(work_ctx, latents);
         ggml_ext_im_set_randn_f32(noise, rng);
         {
             float mean   = 0;
@@ -884,12 +884,12 @@ struct AutoEncoderKL : public VAE {
     }
 
     void test() {
-        struct ggml_init_params params;
+        ggml_init_params params;
         params.mem_size   = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
         params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
-        struct ggml_context* work_ctx = ggml_init(params);
+        ggml_context* work_ctx = ggml_init(params);
         GGML_ASSERT(work_ctx != nullptr);
 
         {
@@ -900,7 +900,7 @@ struct AutoEncoderKL : public VAE {
             auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 64, 64, 3, 2);
             ggml_set_f32(x, 0.5f);
             print_ggml_tensor(x);
-            struct ggml_tensor* out = nullptr;
+            ggml_tensor* out = nullptr;
 
             int64_t t0 = ggml_time_ms();
             _compute(8, x, false, &out, work_ctx);
@@ -918,7 +918,7 @@ struct AutoEncoderKL : public VAE {
             auto z = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 4, 1);
             ggml_set_f32(z, 0.5f);
             print_ggml_tensor(z);
-            struct ggml_tensor* out = nullptr;
+            ggml_tensor* out = nullptr;
 
             int64_t t0 = ggml_time_ms();
             _compute(8, z, true, &out, work_ctx);

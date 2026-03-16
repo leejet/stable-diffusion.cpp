@@ -799,7 +799,7 @@ struct CacheDitConditionState {
         }
     }
 
-    bool before_condition(const void* cond, struct ggml_tensor* input, struct ggml_tensor* output, float sigma, int step_index) {
+    bool before_condition(const void* cond, ggml_tensor* input, ggml_tensor* output, float sigma, int step_index) {
         if (!enabled() || step_index < 0)
             return false;
 
@@ -867,7 +867,7 @@ struct CacheDitConditionState {
         return false;
     }
 
-    void after_condition(const void* cond, struct ggml_tensor* input, struct ggml_tensor* output) {
+    void after_condition(const void* cond, ggml_tensor* input, ggml_tensor* output) {
         if (!step_is_active())
             return;
 
