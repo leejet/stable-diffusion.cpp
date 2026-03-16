@@ -495,6 +495,8 @@ public:
 
     std::shared_ptr<RNG> rng         = std::make_shared<PhiloxRNG>();
     std::shared_ptr<RNG> sampler_rng = nullptr;
+    std::minstd_rand     fallback_rng;
+
     int n_threads                    = -1;
     float default_flow_shift         = INFINITY;
 
@@ -617,6 +619,8 @@ public:
         offload_params_to_cpu   = sd_ctx_params->offload_params_to_cpu;
 
         bool use_tae = false;
+
+        fallback_rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
 
         rng = get_rng(sd_ctx_params->rng_type);
         if (sd_ctx_params->sampler_rng_type != RNG_TYPE_COUNT && sd_ctx_params->sampler_rng_type != sd_ctx_params->rng_type) {
@@ -2461,6 +2465,17 @@ public:
             flow_denoiser->set_shift(flow_shift);
         }
     }
+
+    int64_t get_seed(int64_t seed) {
+        if (seed < 0) {
+            // prevent potential issues if 'stable-diffusion.cpp' is invoked
+            // as a library by a third party with a seed <0
+            seed = fallback_rng();
+            LOG_DEBUG("generated %" PRId64 " as random seed", seed);
+        }
+        return seed;
+    }
+
 };
 
 /*================================================= SD API ==================================================*/
@@ -2990,13 +3005,6 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     ggml_tensor* concat_latent            = nullptr,
                                     ggml_tensor* denoise_mask             = nullptr,
                                     const sd_cache_params_t* cache_params = nullptr) {
-    if (seed < 0) {
-        // Generally, when using the provided command line, the seed is always >0.
-        // However, to prevent potential issues if 'stable-diffusion.cpp' is invoked as a library
-        // by a third party with a seed <0, let's incorporate randomization here.
-        srand((int)time(nullptr));
-        seed = rand();
-    }
 
     if (!std::isfinite(guidance.img_cfg)) {
         guidance.img_cfg = guidance.txt_cfg;
@@ -3312,11 +3320,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
         return nullptr;
     }
 
-    int64_t seed = sd_img_gen_params->seed;
-    if (seed < 0) {
-        srand((int)time(nullptr));
-        seed = rand();
-    }
+    int64_t seed = sd_ctx->sd->get_seed(sd_img_gen_params->seed);
     sd_ctx->sd->rng->manual_seed(seed);
     sd_ctx->sd->sampler_rng->manual_seed(seed);
 
@@ -3672,11 +3676,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         return nullptr;
     }
 
-    int64_t seed = sd_vid_gen_params->seed;
-    if (seed < 0) {
-        seed = (int)time(nullptr);
-    }
-
+    int64_t seed = sd_ctx->sd->get_seed(sd_vid_gen_params->seed);
     sd_ctx->sd->rng->manual_seed(seed);
     sd_ctx->sd->sampler_rng->manual_seed(seed);
 
