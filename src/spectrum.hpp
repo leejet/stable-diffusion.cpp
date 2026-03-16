@@ -57,7 +57,7 @@ struct SpectrumState {
         return (num_cached + 1) % ws != 0;
     }
 
-    void update(const struct ggml_tensor* denoised) {
+    void update(const ggml_tensor* denoised) {
         int64_t ne        = ggml_nelements(denoised);
         const float* data = (const float*)denoised->data;
 
@@ -76,7 +76,7 @@ struct SpectrumState {
         cnt++;
     }
 
-    void predict(struct ggml_tensor* denoised) {
+    void predict(ggml_tensor* denoised) {
         int64_t F    = (int64_t)H_buf[0].size();
         int K_curr   = (int)H_buf.size();
         int M1       = config.m + 1;

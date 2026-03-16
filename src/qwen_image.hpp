@@ -26,9 +26,9 @@ namespace Qwen {
             blocks["linear_2"] = std::shared_ptr<GGMLBlock>(new Linear(time_embed_dim, out_dim, sample_proj_bias));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* sample,
-                                    struct ggml_tensor* condition = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* sample,
+                             ggml_tensor* condition = nullptr) {
             if (condition != nullptr) {
                 auto cond_proj = std::dynamic_pointer_cast<Linear>(blocks["cond_proj"]);
                 sample         = ggml_add(ctx->ggml_ctx, sample, cond_proj->forward(ctx, condition));
@@ -49,8 +49,8 @@ namespace Qwen {
             blocks["timestep_embedder"] = std::shared_ptr<GGMLBlock>(new TimestepEmbedding(256, embedding_dim));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* timesteps) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* timesteps) {
             // timesteps: [N,]
             // return: [N, embedding_dim]
             auto timestep_embedder = std::dynamic_pointer_cast<TimestepEmbedding>(blocks["timestep_embedder"]);
@@ -107,10 +107,10 @@ namespace Qwen {
         }
 
         std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
-                                                      struct ggml_tensor* img,
-                                                      struct ggml_tensor* txt,
-                                                      struct ggml_tensor* pe,
-                                                      struct ggml_tensor* mask = nullptr) {
+                                                      ggml_tensor* img,
+                                                      ggml_tensor* txt,
+                                                      ggml_tensor* pe,
+                                                      ggml_tensor* mask = nullptr) {
             // img: [N, n_img_token, hidden_size]
             // txt: [N, n_txt_token, hidden_size]
             // pe: [n_img_token + n_txt_token, d_head/2, 2, 2]
@@ -249,11 +249,11 @@ namespace Qwen {
         }
 
         virtual std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx,
-                                                              struct ggml_tensor* img,
-                                                              struct ggml_tensor* txt,
-                                                              struct ggml_tensor* t_emb,
-                                                              struct ggml_tensor* pe,
-                                                              struct ggml_tensor* modulate_index = nullptr) {
+                                                              ggml_tensor* img,
+                                                              ggml_tensor* txt,
+                                                              ggml_tensor* t_emb,
+                                                              ggml_tensor* pe,
+                                                              ggml_tensor* modulate_index = nullptr) {
             // img: [N, n_img_token, hidden_size]
             // txt: [N, n_txt_token, hidden_size]
             // pe: [n_img_token + n_txt_token, d_head/2, 2, 2]
@@ -325,9 +325,9 @@ namespace Qwen {
             blocks["linear"] = std::shared_ptr<GGMLBlock>(new Linear(conditioning_embedding_dim, embedding_dim * 2, bias));
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* c) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* c) {
             // x: [N, n_token, hidden_size]
             // c: [N, hidden_size]
             // return: [N, n_token, patch_size * patch_size * out_channels]
@@ -389,12 +389,12 @@ namespace Qwen {
             blocks["proj_out"] = std::shared_ptr<GGMLBlock>(new Linear(inner_dim, params.patch_size * params.patch_size * params.out_channels));
         }
 
-        struct ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
-                                         struct ggml_tensor* x,
-                                         struct ggml_tensor* timestep,
-                                         struct ggml_tensor* context,
-                                         struct ggml_tensor* pe,
-                                         struct ggml_tensor* modulate_index = nullptr) {
+        ggml_tensor* forward_orig(GGMLRunnerContext* ctx,
+                                  ggml_tensor* x,
+                                  ggml_tensor* timestep,
+                                  ggml_tensor* context,
+                                  ggml_tensor* pe,
+                                  ggml_tensor* modulate_index = nullptr) {
             auto time_text_embed = std::dynamic_pointer_cast<QwenTimestepProjEmbeddings>(blocks["time_text_embed"]);
             auto txt_norm        = std::dynamic_pointer_cast<RMSNorm>(blocks["txt_norm"]);
             auto img_in          = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
@@ -429,13 +429,13 @@ namespace Qwen {
             return img;
         }
 
-        struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                    struct ggml_tensor* x,
-                                    struct ggml_tensor* timestep,
-                                    struct ggml_tensor* context,
-                                    struct ggml_tensor* pe,
-                                    std::vector<ggml_tensor*> ref_latents = {},
-                                    struct ggml_tensor* modulate_index    = nullptr) {
+        ggml_tensor* forward(GGMLRunnerContext* ctx,
+                             ggml_tensor* x,
+                             ggml_tensor* timestep,
+                             ggml_tensor* context,
+                             ggml_tensor* pe,
+                             std::vector<ggml_tensor*> ref_latents = {},
+                             ggml_tensor* modulate_index           = nullptr) {
             // Forward pass of DiT.
             // x: [N, C, H, W]
             // timestep: [N,]
@@ -521,17 +521,17 @@ namespace Qwen {
             return "qwen_image";
         }
 
-        void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+        void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
             qwen_image.get_param_tensors(tensors, prefix);
         }
 
-        struct ggml_cgraph* build_graph(struct ggml_tensor* x,
-                                        struct ggml_tensor* timesteps,
-                                        struct ggml_tensor* context,
-                                        std::vector<ggml_tensor*> ref_latents = {},
-                                        bool increase_ref_index               = false) {
+        ggml_cgraph* build_graph(ggml_tensor* x,
+                                 ggml_tensor* timesteps,
+                                 ggml_tensor* context,
+                                 std::vector<ggml_tensor*> ref_latents = {},
+                                 bool increase_ref_index               = false) {
             GGML_ASSERT(x->ne[3] == 1);
-            struct ggml_cgraph* gf = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE);
+            ggml_cgraph* gf = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE);
 
             x         = to_backend(x);
             context   = to_backend(context);
@@ -587,13 +587,13 @@ namespace Qwen {
 
             auto runner_ctx = get_context();
 
-            struct ggml_tensor* out = qwen_image.forward(&runner_ctx,
-                                                         x,
-                                                         timesteps,
-                                                         context,
-                                                         pe,
-                                                         ref_latents,
-                                                         modulate_index);
+            ggml_tensor* out = qwen_image.forward(&runner_ctx,
+                                                  x,
+                                                  timesteps,
+                                                  context,
+                                                  pe,
+                                                  ref_latents,
+                                                  modulate_index);
 
             ggml_build_forward_expand(gf, out);
 
@@ -601,17 +601,17 @@ namespace Qwen {
         }
 
         bool compute(int n_threads,
-                     struct ggml_tensor* x,
-                     struct ggml_tensor* timesteps,
-                     struct ggml_tensor* context,
+                     ggml_tensor* x,
+                     ggml_tensor* timesteps,
+                     ggml_tensor* context,
                      std::vector<ggml_tensor*> ref_latents = {},
                      bool increase_ref_index               = false,
-                     struct ggml_tensor** output           = nullptr,
-                     struct ggml_context* output_ctx       = nullptr) {
+                     ggml_tensor** output                  = nullptr,
+                     ggml_context* output_ctx              = nullptr) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
-            auto get_graph = [&]() -> struct ggml_cgraph* {
+            auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(x, timesteps, context, ref_latents, increase_ref_index);
             };
 
@@ -619,12 +619,12 @@ namespace Qwen {
         }
 
         void test() {
-            struct ggml_init_params params;
+            ggml_init_params params;
             params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1GB
             params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
-            struct ggml_context* work_ctx = ggml_init(params);
+            ggml_context* work_ctx = ggml_init(params);
             GGML_ASSERT(work_ctx != nullptr);
 
             {
@@ -641,7 +641,7 @@ namespace Qwen {
                 auto context = load_tensor_from_file(work_ctx, "./qwen_image_context.bin");
                 print_ggml_tensor(context);
 
-                struct ggml_tensor* out = nullptr;
+                ggml_tensor* out = nullptr;
 
                 int64_t t0 = ggml_time_ms();
                 compute(8, x, timesteps, context, {}, false, &out, work_ctx);

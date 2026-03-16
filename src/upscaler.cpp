@@ -72,13 +72,13 @@ struct UpscalerGGML {
         LOG_INFO("upscaling from (%i x %i) to (%i x %i)",
                  input_image.width, input_image.height, output_width, output_height);
 
-        struct ggml_init_params params;
+        ggml_init_params params;
         params.mem_size   = static_cast<size_t>(1024 * 1024) * 1024;  // 1G
         params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
         // draft context
-        struct ggml_context* upscale_ctx = ggml_init(params);
+        ggml_context* upscale_ctx = ggml_init(params);
         if (!upscale_ctx) {
             LOG_ERROR("ggml_init() failed");
             return upscaled_image;

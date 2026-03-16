@@ -4,13 +4,13 @@
 #include "ggml_extend.hpp"
 #define M_PI_ 3.14159265358979323846f
 
-void convolve(struct ggml_tensor* input, struct ggml_tensor* output, struct ggml_tensor* kernel, int padding) {
-    struct ggml_init_params params;
-    params.mem_size                 = 80 * input->ne[0] * input->ne[1];  // 20M for 512x512
-    params.mem_buffer               = nullptr;
-    params.no_alloc                 = false;
-    struct ggml_context* ctx0       = ggml_init(params);
-    struct ggml_tensor* kernel_fp16 = ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, kernel->ne[0], kernel->ne[1], 1, 1);
+void convolve(ggml_tensor* input, ggml_tensor* output, ggml_tensor* kernel, int padding) {
+    ggml_init_params params;
+    params.mem_size          = 80 * input->ne[0] * input->ne[1];  // 20M for 512x512
+    params.mem_buffer        = nullptr;
+    params.no_alloc          = false;
+    ggml_context* ctx0       = ggml_init(params);
+    ggml_tensor* kernel_fp16 = ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, kernel->ne[0], kernel->ne[1], 1, 1);
     ggml_fp32_to_fp16_row((float*)kernel->data, (ggml_fp16_t*)kernel_fp16->data, ggml_nelements(kernel));
     ggml_tensor* h  = ggml_conv_2d(ctx0, kernel_fp16, input, 1, 1, padding, padding, 1, 1);
     ggml_cgraph* gf = ggml_new_graph(ctx0);
@@ -19,7 +19,7 @@ void convolve(struct ggml_tensor* input, struct ggml_tensor* output, struct ggml
     ggml_free(ctx0);
 }
 
-void gaussian_kernel(struct ggml_tensor* kernel) {
+void gaussian_kernel(ggml_tensor* kernel) {
     int ks_mid   = static_cast<int>(kernel->ne[0] / 2);
     float sigma  = 1.4f;
     float normal = 1.f / (2.0f * M_PI_ * powf(sigma, 2.0f));
@@ -33,7 +33,7 @@ void gaussian_kernel(struct ggml_tensor* kernel) {
     }
 }
 
-void grayscale(struct ggml_tensor* rgb_img, struct ggml_tensor* grayscale) {
+void grayscale(ggml_tensor* rgb_img, ggml_tensor* grayscale) {
     for (int iy = 0; iy < rgb_img->ne[1]; iy++) {
         for (int ix = 0; ix < rgb_img->ne[0]; ix++) {
             float r    = ggml_ext_tensor_get_f32(rgb_img, ix, iy);
@@ -45,7 +45,7 @@ void grayscale(struct ggml_tensor* rgb_img, struct ggml_tensor* grayscale) {
     }
 }
 
-void prop_hypot(struct ggml_tensor* x, struct ggml_tensor* y, struct ggml_tensor* h) {
+void prop_hypot(ggml_tensor* x, ggml_tensor* y, ggml_tensor* h) {
     int n_elements = static_cast<int>(ggml_nelements(h));
     float* dx      = (float*)x->data;
     float* dy      = (float*)y->data;
@@ -55,7 +55,7 @@ void prop_hypot(struct ggml_tensor* x, struct ggml_tensor* y, struct ggml_tensor
     }
 }
 
-void prop_arctan2(struct ggml_tensor* x, struct ggml_tensor* y, struct ggml_tensor* h) {
+void prop_arctan2(ggml_tensor* x, ggml_tensor* y, ggml_tensor* h) {
     int n_elements = static_cast<int>(ggml_nelements(h));
     float* dx      = (float*)x->data;
     float* dy      = (float*)y->data;
@@ -65,7 +65,7 @@ void prop_arctan2(struct ggml_tensor* x, struct ggml_tensor* y, struct ggml_tens
     }
 }
 
-void normalize_tensor(struct ggml_tensor* g) {
+void normalize_tensor(ggml_tensor* g) {
     int n_elements = static_cast<int>(ggml_nelements(g));
     float* dg      = (float*)g->data;
     float max      = -INFINITY;
@@ -78,7 +78,7 @@ void normalize_tensor(struct ggml_tensor* g) {
     }
 }
 
-void non_max_supression(struct ggml_tensor* result, struct ggml_tensor* G, struct ggml_tensor* D) {
+void non_max_supression(ggml_tensor* result, ggml_tensor* G, ggml_tensor* D) {
     for (int iy = 1; iy < result->ne[1] - 1; iy++) {
         for (int ix = 1; ix < result->ne[0] - 1; ix++) {
             float angle = ggml_ext_tensor_get_f32(D, ix, iy) * 180.0f / M_PI_;
@@ -117,7 +117,7 @@ void non_max_supression(struct ggml_tensor* result, struct ggml_tensor* G, struc
     }
 }
 
-void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float low_threshold, float weak, float strong) {
+void threshold_hystersis(ggml_tensor* img, float high_threshold, float low_threshold, float weak, float strong) {
     int n_elements = static_cast<int>(ggml_nelements(img));
     float* imd     = (float*)img->data;
     float max      = -INFINITY;
@@ -163,11 +163,11 @@ void threshold_hystersis(struct ggml_tensor* img, float high_threshold, float lo
 }
 
 bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold, float weak, float strong, bool inverse) {
-    struct ggml_init_params params;
-    params.mem_size               = static_cast<size_t>(40 * img.width * img.height);  // 10MB for 512x512
-    params.mem_buffer             = nullptr;
-    params.no_alloc               = false;
-    struct ggml_context* work_ctx = ggml_init(params);
+    ggml_init_params params;
+    params.mem_size        = static_cast<size_t>(40 * img.width * img.height);  // 10MB for 512x512
+    params.mem_buffer      = nullptr;
+    params.no_alloc        = false;
+    ggml_context* work_ctx = ggml_init(params);
 
     if (!work_ctx) {
         LOG_ERROR("ggml_init() failed");
@@ -185,19 +185,19 @@ bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold,
         -1, -2, -1};
 
     // generate kernel
-    int kernel_size             = 5;
-    struct ggml_tensor* gkernel = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, kernel_size, kernel_size, 1, 1);
-    struct ggml_tensor* sf_kx   = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 3, 3, 1, 1);
+    int kernel_size      = 5;
+    ggml_tensor* gkernel = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, kernel_size, kernel_size, 1, 1);
+    ggml_tensor* sf_kx   = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 3, 3, 1, 1);
     memcpy(sf_kx->data, kX, ggml_nbytes(sf_kx));
-    struct ggml_tensor* sf_ky = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 3, 3, 1, 1);
+    ggml_tensor* sf_ky = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 3, 3, 1, 1);
     memcpy(sf_ky->data, kY, ggml_nbytes(sf_ky));
     gaussian_kernel(gkernel);
-    struct ggml_tensor* image      = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, img.width, img.height, 3, 1);
-    struct ggml_tensor* image_gray = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, img.width, img.height, 1, 1);
-    struct ggml_tensor* iX         = ggml_dup_tensor(work_ctx, image_gray);
-    struct ggml_tensor* iY         = ggml_dup_tensor(work_ctx, image_gray);
-    struct ggml_tensor* G          = ggml_dup_tensor(work_ctx, image_gray);
-    struct ggml_tensor* tetha      = ggml_dup_tensor(work_ctx, image_gray);
+    ggml_tensor* image      = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, img.width, img.height, 3, 1);
+    ggml_tensor* image_gray = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, img.width, img.height, 1, 1);
+    ggml_tensor* iX         = ggml_dup_tensor(work_ctx, image_gray);
+    ggml_tensor* iY         = ggml_dup_tensor(work_ctx, image_gray);
+    ggml_tensor* G          = ggml_dup_tensor(work_ctx, image_gray);
+    ggml_tensor* tetha      = ggml_dup_tensor(work_ctx, image_gray);
     sd_image_to_ggml_tensor(img, image);
     grayscale(image, image_gray);
     convolve(image_gray, image_gray, gkernel, 2);
