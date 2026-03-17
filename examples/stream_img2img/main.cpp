@@ -96,7 +96,8 @@ int main(int argc, char** argv) {
             0.6f,             // strength
             4,                // steps (distilled models)
             1.0f,             // cfg_scale
-            42                // seed
+            42,               // seed
+            nullptr           // cache_params
         );
 
         end = clock();

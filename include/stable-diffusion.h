@@ -251,6 +251,7 @@ enum sd_cache_mode_t {
     SD_CACHE_DBCACHE,
     SD_CACHE_TAYLORSEER,
     SD_CACHE_CACHE_DIT,
+    SD_CACHE_SPECTRUM,
 };
 
 typedef struct {
@@ -271,6 +272,13 @@ typedef struct {
     int taylorseer_skip_interval;
     const char* scm_mask;
     bool scm_policy_dynamic;
+    float spectrum_w;
+    int spectrum_m;
+    float spectrum_lam;
+    int spectrum_window_size;
+    float spectrum_flex_window;
+    int spectrum_warmup_steps;
+    float spectrum_stop_percent;
 } sd_cache_params_t;
 
 typedef struct {
@@ -406,7 +414,8 @@ SD_API sd_image_t sd_img2img_with_cond(
     float              strength,
     int                sample_steps,
     float              cfg_scale,
-    long long int      seed
+    long long int      seed,
+    sd_cache_params_t* cache_params
 );
 
 // --- End of Streaming API Extensions ---

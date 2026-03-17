@@ -162,7 +162,7 @@ jobs:
 
     strategy:
       matrix:
-        variant: [musa, sycl, vulkan]
+        variant: [musa, sycl, vulkan, cuda]
 
     env:
       REGISTRY: ghcr.io
