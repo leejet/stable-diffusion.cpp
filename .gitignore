@@ -13,3 +13,5 @@ output*.png
 models*
 *.log
 preview.png
+test-build/
+test-build-static/
