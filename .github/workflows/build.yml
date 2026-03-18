@@ -284,7 +284,7 @@ jobs:
           - build: "avx512"
             defines: "-DGGML_NATIVE=OFF -DGGML_AVX512=ON -DGGML_AVX=ON -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON"
           - build: "cuda12"
-            defines: "-DSD_CUDA=ON -DSD_BUILD_SHARED_LIBS=ON -DCMAKE_CUDA_ARCHITECTURES='61;70;75;80;86;89;90;100;120' -DCMAKE_CUDA_FLAGS='-Xcudafe \"--diag_suppress=177\" -Xcudafe \"--diag_suppress=550\"'"
+            defines: '-DSD_CUDA=ON -DSD_BUILD_SHARED_LIBS=ON -DCMAKE_CUDA_ARCHITECTURES=''61;70;75;80;86;89;90;100;120'' -DCMAKE_CUDA_FLAGS=''-Xcudafe "--diag_suppress=177" -Xcudafe "--diag_suppress=550"'''
           - build: "vulkan"
             defines: "-DSD_VULKAN=ON -DSD_BUILD_SHARED_LIBS=ON"
     steps:
@@ -347,19 +347,31 @@ jobs:
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
           $filePath = ".\build\bin\Release\*"
+          $binDir = ".\build\bin\Release"
           if (Test-Path $filePath) {
             echo "Exists at path $filePath"
-            Copy-Item ggml/LICENSE .\build\bin\Release\ggml.txt
-            Copy-Item LICENSE .\build\bin\Release\stable-diffusion.cpp.txt
+            Copy-Item ggml/LICENSE "$binDir\ggml.txt"
+            Copy-Item LICENSE "$binDir\stable-diffusion.cpp.txt"
           } elseif (Test-Path ".\build\bin\stable-diffusion.dll") {
-          $filePath = ".\build\bin\*"
+            $filePath = ".\build\bin\*"
+            $binDir = ".\build\bin"
             echo "Exists at path $filePath"
-            Copy-Item ggml/LICENSE .\build\bin\ggml.txt
-            Copy-Item LICENSE .\build\bin\stable-diffusion.cpp.txt
+            Copy-Item ggml/LICENSE "$binDir\ggml.txt"
+            Copy-Item LICENSE "$binDir\stable-diffusion.cpp.txt"
           } else {
             ls .\build\bin
             throw "Can't find stable-diffusion.dll"
           }
+
+          # Include import library for Windows consumers linking against the DLL.
+          $importLib = Get-ChildItem -Path .\build -Recurse -Filter stable-diffusion.lib -File |
+            Where-Object { $_.FullName -notmatch '\\_deps\\' } |
+            Select-Object -First 1
+          if ($null -eq $importLib) {
+            throw "Can't find stable-diffusion.lib"
+          }
+          Copy-Item $importLib.FullName "$binDir\stable-diffusion.lib" -Force
+
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-${{ matrix.build }}-x64.zip $filePath
 
       - name: Copy and pack Cuda runtime
@@ -475,6 +487,16 @@ jobs:
           cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
           cp "${env:HIP_PATH}\bin\hipblaslt\library\*" "build\bin\hipblaslt\library\"
+
+          # Include import library for Windows consumers linking against the DLL.
+          $importLib = Get-ChildItem -Path .\build -Recurse -Filter stable-diffusion.lib -File |
+            Where-Object { $_.FullName -notmatch '\\_deps\\' } |
+            Select-Object -First 1
+          if ($null -eq $importLib) {
+            throw "Can't find stable-diffusion.lib"
+          }
+          cp $importLib.FullName "build\bin\stable-diffusion.lib"
+
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-x64.zip .\build\bin\*
 
       - name: Upload artifacts
