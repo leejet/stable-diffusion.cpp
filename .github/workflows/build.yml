@@ -67,11 +67,6 @@ jobs:
           cmake .. -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=ON
           cmake --build . --config Release
 
-          # Build static archive variant for development/linking use.
-          cd ..
-          cmake -S . -B build-static -DGGML_AVX2=ON -DSD_BUILD_SHARED_LIBS=OFF
-          cmake --build build-static --config Release
-
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -91,12 +86,6 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          static_lib_path="$(find ./build-static -type f -name 'libstable-diffusion.a' | head -n 1)"
-          if [ -z "$static_lib_path" ]; then
-            echo "Can't find libstable-diffusion.a"
-            exit 1
-          fi
-          cp "$static_lib_path" ./build/bin/libstable-diffusion.a
           zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/*
 
       - name: Upload artifacts
@@ -131,11 +120,6 @@ jobs:
           cmake .. -DSD_BUILD_SHARED_LIBS=ON -DSD_VULKAN=ON
           cmake --build . --config Release
 
-          # Build static archive variant for development/linking use.
-          cd ..
-          cmake -S . -B build-static -DSD_BUILD_SHARED_LIBS=OFF -DSD_VULKAN=ON
-          cmake --build build-static --config Release
-
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -155,12 +139,6 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          static_lib_path="$(find ./build-static -type f -name 'libstable-diffusion.a' | head -n 1)"
-          if [ -z "$static_lib_path" ]; then
-            echo "Can't find libstable-diffusion.a"
-            exit 1
-          fi
-          cp "$static_lib_path" ./build/bin/libstable-diffusion.a
           zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-vulkan.zip ./build/bin/*
 
       - name: Upload artifacts
@@ -259,11 +237,6 @@ jobs:
           cmake .. -DGGML_AVX2=ON -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSD_BUILD_SHARED_LIBS=ON
           cmake --build . --config Release
 
-          # Build static archive variant for development/linking use.
-          cd ..
-          cmake -S . -B build-static -DGGML_AVX2=ON -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DSD_BUILD_SHARED_LIBS=OFF
-          cmake --build build-static --config Release
-
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -283,12 +256,6 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          static_lib_path="$(find ./build-static -type f -name 'libstable-diffusion.a' | head -n 1)"
-          if [ -z "$static_lib_path" ]; then
-            echo "Can't find libstable-diffusion.a"
-            exit 1
-          fi
-          cp "$static_lib_path" ./build/bin/libstable-diffusion.a
           zip -j sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-${{ steps.system-info.outputs.OS_NAME }}-${{ steps.system-info.outputs.OS_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}.zip ./build/bin/*
 
       - name: Upload artifacts
@@ -633,20 +600,6 @@ jobs:
             -DSD_BUILD_SHARED_LIBS=ON
           cmake --build . --config Release
 
-          # Build static archive variant for development/linking use.
-          cd ..
-          cmake -S . -B build-static -G Ninja \
-            -DCMAKE_CXX_COMPILER=amdclang++ \
-            -DCMAKE_C_COMPILER=amdclang \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSD_HIPBLAS=ON \
-            -DGPU_TARGETS="${{ env.GPU_TARGETS }}" \
-            -DAMDGPU_TARGETS="${{ env.GPU_TARGETS }}" \
-            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DSD_BUILD_SHARED_LIBS=OFF
-          cmake --build build-static --config Release
-
       - name: Get commit hash
         id: commit
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -684,12 +637,6 @@ jobs:
         run: |
           cp ggml/LICENSE ./build/bin/ggml.txt
           cp LICENSE ./build/bin/stable-diffusion.cpp.txt
-          static_lib_path="$(find ./build-static -type f -name 'libstable-diffusion.a' | head -n 1)"
-          if [ -z "$static_lib_path" ]; then
-            echo "Can't find libstable-diffusion.a"
-            exit 1
-          fi
-          cp "$static_lib_path" ./build/bin/libstable-diffusion.a
           zip -y -r sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-${{ steps.system-info.outputs.OS_TYPE }}-Ubuntu-${{ env.UBUNTU_VERSION }}-${{ steps.system-info.outputs.CPU_ARCH }}-rocm.zip ./build/bin
 
       - name: Upload artifacts
