@@ -1263,6 +1263,8 @@ public:
                 }
                 return false;
             };
+
+            LOG_INFO("applying lora to diffusion model");
             auto lora = load_lora_model_from_file(kv.first, kv.second, diffusion_backend, lora_tensor_filter_diff);
             if (lora && !lora->lora_tensors.empty()) {
                 lora->apply(tensors, version, n_threads);
@@ -1277,6 +1279,7 @@ public:
                 return false;
             };
             // TODO: split by model
+            LOG_INFO("applying lora to text encoders");
             lora = load_lora_model_from_file(kv.first, kv.second, clip_backends[0], lora_tensor_filter_cond);
             if (lora && !lora->lora_tensors.empty()) {
                 lora->apply(tensors, version, n_threads);
@@ -1290,7 +1293,8 @@ public:
                 }
                 return false;
             };
-            auto first_stage_backend = use_tiny_autoencoder ? tae_backend : vae_backend;
+            LOG_INFO("applying lora to first stage model"); 
+            auto first_stage_backend = first_stage_model->get_params_backend();
             lora                     = load_lora_model_from_file(kv.first, kv.second, first_stage_backend, lora_tensor_filter_first);
             if (lora && !lora->lora_tensors.empty()) {
                 lora->apply(tensors, version, n_threads);
