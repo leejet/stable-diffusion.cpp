@@ -303,6 +303,10 @@ namespace sd {
             return data_.at(static_cast<size_t>(index));
         }
 
+        int64_t get_flat_index(const std::vector<int64_t>& coord) const {
+            return static_cast<int64_t>(offset_of(coord));
+        }
+
     private:
         size_t offset_of(const std::vector<int64_t>& coord) const {
             if (coord.size() != shape_.size()) {
@@ -815,6 +819,9 @@ namespace sd {
     namespace ops {
         enum class InterpolateMode {
             Nearest,
+            MaxPool,
+            MinPool,
+            AvgPool,
         };
 
         inline int64_t normalize_slice_bound(int64_t index, int64_t dim_size) {
@@ -1012,12 +1019,16 @@ namespace sd {
                                      std::vector<int64_t> output_shape,
                                      InterpolateMode mode = InterpolateMode::Nearest,
                                      bool align_corners   = false) {
-            if (mode != InterpolateMode::Nearest) {
-                tensor_throw_invalid_argument("Only nearest interpolate mode is implemented, got mode=" +
+            bool is_nearest_like_mode = (mode == InterpolateMode::Nearest ||
+                                         mode == InterpolateMode::MaxPool ||
+                                         mode == InterpolateMode::MinPool ||
+                                         mode == InterpolateMode::AvgPool);
+            if (!is_nearest_like_mode) {
+                tensor_throw_invalid_argument("Only nearest-like interpolate modes are implemented, got mode=" +
                                               std::to_string(static_cast<int>(mode)));
             }
             if (align_corners) {
-                tensor_throw_invalid_argument("align_corners is not supported for nearest interpolate: input_shape=" +
+                tensor_throw_invalid_argument("align_corners is not supported for nearest-like interpolate: input_shape=" +
                                               tensor_shape_to_string(input.shape()) + ", output_shape=" +
                                               tensor_shape_to_string(output_shape));
             }
@@ -1044,14 +1055,82 @@ namespace sd {
                 }
             }
 
+            bool pure_upsampling = true;
+            for(int64_t i=0; i<input.dim(); ++i) {
+                if (input.shape()[i] > output_shape[i]) pure_upsampling = false;
+            }
+
             Tensor<T> output(std::move(output_shape));
-            for (int64_t flat = 0; flat < output.numel(); ++flat) {
-                std::vector<int64_t> output_coord = tensor_unravel_index(flat, output.shape());
-                std::vector<int64_t> input_coord(static_cast<size_t>(input.dim()), 0);
-                for (size_t i = 0; i < static_cast<size_t>(input.dim()); ++i) {
-                    input_coord[i] = output_coord[i] * input.shape()[i] / output.shape()[i];
+            if (!pure_upsampling && (mode != InterpolateMode::Nearest)) {
+                // Pooling modes only differ from nearest mode when downsampling
+                for (int64_t flat_out = 0; flat_out < output.numel(); ++flat_out) {
+                    std::vector<int64_t> output_coord = tensor_unravel_index(flat_out, output.shape());
+
+                    std::vector<int64_t> input_start(output.dim(), 0);
+                    std::vector<int64_t> input_end(output.dim(), 0);
+
+                    for (size_t i = 0; i < static_cast<size_t>(output.dim()); ++i) {
+                        int64_t I_dim = input.shape()[i];
+                        int64_t O_dim = output.shape()[i];
+
+                        if (I_dim > 0 && O_dim > 0) {
+                            input_start[i] = std::max(int64_t(0), static_cast<int64_t>(output_coord[i] * I_dim / O_dim));
+                            input_end[i]   = std::min(I_dim, ((output_coord[i] + 1) * I_dim + O_dim - 1) / O_dim);
+                        } else {
+                            input_start[i] = 0;
+                            input_end[i]   = 1;
+                        }
+                    }
+
+                    T val;
+                    if (mode == InterpolateMode::MaxPool) {
+                        val = std::numeric_limits<T>::lowest();
+                    } else if(mode == InterpolateMode::MinPool) {
+                        val = std::numeric_limits<T>::max();
+                    } else if(mode == InterpolateMode::AvgPool) {
+                        val = T(0);
+                    }
+
+                    bool done_window                      = false;
+                    std::vector<int64_t> current_in_coord = input_start;
+
+                    while (!done_window) {
+                        if (mode == InterpolateMode::MaxPool) {
+                            val = std::max(val, input.index(current_in_coord));
+                        } else if(mode == InterpolateMode::MinPool) {
+                            val = std::min(val, input.index(current_in_coord));
+                        } else if(mode == InterpolateMode::AvgPool) {
+                            val += input.index(current_in_coord);
+                        }
+
+                        for (int d = static_cast<int>(output.dim()) - 1; d >= 0; --d) {
+                            if (++current_in_coord[d] < input_end[d]) {
+                                break;
+                            }
+                            current_in_coord[d] = input_start[d];
+                            if (d == 0) {
+                                done_window = true;
+                            }
+                        }
+                    }
+                    if (mode == InterpolateMode::AvgPool) {
+                        int64_t window_size = 1;
+                        for (size_t i = 0; i < static_cast<size_t>(output.dim()); ++i) {
+                            window_size *= (input_end[i] - input_start[i]);
+                        }
+                        val /= static_cast<T>(window_size);
+                    }
+                    output[flat_out] = val;
                 }
-                output[flat] = input.index(input_coord);
+            } else {
+                for (int64_t flat = 0; flat < output.numel(); ++flat) {
+                    std::vector<int64_t> output_coord = tensor_unravel_index(flat, output.shape());
+                    std::vector<int64_t> input_coord(static_cast<size_t>(input.dim()), 0);
+                    for (size_t i = 0; i < static_cast<size_t>(input.dim()); ++i) {
+                        input_coord[i] = output_coord[i] * input.shape()[i] / output.shape()[i];
+                    }
+                    output[flat] = input.index(input_coord);
+                }
             }
 
             return output;
