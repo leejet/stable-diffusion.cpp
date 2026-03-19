@@ -93,14 +93,13 @@ python convert_diffusers_to_original_stable_diffusion.py \
 The file segmind_tiny-sd.safetensors will be generated and is now ready for use with sd.cpp. You can follow a similar process for the other models mentioned above.
 
 
-### SDXS-512
+### SDXS-512-DreamShaper
 
 Another very tiny and **incredibly fast**  model is SDXS by IDKiro et al.  The authors refer to it as *"Real-Time One-Step Latent Diffusion Models with Image Conditions"*. For details read the paper: https://arxiv.org/pdf/2403.16627 . Once again the authors removed some more blocks of U-Net part and unlike other SD1 models they use an adjusted _AutoEncoderTiny_ instead of default _AutoEncoderKL_ for the VAE part.
 ##### Some ready-to-run SDXS-512 model files are available online, such as:
 
-* https://huggingface.co/akleine/sdxs-09
+* https://huggingface.co/akleine/sdxs-512
 * https://huggingface.co/concedo/sdxs-512-tinySDdistilled-GGUF
-
 
 ##### Run the model as follows:
 ```bash
@@ -109,3 +108,11 @@ Another very tiny and **incredibly fast**  model is SDXS by IDKiro et al.  The a
 ```
 Both options: ``` --cfg-scale 1 ``` and  ``` --steps 1 ``` are mandatory here.
 
+### SDXS-512-0.9
+
+Even though the name "SDXS-512-0.9" is similar to "SDXS-512-DreamShaper", it is *completely different* but also **incredibly fast**. Sometimes it is preferred, so try it yourself.
+##### Download a ready-to-run file from here:
+
+* https://huggingface.co/akleine/sdxs-09
+
+For the use of this model, both options ``` --cfg-scale 1 ``` and ``` --steps 1 ``` are again absolutely necessary.
