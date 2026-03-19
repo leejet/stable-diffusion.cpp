@@ -82,6 +82,7 @@ struct Conditioner {
     virtual ~Conditioner() = default;
 
 public:
+    int model_count                                                                        = 1;
     virtual SDCondition get_learned_condition(int n_threads,
                                               const ConditionerParams& conditioner_params) = 0;
     virtual void alloc_params_buffer()                                                     = 0;
@@ -97,6 +98,11 @@ public:
     virtual std::string remove_trigger_from_prompt(const std::string& prompt) {
         GGML_ABORT("Not implemented yet!");
     }
+    virtual bool is_cond_stage_model_name_at_index(const std::string& name, int index) {
+        return true;
+    }
+    virtual ggml_backend_t get_params_backend_at_index(int index) = 0;
+    virtual ggml_backend_t get_runtime_backend_at_index(int index) = 0;
 };
 
 // ldm.modules.encoders.modules.FrozenCLIPEmbedder
@@ -139,8 +145,9 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
             LOG_INFO("CLIP-H: using %s backend", ggml_backend_name(clip_backend));
             text_model = std::make_shared<CLIPTextModelRunner>(clip_backend, offload_params_to_cpu, tensor_storage_map, "cond_stage_model.transformer.text_model", OPEN_CLIP_VIT_H_14, true, force_clip_f32);
         } else if (sd_version_is_sdxl(version)) {
+            model_count                   = 2;
             ggml_backend_t clip_g_backend = clip_backend;
-            if (backends.size() >= 2){
+            if (backends.size() >= 2) {
                 clip_g_backend = backends[1];
                 if (backends.size() > 2) {
                     LOG_WARN("More than 2 clip backends provided, but the model only supports 2 text encoders. Ignoring the rest.");
@@ -669,6 +676,42 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
                                             conditioner_params.adm_in_channels,
                                             conditioner_params.zero_out_masked);
     }
+
+    bool is_cond_stage_model_name_at_index(const std::string& name, int index) override {
+        if (sd_version_is_sdxl(version)) {
+            if (index == 0) {
+                return contains(name, "cond_stage_model.model.transformer");
+            } else if (index == 1) {
+                return contains(name, "cond_stage_model.model.1");
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    ggml_backend_t get_params_backend_at_index(int index){
+        if (sd_version_is_sdxl(version) && index == 1){
+            if(text_model2) {
+                return text_model2->get_params_backend();
+            }
+        } else if (text_model) {
+            return text_model->get_params_backend();
+        }
+        return nullptr;
+    }
+
+    ggml_backend_t get_runtime_backend_at_index(int index){
+        if (sd_version_is_sdxl(version) && index == 1){
+            if(text_model2) {
+                return text_model2->get_runtime_backend();
+            }
+        } else if (text_model) {
+            return text_model->get_runtime_backend();
+        }
+        return nullptr;
+    }
+
 };
 
 struct FrozenCLIPVisionEmbedder : public GGMLRunner {
@@ -741,12 +784,14 @@ struct SD3CLIPEmbedder : public Conditioner {
         bool use_clip_g = false;
         bool use_t5     = false;
 
+        model_count = 3;
+
         ggml_backend_t clip_l_backend, clip_g_backend, t5_backend;
         if (backends.size() == 1) {
             clip_l_backend = clip_g_backend = t5_backend = backends[0];
         } else if (backends.size() == 2) {
             clip_l_backend = clip_g_backend = backends[0];
-            t5_backend = backends[1];
+            t5_backend                      = backends[1];
         } else if (backends.size() >= 3) {
             clip_l_backend = backends[0];
             clip_g_backend = backends[1];
@@ -1098,6 +1143,42 @@ struct SD3CLIPEmbedder : public Conditioner {
                                             conditioner_params.clip_skip,
                                             conditioner_params.zero_out_masked);
     }
+
+    bool is_cond_stage_model_name_at_index(const std::string& name, int index) override {
+        if (index == 0) {
+            return contains(name, "text_encoders.clip_l");
+        } else if (index == 1) {
+            return contains(name, "text_encoders.clip_g");
+        } else if (index == 2) {
+            return contains(name, "text_encoders.t5xxl");
+        } else {
+            return false;
+        }
+    }
+
+    ggml_backend_t get_params_backend_at_index(int index){
+        if (index == 0 && clip_l) {
+            return clip_l->get_params_backend();
+        } else if (index == 1 && clip_g) {
+            return clip_g->get_params_backend();
+        } else if (index == 2 && t5) {
+            return t5->get_params_backend();
+        } else {
+            return nullptr;
+        }
+    }
+
+    ggml_backend_t get_runtime_backend_at_index(int index){
+        if (index == 0 && clip_l) {
+            return clip_l->get_runtime_backend();
+        } else if (index == 1 && clip_g) {
+            return clip_g->get_runtime_backend();
+        } else if (index == 2 && t5) {
+            return t5->get_runtime_backend();
+        } else {
+            return nullptr;
+        }
+    }
 };
 
 struct FluxCLIPEmbedder : public Conditioner {
@@ -1113,18 +1194,18 @@ struct FluxCLIPEmbedder : public Conditioner {
         bool use_clip_l = false;
         bool use_t5     = false;
 
+        model_count = 2;
 
         ggml_backend_t clip_l_backend, t5_backend;
         if (backends.size() == 1) {
             clip_l_backend = t5_backend = backends[0];
         } else if (backends.size() >= 2) {
             clip_l_backend = backends[0];
-            t5_backend = backends[1];
+            t5_backend     = backends[1];
             if (backends.size() > 2) {
                 LOG_WARN("More than 2 clip backends provided, but the model only supports 2 text encoders. Ignoring the rest.");
             }
         }
-
 
         for (auto pair : tensor_storage_map) {
             if (pair.first.find("text_encoders.clip_l") != std::string::npos) {
@@ -1358,6 +1439,36 @@ struct FluxCLIPEmbedder : public Conditioner {
                                             conditioner_params.clip_skip,
                                             conditioner_params.zero_out_masked);
     }
+
+    bool is_cond_stage_model_name_at_index(const std::string& name, int index) override {
+        if (index == 0) {
+            return contains(name, "text_encoders.clip_l");
+        } else if (index == 1) {
+            return contains(name, "text_encoders.t5xxl");
+        } else {
+            return false;
+        }
+    }
+
+    ggml_backend_t get_params_backend_at_index(int index){
+        if (index == 0 && clip_l) {
+            return clip_l->get_params_backend();
+        } else if (index == 1 && t5) {
+            return t5->get_params_backend();
+        } else {
+            return nullptr;
+        }
+    }
+
+    ggml_backend_t get_runtime_backend_at_index(int index){
+        if (index == 0 && clip_l) {
+            return clip_l->get_runtime_backend();
+        } else if (index == 1 && t5) {
+            return t5->get_runtime_backend();
+        } else {
+            return nullptr;
+        }
+    }
 };
 
 struct T5CLIPEmbedder : public Conditioner {
@@ -1554,6 +1665,20 @@ struct T5CLIPEmbedder : public Conditioner {
                                             conditioner_params.clip_skip,
                                             conditioner_params.zero_out_masked);
     }
+
+    ggml_backend_t get_params_backend_at_index(int index){
+        if (t5){
+            return t5->get_params_backend();
+        }
+        return nullptr;
+    }
+
+    ggml_backend_t get_runtime_backend_at_index(int index){
+        if (t5){
+            return t5->get_runtime_backend();
+        }
+        return nullptr;
+    }
 };
 
 struct AnimaConditioner : public Conditioner {
@@ -1566,11 +1691,11 @@ struct AnimaConditioner : public Conditioner {
                      const String2TensorStorage& tensor_storage_map = {}) {
         qwen_tokenizer = std::make_shared<LLM::Qwen2Tokenizer>();
         llm            = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::QWEN3,
-                                               backend,
-                                               offload_params_to_cpu,
-                                               tensor_storage_map,
-                                               "text_encoders.llm",
-                                               false);
+                                                          backend,
+                                                          offload_params_to_cpu,
+                                                          tensor_storage_map,
+                                                          "text_encoders.llm",
+                                                          false);
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
@@ -1667,6 +1792,20 @@ struct AnimaConditioner : public Conditioner {
         result.c_t5_ids     = std::move(t5_ids_tensor);
         result.c_t5_weights = std::move(t5_weight_tensor);
         return result;
+    }
+
+    ggml_backend_t get_params_backend_at_index(int index){
+        if (llm){
+            return llm->get_params_backend();
+        }
+        return nullptr;
+    }
+
+    ggml_backend_t get_runtime_backend_at_index(int index){
+        if (llm){
+            return llm->get_runtime_backend();
+        }
+        return nullptr;
     }
 };
 
@@ -2011,6 +2150,20 @@ struct LLMEmbedder : public Conditioner {
         result.c_crossattn        = std::move(hidden_states);
         result.extra_c_crossattns = std::move(extra_hidden_states_vec);
         return result;
+    }
+
+    ggml_backend_t get_params_backend_at_index(int index){
+        if (llm){
+            return llm->get_params_backend();
+        }
+        return nullptr;
+    }
+
+    ggml_backend_t get_runtime_backend_at_index(int index){
+        if (llm){
+            return llm->get_runtime_backend();
+        }
+        return nullptr;
     }
 };
 

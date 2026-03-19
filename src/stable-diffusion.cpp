@@ -1249,14 +1249,6 @@ public:
         for (auto& kv : lora_state_diff) {
             bool applied = false;
             int64_t t0 = ggml_time_ms();
-            // TODO: Fix that
-            bool are_clip_backends_similar = true;
-            for (auto backend: clip_backends){
-                are_clip_backends_similar = are_clip_backends_similar && (clip_backends[0]==backend || ggml_backend_is_cpu(backend));
-            }
-            if(!are_clip_backends_similar){
-                LOG_WARN("Text encoders are running on different backends. This may cause issues when immediately applying LoRAs.");
-            }
             auto lora_tensor_filter_diff = [&](const std::string& tensor_name) {
                 if (is_diffusion_model_name(tensor_name)) {
                     return true;
@@ -1272,19 +1264,22 @@ public:
                 applied = true;
             }
 
-            auto lora_tensor_filter_cond = [&](const std::string& tensor_name) {
-                if (is_cond_stage_model_name(tensor_name)) {
-                    return true;
+            for (int i = 0; i < cond_stage_model->model_count; i++) {
+                auto lora_tensor_filter_cond = [&](const std::string& tensor_name) {
+                    if (is_cond_stage_model_name(tensor_name)) {
+                        return cond_stage_model->is_cond_stage_model_name_at_index(tensor_name, i);
+                    }
+                    return false;
+                };
+                // TODO: split by model
+                LOG_INFO("applying lora to text encoder (%d)", i);
+                auto backend = cond_stage_model->get_params_backend_at_index(i);
+                lora         = load_lora_model_from_file(kv.first, kv.second, backend, lora_tensor_filter_cond);
+                if (lora && !lora->lora_tensors.empty()) {
+                    lora->apply(tensors, version, n_threads);
+                    lora->free_params_buffer();
+                    applied = true;
                 }
-                return false;
-            };
-            // TODO: split by model
-            LOG_INFO("applying lora to text encoders");
-            lora = load_lora_model_from_file(kv.first, kv.second, clip_backends[0], lora_tensor_filter_cond);
-            if (lora && !lora->lora_tensors.empty()) {
-                lora->apply(tensors, version, n_threads);
-                lora->free_params_buffer();
-                applied = true;
             }
 
             auto lora_tensor_filter_first = [&](const std::string& tensor_name) {
@@ -1346,22 +1341,27 @@ public:
                 }
             }
             cond_stage_lora_models  = lora_models;
-            auto lora_tensor_filter = [&](const std::string& tensor_name) {
-                if (is_cond_stage_model_name(tensor_name)) {
-                    return true;
-                }
-                return false;
-            };
-            for (auto& kv : lora_state_diff) {
-                const std::string& lora_id = kv.first;
-                float multiplier           = kv.second;
-                //TODO: split by model
-                auto lora = load_lora_model_from_file(lora_id, multiplier, clip_backends[0], lora_tensor_filter);
-                if (lora && !lora->lora_tensors.empty()) {
-                    lora->preprocess_lora_tensors(tensors);
-                    cond_stage_lora_models.push_back(lora);
+
+            
+            for(int i=0;i<cond_stage_model->model_count;i++){
+                auto lora_tensor_filter_cond = [&](const std::string& tensor_name) {
+                    if (is_cond_stage_model_name(tensor_name)) {
+                        return cond_stage_model->is_cond_stage_model_name_at_index(tensor_name, i);
+                    }
+                    return false;
+                };
+                for (auto& kv : lora_state_diff) {
+                    const std::string& lora_id = kv.first;
+                    float multiplier           = kv.second;
+                    auto backend = cond_stage_model->get_runtime_backend_at_index(i);
+                    auto lora = load_lora_model_from_file(kv.first, kv.second, backend, lora_tensor_filter_cond);
+                    if (lora && !lora->lora_tensors.empty()) {
+                        lora->preprocess_lora_tensors(tensors);
+                        cond_stage_lora_models.push_back(lora);
+                    }
                 }
             }
+
             auto multi_lora_adapter = std::make_shared<MultiLoraAdapter>(cond_stage_lora_models);
             cond_stage_model->set_weight_adapter(multi_lora_adapter);
         }
