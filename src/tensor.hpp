@@ -819,9 +819,9 @@ namespace sd {
     namespace ops {
         enum class InterpolateMode {
             Nearest,
-            MaxPool,
-            MinPool,
-            AvgPool,
+            NearestMax,
+            NearestMin,
+            NearestAvg,
         };
 
         inline int64_t normalize_slice_bound(int64_t index, int64_t dim_size) {
@@ -1020,9 +1020,9 @@ namespace sd {
                                      InterpolateMode mode = InterpolateMode::Nearest,
                                      bool align_corners   = false) {
             bool is_nearest_like_mode = (mode == InterpolateMode::Nearest ||
-                                         mode == InterpolateMode::MaxPool ||
-                                         mode == InterpolateMode::MinPool ||
-                                         mode == InterpolateMode::AvgPool);
+                                         mode == InterpolateMode::NearestMax ||
+                                         mode == InterpolateMode::NearestMin ||
+                                         mode == InterpolateMode::NearestAvg);
             if (!is_nearest_like_mode) {
                 tensor_throw_invalid_argument("Only nearest-like interpolate modes are implemented, got mode=" +
                                               std::to_string(static_cast<int>(mode)));
@@ -1083,11 +1083,11 @@ namespace sd {
                     }
 
                     T val;
-                    if (mode == InterpolateMode::MaxPool) {
+                    if (mode == InterpolateMode::NearestMax) {
                         val = std::numeric_limits<T>::lowest();
-                    } else if(mode == InterpolateMode::MinPool) {
+                    } else if(mode == InterpolateMode::NearestMin) {
                         val = std::numeric_limits<T>::max();
-                    } else if(mode == InterpolateMode::AvgPool) {
+                    } else if(mode == InterpolateMode::NearestAvg) {
                         val = T(0);
                     }
 
@@ -1095,11 +1095,11 @@ namespace sd {
                     std::vector<int64_t> current_in_coord = input_start;
 
                     while (!done_window) {
-                        if (mode == InterpolateMode::MaxPool) {
+                        if (mode == InterpolateMode::NearestMax) {
                             val = std::max(val, input.index(current_in_coord));
-                        } else if(mode == InterpolateMode::MinPool) {
+                        } else if(mode == InterpolateMode::NearestMin) {
                             val = std::min(val, input.index(current_in_coord));
-                        } else if(mode == InterpolateMode::AvgPool) {
+                        } else if(mode == InterpolateMode::NearestAvg) {
                             val += input.index(current_in_coord);
                         }
 
@@ -1113,7 +1113,7 @@ namespace sd {
                             }
                         }
                     }
-                    if (mode == InterpolateMode::AvgPool) {
+                    if (mode == InterpolateMode::NearestAvg) {
                         int64_t window_size = 1;
                         for (size_t i = 0; i < static_cast<size_t>(output.dim()); ++i) {
                             window_size *= (input_end[i] - input_start[i]);
@@ -1205,6 +1205,81 @@ namespace sd {
                                std::vector<double>(size.has_value() ? size->size() : input.dim(), scale_factor),
                                mode,
                                align_corners);
+        }
+
+        template <typename T>
+        inline Tensor<T> maxPool2D(const Tensor<T>& input,
+                                   std::vector<int64_t> kernel_size,
+                                   std::vector<int64_t> stride,
+                                   std::vector<int64_t> padding) {
+            if (input.dim() != 4) {
+                tensor_throw_invalid_argument("Tensor maxPool2D requires 4D input: input_dim=" +
+                                              std::to_string(input.dim()) + ", input_shape=" +
+                                              tensor_shape_to_string(input.shape()));
+            }
+            if (kernel_size.size() != 2 || stride.size() != 2 || padding.size() != 2) {
+                tensor_throw_invalid_argument("Tensor maxPool2D requires kernel_size, stride, and padding to have length 2");
+            }
+            for (size_t i = 0; i < 2; ++i) {
+                if (kernel_size[i] <= 0) {
+                    tensor_throw_invalid_argument("Tensor maxPool2D kernel_size must be positive: kernel_size=" +
+                                                  tensor_shape_to_string(kernel_size));
+                }
+                if (stride[i] <= 0) {
+                    tensor_throw_invalid_argument("Tensor maxPool2D stride must be positive: stride=" +
+                                                  tensor_shape_to_string(stride));
+                }
+                if (padding[i] < 0) {
+                    tensor_throw_invalid_argument("Tensor maxPool2D padding must be non-negative: padding=" +
+                                                  tensor_shape_to_string(padding));
+                }
+            }
+
+            const int64_t in_height   = input.shape()[0];
+            const int64_t in_width    = input.shape()[1];
+            const int64_t in_channels = input.shape()[2];
+            const int64_t batch_size  = input.shape()[3];
+
+            const int64_t out_height = (in_height + 2 * padding[0] - kernel_size[0]) / stride[0] + 1;
+            const int64_t out_width  = (in_width + 2 * padding[1] - kernel_size[1]) / stride[1] + 1;
+
+            if (out_height <= 0 || out_width <= 0) {
+                tensor_throw_invalid_argument("maxPool2D results in invalid output dimensions: " +
+                                              std::to_string(out_height) + "x" + std::to_string(out_width));
+            }
+
+            Tensor<T> output({out_height, out_width, in_channels, batch_size});
+
+            for (int64_t oh = 0; oh < out_height; ++oh) {
+                for (int64_t ow = 0; ow < out_width; ++ow) {
+                    for (int64_t c = 0; c < in_channels; ++c) {
+                        for (int64_t b = 0; b < batch_size; ++b) {
+                            T max_val            = std::numeric_limits<T>::lowest();
+                            bool has_valid_input = false;
+
+                            for (int64_t kh = 0; kh < kernel_size[0]; ++kh) {
+                                for (int64_t kw = 0; kw < kernel_size[1]; ++kw) {
+                                    int64_t ih = oh * stride[0] + kh - padding[0];
+                                    int64_t iw = ow * stride[1] + kw - padding[1];
+
+                                    if (ih >= 0 && ih < in_height && iw >= 0 && iw < in_width) {
+                                        T val           = input.index(ih, iw, c, b);
+                                        max_val         = std::max(max_val, val);
+                                        has_valid_input = true;
+                                    }
+                                }
+                            }
+
+                            if (has_valid_input) {
+                                output.index(oh, ow, c, b) = max_val;
+                            } else {
+                                output.index(oh, ow, c, b) = T(0);
+                            }
+                        }
+                    }
+                }
+            }
+            return output;
         }
 
         template <typename T>
