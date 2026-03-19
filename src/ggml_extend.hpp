@@ -2151,6 +2151,14 @@ public:
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {
         weight_adapter = adapter;
     }
+
+    ggml_backend_t get_runtime_backend() {
+        return runtime_backend;
+    }
+
+    ggml_backend_t get_params_backend() {
+        return params_backend;
+    }
 };
 
 class GGMLBlock {
