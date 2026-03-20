@@ -840,7 +840,7 @@ struct AutoEncoderKL : public VAE {
         return vae_latents;
     }
 
-    ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+    ggml_tensor* vae_to_diffusion_latents(ggml_context* work_ctx, ggml_tensor* latents) {
         ggml_tensor* diffusion_latents = ggml_dup(work_ctx, latents);
         if (sd_version_is_flux2(version)) {
             int channel_dim = 2;

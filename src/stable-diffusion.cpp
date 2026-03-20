@@ -2444,7 +2444,7 @@ public:
     ggml_tensor* encode_first_stage(ggml_context* work_ctx, ggml_tensor* x) {
         ggml_tensor* latents = encode_to_vae_latents(work_ctx, x);
         if (version != VERSION_SD1_PIX2PIX) {
-            latents = first_stage_model->vae_to_diffuison_latents(work_ctx, latents);
+            latents = first_stage_model->vae_to_diffusion_latents(work_ctx, latents);
         }
         return latents;
     }
@@ -3783,7 +3783,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
             }
         });
 
-        init_latent = sd_ctx->sd->first_stage_model->vae_to_diffuison_latents(work_ctx, init_latent);
+        init_latent = sd_ctx->sd->first_stage_model->vae_to_diffusion_latents(work_ctx, init_latent);
 
         int64_t t2 = ggml_time_ms();
         LOG_INFO("encode_first_stage completed, taking %" PRId64 " ms", t2 - t1);

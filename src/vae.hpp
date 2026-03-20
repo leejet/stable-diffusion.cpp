@@ -185,7 +185,7 @@ public:
 
     virtual ggml_tensor* vae_output_to_latents(ggml_context* work_ctx, ggml_tensor* vae_output, std::shared_ptr<RNG> rng) = 0;
     virtual ggml_tensor* diffusion_to_vae_latents(ggml_context* work_ctx, ggml_tensor* latents)                           = 0;
-    virtual ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents)                           = 0;
+    virtual ggml_tensor* vae_to_diffusion_latents(ggml_context* work_ctx, ggml_tensor* latents)                           = 0;
     virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix)                = 0;
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
 };
@@ -221,7 +221,7 @@ struct FakeVAE : public VAE {
         return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
     }
 
-    ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+    ggml_tensor* vae_to_diffusion_latents(ggml_context* work_ctx, ggml_tensor* latents) {
         return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
     }
 

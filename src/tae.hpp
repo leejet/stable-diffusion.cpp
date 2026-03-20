@@ -570,7 +570,7 @@ struct TinyImageAutoEncoder : public VAE {
         return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
     }
 
-    ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+    ggml_tensor* vae_to_diffusion_latents(ggml_context* work_ctx, ggml_tensor* latents) {
         return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
     }
 
@@ -633,7 +633,7 @@ struct TinyVideoAutoEncoder : public VAE {
         return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
     }
 
-    ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+    ggml_tensor* vae_to_diffusion_latents(ggml_context* work_ctx, ggml_tensor* latents) {
         return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
     }
 

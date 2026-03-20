@@ -1191,7 +1191,7 @@ namespace WAN {
             return vae_latents;
         }
 
-        ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
+        ggml_tensor* vae_to_diffusion_latents(ggml_context* work_ctx, ggml_tensor* latents) {
             ggml_tensor* diffusion_latents = ggml_dup(work_ctx, latents);
             int channel_dim                = sd_version_is_wan(version) ? 3 : 2;
             std::vector<float> latents_mean_vec;

@@ -841,7 +841,7 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
                                             const bool circular_x,
                                             const bool circular_y,
                                             on_tile_process on_processing,
-                                            bool slient = false) {
+                                            bool silent = false) {
     output = ggml_set_f32(output, 0);
 
     int input_width   = (int)input->ne[0];
@@ -871,7 +871,7 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     float tile_overlap_factor_y;
     sd_tiling_calc_tiles(num_tiles_y, tile_overlap_factor_y, small_height, p_tile_size_y, tile_overlap_factor, circular_y);
 
-    if (!slient) {
+    if (!silent) {
         LOG_DEBUG("num tiles : %d, %d ", num_tiles_x, num_tiles_y);
         LOG_DEBUG("optimal overlap : %f, %f (targeting %f)", tile_overlap_factor_x, tile_overlap_factor_y, tile_overlap_factor);
     }
@@ -905,7 +905,7 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     params.mem_buffer = nullptr;
     params.no_alloc   = false;
 
-    if (!slient) {
+    if (!silent) {
         LOG_DEBUG("tile work buffer size: %.2f MB", params.mem_size / 1024.f / 1024.f);
     }
 
@@ -920,7 +920,7 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
     ggml_tensor* input_tile  = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, input_tile_size_x, input_tile_size_y, input->ne[2], input->ne[3]);
     ggml_tensor* output_tile = ggml_new_tensor_4d(tiles_ctx, GGML_TYPE_F32, output_tile_size_x, output_tile_size_y, output->ne[2], output->ne[3]);
     int num_tiles            = num_tiles_x * num_tiles_y;
-    if (!slient) {
+    if (!silent) {
         LOG_DEBUG("processing %i tiles", num_tiles);
         pretty_progress(0, num_tiles, 0.0f);
     }
@@ -973,7 +973,7 @@ __STATIC_INLINE__ void sd_tiling_non_square(ggml_tensor* input,
         }
         last_x = false;
     }
-    if (!slient) {
+    if (!silent) {
         if (tile_count < num_tiles) {
             pretty_progress(num_tiles, num_tiles, last_time);
         }
