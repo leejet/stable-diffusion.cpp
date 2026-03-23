@@ -60,6 +60,7 @@ You can find the full API signature in `include/stable-diffusion.h` under the `/
 - `sd_encode_ref_image()`: Encodes images into a cacheable object.
 - `sd_img2img_with_cond()`: The hot-loop function that takes cached conditions and an input frame, running only the diffusion and decode steps.
 - `sd_free_condition()` / `sd_free_image_latent()`: Memory cleanup handlers.
+- `sd_free_image_data()` / `sd_free_images()`: Memory cleanup handlers for `sd_image_t` and `sd_image_t*` respectively. Added to ensure FFI safety across DLL boundaries (particularly for the Rust wrapper `cacheable-sd-rs`) so that the caller does not have to use `libc::free` directly.
 
 ## 6. Known Limitations
 
