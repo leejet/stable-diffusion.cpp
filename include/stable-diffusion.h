@@ -383,6 +383,20 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
 SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, int* num_frames_out);
 
+// --- Memory Management ---
+
+/**
+ * @brief Frees the pixel data buffer inside an sd_image_t.
+ * Use this for functions that return a single sd_image_t by value.
+ */
+SD_API void sd_free_image_data(uint8_t* data);
+
+/**
+ * @brief Frees an array of sd_image_t and all internal pixel buffers.
+ * Use this to free the result of generate_image or generate_video.
+ */
+SD_API void sd_free_images(sd_image_t* images, int count);
+
 // --- Streaming API Extensions ---
 
 typedef struct sd_condition_t sd_condition_t;

@@ -3530,6 +3530,22 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     return result_images;
 }
 
+SD_API void sd_free_image_data(uint8_t* data) {
+    if (data) {
+        free(data);
+    }
+}
+
+SD_API void sd_free_images(sd_image_t* images, int count) {
+    if (images == nullptr) return;
+    for (int i = 0; i < count; i++) {
+        if (images[i].data) {
+            free(images[i].data);
+        }
+    }
+    free(images);
+}
+
 SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* sd_vid_gen_params, int* num_frames_out) {
     if (sd_ctx == nullptr || sd_vid_gen_params == nullptr) {
         return nullptr;
