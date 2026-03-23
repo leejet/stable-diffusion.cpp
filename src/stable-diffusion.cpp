@@ -96,8 +96,7 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
     if (reuse_threshold == INFINITY) {
         if (params.mode == SD_CACHE_EASYCACHE) {
             reuse_threshold = 0.2;
-        }
-        else if (params.mode == SD_CACHE_UCACHE) {
+        } else if (params.mode == SD_CACHE_UCACHE) {
             reuse_threshold = 1.0;
         }
     }
@@ -439,8 +438,8 @@ public:
                                                                      offload_params_to_cpu,
                                                                      tensor_storage_map);
                 diffusion_model  = std::make_shared<MMDiTModel>(backend,
-                                                               offload_params_to_cpu,
-                                                               tensor_storage_map);
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map);
             } else if (sd_version_is_flux(version)) {
                 bool is_chroma = false;
                 for (auto pair : tensor_storage_map) {
@@ -488,10 +487,10 @@ public:
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<FluxModel>(backend,
-                                                              offload_params_to_cpu,
-                                                              tensor_storage_map,
-                                                              version,
-                                                              sd_ctx_params->chroma_use_dit_mask);
+                                                               offload_params_to_cpu,
+                                                               tensor_storage_map,
+                                                               version,
+                                                               sd_ctx_params->chroma_use_dit_mask);
             } else if (sd_version_is_wan(version)) {
                 cond_stage_model = std::make_shared<T5CLIPEmbedder>(clip_backend,
                                                                     offload_params_to_cpu,
@@ -500,10 +499,10 @@ public:
                                                                     1,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
-                                                             offload_params_to_cpu,
-                                                             tensor_storage_map,
-                                                             "model.diffusion_model",
-                                                             version);
+                                                              offload_params_to_cpu,
+                                                              tensor_storage_map,
+                                                              "model.diffusion_model",
+                                                              version);
                 if (strlen(SAFE_STR(sd_ctx_params->high_noise_diffusion_model_path)) > 0) {
                     high_noise_diffusion_model = std::make_shared<WanModel>(backend,
                                                                             offload_params_to_cpu,
@@ -532,29 +531,29 @@ public:
                                                                  "",
                                                                  enable_vision);
                 diffusion_model  = std::make_shared<QwenImageModel>(backend,
-                                                                   offload_params_to_cpu,
-                                                                   tensor_storage_map,
-                                                                   "model.diffusion_model",
-                                                                   version,
-                                                                   sd_ctx_params->qwen_image_zero_cond_t);
+                                                                    offload_params_to_cpu,
+                                                                    tensor_storage_map,
+                                                                    "model.diffusion_model",
+                                                                    version,
+                                                                    sd_ctx_params->qwen_image_zero_cond_t);
             } else if (sd_version_is_anima(version)) {
                 cond_stage_model = std::make_shared<AnimaConditioner>(clip_backend,
                                                                       offload_params_to_cpu,
                                                                       tensor_storage_map);
                 diffusion_model  = std::make_shared<AnimaModel>(backend,
-                                                               offload_params_to_cpu,
-                                                               tensor_storage_map,
-                                                               "model.diffusion_model");
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map,
+                                                                "model.diffusion_model");
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backend,
                                                                  offload_params_to_cpu,
                                                                  tensor_storage_map,
                                                                  version);
                 diffusion_model  = std::make_shared<ZImageModel>(backend,
-                                                                offload_params_to_cpu,
-                                                                tensor_storage_map,
-                                                                "model.diffusion_model",
-                                                                version);
+                                                                 offload_params_to_cpu,
+                                                                 tensor_storage_map,
+                                                                 "model.diffusion_model",
+                                                                 version);
             } else {  // SD1.x SD2.x SDXL
                 std::map<std::string, std::string> embbeding_map;
                 for (uint32_t i = 0; i < sd_ctx_params->embedding_count; i++) {
@@ -3537,7 +3536,8 @@ SD_API void sd_free_image_data(uint8_t* data) {
 }
 
 SD_API void sd_free_images(sd_image_t* images, int count) {
-    if (images == nullptr) return;
+    if (images == nullptr)
+        return;
     for (int i = 0; i < count; i++) {
         if (images[i].data) {
             free(images[i].data);
@@ -4008,21 +4008,24 @@ struct sd_condition_t {
     SDCondition uncond;
 
     ~sd_condition_t() {
-        if (storage_ctx) ggml_free(storage_ctx);
+        if (storage_ctx)
+            ggml_free(storage_ctx);
     }
 };
 
 struct sd_image_latent_t {
     struct ggml_context* storage_ctx = nullptr;
-    struct ggml_tensor* latent = nullptr;
+    struct ggml_tensor* latent       = nullptr;
 
     ~sd_image_latent_t() {
-        if (storage_ctx) ggml_free(storage_ctx);
+        if (storage_ctx)
+            ggml_free(storage_ctx);
     }
 };
 
 static ggml_tensor* duplicate_tensor_to_ctx(struct ggml_context* ctx, struct ggml_tensor* src) {
-    if (!src) return nullptr;
+    if (!src)
+        return nullptr;
     struct ggml_tensor* dst = ggml_dup_tensor(ctx, src);
     if (src->data && dst->data) {
         memcpy(dst->data, src->data, ggml_nbytes(src));
@@ -4033,9 +4036,12 @@ static ggml_tensor* duplicate_tensor_to_ctx(struct ggml_context* ctx, struct ggm
 
 static size_t calculate_condition_storage_size(const SDCondition& cond) {
     size_t size = 0;
-    if (cond.c_crossattn) size += ggml_nbytes(cond.c_crossattn) + ggml_tensor_overhead();
-    if (cond.c_concat)    size += ggml_nbytes(cond.c_concat)    + ggml_tensor_overhead();
-    if (cond.c_vector)    size += ggml_nbytes(cond.c_vector)    + ggml_tensor_overhead();
+    if (cond.c_crossattn)
+        size += ggml_nbytes(cond.c_crossattn) + ggml_tensor_overhead();
+    if (cond.c_concat)
+        size += ggml_nbytes(cond.c_concat) + ggml_tensor_overhead();
+    if (cond.c_vector)
+        size += ggml_nbytes(cond.c_vector) + ggml_tensor_overhead();
     return size;
 }
 
@@ -4046,20 +4052,19 @@ static void copy_sd_condition(struct ggml_context* storage_ctx, SDCondition& dst
 }
 
 SD_API sd_condition_t* sd_encode_condition(
-    sd_ctx_t*   sd_ctx,
+    sd_ctx_t* sd_ctx,
     const char* prompt,
     const char* negative_prompt,
-    int         width,
-    int         height
-) {
+    int width,
+    int height) {
     if (!sd_ctx || !sd_ctx->sd || !sd_ctx->sd->cond_stage_model) {
         return nullptr;
     }
 
     struct ggml_init_params work_params;
-    work_params.mem_size   = 256 * 1024 * 1024;
-    work_params.mem_buffer = nullptr;
-    work_params.no_alloc   = false;
+    work_params.mem_size          = 256 * 1024 * 1024;
+    work_params.mem_buffer        = nullptr;
+    work_params.no_alloc          = false;
     struct ggml_context* work_ctx = ggml_init(work_params);
 
     if (!work_ctx) {
@@ -4078,32 +4083,29 @@ SD_API sd_condition_t* sd_encode_condition(
     SDCondition temp_cond = sd_ctx->sd->cond_stage_model->get_learned_condition(
         work_ctx,
         sd_ctx->sd->n_threads,
-        condition_params
-    );
+        condition_params);
 
     SDCondition temp_uncond = {nullptr, nullptr, nullptr};
     if (negative_prompt && strlen(negative_prompt) > 0) {
         condition_params.text = negative_prompt;
-        temp_uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(
+        temp_uncond           = sd_ctx->sd->cond_stage_model->get_learned_condition(
             work_ctx,
             sd_ctx->sd->n_threads,
-            condition_params
-        );
+            condition_params);
     } else {
         condition_params.text = "";
-        temp_uncond = sd_ctx->sd->cond_stage_model->get_learned_condition(
+        temp_uncond           = sd_ctx->sd->cond_stage_model->get_learned_condition(
             work_ctx,
             sd_ctx->sd->n_threads,
-            condition_params
-        );
+            condition_params);
     }
 
-    size_t required_storage_size = calculate_condition_storage_size(temp_cond) + 
+    size_t required_storage_size = calculate_condition_storage_size(temp_cond) +
                                    calculate_condition_storage_size(temp_uncond) +
                                    ggml_tensor_overhead() * 2;
 
-    struct ggml_init_params storage_params = { required_storage_size, nullptr, false };
-    struct ggml_context* storage_ctx = ggml_init(storage_params);
+    struct ggml_init_params storage_params = {required_storage_size, nullptr, false};
+    struct ggml_context* storage_ctx       = ggml_init(storage_params);
     if (!storage_ctx) {
         LOG_ERROR("ggml_init() for storage_ctx failed");
         ggml_free(work_ctx);
@@ -4111,7 +4113,7 @@ SD_API sd_condition_t* sd_encode_condition(
     }
 
     sd_condition_t* res = new sd_condition_t();
-    res->storage_ctx = storage_ctx;
+    res->storage_ctx    = storage_ctx;
 
     copy_sd_condition(res->storage_ctx, res->cond, temp_cond);
     copy_sd_condition(res->storage_ctx, res->uncond, temp_uncond);
@@ -4128,17 +4130,16 @@ SD_API void sd_free_condition(sd_condition_t* cond) {
 }
 
 SD_API sd_image_latent_t* sd_encode_ref_image(
-    sd_ctx_t*         sd_ctx,
-    const sd_image_t* image
-) {
+    sd_ctx_t* sd_ctx,
+    const sd_image_t* image) {
     if (!sd_ctx || !sd_ctx->sd || !image) {
         return nullptr;
     }
 
     struct ggml_init_params work_params;
-    work_params.mem_size   = 256 * 1024 * 1024;
-    work_params.mem_buffer = nullptr;
-    work_params.no_alloc   = false;
+    work_params.mem_size          = 256 * 1024 * 1024;
+    work_params.mem_buffer        = nullptr;
+    work_params.no_alloc          = false;
     struct ggml_context* work_ctx = ggml_init(work_params);
 
     if (!work_ctx) {
@@ -4161,9 +4162,9 @@ SD_API sd_image_latent_t* sd_encode_ref_image(
 
     ggml_tensor* temp_latent = sd_ctx->sd->encode_first_stage(work_ctx, img);
 
-    size_t required_storage_size = ggml_nbytes(temp_latent) + ggml_tensor_overhead() * 2;
-    struct ggml_init_params storage_params = { required_storage_size, nullptr, false };
-    struct ggml_context* storage_ctx = ggml_init(storage_params);
+    size_t required_storage_size           = ggml_nbytes(temp_latent) + ggml_tensor_overhead() * 2;
+    struct ggml_init_params storage_params = {required_storage_size, nullptr, false};
+    struct ggml_context* storage_ctx       = ggml_init(storage_params);
     if (!storage_ctx) {
         LOG_ERROR("ggml_init() for storage_ctx failed");
         ggml_free(work_ctx);
@@ -4171,8 +4172,8 @@ SD_API sd_image_latent_t* sd_encode_ref_image(
     }
 
     sd_image_latent_t* res = new sd_image_latent_t();
-    res->storage_ctx = storage_ctx;
-    res->latent = duplicate_tensor_to_ctx(storage_ctx, temp_latent);
+    res->storage_ctx       = storage_ctx;
+    res->latent            = duplicate_tensor_to_ctx(storage_ctx, temp_latent);
 
     ggml_free(work_ctx);
 
@@ -4186,28 +4187,27 @@ SD_API void sd_free_image_latent(sd_image_latent_t* latent) {
 }
 
 SD_API sd_image_t sd_img2img_with_cond(
-    sd_ctx_t*          sd_ctx,
-    sd_image_t         input_frame,
-    sd_condition_t*    cond,
+    sd_ctx_t* sd_ctx,
+    sd_image_t input_frame,
+    sd_condition_t* cond,
     sd_image_latent_t** ref_latents,
-    int                n_ref_latents,
-    float              strength,
-    int                sample_steps,
-    float              cfg_scale,
-    long long int      seed,
-    sd_cache_params_t* cache_params
-) {
+    int n_ref_latents,
+    float strength,
+    int sample_steps,
+    float cfg_scale,
+    long long int seed,
+    sd_cache_params_t* cache_params) {
     sd_image_t result = {0, 0, 0, nullptr};
     if (!sd_ctx || !sd_ctx->sd || !cond || !input_frame.data) {
         return result;
     }
 
-    int width = input_frame.width;
+    int width  = input_frame.width;
     int height = input_frame.height;
 
-    int vae_scale_factor = sd_ctx->sd->get_vae_scale_factor();
+    int vae_scale_factor            = sd_ctx->sd->get_vae_scale_factor();
     int diffusion_model_down_factor = sd_ctx->sd->get_diffusion_model_down_factor();
-    int spatial_multiple = vae_scale_factor * diffusion_model_down_factor;
+    int spatial_multiple            = vae_scale_factor * diffusion_model_down_factor;
 
     int width_offset  = align_up_offset(width, spatial_multiple);
     int height_offset = align_up_offset(height, spatial_multiple);
@@ -4243,15 +4243,16 @@ SD_API sd_image_t sd_img2img_with_cond(
     sd_ctx->sd->sampler_rng->manual_seed(seed);
 
     enum sample_method_t sample_method = sd_get_default_sample_method(sd_ctx);
-    scheduler_t scheduler = sd_get_default_scheduler(sd_ctx, sample_method);
+    scheduler_t scheduler              = sd_get_default_scheduler(sd_ctx, sample_method);
 
     std::vector<float> sigmas = sd_ctx->sd->denoiser->get_sigmas(sample_steps,
-                                              sd_ctx->sd->get_image_seq_len(height, width),
-                                              scheduler,
-                                              sd_ctx->sd->version);
+                                                                 sd_ctx->sd->get_image_seq_len(height, width),
+                                                                 scheduler,
+                                                                 sd_ctx->sd->version);
 
     size_t t_enc = static_cast<size_t>(sample_steps * strength);
-    if (t_enc == sample_steps) t_enc--;
+    if (t_enc == sample_steps)
+        t_enc--;
     std::vector<float> sigma_sched;
     sigma_sched.assign(sigmas.begin() + sample_steps - t_enc - 1, sigmas.end());
     sigmas = sigma_sched;
@@ -4268,18 +4269,18 @@ SD_API sd_image_t sd_img2img_with_cond(
         }
     }
 
-    struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 
+    struct ggml_tensor* noise = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32,
                                                    init_latent->ne[0], init_latent->ne[1], init_latent->ne[2], 1);
     ggml_ext_im_set_randn_f32(noise, sd_ctx->sd->rng);
 
     sd_guidance_params_t guidance;
-    guidance.txt_cfg = cfg_scale;
-    guidance.img_cfg = cfg_scale;
+    guidance.txt_cfg            = cfg_scale;
+    guidance.img_cfg            = cfg_scale;
     guidance.distilled_guidance = 3.5f;
-    guidance.slg.layer_count = 0;
-    guidance.slg.layer_start = 0.01f;
-    guidance.slg.layer_end = 0.2f;
-    guidance.slg.scale = 0.f;
+    guidance.slg.layer_count    = 0;
+    guidance.slg.layer_start    = 0.01f;
+    guidance.slg.layer_end      = 0.2f;
+    guidance.slg.scale          = 0.f;
 
     SDCondition img_cond;
     SDCondition id_cond;
@@ -4295,17 +4296,17 @@ SD_API sd_image_t sd_img2img_with_cond(
                                                  nullptr,
                                                  0.f,
                                                  guidance,
-                                                 0.f, // eta
-                                                 0, // shifted_timestep
+                                                 0.f,  // eta
+                                                 0,    // shifted_timestep
                                                  sample_method,
                                                  sigmas,
-                                                 -1, // start_merge_step
+                                                 -1,  // start_merge_step
                                                  id_cond,
                                                  refs,
-                                                 false, // increase_ref_index
-                                                 nullptr, // denoise_mask
-                                                 nullptr, // vace_context
-                                                 1.0f, // vace_strength
+                                                 false,    // increase_ref_index
+                                                 nullptr,  // denoise_mask
+                                                 nullptr,  // vace_context
+                                                 1.0f,     // vace_strength
                                                  cache_params);
 
     if (sd_ctx->sd->free_params_immediately) {
@@ -4320,10 +4321,10 @@ SD_API sd_image_t sd_img2img_with_cond(
         }
 
         if (decoded) {
-            result.width = width;
-            result.height = height;
+            result.width   = width;
+            result.height  = height;
             result.channel = 3;
-            result.data = ggml_tensor_to_sd_image(decoded);
+            result.data    = ggml_tensor_to_sd_image(decoded);
         }
     }
 
