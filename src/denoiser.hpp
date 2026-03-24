@@ -781,1052 +781,1037 @@ static void generate_ancestral_step(float& sigma_up, float& sigma_down, float si
     }
 }
 
-template<typename Callable>
+template <typename Callable>
 void denoiser_tensor_iter(
-    ggml_tensor* a, Callable && fn) {
+    ggml_tensor* a,
+    Callable&& fn) {
     for (int64_t i = 0; i < ggml_nelements(a); i++) {
         fn(static_cast<float*>(a->data)[i]);
     }
 }
 
-template<typename Callable>
+template <typename Callable>
 void denoiser_tensor_iter(
-    ggml_tensor* a, ggml_tensor *b, Callable && fn) {
+    ggml_tensor* a,
+    ggml_tensor* b,
+    Callable&& fn) {
     for (int64_t i = 0; i < ggml_nelements(a); i++) {
         fn(static_cast<float*>(a->data)[i], static_cast<float*>(b->data)[i]);
     }
 }
 
-template<typename Callable>
+template <typename Callable>
 void denoiser_tensor_iter(
-    ggml_tensor* a, ggml_tensor *b, ggml_tensor *c, Callable && fn) {
+    ggml_tensor* a,
+    ggml_tensor* b,
+    ggml_tensor* c,
+    Callable&& fn) {
     for (int64_t i = 0; i < ggml_nelements(a); i++) {
         fn(static_cast<float*>(a->data)[i], static_cast<float*>(b->data)[i],
-            static_cast<float*>(c->data)[i]);
+           static_cast<float*>(c->data)[i]);
     }
 }
 
-template<typename Callable>
+template <typename Callable>
 void denoiser_tensor_iter(
-    ggml_tensor* a, ggml_tensor *b, ggml_tensor *c, ggml_tensor* d, Callable && fn) {
+    ggml_tensor* a,
+    ggml_tensor* b,
+    ggml_tensor* c,
+    ggml_tensor* d,
+    Callable&& fn) {
     for (int64_t i = 0; i < ggml_nelements(a); i++) {
         fn(static_cast<float*>(a->data)[i], static_cast<float*>(b->data)[i],
-            static_cast<float*>(c->data)[i], static_cast<float*>(d->data)[i]);
+           static_cast<float*>(c->data)[i], static_cast<float*>(d->data)[i]);
     }
 }
 
-template<typename Callable>
+template <typename Callable>
 void denoiser_tensor_iter(
-    ggml_tensor* a, ggml_tensor *b, ggml_tensor *c, ggml_tensor* d,
-    ggml_tensor *e, Callable && fn) {
+    ggml_tensor* a,
+    ggml_tensor* b,
+    ggml_tensor* c,
+    ggml_tensor* d,
+    ggml_tensor* e,
+    Callable&& fn) {
     for (int64_t i = 0; i < ggml_nelements(a); i++) {
         fn(static_cast<float*>(a->data)[i], static_cast<float*>(b->data)[i],
-            static_cast<float*>(c->data)[i], static_cast<float*>(d->data)[i],
-            static_cast<float*>(e->data)[i]);
+           static_cast<float*>(c->data)[i], static_cast<float*>(d->data)[i],
+           static_cast<float*>(e->data)[i]);
     }
 }
 
-template<typename Callable>
+template <typename Callable>
 void denoiser_tensor_iter(
-    ggml_tensor* a, ggml_tensor *b, ggml_tensor *c, ggml_tensor* d,
-    ggml_tensor *e, ggml_tensor* f, Callable && fn) {
+    ggml_tensor* a,
+    ggml_tensor* b,
+    ggml_tensor* c,
+    ggml_tensor* d,
+    ggml_tensor* e,
+    ggml_tensor* f,
+    Callable&& fn) {
     for (int64_t i = 0; i < ggml_nelements(a); i++) {
         fn(static_cast<float*>(a->data)[i], static_cast<float*>(b->data)[i],
-            static_cast<float*>(c->data)[i], static_cast<float*>(d->data)[i],
-            static_cast<float*>(e->data)[i], static_cast<float*>(f->data)[i]);
+           static_cast<float*>(c->data)[i], static_cast<float*>(d->data)[i],
+           static_cast<float*>(e->data)[i], static_cast<float*>(f->data)[i]);
     }
 }
 
-static bool euler_a_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                  ggml_tensor* x, std::vector<float> sigmas,
-                                  std::shared_ptr<RNG> rng, float eta)
-{
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
+static bool euler_a_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas, std::shared_ptr<RNG> rng, float eta) {
+    size_t steps       = sigmas.size() - 1;
+    ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
-            for (int i = 0; i < steps; i++) {
-                float sigma = sigmas[i];
+    for (int i = 0; i < steps; i++) {
+        float sigma = sigmas[i];
 
-                // denoise
-                ggml_tensor* denoised = model(x, sigma, i + 1);
-                if (denoised == nullptr) {
-                    return false;
-                }
+        // denoise
+        ggml_tensor* denoised = model(x, sigma, i + 1);
+        if (denoised == nullptr) {
+            return false;
+        }
 
-                denoiser_tensor_iter(d, x, denoised, [sigma](float& d, float& x, float& denoised) {
-                    d = (x - denoised) / sigma;
-                });
+        denoiser_tensor_iter(d, x, denoised, [sigma](float& d, float& x, float& denoised) {
+            d = (x - denoised) / sigma;
+        });
 
-                // get_ancestral_step
-                float sigma_up, sigma_down;
-                generate_ancestral_step(sigma_up, sigma_down, sigma, sigmas[i + 1], eta);
+        // get_ancestral_step
+        float sigma_up, sigma_down;
+        generate_ancestral_step(sigma_up, sigma_down, sigma, sigmas[i + 1], eta);
 
-                // Euler method
-                float dt = sigma_down - sigma;
-                denoiser_tensor_iter(x, d, [dt](float& x, const float& d) {
-                    x = x + d * dt;
-                });
+        // Euler method
+        float dt = sigma_down - sigma;
+        denoiser_tensor_iter(x, d, [dt](float& x, const float& d) {
+            x = x + d * dt;
+        });
 
-                if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
-                    ggml_ext_im_set_randn_f32(noise, rng);
-                    denoiser_tensor_iter(x, noise, [sigma_up](float& x, const float& noise) {
-                        x = x + noise * sigma_up;
-                    });
-                }
-            }
-            return true;
+        if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
+            ggml_ext_im_set_randn_f32(noise, rng);
+            denoiser_tensor_iter(x, noise, [sigma_up](float& x, const float& noise) {
+                x = x + noise * sigma_up;
+            });
+        }
+    }
+    return true;
 }
 
-static bool euler_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                ggml_tensor* x, std::vector<float> sigmas)
-{
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
+static bool euler_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas) {
+    size_t steps   = sigmas.size() - 1;
+    ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
 
-            for (int i = 0; i < steps; i++) {
-                float sigma = sigmas[i];
+    for (int i = 0; i < steps; i++) {
+        float sigma = sigmas[i];
 
-                // denoise
-                ggml_tensor* denoised = model(x, sigma, i + 1);
-                if (denoised == nullptr) {
-                    return false;
-                }
+        // denoise
+        ggml_tensor* denoised = model(x, sigma, i + 1);
+        if (denoised == nullptr) {
+            return false;
+        }
 
-                denoiser_tensor_iter(d, x, denoised, [sigma](float& d, const float& x, const float& denoised) {
-                    d = (x - denoised) / sigma;
-                });
+        denoiser_tensor_iter(d, x, denoised, [sigma](float& d, const float& x, const float& denoised) {
+            d = (x - denoised) / sigma;
+        });
 
-                float dt = sigmas[i + 1] - sigma;
-                denoiser_tensor_iter(x, d, [dt](float& x, const float& d) {
-                    x = x + d * dt;
-                });
-            }
-            return true;
+        float dt = sigmas[i + 1] - sigma;
+        denoiser_tensor_iter(x, d, [dt](float& x, const float& d) {
+            x = x + d * dt;
+        });
+    }
+    return true;
 }
 
-static bool heun_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x,
-                               std::vector<float> sigmas) {
+static bool heun_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas) {
+    size_t steps    = sigmas.size() - 1;
+    ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
-            ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
+    for (int i = 0; i < steps; i++) {
+        float sigma    = sigmas[i];
+        float sigma_to = sigmas[i + 1];
 
-            for (int i = 0; i < steps; i++) {
-                float sigma    = sigmas[i];
-                float sigma_to = sigmas[i + 1];
+        // denoise
+        ggml_tensor* denoised = model(x, sigma, -(i + 1));
+        if (denoised == nullptr) {
+            return false;
+        }
 
-                // denoise
-                ggml_tensor* denoised = model(x, sigma, -(i + 1));
-                if (denoised == nullptr) {
-                    return false;
-                }
+        denoiser_tensor_iter(d, x, denoised, [sigma](float& d, const float& x, const float& denoised) {
+            d = (x - denoised) / sigma;
+        });
 
-                denoiser_tensor_iter(d, x, denoised, [sigma](float& d, const float& x, const float& denoised) {
-                    d = (x - denoised) / sigma;
-                });
+        float dt = sigma_to - sigma;
+        if (sigma_to == 0) {
+            // Euler step
+            denoiser_tensor_iter(x, d, [dt](float& x, const float& d) {
+                x = x + d * dt;
+            });
+        } else {
+            // Heun step
+            denoiser_tensor_iter(x2, x, d, [dt](float& x2, const float& x, const float& d) {
+                x2 = x + d * dt;
+            });
 
-                float dt = sigma_to - sigma;
-                if (sigma_to == 0) {
-                    // Euler step
-                    denoiser_tensor_iter(x, d, [dt](float& x, const float& d) {
-                        x = x + d * dt;
-                    });
-                } else {
-                    // Heun step
-                    denoiser_tensor_iter(x2, x, d, [dt](float& x2, const float& x, const float& d) {
-                        x2 = x + d * dt;
-                    });
-
-                    ggml_tensor* denoised = model(x2, sigma_to, i + 1);
-                    if (denoised == nullptr) {
-                        return false;
-                    }
-
-                    denoiser_tensor_iter(d, x, x2, denoised,
-                        [sigma_to, dt](float& d, float& x, const float& x2, const float& denoised) {
-                        float d2 = (x2 - denoised) / sigma_to;
-                        d = (d + d2) / 2;
-                        x = x + d * dt;
-                    });
-                }
+            ggml_tensor* denoised = model(x2, sigma_to, i + 1);
+            if (denoised == nullptr) {
+                return false;
             }
-            return true;
+
+            denoiser_tensor_iter(d, x, x2, denoised,
+                                 [sigma_to, dt](float& d, float& x, const float& x2, const float& denoised) {
+                                     float d2 = (x2 - denoised) / sigma_to;
+                                     d        = (d + d2) / 2;
+                                     x        = x + d * dt;
+                                 });
+        }
+    }
+    return true;
 }
 
-static bool dpm2_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x,
-                               std::vector<float> sigmas) {
+static bool dpm2_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas) {
+    size_t steps    = sigmas.size() - 1;
+    ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
-            ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
+    for (int i = 0; i < steps; i++) {
+        float sigma    = sigmas[i];
+        float sigma_to = sigmas[i + 1];
+        // denoise
+        ggml_tensor* denoised = model(x, sigma, -(i + 1));
+        if (denoised == nullptr) {
+            return false;
+        }
 
-            for (int i = 0; i < steps; i++) {
-                float sigma    = sigmas[i];
-                float sigma_to = sigmas[i + 1];
-                // denoise
-                ggml_tensor* denoised = model(x, sigma, -(i + 1));
-                if (denoised == nullptr) {
-                    return false;
-                }
+        denoiser_tensor_iter(d, x, denoised, [sigma](float& d, const float& x, const float& denoised) {
+            d = (x - denoised) / sigma;
+        });
 
-                denoiser_tensor_iter(d, x, denoised, [sigma](float& d, const float& x, const float& denoised) {
-                    d = (x - denoised) / sigma;
-                });
+        if (sigma_to == 0) {
+            // Euler step
+            float dt = -sigma;
+            denoiser_tensor_iter(x, d, [dt](float& x, const float& d) {
+                x = x + d * dt;
+            });
+        } else {
+            // DPM-Solver-2
+            float sigma_mid = exp(0.5f * (log(sigma) + log(sigma_to)));
+            float dt_1      = sigma_mid - sigma;
+            float dt_2      = sigma_to - sigma;
 
-                if (sigma_to == 0) {
-                    // Euler step
-                    float dt = -sigma;
-                    denoiser_tensor_iter(x, d, [dt](float& x, const float& d) {
-                        x = x + d * dt;
-                    });
-                } else {
-                    // DPM-Solver-2
-                    float sigma_mid = exp(0.5f * (log(sigma) + log(sigma_to)));
-                    float dt_1      = sigma_mid - sigma;
-                    float dt_2      = sigma_to - sigma;
+            denoiser_tensor_iter(x2, x, d,
+                                 [dt_1](float& x2, const float& x, const float& d) {
+                                     x2 = x + d * dt_1;
+                                 });
 
-                    denoiser_tensor_iter(x2, x, d,
-                        [dt_1](float& x2, const float& x, const float& d) {
-                        x2 = x + d * dt_1;
-                    });
-
-                    ggml_tensor* denoised = model(x2, sigma_mid, i + 1);
-                    if (denoised == nullptr) {
-                        return false;
-                    }
-                    denoiser_tensor_iter(x, denoised, x2,
-                        [sigma_mid, dt_2](float& x, const float& denoised, const float& x2) {
-                        float d2 = (x2 - denoised) / sigma_mid;
-                        x = x + d2 * dt_2;
-                    });
-                }
+            ggml_tensor* denoised = model(x2, sigma_mid, i + 1);
+            if (denoised == nullptr) {
+                return false;
             }
-            return true;
+            denoiser_tensor_iter(x, denoised, x2,
+                                 [sigma_mid, dt_2](float& x, const float& denoised, const float& x2) {
+                                     float d2 = (x2 - denoised) / sigma_mid;
+                                     x        = x + d2 * dt_2;
+                                 });
+        }
+    }
+    return true;
 }
 
-static bool dpmpp2s_a_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                    ggml_tensor* x, std::vector<float> sigmas,
-                                    std::shared_ptr<RNG> rng, float eta) {
+static bool dpmpp2s_a_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas, std::shared_ptr<RNG> rng, float eta) {
+    size_t steps       = sigmas.size() - 1;
+    ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
+    for (int i = 0; i < steps; i++) {
+        // denoise
+        ggml_tensor* denoised = model(x, sigmas[i], -(i + 1));
+        if (denoised == nullptr) {
+            return false;
+        }
 
-            for (int i = 0; i < steps; i++) {
-                // denoise
-                ggml_tensor* denoised = model(x, sigmas[i], -(i + 1));
-                if (denoised == nullptr) {
-                    return false;
-                }
+        // get_ancestral_step
+        float sigma_up, sigma_down;
+        generate_ancestral_step(sigma_up, sigma_down, sigmas[i], sigmas[i + 1], eta);
 
-                // get_ancestral_step
-                float sigma_up, sigma_down;
-                generate_ancestral_step(sigma_up, sigma_down, sigmas[i], sigmas[i + 1], eta);
+        if (sigma_down == 0) {
+            // d = (x - denoised) / sigmas[i];
+            // dt = sigma_down - sigmas[i];
+            // x += d * dt;
+            // => x = denoised
+            copy_ggml_tensor(x, denoised);
+        } else {
+            // DPM-Solver++(2S)
+            auto t_fn     = [](float sigma) -> float { return -log(sigma); };
+            auto sigma_fn = [](float t) -> float { return exp(-t); };
+            float t       = t_fn(sigmas[i]);
+            float t_next  = t_fn(sigma_down);
+            float h       = t_next - t;
+            float s       = t + 0.5f * h;
 
-                if (sigma_down == 0) {
-                    // d = (x - denoised) / sigmas[i];
-                    // dt = sigma_down - sigmas[i];
-                    // x += d * dt;
-                    // => x = denoised
-                    copy_ggml_tensor(x, denoised);
-                } else {
-                    // DPM-Solver++(2S)
-                    auto t_fn     = [](float sigma) -> float { return -log(sigma); };
-                    auto sigma_fn = [](float t) -> float { return exp(-t); };
-                    float t       = t_fn(sigmas[i]);
-                    float t_next  = t_fn(sigma_down);
-                    float h       = t_next - t;
-                    float s       = t + 0.5f * h;
+            // First half-step
+            denoiser_tensor_iter(x2, x, denoised,
+                                 [sigma_fn, s, t, h](float& x2, const float& x, const float& denoised) {
+                                     x2 = (sigma_fn(s) / sigma_fn(t)) * x - (exp(-h * 0.5f) - 1) * denoised;
+                                 });
 
-                    // First half-step
-                    denoiser_tensor_iter(x2, x, denoised,
-                        [sigma_fn, s, t, h](float& x2, const float& x, const float& denoised) {
-                        x2 = (sigma_fn(s) / sigma_fn(t)) * x - (exp(-h * 0.5f) - 1) * denoised;
-                    });
-
-                    ggml_tensor* denoised = model(x2, sigmas[i + 1], i + 1);
-                    if (denoised == nullptr) {
-                        return false;
-                    }
-
-                    // Second half-step
-                    denoiser_tensor_iter(x, denoised,
-                        [sigma_fn, t_next, t, h](float& x, const float& denoised) {
-                        x = (sigma_fn(t_next) / sigma_fn(t)) * x - (exp(-h) - 1) * denoised;
-                    });
-                }
-
-                // Noise addition
-                if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
-                    ggml_ext_im_set_randn_f32(noise, rng);
-                    denoiser_tensor_iter(x, noise, [sigma_up](float& x, const float& noise) {
-                        x = x + noise * sigma_up;
-                    });
-                }
+            ggml_tensor* denoised = model(x2, sigmas[i + 1], i + 1);
+            if (denoised == nullptr) {
+                return false;
             }
+
+            // Second half-step
+            denoiser_tensor_iter(x, denoised,
+                                 [sigma_fn, t_next, t, h](float& x, const float& denoised) {
+                                     x = (sigma_fn(t_next) / sigma_fn(t)) * x - (exp(-h) - 1) * denoised;
+                                 });
+        }
+
+        // Noise addition
+        if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
+            ggml_ext_im_set_randn_f32(noise, rng);
+            denoiser_tensor_iter(x, noise, [sigma_up](float& x, const float& noise) {
+                x = x + noise * sigma_up;
+            });
+        }
+    }
     return true;
 }
 
 // DPM++ (2M) from Karras et al (2022)
-static bool dpmpp2m_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                  ggml_tensor* x, std::vector<float> sigmas) {
+static bool dpmpp2m_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas) {
+    size_t steps              = sigmas.size() - 1;
+    ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
+    auto t_fn = [](float sigma) -> float { return -log(sigma); };
 
-            auto t_fn = [](float sigma) -> float { return -log(sigma); };
+    for (int i = 0; i < steps; i++) {
+        // denoise
+        ggml_tensor* denoised = model(x, sigmas[i], i + 1);
+        if (denoised == nullptr) {
+            return false;
+        }
 
-            for (int i = 0; i < steps; i++) {
-                // denoise
-                ggml_tensor* denoised = model(x, sigmas[i], i + 1);
-                if (denoised == nullptr) {
-                    return false;
-                }
+        float t      = t_fn(sigmas[i]);
+        float t_next = t_fn(sigmas[i + 1]);
+        float h      = t_next - t;
+        float a      = sigmas[i + 1] / sigmas[i];
+        float b      = exp(-h) - 1.f;
 
-                float t      = t_fn(sigmas[i]);
-                float t_next = t_fn(sigmas[i + 1]);
-                float h      = t_next - t;
-                float a      = sigmas[i + 1] / sigmas[i];
-                float b      = exp(-h) - 1.f;
+        if (i == 0 || sigmas[i + 1] == 0) {
+            // Simpler step for the edge cases
+            denoiser_tensor_iter(x, denoised, [a, b](float& x, const float& denoised) {
+                x = a * x - b * denoised;
+            });
+        } else {
+            float h_last = t - t_fn(sigmas[i - 1]);
+            float r      = h_last / h;
+            denoiser_tensor_iter(x, denoised, old_denoised,
+                                 [r, a, b](float& x, const float& denoised, const float& old_denoised) {
+                                     float denoised_d = (1.f + 1.f / (2.f * r)) * denoised - (1.f / (2.f * r)) * old_denoised;
+                                     x                = a * x - b * denoised_d;
+                                 });
+        }
 
-                if (i == 0 || sigmas[i + 1] == 0) {
-                    // Simpler step for the edge cases
-                    denoiser_tensor_iter(x, denoised, [a, b](float& x, const float& denoised) {
-                        x = a * x - b * denoised;
-                    });
-                } else {
-                    float h_last = t - t_fn(sigmas[i - 1]);
-                    float r      = h_last / h;
-                    denoiser_tensor_iter(x, denoised, old_denoised,
-                        [r, a, b](float& x, const float& denoised, const float& old_denoised) {
-                        float denoised_d = (1.f + 1.f / (2.f * r)) * denoised - (1.f / (2.f * r)) * old_denoised;
-                        x                = a * x - b * denoised_d;
-                    });
-                }
-
-                copy_ggml_tensor(old_denoised, denoised);
-            }
+        copy_ggml_tensor(old_denoised, denoised);
+    }
     return true;
 }
 
 // Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
-static bool dpmpp2mv2_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                    ggml_tensor* x, std::vector<float> sigmas) {
+static bool dpmpp2mv2_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas) {
+    size_t steps              = sigmas.size() - 1;
+    ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
+    auto t_fn = [](float sigma) -> float { return -log(sigma); };
 
-            auto t_fn = [](float sigma) -> float { return -log(sigma); };
+    for (int i = 0; i < steps; i++) {
+        // denoise
+        ggml_tensor* denoised = model(x, sigmas[i], i + 1);
+        if (denoised == nullptr) {
+            return false;
+        }
 
-            for (int i = 0; i < steps; i++) {
-                // denoise
-                ggml_tensor* denoised = model(x, sigmas[i], i + 1);
-                if (denoised == nullptr) {
-                    return false;
-                }
+        float t      = t_fn(sigmas[i]);
+        float t_next = t_fn(sigmas[i + 1]);
+        float h      = t_next - t;
+        float a      = sigmas[i + 1] / sigmas[i];
 
-                float t      = t_fn(sigmas[i]);
-                float t_next = t_fn(sigmas[i + 1]);
-                float h      = t_next - t;
-                float a      = sigmas[i + 1] / sigmas[i];
+        if (i == 0 || sigmas[i + 1] == 0) {
+            // Simpler step for the edge cases
+            float b = exp(-h) - 1.f;
+            denoiser_tensor_iter(x, denoised, [a, b](float& x, const float& denoised) {
+                x = a * x - b * denoised;
+            });
+        } else {
+            float h_last = t - t_fn(sigmas[i - 1]);
+            float h_min  = std::min(h_last, h);
+            float h_max  = std::max(h_last, h);
+            float r      = h_max / h_min;
+            float h_d    = (h_max + h_min) / 2.f;
+            float b      = exp(-h_d) - 1.f;
+            denoiser_tensor_iter(x, denoised, old_denoised,
+                                 [r, a, b](float& x, const float& denoised, const float& old_denoised) {
+                                     float denoised_d = (1.f + 1.f / (2.f * r)) * denoised - (1.f / (2.f * r)) * old_denoised;
+                                     x                = a * x - b * denoised_d;
+                                 });
+        }
 
-                if (i == 0 || sigmas[i + 1] == 0) {
-                    // Simpler step for the edge cases
-                    float b = exp(-h) - 1.f;
-                    denoiser_tensor_iter(x, denoised, [a, b](float& x, const float& denoised) {
-                        x = a * x - b * denoised;
-                    });
-                } else {
-                    float h_last = t - t_fn(sigmas[i - 1]);
-                    float h_min  = std::min(h_last, h);
-                    float h_max  = std::max(h_last, h);
-                    float r      = h_max / h_min;
-                    float h_d    = (h_max + h_min) / 2.f;
-                    float b      = exp(-h_d) - 1.f;
-                    denoiser_tensor_iter(x, denoised, old_denoised,
-                        [r, a, b](float& x, const float& denoised, const float& old_denoised) {
-                        float denoised_d = (1.f + 1.f / (2.f * r)) * denoised - (1.f / (2.f * r)) * old_denoised;
-                        x                = a * x - b * denoised_d;
-                    });
-                }
-
-                copy_ggml_tensor(old_denoised, denoised);
-            }
+        copy_ggml_tensor(old_denoised, denoised);
+    }
     return true;
 }
 // iPNDM sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
-static bool ipndm_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                ggml_tensor* x, std::vector<float> sigmas) {
+static bool ipndm_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas) {
+    size_t steps        = sigmas.size() - 1;
+    int max_order       = 4;
+    ggml_tensor* x_next = x;
+    std::vector<ggml_tensor*> buffer_model;
 
-    size_t steps = sigmas.size() - 1;
-            int max_order       = 4;
-            ggml_tensor* x_next = x;
-            std::vector<ggml_tensor*> buffer_model;
+    for (int i = 0; i < steps; i++) {
+        float sigma      = sigmas[i];
+        float sigma_next = sigmas[i + 1];
 
-            for (int i = 0; i < steps; i++) {
-                float sigma      = sigmas[i];
-                float sigma_next = sigmas[i + 1];
+        ggml_tensor* x_cur = x_next;
+        float* vec_x_cur   = (float*)x_cur->data;
+        float* vec_x_next  = (float*)x_next->data;
 
-                ggml_tensor* x_cur = x_next;
-                float* vec_x_cur   = (float*)x_cur->data;
-                float* vec_x_next  = (float*)x_next->data;
+        // Denoising step
+        ggml_tensor* denoised = model(x_cur, sigma, i + 1);
+        if (denoised == nullptr) {
+            return false;
+        }
 
-                // Denoising step
-                ggml_tensor* denoised = model(x_cur, sigma, i + 1);
-                if (denoised == nullptr) {
-                    return false;
-                }
+        ggml_tensor* d_cur = ggml_dup_tensor(work_ctx, x_cur);
+        denoiser_tensor_iter(d_cur, x_cur, denoised,
+                             [sigma](float& d_cur, const float& x_cur, const float& denoised) {
+                                 d_cur = (x_cur - denoised) / sigma;
+                             });
 
-                ggml_tensor* d_cur = ggml_dup_tensor(work_ctx, x_cur);
-                denoiser_tensor_iter(d_cur, x_cur, denoised,
-                    [sigma](float& d_cur, const float& x_cur, const float& denoised) {
-                    d_cur = (x_cur - denoised) / sigma;
-                });
+        int order = std::min(max_order, i + 1);
 
-                int order = std::min(max_order, i + 1);
+        // Calculate vec_x_next based on the order
+        switch (order) {
+            case 1:  // First Euler step
+                denoiser_tensor_iter(x_next, x_cur, d_cur,
+                                     [sigma_next, sigma](float& x_next, const float& x_cur, const float& d_cur) {
+                                         x_next = x_cur + (sigma_next - sigma) * d_cur;
+                                     });
+                break;
 
-                // Calculate vec_x_next based on the order
-                switch (order) {
-                    case 1:  // First Euler step
-                        denoiser_tensor_iter(x_next, x_cur, d_cur,
-                            [sigma_next, sigma](float& x_next, const float& x_cur, const float& d_cur) {
-                            x_next = x_cur + (sigma_next - sigma) * d_cur;
-                        });
-                        break;
+            case 2:  // Use one history point
+                denoiser_tensor_iter(x_next, x_cur, d_cur, buffer_model.back(),
+                                     [sigma_next, sigma](float& x_next, const float& x_cur, const float& d_cur, const float& d_prev1) {
+                                         x_next = x_cur + (sigma_next - sigma) * (3 * d_cur - d_prev1) / 2;
+                                     });
+                break;
 
-                    case 2:  // Use one history point
-                        denoiser_tensor_iter(x_next, x_cur, d_cur, buffer_model.back(),
-                            [sigma_next, sigma](float& x_next, const float& x_cur, const float& d_cur, const float& d_prev1) {
-                            x_next = x_cur + (sigma_next - sigma) * (3 * d_cur - d_prev1) / 2;
-                        });
-                        break;
+            case 3:  // Use two history points
+                denoiser_tensor_iter(x_next, x_cur, d_cur, buffer_model.back(),
+                                     buffer_model[buffer_model.size() - 2],
+                                     [sigma_next, sigma](float& x_next, const float& x_cur, const float& d_cur, const float& d_prev1, const float& d_prev2) {
+                                         x_next = x_cur + (sigma_next - sigma) * (23 * d_cur - 16 * d_prev1 + 5 * d_prev2) / 12;
+                                     });
+                break;
 
-                    case 3:  // Use two history points
-                        denoiser_tensor_iter(x_next, x_cur, d_cur, buffer_model.back(),
-                            buffer_model[buffer_model.size() - 2],
-                            [sigma_next, sigma](float& x_next, const float& x_cur, const float& d_cur, const float& d_prev1, const float& d_prev2) {
-                            x_next = x_cur + (sigma_next - sigma) * (23 * d_cur - 16 * d_prev1 + 5 * d_prev2) / 12;
-                        });
-                        break;
+            case 4:  // Use three history points
+                denoiser_tensor_iter(x_next, x_cur, d_cur, buffer_model.back(),
+                                     buffer_model[buffer_model.size() - 2], buffer_model[buffer_model.size() - 3],
+                                     [sigma_next, sigma](float& x_next, const float& x_cur, const float& d_cur, const float& d_prev1, const float& d_prev2, const float& d_prev3) {
+                                         x_next = x_cur + (sigma_next - sigma) * (55 * d_cur - 59 * d_prev1 + 37 * d_prev2 - 9 * d_prev3) / 24;
+                                     });
+                break;
+        }
 
-                    case 4:  // Use three history points
-                        denoiser_tensor_iter(x_next, x_cur, d_cur, buffer_model.back(),
-                            buffer_model[buffer_model.size() - 2], buffer_model[buffer_model.size() - 3],
-                            [sigma_next, sigma](float& x_next, const float& x_cur, const float& d_cur, const float& d_prev1, const float& d_prev2, const float& d_prev3) {
-                            x_next = x_cur + (sigma_next - sigma) * (55 * d_cur - 59 * d_prev1 + 37 * d_prev2 - 9 * d_prev3) / 24;
-                        });
-                        break;
-                }
-
-                // Manage buffer_model
-                if (buffer_model.size() == max_order - 1) {
-                    // Shift elements to the left
-                    for (int k = 0; k < max_order - 2; k++) {
-                        buffer_model[k] = buffer_model[k + 1];
-                    }
-                    buffer_model.back() = d_cur;  // Replace the last element with d_cur
-                } else {
-                    buffer_model.push_back(d_cur);
-                }
+        // Manage buffer_model
+        if (buffer_model.size() == max_order - 1) {
+            // Shift elements to the left
+            for (int k = 0; k < max_order - 2; k++) {
+                buffer_model[k] = buffer_model[k + 1];
             }
+            buffer_model.back() = d_cur;  // Replace the last element with d_cur
+        } else {
+            buffer_model.push_back(d_cur);
+        }
+    }
 
     return true;
 }
 // iPNDM_v sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
-static bool ipndm_v_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                  ggml_tensor* x, std::vector<float> sigmas) {
+static bool ipndm_v_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas) {
+    size_t steps  = sigmas.size() - 1;
+    int max_order = 4;
+    std::vector<ggml_tensor*> buffer_model;
+    ggml_tensor* x_next = x;
 
-    size_t steps = sigmas.size() - 1;
-            int max_order = 4;
-            std::vector<ggml_tensor*> buffer_model;
-            ggml_tensor* x_next = x;
+    for (int i = 0; i < steps; i++) {
+        float sigma  = sigmas[i];
+        float t_next = sigmas[i + 1];
 
-            for (int i = 0; i < steps; i++) {
-                float sigma  = sigmas[i];
-                float t_next = sigmas[i + 1];
+        // Denoising step
+        ggml_tensor* denoised = model(x, sigma, i + 1);
+        ggml_tensor* d_cur    = ggml_dup_tensor(work_ctx, x);
 
-                // Denoising step
-                ggml_tensor* denoised = model(x, sigma, i + 1);
-                ggml_tensor* d_cur    = ggml_dup_tensor(work_ctx, x);
+        denoiser_tensor_iter(d_cur, x, denoised,
+                             [sigma](float& d_cur, const float& x, const float& denoised) {
+                                 d_cur = (x - denoised) / sigma;
+                             });
 
-                denoiser_tensor_iter(d_cur, x, denoised,
-                    [sigma](float& d_cur, const float& x, const float& denoised) {
-                    d_cur = (x - denoised) / sigma;
-                });
+        int order   = std::min(max_order, i + 1);
+        float h_n   = t_next - sigma;
+        float h_n_1 = (i > 0) ? (sigma - sigmas[i - 1]) : h_n;
 
-                int order   = std::min(max_order, i + 1);
-                float h_n   = t_next - sigma;
-                float h_n_1 = (i > 0) ? (sigma - sigmas[i - 1]) : h_n;
+        switch (order) {
+            case 1:  // First Euler step
+                denoiser_tensor_iter(x, d_cur,
+                                     [h_n](float& x, const float& d_cur) {
+                                         x += d_cur * h_n;
+                                     });
+                break;
 
-                switch (order) {
-                    case 1:  // First Euler step
-                        denoiser_tensor_iter(x, d_cur,
-                            [h_n](float& x, const float& d_cur) {
-                            x += d_cur * h_n;
-                        });
-                        break;
+            case 2:
+                denoiser_tensor_iter(x, d_cur, buffer_model.back(),
+                                     [h_n, h_n_1](float& x, const float& d_cur, const float& d_prev1) {
+                                         x += h_n * ((2 + (h_n / h_n_1)) * d_cur - (h_n / h_n_1) * d_prev1) / 2;
+                                     });
+                break;
 
-                    case 2:
-                        denoiser_tensor_iter(x, d_cur, buffer_model.back(),
-                            [h_n, h_n_1](float& x, const float& d_cur, const float& d_prev1) {
-                            x += h_n * ((2 + (h_n / h_n_1)) * d_cur - (h_n / h_n_1) * d_prev1) / 2;
-                        });
-                        break;
-
-                    case 3: {
-                        float h_n_2          = (i > 1) ? (sigmas[i - 1] - sigmas[i - 2]) : h_n_1;
-                        ggml_tensor* d_prev1 = buffer_model.back();
-                        ggml_tensor* d_prev2 = (buffer_model.size() > 1) ? buffer_model[buffer_model.size() - 2] : d_prev1;
-                        denoiser_tensor_iter(x, d_cur, d_prev1, d_prev2,
-                            [h_n_2](float& x, const float& d_cur, const float& d_prev1, const float& d_prev2) {
-                            x += h_n_2 * ((23 * d_cur - 16 * d_prev1 + 5 * d_prev2) / 12);
-                        });
-                        break;
-                    }
-
-                    case 4: {
-                        float h_n_2          = (i > 1) ? (sigmas[i - 1] - sigmas[i - 2]) : h_n_1;
-                        float h_n_3          = (i > 2) ? (sigmas[i - 2] - sigmas[i - 3]) : h_n_2;
-                        ggml_tensor* d_prev1 = buffer_model.back();
-                        ggml_tensor* d_prev2 = (buffer_model.size() > 1) ? buffer_model[buffer_model.size() - 2] : d_prev1;
-                        ggml_tensor* d_prev3 = (buffer_model.size() > 2) ? buffer_model[buffer_model.size() - 3] : d_prev2;
-                        denoiser_tensor_iter(x, d_cur, d_prev1, d_prev2, d_prev3,
-                            [h_n_3](float& x, const float& d_cur, const float& d_prev1, const float& d_prev2, const float& d_prev3) {
-                            x += h_n_3 * ((55 * d_cur - 59 * d_prev1 + 37 * d_prev2 - 9 * d_prev3) / 24);
-                        });
-                        break;
-                    }
-                }
-
-                // Manage buffer_model
-                if (buffer_model.size() == max_order - 1) {
-                    buffer_model.erase(buffer_model.begin());
-                }
-                buffer_model.push_back(d_cur);
-
-                // Prepare the next d tensor
-                d_cur = ggml_dup_tensor(work_ctx, x_next);
+            case 3: {
+                float h_n_2          = (i > 1) ? (sigmas[i - 1] - sigmas[i - 2]) : h_n_1;
+                ggml_tensor* d_prev1 = buffer_model.back();
+                ggml_tensor* d_prev2 = (buffer_model.size() > 1) ? buffer_model[buffer_model.size() - 2] : d_prev1;
+                denoiser_tensor_iter(x, d_cur, d_prev1, d_prev2,
+                                     [h_n_2](float& x, const float& d_cur, const float& d_prev1, const float& d_prev2) {
+                                         x += h_n_2 * ((23 * d_cur - 16 * d_prev1 + 5 * d_prev2) / 12);
+                                     });
+                break;
             }
+
+            case 4: {
+                float h_n_2          = (i > 1) ? (sigmas[i - 1] - sigmas[i - 2]) : h_n_1;
+                float h_n_3          = (i > 2) ? (sigmas[i - 2] - sigmas[i - 3]) : h_n_2;
+                ggml_tensor* d_prev1 = buffer_model.back();
+                ggml_tensor* d_prev2 = (buffer_model.size() > 1) ? buffer_model[buffer_model.size() - 2] : d_prev1;
+                ggml_tensor* d_prev3 = (buffer_model.size() > 2) ? buffer_model[buffer_model.size() - 3] : d_prev2;
+                denoiser_tensor_iter(x, d_cur, d_prev1, d_prev2, d_prev3,
+                                     [h_n_3](float& x, const float& d_cur, const float& d_prev1, const float& d_prev2, const float& d_prev3) {
+                                         x += h_n_3 * ((55 * d_cur - 59 * d_prev1 + 37 * d_prev2 - 9 * d_prev3) / 24);
+                                     });
+                break;
+            }
+        }
+
+        // Manage buffer_model
+        if (buffer_model.size() == max_order - 1) {
+            buffer_model.erase(buffer_model.begin());
+        }
+        buffer_model.push_back(d_cur);
+
+        // Prepare the next d tensor
+        d_cur = ggml_dup_tensor(work_ctx, x_next);
+    }
     return true;
 }
 
 // Latent Consistency Models
-static bool lcm_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                              ggml_tensor* x, std::vector<float> sigmas,
-                              std::shared_ptr<RNG> rng) {
+static bool lcm_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas, std::shared_ptr<RNG> rng) {
+    size_t steps       = sigmas.size() - 1;
+    ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
 
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+    for (int i = 0; i < steps; i++) {
+        float sigma    = sigmas[i];
+        float sigma_to = sigmas[i + 1];
 
-            for (int i = 0; i < steps; i++) {
-                float sigma    = sigmas[i];
-                float sigma_to = sigmas[i + 1];
+        // denoise
+        ggml_tensor* denoised = model(x, sigma, i + 1);
+        if (denoised == nullptr) {
+            return false;
+        }
 
-                // denoise
-                ggml_tensor* denoised = model(x, sigma, i + 1);
-                if (denoised == nullptr) {
-                    return false;
-                }
+        // x = denoised
+        copy_ggml_tensor(x, denoised);
 
-                // x = denoised
-                copy_ggml_tensor(x, denoised);
-
-                if (sigma_to > 0) {
-                    // x += sigmas[i + 1] * noise_sampler(sigmas[i], sigmas[i + 1])
-                    ggml_ext_im_set_randn_f32(noise, rng);
-                    // noise = load_tensor_from_file(res_ctx, "./rand" + std::to_string(i+1) + ".bin");
-                    denoiser_tensor_iter(x, noise, [sigma_to](float& x, const float& noise) {
-                        x = x + noise * sigma_to;
-                    });
-                }
-            }
+        if (sigma_to > 0) {
+            // x += sigmas[i + 1] * noise_sampler(sigmas[i], sigmas[i + 1])
+            ggml_ext_im_set_randn_f32(noise, rng);
+            // noise = load_tensor_from_file(res_ctx, "./rand" + std::to_string(i+1) + ".bin");
+            denoiser_tensor_iter(x, noise, [sigma_to](float& x, const float& noise) {
+                x = x + noise * sigma_to;
+            });
+        }
+    }
     return true;
 }
 
 // Denoising Diffusion Implicit Models
 // with the "trailing" timestep spacing
-static bool ddim_trailing_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                        ggml_tensor* x, std::vector<float> sigmas,
-                                        std::shared_ptr<RNG> rng, float eta) {
+static bool ddim_trailing_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas, std::shared_ptr<RNG> rng, float eta) {
     size_t steps = sigmas.size() - 1;
-            // See J. Song et al., "Denoising Diffusion Implicit
-            // Models", arXiv:2010.02502 [cs.LG]
-            //
-            // DDIM itself needs alphas_cumprod (DDPM, J. Ho et al.,
-            // arXiv:2006.11239 [cs.LG] with k-diffusion's start and
-            // end beta) (which unfortunately k-diffusion's data
-            // structure hides from the denoiser), and the sigmas are
-            // also needed to invert the behavior of CompVisDenoiser
-            // (k-diffusion's LMSDiscreteSchedulerr)
-            float beta_start = 0.00085f;
-            float beta_end   = 0.0120f;
-            std::vector<double> alphas_cumprod;
-            std::vector<double> compvis_sigmas;
+    // See J. Song et al., "Denoising Diffusion Implicit
+    // Models", arXiv:2010.02502 [cs.LG]
+    //
+    // DDIM itself needs alphas_cumprod (DDPM, J. Ho et al.,
+    // arXiv:2006.11239 [cs.LG] with k-diffusion's start and
+    // end beta) (which unfortunately k-diffusion's data
+    // structure hides from the denoiser), and the sigmas are
+    // also needed to invert the behavior of CompVisDenoiser
+    // (k-diffusion's LMSDiscreteSchedulerr)
+    float beta_start = 0.00085f;
+    float beta_end   = 0.0120f;
+    std::vector<double> alphas_cumprod;
+    std::vector<double> compvis_sigmas;
 
-            alphas_cumprod.reserve(TIMESTEPS);
-            compvis_sigmas.reserve(TIMESTEPS);
-            for (int i = 0; i < TIMESTEPS; i++) {
-                alphas_cumprod[i] =
-                    (i == 0 ? 1.0f : alphas_cumprod[i - 1]) *
-                    (1.0f -
-                     std::pow(sqrtf(beta_start) +
-                                  (sqrtf(beta_end) - sqrtf(beta_start)) *
-                                      ((float)i / (TIMESTEPS - 1)),
-                              2));
-                compvis_sigmas[i] =
-                    std::sqrt((1 - alphas_cumprod[i]) /
-                              alphas_cumprod[i]);
-            }
+    alphas_cumprod.reserve(TIMESTEPS);
+    compvis_sigmas.reserve(TIMESTEPS);
+    for (int i = 0; i < TIMESTEPS; i++) {
+        alphas_cumprod[i] =
+            (i == 0 ? 1.0f : alphas_cumprod[i - 1]) *
+            (1.0f -
+             std::pow(sqrtf(beta_start) +
+                          (sqrtf(beta_end) - sqrtf(beta_start)) *
+                              ((float)i / (TIMESTEPS - 1)),
+                      2));
+        compvis_sigmas[i] =
+            std::sqrt((1 - alphas_cumprod[i]) /
+                      alphas_cumprod[i]);
+    }
 
-            ggml_tensor* pred_original_sample =
-                ggml_dup_tensor(work_ctx, x);
-            ggml_tensor* variance_noise =
-                ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* pred_original_sample =
+        ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* variance_noise =
+        ggml_dup_tensor(work_ctx, x);
 
-            for (int i = 0; i < steps; i++) {
-                // The "trailing" DDIM timestep, see S. Lin et al.,
-                // "Common Diffusion Noise Schedulers and Sample Steps
-                // are Flawed", arXiv:2305.08891 [cs], p. 4, Table
-                // 2. Most variables below follow Diffusers naming
-                //
-                // Diffuser naming vs. Song et al. (2010), p. 5, (12)
-                // and p. 16, (16) (<variable name> -> <name in
-                // paper>):
-                //
-                // - pred_noise_t -> epsilon_theta^(t)(x_t)
-                // - pred_original_sample -> f_theta^(t)(x_t) or x_0
-                // - std_dev_t -> sigma_t (not the LMS sigma)
-                // - eta -> eta (set to 0 at the moment)
-                // - pred_sample_direction -> "direction pointing to
-                //   x_t"
-                // - pred_prev_sample -> "x_t-1"
-                int timestep = static_cast<int>(roundf(TIMESTEPS - i * ((float)TIMESTEPS / steps))) - 1;
-                // 1. get previous step value (=t-1)
-                int prev_timestep = timestep - TIMESTEPS / static_cast<int>(steps);
-                // The sigma here is chosen to cause the
-                // CompVisDenoiser to produce t = timestep
-                float sigma = static_cast<float>(compvis_sigmas[timestep]);
-                if (i == 0) {
-                    // The function add_noise intializes x to
-                    // Diffusers' latents * sigma (as in Diffusers'
-                    // pipeline) or sample * sigma (Diffusers'
-                    // scheduler), where this sigma = init_noise_sigma
-                    // in Diffusers. For DDPM and DDIM however,
-                    // init_noise_sigma = 1. But the k-diffusion
-                    // model() also evaluates F_theta(c_in(sigma) x;
-                    // ...) instead of the bare U-net F_theta, with
-                    // c_in = 1 / sqrt(sigma^2 + 1), as defined in
-                    // T. Karras et al., "Elucidating the Design Space
-                    // of Diffusion-Based Generative Models",
-                    // arXiv:2206.00364 [cs.CV], p. 3, Table 1. Hence
-                    // the first call has to be prescaled as x <- x /
-                    // (c_in * sigma) with the k-diffusion pipeline
-                    // and CompVisDenoiser.
-                    denoiser_tensor_iter(x, [sigma](float& x) {
-                        x *= std::sqrt(sigma * sigma + 1) / sigma;
-                    });
-                } else {
-                    // For the subsequent steps after the first one,
-                    // at this point x = latents or x = sample, and
-                    // needs to be prescaled with x <- sample / c_in
-                    // to compensate for model() applying the scale
-                    // c_in before the U-net F_theta
-                    denoiser_tensor_iter(x, [sigma](float& x) {
-                        x *= std::sqrt(sigma * sigma + 1);
-                    });
-                }
-                // Note (also noise_pred in Diffuser's pipeline)
-                // model_output = model() is the D(x, sigma) as
-                // defined in Karras et al. (2022), p. 3, Table 1 and
-                // p. 8 (7), compare also p. 38 (226) therein.
-                ggml_tensor* model_output =
-                    model(x, sigma, i + 1);
-                // Here model_output is still the k-diffusion denoiser
-                // output, not the U-net output F_theta(c_in(sigma) x;
-                // ...) in Karras et al. (2022), whereas Diffusers'
-                // model_output is F_theta(...). Recover the actual
-                // model_output, which is also referred to as the
-                // "Karras ODE derivative" d or d_cur in several
-                // samplers above.
-                denoiser_tensor_iter(model_output, x, [sigma](float& model_output, const float& x) {
-                    model_output = (x - model_output) * (1 / sigma);
-                });
-                // 2. compute alphas, betas
-                float alpha_prod_t = static_cast<float>(alphas_cumprod[timestep]);
-                // Note final_alpha_cumprod = alphas_cumprod[0] due to
-                // trailing timestep spacing
-                float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
-                float beta_prod_t       = 1 - alpha_prod_t;
-                // 3. compute predicted original sample from predicted
-                // noise also called "predicted x_0" of formula (12)
-                // from https://arxiv.org/pdf/2010.02502.pdf
-                denoiser_tensor_iter(pred_original_sample, model_output, x,
-                    [sigma, beta_prod_t, alpha_prod_t](float& pred_original_sample, const float& model_output, const float& x) {
-                    // Note the substitution of latents or sample = x
-                    // * c_in = x / sqrt(sigma^2 + 1)
-                    pred_original_sample =
-                        (x / std::sqrt(sigma * sigma + 1) -
-                         std::sqrt(beta_prod_t) *
-                             model_output) *
-                        (1 / std::sqrt(alpha_prod_t));
-                });
-                // Assuming the "epsilon" prediction type, where below
-                // pred_epsilon = model_output is inserted, and is not
-                // defined/copied explicitly.
-                //
-                // 5. compute variance: "sigma_t(eta)" -> see formula
-                // (16)
-                //
-                // sigma_t = sqrt((1 - alpha_t-1)/(1 - alpha_t)) *
-                // sqrt(1 - alpha_t/alpha_t-1)
-                float beta_prod_t_prev = 1 - alpha_prod_t_prev;
-                float variance         = (beta_prod_t_prev / beta_prod_t) *
-                                 (1 - alpha_prod_t / alpha_prod_t_prev);
-                float std_dev_t = eta * std::sqrt(variance);
-                // 6. compute "direction pointing to x_t" of formula
-                // (12) from https://arxiv.org/pdf/2010.02502.pdf
-                // 7. compute x_t without "random noise" of formula
-                // (12) from https://arxiv.org/pdf/2010.02502.pdf
-                denoiser_tensor_iter(x, model_output, pred_original_sample,
-                    [alpha_prod_t_prev, std_dev_t](float& x, const float& model_output, const float& pred_original_sample) {
-                    // Two step inner loop without an explicit tensor
-                    float pred_sample_direction =
-                        ::sqrtf(1 - alpha_prod_t_prev -
-                                ::powf(std_dev_t, 2)) *
-                        model_output;
-                    x = std::sqrt(alpha_prod_t_prev) *
-                                   pred_original_sample +
-                               pred_sample_direction;
-                });
-                if (eta > 0) {
-                    ggml_ext_im_set_randn_f32(variance_noise, rng);
-                    denoiser_tensor_iter(x, variance_noise, [std_dev_t](float& x, const float& variance_noise) {
-                        x = x + variance_noise * std_dev_t;
-                    });
-                }
-                // See the note above: x = latents or sample here, and
-                // is not scaled by the c_in. For the final output
-                // this is correct, but for subsequent iterations, x
-                // needs to be prescaled again, since k-diffusion's
-                // model() differes from the bare U-net F_theta by the
-                // factor c_in.
-            }
+    for (int i = 0; i < steps; i++) {
+        // The "trailing" DDIM timestep, see S. Lin et al.,
+        // "Common Diffusion Noise Schedulers and Sample Steps
+        // are Flawed", arXiv:2305.08891 [cs], p. 4, Table
+        // 2. Most variables below follow Diffusers naming
+        //
+        // Diffuser naming vs. Song et al. (2010), p. 5, (12)
+        // and p. 16, (16) (<variable name> -> <name in
+        // paper>):
+        //
+        // - pred_noise_t -> epsilon_theta^(t)(x_t)
+        // - pred_original_sample -> f_theta^(t)(x_t) or x_0
+        // - std_dev_t -> sigma_t (not the LMS sigma)
+        // - eta -> eta (set to 0 at the moment)
+        // - pred_sample_direction -> "direction pointing to
+        //   x_t"
+        // - pred_prev_sample -> "x_t-1"
+        int timestep = static_cast<int>(roundf(TIMESTEPS - i * ((float)TIMESTEPS / steps))) - 1;
+        // 1. get previous step value (=t-1)
+        int prev_timestep = timestep - TIMESTEPS / static_cast<int>(steps);
+        // The sigma here is chosen to cause the
+        // CompVisDenoiser to produce t = timestep
+        float sigma = static_cast<float>(compvis_sigmas[timestep]);
+        if (i == 0) {
+            // The function add_noise intializes x to
+            // Diffusers' latents * sigma (as in Diffusers'
+            // pipeline) or sample * sigma (Diffusers'
+            // scheduler), where this sigma = init_noise_sigma
+            // in Diffusers. For DDPM and DDIM however,
+            // init_noise_sigma = 1. But the k-diffusion
+            // model() also evaluates F_theta(c_in(sigma) x;
+            // ...) instead of the bare U-net F_theta, with
+            // c_in = 1 / sqrt(sigma^2 + 1), as defined in
+            // T. Karras et al., "Elucidating the Design Space
+            // of Diffusion-Based Generative Models",
+            // arXiv:2206.00364 [cs.CV], p. 3, Table 1. Hence
+            // the first call has to be prescaled as x <- x /
+            // (c_in * sigma) with the k-diffusion pipeline
+            // and CompVisDenoiser.
+            denoiser_tensor_iter(x, [sigma](float& x) {
+                x *= std::sqrt(sigma * sigma + 1) / sigma;
+            });
+        } else {
+            // For the subsequent steps after the first one,
+            // at this point x = latents or x = sample, and
+            // needs to be prescaled with x <- sample / c_in
+            // to compensate for model() applying the scale
+            // c_in before the U-net F_theta
+            denoiser_tensor_iter(x, [sigma](float& x) {
+                x *= std::sqrt(sigma * sigma + 1);
+            });
+        }
+        // Note (also noise_pred in Diffuser's pipeline)
+        // model_output = model() is the D(x, sigma) as
+        // defined in Karras et al. (2022), p. 3, Table 1 and
+        // p. 8 (7), compare also p. 38 (226) therein.
+        ggml_tensor* model_output =
+            model(x, sigma, i + 1);
+        // Here model_output is still the k-diffusion denoiser
+        // output, not the U-net output F_theta(c_in(sigma) x;
+        // ...) in Karras et al. (2022), whereas Diffusers'
+        // model_output is F_theta(...). Recover the actual
+        // model_output, which is also referred to as the
+        // "Karras ODE derivative" d or d_cur in several
+        // samplers above.
+        denoiser_tensor_iter(model_output, x, [sigma](float& model_output, const float& x) {
+            model_output = (x - model_output) * (1 / sigma);
+        });
+        // 2. compute alphas, betas
+        float alpha_prod_t = static_cast<float>(alphas_cumprod[timestep]);
+        // Note final_alpha_cumprod = alphas_cumprod[0] due to
+        // trailing timestep spacing
+        float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
+        float beta_prod_t       = 1 - alpha_prod_t;
+        // 3. compute predicted original sample from predicted
+        // noise also called "predicted x_0" of formula (12)
+        // from https://arxiv.org/pdf/2010.02502.pdf
+        denoiser_tensor_iter(pred_original_sample, model_output, x,
+                             [sigma, beta_prod_t, alpha_prod_t](float& pred_original_sample, const float& model_output, const float& x) {
+                                 // Note the substitution of latents or sample = x
+                                 // * c_in = x / sqrt(sigma^2 + 1)
+                                 pred_original_sample =
+                                     (x / std::sqrt(sigma * sigma + 1) -
+                                      std::sqrt(beta_prod_t) *
+                                          model_output) *
+                                     (1 / std::sqrt(alpha_prod_t));
+                             });
+        // Assuming the "epsilon" prediction type, where below
+        // pred_epsilon = model_output is inserted, and is not
+        // defined/copied explicitly.
+        //
+        // 5. compute variance: "sigma_t(eta)" -> see formula
+        // (16)
+        //
+        // sigma_t = sqrt((1 - alpha_t-1)/(1 - alpha_t)) *
+        // sqrt(1 - alpha_t/alpha_t-1)
+        float beta_prod_t_prev = 1 - alpha_prod_t_prev;
+        float variance         = (beta_prod_t_prev / beta_prod_t) *
+                         (1 - alpha_prod_t / alpha_prod_t_prev);
+        float std_dev_t = eta * std::sqrt(variance);
+        // 6. compute "direction pointing to x_t" of formula
+        // (12) from https://arxiv.org/pdf/2010.02502.pdf
+        // 7. compute x_t without "random noise" of formula
+        // (12) from https://arxiv.org/pdf/2010.02502.pdf
+        denoiser_tensor_iter(x, model_output, pred_original_sample,
+                             [alpha_prod_t_prev, std_dev_t](float& x, const float& model_output, const float& pred_original_sample) {
+                                 // Two step inner loop without an explicit tensor
+                                 float pred_sample_direction =
+                                     ::sqrtf(1 - alpha_prod_t_prev -
+                                             ::powf(std_dev_t, 2)) *
+                                     model_output;
+                                 x = std::sqrt(alpha_prod_t_prev) *
+                                         pred_original_sample +
+                                     pred_sample_direction;
+                             });
+        if (eta > 0) {
+            ggml_ext_im_set_randn_f32(variance_noise, rng);
+            denoiser_tensor_iter(x, variance_noise, [std_dev_t](float& x, const float& variance_noise) {
+                x = x + variance_noise * std_dev_t;
+            });
+        }
+        // See the note above: x = latents or sample here, and
+        // is not scaled by the c_in. For the final output
+        // this is correct, but for subsequent iterations, x
+        // needs to be prescaled again, since k-diffusion's
+        // model() differes from the bare U-net F_theta by the
+        // factor c_in.
+    }
     return true;
 }
 
 // Strategic Stochastic Sampling (Algorithm 4) in Trajectory Consistency Distillation
-static bool tcd_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                              ggml_tensor* x, std::vector<float> sigmas,
-                              std::shared_ptr<RNG> rng, float eta) {
-
+static bool tcd_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas, std::shared_ptr<RNG> rng, float eta) {
     size_t steps = sigmas.size() - 1;
 
-            // See J. Zheng et al., "Trajectory Consistency
-            // Distillation: Improved Latent Consistency Distillation
-            // by Semi-Linear Consistency Function with Trajectory
-            // Mapping", arXiv:2402.19159 [cs.CV]
-            float beta_start = 0.00085f;
-            float beta_end   = 0.0120f;
-            std::vector<double> alphas_cumprod;
-            std::vector<double> compvis_sigmas;
+    // See J. Zheng et al., "Trajectory Consistency
+    // Distillation: Improved Latent Consistency Distillation
+    // by Semi-Linear Consistency Function with Trajectory
+    // Mapping", arXiv:2402.19159 [cs.CV]
+    float beta_start = 0.00085f;
+    float beta_end   = 0.0120f;
+    std::vector<double> alphas_cumprod;
+    std::vector<double> compvis_sigmas;
 
-            alphas_cumprod.reserve(TIMESTEPS);
-            compvis_sigmas.reserve(TIMESTEPS);
-            for (int i = 0; i < TIMESTEPS; i++) {
-                alphas_cumprod[i] =
-                    (i == 0 ? 1.0f : alphas_cumprod[i - 1]) *
-                    (1.0f -
-                     std::pow(sqrtf(beta_start) +
-                                  (sqrtf(beta_end) - sqrtf(beta_start)) *
-                                      ((float)i / (TIMESTEPS - 1)),
-                              2));
-                compvis_sigmas[i] =
-                    std::sqrt((1 - alphas_cumprod[i]) /
-                              alphas_cumprod[i]);
-            }
-            int original_steps = 50;
+    alphas_cumprod.reserve(TIMESTEPS);
+    compvis_sigmas.reserve(TIMESTEPS);
+    for (int i = 0; i < TIMESTEPS; i++) {
+        alphas_cumprod[i] =
+            (i == 0 ? 1.0f : alphas_cumprod[i - 1]) *
+            (1.0f -
+             std::pow(sqrtf(beta_start) +
+                          (sqrtf(beta_end) - sqrtf(beta_start)) *
+                              ((float)i / (TIMESTEPS - 1)),
+                      2));
+        compvis_sigmas[i] =
+            std::sqrt((1 - alphas_cumprod[i]) /
+                      alphas_cumprod[i]);
+    }
+    int original_steps = 50;
 
-            ggml_tensor* pred_original_sample =
-                ggml_dup_tensor(work_ctx, x);
-            ggml_tensor* noise =
-                ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* pred_original_sample =
+        ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* noise =
+        ggml_dup_tensor(work_ctx, x);
 
-            for (int i = 0; i < steps; i++) {
-                // Analytic form for TCD timesteps
-                int timestep = TIMESTEPS - 1 -
-                               (TIMESTEPS / original_steps) *
-                                   (int)floor(i * ((float)original_steps / steps));
-                // 1. get previous step value
-                int prev_timestep = i >= steps - 1 ? 0 : TIMESTEPS - 1 - (TIMESTEPS / original_steps) * (int)floor((i + 1) * ((float)original_steps / steps));
-                // Here timestep_s is tau_n' in Algorithm 4. The _s
-                // notation appears to be that from C. Lu,
-                // "DPM-Solver: A Fast ODE Solver for Diffusion
-                // Probabilistic Model Sampling in Around 10 Steps",
-                // arXiv:2206.00927 [cs.LG], but this notation is not
-                // continued in Algorithm 4, where _n' is used.
-                int timestep_s =
-                    (int)floor((1 - eta) * prev_timestep);
-                // Begin k-diffusion specific workaround for
-                // evaluating F_theta(x; ...) from D(x, sigma), same
-                // as in DDIM (and see there for detailed comments)
-                float sigma = static_cast<float>(compvis_sigmas[timestep]);
-                if (i == 0) {
-                    denoiser_tensor_iter(x, [sigma](float& x) {
-                        x *= std::sqrt(sigma * sigma + 1) / sigma;
-                    });
-                } else {
-                    denoiser_tensor_iter(x, [sigma](float& x) {
-                        x *= std::sqrt(sigma * sigma + 1);
-                    });
-                }
-                ggml_tensor* model_output = model(x, sigma, i + 1);
-                denoiser_tensor_iter(model_output, x, [sigma](float& model_output, const float& x) {
-                    model_output = (x - model_output) * (1 / sigma);
-                });
-                // 2. compute alphas, betas
-                //
-                // When comparing TCD with DDPM/DDIM note that Zheng
-                // et al. (2024) follows the DPM-Solver notation for
-                // alpha. One can find the following comment in the
-                // original DPM-Solver code
-                // (https://github.com/LuChengTHU/dpm-solver/):
-                // "**Important**: Please pay special attention for
-                // the args for `alphas_cumprod`: The `alphas_cumprod`
-                // is the \hat{alpha_n} arrays in the notations of
-                // DDPM. [...] Therefore, the notation \hat{alpha_n}
-                // is different from the notation alpha_t in
-                // DPM-Solver. In fact, we have alpha_{t_n} =
-                // \sqrt{\hat{alpha_n}}, [...]"
-                float alpha_prod_t = static_cast<float>(alphas_cumprod[timestep]);
-                float beta_prod_t  = 1 - alpha_prod_t;
-                // Note final_alpha_cumprod = alphas_cumprod[0] since
-                // TCD is always "trailing"
-                float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
-                // The subscript _s are the only portion in this
-                // section (2) unique to TCD
-                float alpha_prod_s = static_cast<float>(alphas_cumprod[timestep_s]);
-                float beta_prod_s  = 1 - alpha_prod_s;
-                // 3. Compute the predicted noised sample x_s based on
-                // the model parameterization
-                //
-                // This section is also exactly the same as DDIM
-                denoiser_tensor_iter(pred_original_sample, model_output, x,
-                    [sigma,beta_prod_t,alpha_prod_t](float& pred_original_sample, const float& model_output, const float& x) {
-                    // Note the substitution of latents or sample = x
-                    // * c_in = x / sqrt(sigma^2 + 1)
-                    pred_original_sample =
-                        (x / std::sqrt(sigma * sigma + 1) -
-                         std::sqrt(beta_prod_t) *
-                             model_output) *
-                        (1 / std::sqrt(alpha_prod_t));
-                });
-                // This consistency function step can be difficult to
-                // decipher from Algorithm 4, as it is simply stated
-                // using a consistency function. This step is the
-                // modified DDIM, i.e. p. 8 (32) in Zheng et
-                // al. (2024), with eta set to 0 (see the paragraph
-                // immediately thereafter that states this somewhat
-                // obliquely).
-                denoiser_tensor_iter(x, model_output, pred_original_sample,
-                    [alpha_prod_s, beta_prod_s](float& x, const float& model_output, const float& pred_original_sample) {
-                    // Substituting x = pred_noised_sample and
-                    // pred_epsilon = model_output
-                    x = std::sqrt(alpha_prod_s) * pred_original_sample +
-                        std::sqrt(beta_prod_s) * model_output;
-                });
-                // 4. Sample and inject noise z ~ N(0, I) for
-                // MultiStep Inference Noise is not used on the final
-                // timestep of the timestep schedule. This also means
-                // that noise is not used for one-step sampling. Eta
-                // (referred to as "gamma" in the paper) was
-                // introduced to control the stochasticity in every
-                // step. When eta = 0, it represents deterministic
-                // sampling, whereas eta = 1 indicates full stochastic
-                // sampling.
-                if (eta > 0 && i != steps - 1) {
-                    // In this case, x is still pred_noised_sample,
-                    // continue in-place
-                    ggml_ext_im_set_randn_f32(noise, rng);
-                    denoiser_tensor_iter(x, noise, [alpha_prod_t_prev, alpha_prod_s](float& x, float& noise) {
-                        // Corresponding to (35) in Zheng et
-                        // al. (2024), substituting x =
-                        // pred_noised_sample
-                        x = std::sqrt(alpha_prod_t_prev / alpha_prod_s) * x +
-                            std::sqrt(1 - alpha_prod_t_prev / alpha_prod_s) * noise;
-                   });
-                }
-            }
+    for (int i = 0; i < steps; i++) {
+        // Analytic form for TCD timesteps
+        int timestep = TIMESTEPS - 1 -
+                       (TIMESTEPS / original_steps) *
+                           (int)floor(i * ((float)original_steps / steps));
+        // 1. get previous step value
+        int prev_timestep = i >= steps - 1 ? 0 : TIMESTEPS - 1 - (TIMESTEPS / original_steps) * (int)floor((i + 1) * ((float)original_steps / steps));
+        // Here timestep_s is tau_n' in Algorithm 4. The _s
+        // notation appears to be that from C. Lu,
+        // "DPM-Solver: A Fast ODE Solver for Diffusion
+        // Probabilistic Model Sampling in Around 10 Steps",
+        // arXiv:2206.00927 [cs.LG], but this notation is not
+        // continued in Algorithm 4, where _n' is used.
+        int timestep_s =
+            (int)floor((1 - eta) * prev_timestep);
+        // Begin k-diffusion specific workaround for
+        // evaluating F_theta(x; ...) from D(x, sigma), same
+        // as in DDIM (and see there for detailed comments)
+        float sigma = static_cast<float>(compvis_sigmas[timestep]);
+        if (i == 0) {
+            denoiser_tensor_iter(x, [sigma](float& x) {
+                x *= std::sqrt(sigma * sigma + 1) / sigma;
+            });
+        } else {
+            denoiser_tensor_iter(x, [sigma](float& x) {
+                x *= std::sqrt(sigma * sigma + 1);
+            });
+        }
+        ggml_tensor* model_output = model(x, sigma, i + 1);
+        denoiser_tensor_iter(model_output, x, [sigma](float& model_output, const float& x) {
+            model_output = (x - model_output) * (1 / sigma);
+        });
+        // 2. compute alphas, betas
+        //
+        // When comparing TCD with DDPM/DDIM note that Zheng
+        // et al. (2024) follows the DPM-Solver notation for
+        // alpha. One can find the following comment in the
+        // original DPM-Solver code
+        // (https://github.com/LuChengTHU/dpm-solver/):
+        // "**Important**: Please pay special attention for
+        // the args for `alphas_cumprod`: The `alphas_cumprod`
+        // is the \hat{alpha_n} arrays in the notations of
+        // DDPM. [...] Therefore, the notation \hat{alpha_n}
+        // is different from the notation alpha_t in
+        // DPM-Solver. In fact, we have alpha_{t_n} =
+        // \sqrt{\hat{alpha_n}}, [...]"
+        float alpha_prod_t = static_cast<float>(alphas_cumprod[timestep]);
+        float beta_prod_t  = 1 - alpha_prod_t;
+        // Note final_alpha_cumprod = alphas_cumprod[0] since
+        // TCD is always "trailing"
+        float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
+        // The subscript _s are the only portion in this
+        // section (2) unique to TCD
+        float alpha_prod_s = static_cast<float>(alphas_cumprod[timestep_s]);
+        float beta_prod_s  = 1 - alpha_prod_s;
+        // 3. Compute the predicted noised sample x_s based on
+        // the model parameterization
+        //
+        // This section is also exactly the same as DDIM
+        denoiser_tensor_iter(pred_original_sample, model_output, x,
+                             [sigma, beta_prod_t, alpha_prod_t](float& pred_original_sample, const float& model_output, const float& x) {
+                                 // Note the substitution of latents or sample = x
+                                 // * c_in = x / sqrt(sigma^2 + 1)
+                                 pred_original_sample =
+                                     (x / std::sqrt(sigma * sigma + 1) -
+                                      std::sqrt(beta_prod_t) *
+                                          model_output) *
+                                     (1 / std::sqrt(alpha_prod_t));
+                             });
+        // This consistency function step can be difficult to
+        // decipher from Algorithm 4, as it is simply stated
+        // using a consistency function. This step is the
+        // modified DDIM, i.e. p. 8 (32) in Zheng et
+        // al. (2024), with eta set to 0 (see the paragraph
+        // immediately thereafter that states this somewhat
+        // obliquely).
+        denoiser_tensor_iter(x, model_output, pred_original_sample,
+                             [alpha_prod_s, beta_prod_s](float& x, const float& model_output, const float& pred_original_sample) {
+                                 // Substituting x = pred_noised_sample and
+                                 // pred_epsilon = model_output
+                                 x = std::sqrt(alpha_prod_s) * pred_original_sample +
+                                     std::sqrt(beta_prod_s) * model_output;
+                             });
+        // 4. Sample and inject noise z ~ N(0, I) for
+        // MultiStep Inference Noise is not used on the final
+        // timestep of the timestep schedule. This also means
+        // that noise is not used for one-step sampling. Eta
+        // (referred to as "gamma" in the paper) was
+        // introduced to control the stochasticity in every
+        // step. When eta = 0, it represents deterministic
+        // sampling, whereas eta = 1 indicates full stochastic
+        // sampling.
+        if (eta > 0 && i != steps - 1) {
+            // In this case, x is still pred_noised_sample,
+            // continue in-place
+            ggml_ext_im_set_randn_f32(noise, rng);
+            denoiser_tensor_iter(x, noise, [alpha_prod_t_prev, alpha_prod_s](float& x, float& noise) {
+                // Corresponding to (35) in Zheng et
+                // al. (2024), substituting x =
+                // pred_noised_sample
+                x = std::sqrt(alpha_prod_t_prev / alpha_prod_s) * x +
+                    std::sqrt(1 - alpha_prod_t_prev / alpha_prod_s) * noise;
+            });
+        }
+    }
     return true;
 }
 
 // Res Multistep sampler
-static bool res_multistep_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                        ggml_tensor* x, std::vector<float> sigmas,
-                                        std::shared_ptr<RNG> rng, float eta) {
+static bool res_multistep_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas, std::shared_ptr<RNG> rng, float eta) {
+    size_t steps              = sigmas.size() - 1;
+    ggml_tensor* noise        = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* noise        = ggml_dup_tensor(work_ctx, x);
-            ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
+    bool have_old_sigma  = false;
+    float old_sigma_down = 0.0f;
 
-            bool have_old_sigma  = false;
-            float old_sigma_down = 0.0f;
+    auto t_fn     = [](float sigma) -> float { return -logf(sigma); };
+    auto sigma_fn = [](float t) -> float { return expf(-t); };
+    auto phi1_fn  = [](float t) -> float {
+        if (fabsf(t) < 1e-6f) {
+            return 1.0f + t * 0.5f + (t * t) / 6.0f;
+        }
+        return (expf(t) - 1.0f) / t;
+    };
+    auto phi2_fn = [&](float t) -> float {
+        if (fabsf(t) < 1e-6f) {
+            return 0.5f + t / 6.0f + (t * t) / 24.0f;
+        }
+        float phi1_val = phi1_fn(t);
+        return (phi1_val - 1.0f) / t;
+    };
 
-            auto t_fn     = [](float sigma) -> float { return -logf(sigma); };
-            auto sigma_fn = [](float t) -> float { return expf(-t); };
-            auto phi1_fn  = [](float t) -> float {
-                if (fabsf(t) < 1e-6f) {
-                    return 1.0f + t * 0.5f + (t * t) / 6.0f;
-                }
-                return (expf(t) - 1.0f) / t;
-            };
-            auto phi2_fn = [&](float t) -> float {
-                if (fabsf(t) < 1e-6f) {
-                    return 0.5f + t / 6.0f + (t * t) / 24.0f;
-                }
-                float phi1_val = phi1_fn(t);
-                return (phi1_val - 1.0f) / t;
-            };
+    for (int i = 0; i < steps; i++) {
+        ggml_tensor* denoised = model(x, sigmas[i], i + 1);
+        if (denoised == nullptr) {
+            return false;
+        }
 
-            for (int i = 0; i < steps; i++) {
-                ggml_tensor* denoised = model(x, sigmas[i], i + 1);
-                if (denoised == nullptr) {
-                    return false;
-                }
+        float sigma_from = sigmas[i];
+        float sigma_to   = sigmas[i + 1];
+        float sigma_up, sigma_down;
+        generate_ancestral_step(sigma_up, sigma_down, sigma_from, sigma_to, eta);
 
-                float sigma_from = sigmas[i];
-                float sigma_to   = sigmas[i + 1];
-                float sigma_up, sigma_down;
-                generate_ancestral_step(sigma_up, sigma_down, sigma_from, sigma_to, eta);
+        if (sigma_down == 0.0f || !have_old_sigma) {
+            float dt = sigma_down - sigma_from;
+            denoiser_tensor_iter(x, denoised, [sigma_from, dt](float& x, const float& denoised) {
+                float d = (x - denoised) / sigma_from;
+                x       = x + d * dt;
+            });
+        } else {
+            float t      = t_fn(sigma_from);
+            float t_old  = t_fn(old_sigma_down);
+            float t_next = t_fn(sigma_down);
+            float t_prev = t_fn(sigmas[i - 1]);
+            float h      = t_next - t;
+            float c2     = (t_prev - t_old) / h;
 
-                if (sigma_down == 0.0f || !have_old_sigma) {
-                    float dt = sigma_down - sigma_from;
-                    denoiser_tensor_iter(x, denoised, [sigma_from, dt](float& x, const float& denoised) {
-                        float d  = (x - denoised) / sigma_from;
-                        x = x + d * dt;
-                    });
-                } else {
-                    float t      = t_fn(sigma_from);
-                    float t_old  = t_fn(old_sigma_down);
-                    float t_next = t_fn(sigma_down);
-                    float t_prev = t_fn(sigmas[i - 1]);
-                    float h      = t_next - t;
-                    float c2     = (t_prev - t_old) / h;
+            float phi1_val = phi1_fn(-h);
+            float phi2_val = phi2_fn(-h);
+            float b1       = phi1_val - phi2_val / c2;
+            float b2       = phi2_val / c2;
 
-                    float phi1_val = phi1_fn(-h);
-                    float phi2_val = phi2_fn(-h);
-                    float b1       = phi1_val - phi2_val / c2;
-                    float b2       = phi2_val / c2;
-
-                    if (!std::isfinite(b1)) {
-                        b1 = 0.0f;
-                    }
-                    if (!std::isfinite(b2)) {
-                        b2 = 0.0f;
-                    }
-
-                    float sigma_h = sigma_fn(h);
-                    denoiser_tensor_iter(x, denoised, old_denoised,
-                        [sigma_h, h, b1, b2](float& x, const float& denoised, const float& old_denoised) {
-                        x = sigma_h * x + h * (b1 * denoised + b2 * old_denoised);
-                    });
-                }
-
-                if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
-                    ggml_ext_im_set_randn_f32(noise, rng);
-                    denoiser_tensor_iter(x, noise, [sigma_up](float& x, const float& noise) {
-                        x = x + noise * sigma_up;
-                    });
-                }
-
-                copy_ggml_tensor(old_denoised, denoised);
-                old_sigma_down = sigma_down;
-                have_old_sigma = true;
+            if (!std::isfinite(b1)) {
+                b1 = 0.0f;
             }
+            if (!std::isfinite(b2)) {
+                b2 = 0.0f;
+            }
+
+            float sigma_h = sigma_fn(h);
+            denoiser_tensor_iter(x, denoised, old_denoised,
+                                 [sigma_h, h, b1, b2](float& x, const float& denoised, const float& old_denoised) {
+                                     x = sigma_h * x + h * (b1 * denoised + b2 * old_denoised);
+                                 });
+        }
+
+        if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
+            ggml_ext_im_set_randn_f32(noise, rng);
+            denoiser_tensor_iter(x, noise, [sigma_up](float& x, const float& noise) {
+                x = x + noise * sigma_up;
+            });
+        }
+
+        copy_ggml_tensor(old_denoised, denoised);
+        old_sigma_down = sigma_down;
+        have_old_sigma = true;
+    }
     return true;
 }
 
 // Res 2s sampler
-static bool res_2s_sample_method(denoise_cb_t model, ggml_context* work_ctx,
-                                 ggml_tensor* x, std::vector<float> sigmas,
-                                 std::shared_ptr<RNG> rng, float eta) {
+static bool res_2s_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas, std::shared_ptr<RNG> rng, float eta) {
+    size_t steps       = sigmas.size() - 1;
+    ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* x0    = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
-    size_t steps = sigmas.size() - 1;
-            ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
-            ggml_tensor* x0    = ggml_dup_tensor(work_ctx, x);
-            ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
+    const float c2 = 0.5f;
+    auto t_fn      = [](float sigma) -> float { return -logf(sigma); };
+    auto phi1_fn   = [](float t) -> float {
+        if (fabsf(t) < 1e-6f) {
+            return 1.0f + t * 0.5f + (t * t) / 6.0f;
+        }
+        return (expf(t) - 1.0f) / t;
+    };
+    auto phi2_fn = [&](float t) -> float {
+        if (fabsf(t) < 1e-6f) {
+            return 0.5f + t / 6.0f + (t * t) / 24.0f;
+        }
+        float phi1_val = phi1_fn(t);
+        return (phi1_val - 1.0f) / t;
+    };
 
-            const float c2 = 0.5f;
-            auto t_fn      = [](float sigma) -> float { return -logf(sigma); };
-            auto phi1_fn   = [](float t) -> float {
-                if (fabsf(t) < 1e-6f) {
-                    return 1.0f + t * 0.5f + (t * t) / 6.0f;
-                }
-                return (expf(t) - 1.0f) / t;
-            };
-            auto phi2_fn = [&](float t) -> float {
-                if (fabsf(t) < 1e-6f) {
-                    return 0.5f + t / 6.0f + (t * t) / 24.0f;
-                }
-                float phi1_val = phi1_fn(t);
-                return (phi1_val - 1.0f) / t;
-            };
+    for (int i = 0; i < steps; i++) {
+        float sigma_from = sigmas[i];
+        float sigma_to   = sigmas[i + 1];
 
-            for (int i = 0; i < steps; i++) {
-                float sigma_from = sigmas[i];
-                float sigma_to   = sigmas[i + 1];
+        ggml_tensor* denoised = model(x, sigma_from, -(i + 1));
+        if (denoised == nullptr) {
+            return false;
+        }
 
-                ggml_tensor* denoised = model(x, sigma_from, -(i + 1));
-                if (denoised == nullptr) {
-                    return false;
-                }
+        float sigma_up, sigma_down;
+        generate_ancestral_step(sigma_up, sigma_down, sigma_from, sigma_to, eta);
 
-                float sigma_up, sigma_down;
-                generate_ancestral_step(sigma_up, sigma_down, sigma_from, sigma_to, eta);
+        copy_ggml_tensor(x0, x);
 
-                copy_ggml_tensor(x0, x);
+        if (sigma_down == 0.0f || sigma_from == 0.0f) {
+            copy_ggml_tensor(x, denoised);
+        } else {
+            float t      = t_fn(sigma_from);
+            float t_next = t_fn(sigma_down);
+            float h      = t_next - t;
 
-                if (sigma_down == 0.0f || sigma_from == 0.0f) {
-                    copy_ggml_tensor(x, denoised);
-                } else {
-                    float t      = t_fn(sigma_from);
-                    float t_next = t_fn(sigma_down);
-                    float h      = t_next - t;
+            float a21      = c2 * phi1_fn(-h * c2);
+            float phi1_val = phi1_fn(-h);
+            float phi2_val = phi2_fn(-h);
+            float b2       = phi2_val / c2;
+            float b1       = phi1_val - b2;
 
-                    float a21      = c2 * phi1_fn(-h * c2);
-                    float phi1_val = phi1_fn(-h);
-                    float phi2_val = phi2_fn(-h);
-                    float b2       = phi2_val / c2;
-                    float b1       = phi1_val - b2;
+            float sigma_c2 = expf(-(t + h * c2));
 
-                    float sigma_c2 = expf(-(t + h * c2));
+            denoiser_tensor_iter(x2, denoised, x0,
+                                 [h, a21](float& x2, const float& denoised, const float& x0) {
+                                     float eps1 = denoised - x0;
+                                     x2         = x0 + h * a21 * eps1;
+                                 });
 
-                    denoiser_tensor_iter(x2, denoised, x0,
-                        [h, a21](float& x2, const float& denoised, const float& x0) {
-                        float eps1 = denoised - x0;
-                        x2         = x0 + h * a21 * eps1;
-                    });
-
-                    ggml_tensor* denoised2 = model(x2, sigma_c2, i + 1);
-                    if (denoised2 == nullptr) {
-                        return false;
-                    }
-
-                    denoiser_tensor_iter(x, denoised, denoised2, x0,
-                        [h, b1, b2](float& x, const float& denoised, const float& denoised2, const float& x0) {
-                        float eps1 = denoised - x0;
-                        float eps2 = denoised2 - x0;
-                        x          = x0 + h * (b1 * eps1 + b2 * eps2);
-                    });
-                }
-
-                if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
-                    ggml_ext_im_set_randn_f32(noise, rng);
-                    denoiser_tensor_iter(x, noise, [sigma_up](float& x, const float& noise) {
-                        x = x + noise * sigma_up;
-                    });
-                }
+            ggml_tensor* denoised2 = model(x2, sigma_c2, i + 1);
+            if (denoised2 == nullptr) {
+                return false;
             }
+
+            denoiser_tensor_iter(x, denoised, denoised2, x0,
+                                 [h, b1, b2](float& x, const float& denoised, const float& denoised2, const float& x0) {
+                                     float eps1 = denoised - x0;
+                                     float eps2 = denoised2 - x0;
+                                     x          = x0 + h * (b1 * eps1 + b2 * eps2);
+                                 });
+        }
+
+        if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
+            ggml_ext_im_set_randn_f32(noise, rng);
+            denoiser_tensor_iter(x, noise, [sigma_up](float& x, const float& noise) {
+                x = x + noise * sigma_up;
+            });
+        }
+    }
 
     return true;
 }
