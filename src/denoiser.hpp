@@ -781,6 +781,27 @@ static void generate_ancestral_step(float& sigma_up, float& sigma_down, float si
     }
 }
 
+static void generate_rf_ancestral_step(float& sigma_down, float& scale_factor, float& renoise_coeff, float sigma_from, float sigma_to, float eta) {
+    // downstep_ratio = 1 + (sigma_to / sigma_from - 1) × eta
+    // sigma_down     = sigma_to × downstep_ratio
+    // scale_factor   = (1 - sigma_to) / (1 - sigma_down)
+    // renoise_coeff  = √(sigma_to² - sigma_down² × scale_factor²)
+
+    float downstep_ratio = 1.0f + (sigma_to / sigma_from - 1.0f) * eta;
+    sigma_down           = sigma_to * downstep_ratio;
+
+    float alpha_ip1  = 1.0f - sigma_to;
+    float alpha_down = 1.0f - sigma_down;
+    scale_factor     = alpha_ip1 / alpha_down;
+
+    float ratio = downstep_ratio * scale_factor;
+    if (ratio >= 1.0f) {
+        renoise_coeff = 0.0f;
+    } else {
+        renoise_coeff = sigma_to * std::sqrt((1.0f + ratio) * (1.0 - ratio));
+    }
+}
+
 template <typename Callable>
 void denoiser_tensor_iter(
     ggml_tensor* a,
@@ -889,6 +910,43 @@ static bool euler_a_sample_method(denoise_cb_t model, ggml_context* work_ctx, gg
             denoiser_tensor_iter(x, noise, [sigma_up](float& x, const float& noise) {
                 x = x + noise * sigma_up;
             });
+        }
+    }
+    return true;
+}
+
+static bool euler_a_rf_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas, std::shared_ptr<RNG> rng, float eta) {
+    size_t steps       = sigmas.size() - 1;
+    ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
+
+    for (int i = 0; i < steps; i++) {
+        float sigma = sigmas[i];
+
+        // denoise
+        ggml_tensor* denoised = model(x, sigma, i + 1);
+        if (denoised == nullptr) {
+            return false;
+        }
+
+        if (sigmas[i + 1] == 0.0f) {
+            copy_ggml_tensor(x, denoised);
+        } else {
+
+            float sigma_down, scale_factor, renoise_coeff;
+            generate_rf_ancestral_step(sigma_down, scale_factor, renoise_coeff,
+                                       sigma, sigmas[i + 1], eta);
+            float sigma_down_i_ratio = sigma_down / sigma;
+            denoiser_tensor_iter(x, denoised, [sigma_down_i_ratio](float& x, const float& denoised) {
+                x = sigma_down_i_ratio * x + (1.0f - sigma_down_i_ratio) * denoised;
+            });
+
+            if (eta > 0.0f) {
+                ggml_ext_im_set_randn_f32(noise, rng);
+                denoiser_tensor_iter(x, noise, [scale_factor, renoise_coeff](float& x, const float& noise) {
+                    x = scale_factor * x + noise * renoise_coeff;
+                });
+            }
         }
     }
     return true;
@@ -1074,6 +1132,78 @@ static bool dpmpp2s_a_sample_method(denoise_cb_t model, ggml_context* work_ctx, 
     }
     return true;
 }
+
+static bool dpmpp2s_a_rf_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas, std::shared_ptr<RNG> rng, float eta) {
+
+    size_t steps = sigmas.size() - 1;
+
+    // Allocate working tensors
+    ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
+    ggml_tensor* u     = ggml_dup_tensor(work_ctx, x);
+
+    auto lambda_fn = [](float sigma) -> float {
+        return logf((1.0f - sigma) / sigma);
+    };
+
+    for (int i = 0; i < steps; i++) {
+
+        float sigma    = sigmas[i];
+        float sigma_to = sigmas[i + 1];
+
+        ggml_tensor* denoised = model(x, sigma, -(i + 1));
+        if (denoised == nullptr) {
+            return false;
+        }
+
+        if (sigma_to == 0) {
+            copy_ggml_tensor(x, denoised);
+        } else {
+            float sigma_down, scale_factor, renoise_coeff;
+            generate_rf_ancestral_step(sigma_down, scale_factor, renoise_coeff, sigma, sigma_to, eta);
+            float sigma_s;
+
+            if (sigma == 1.0f) {
+                // Avoid log(0) when sigma = 1.0
+                sigma_s = 0.9999f;
+            } else {
+                float t_i = lambda_fn(sigma);
+                float t_down = lambda_fn(sigma_down);
+                float h = t_down - t_i;
+                float s = t_i + 0.5f * h;
+                sigma_s = 1.0f / (exp(s) + 1.0f);
+            }
+
+            float sigma_s_i_ratio = sigma_s / sigma;
+            denoiser_tensor_iter(u, x, denoised,
+                [sigma_s_i_ratio](float& u, const float& x, const float& denoised) {
+                u = sigma_s_i_ratio * x + (1.0f - sigma_s_i_ratio) * denoised;
+            });
+
+            // Second denoise step with u
+            ggml_tensor* D_i = model(u, sigma_s, i);
+            if (D_i == nullptr) {
+                return false;
+            }
+
+            float sigma_down_i_ratio = sigma_down / sigma;
+            denoiser_tensor_iter(x, D_i, [sigma_down_i_ratio](float& x, const float& D_i) {
+                x = sigma_down_i_ratio * x + (1.0f - sigma_down_i_ratio) * D_i;
+            });
+
+            if (sigmas[i + 1] > 0 && eta > 0) {
+                ggml_ext_im_set_randn_f32(noise, rng);
+                denoiser_tensor_iter(x, noise, [scale_factor, renoise_coeff](float& x, const float& noise) {
+                    x = scale_factor * x + noise * renoise_coeff;
+                });
+            }
+        }
+
+    }
+
+    return true;
+}
+
 
 // DPM++ (2M) from Karras et al (2022)
 static bool dpmpp2m_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x, std::vector<float> sigmas) {
@@ -1823,10 +1953,14 @@ static bool sample_k_diffusion(sample_method_t method,
                                ggml_tensor* x,
                                std::vector<float> sigmas,
                                std::shared_ptr<RNG> rng,
-                               float eta) {
+                               float eta,
+                               float flow_denoiser) {
     switch (method) {
         case EULER_A_SAMPLE_METHOD:
-            return euler_a_sample_method(model, work_ctx, x, sigmas, rng, eta);
+            if (flow_denoiser)
+                return euler_a_rf_sample_method(model, work_ctx, x, sigmas, rng, eta);
+            else
+                return euler_a_sample_method(model, work_ctx, x, sigmas, rng, eta);
         case EULER_SAMPLE_METHOD:
             return euler_sample_method(model, work_ctx, x, sigmas);
         case HEUN_SAMPLE_METHOD:
@@ -1834,7 +1968,10 @@ static bool sample_k_diffusion(sample_method_t method,
         case DPM2_SAMPLE_METHOD:
             return dpm2_sample_method(model, work_ctx, x, sigmas);
         case DPMPP2S_A_SAMPLE_METHOD:
-            return dpmpp2s_a_sample_method(model, work_ctx, x, sigmas, rng, eta);
+            if (flow_denoiser)
+                return dpmpp2s_a_rf_sample_method(model, work_ctx, x, sigmas, rng, eta);
+            else
+                return dpmpp2s_a_sample_method(model, work_ctx, x, sigmas, rng, eta);
         case DPMPP2M_SAMPLE_METHOD:
             return dpmpp2m_sample_method(model, work_ctx, x, sigmas);
         case DPMPP2Mv2_SAMPLE_METHOD:

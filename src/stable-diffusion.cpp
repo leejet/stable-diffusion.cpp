@@ -2000,6 +2000,7 @@ public:
                         float eta,
                         int shifted_timestep,
                         sample_method_t method,
+                        bool is_flow_denoiser,
                         const std::vector<float>& sigmas,
                         int start_merge_step,
                         SDCondition id_cond,
@@ -2347,7 +2348,7 @@ public:
             return denoised;
         };
 
-        if (!sample_k_diffusion(method, denoise, work_ctx, x, sigmas, sampler_rng, eta)) {
+        if (!sample_k_diffusion(method, denoise, work_ctx, x, sigmas, sampler_rng, eta, is_flow_denoiser)) {
             LOG_ERROR("Diffusion model sampling failed");
             if (control_net) {
                 control_net->free_control_ctx();
@@ -2461,6 +2462,12 @@ public:
             flow_denoiser->set_shift(flow_shift);
         }
     }
+
+    bool is_flow_denoiser() {
+        auto flow_denoiser = std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser);
+        return !!flow_denoiser;
+    }
+
 };
 
 /*================================================= SD API ==================================================*/
@@ -2994,6 +3001,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                     int width,
                                     int height,
                                     enum sample_method_t sample_method,
+                                    bool is_flow_denoiser,
                                     const std::vector<float>& sigmas,
                                     int64_t seed,
                                     int batch_count,
@@ -3194,6 +3202,7 @@ sd_image_t* generate_image_internal(sd_ctx_t* sd_ctx,
                                                   eta,
                                                   shifted_timestep,
                                                   sample_method,
+                                                  is_flow_denoiser,
                                                   sigmas,
                                                   start_merge_step,
                                                   id_cond,
@@ -3357,6 +3366,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     } else {
         LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
     }
+    bool is_flow_denoiser = sd_ctx->sd->is_flow_denoiser();
 
     int sample_steps = sd_img_gen_params->sample_params.sample_steps;
     std::vector<float> sigmas;
@@ -3576,6 +3586,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         width,
                                                         height,
                                                         sample_method,
+                                                        is_flow_denoiser,
                                                         sigmas,
                                                         seed,
                                                         sd_img_gen_params->batch_count,
@@ -3635,6 +3646,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
         sample_method = sd_get_default_sample_method(sd_ctx);
     }
     LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
+    bool is_flow_denoiser = sd_ctx->sd->is_flow_denoiser();
 
     int high_noise_sample_steps = 0;
     if (sd_ctx->sd->high_noise_diffusion_model) {
@@ -3955,6 +3967,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                  sd_vid_gen_params->high_noise_sample_params.eta,
                                  sd_vid_gen_params->high_noise_sample_params.shifted_timestep,
                                  high_noise_sample_method,
+                                 is_flow_denoiser,
                                  high_noise_sigmas,
                                  -1,
                                  {},
@@ -3992,6 +4005,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                           sd_vid_gen_params->sample_params.eta,
                                           sd_vid_gen_params->sample_params.shifted_timestep,
                                           sample_method,
+                                          is_flow_denoiser,
                                           sigmas,
                                           -1,
                                           {},
