@@ -837,17 +837,11 @@ void denoiser_tensor_iter(
     }
 }
 
-// k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
-static bool sample_k_diffusion(sample_method_t method,
-                               denoise_cb_t model,
-                               ggml_context* work_ctx,
-                               ggml_tensor* x,
-                               std::vector<float> sigmas,
-                               std::shared_ptr<RNG> rng,
-                               float eta) {
+static bool euler_a_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                  ggml_tensor* x, std::vector<float> sigmas,
+                                  std::shared_ptr<RNG> rng, float eta)
+{
     size_t steps = sigmas.size() - 1;
-    switch (method) {
-        case EULER_A_SAMPLE_METHOD: { // sample_euler_ancestral
             ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
             ggml_tensor* d     = ggml_dup_tensor(work_ctx, x);
 
@@ -881,9 +875,13 @@ static bool sample_k_diffusion(sample_method_t method,
                     });
                 }
             }
-        } break;
-        case EULER_SAMPLE_METHOD:  // Implemented without any sigma churn
-        {
+            return true;
+}
+
+static bool euler_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                ggml_tensor* x, std::vector<float> sigmas)
+{
+    size_t steps = sigmas.size() - 1;
             ggml_tensor* d = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
@@ -904,8 +902,13 @@ static bool sample_k_diffusion(sample_method_t method,
                     x = x + d * dt;
                 });
             }
-        } break;
-        case HEUN_SAMPLE_METHOD: {
+            return true;
+}
+
+static bool heun_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x,
+                               std::vector<float> sigmas) {
+
+    size_t steps = sigmas.size() - 1;
             ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
             ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
@@ -948,8 +951,13 @@ static bool sample_k_diffusion(sample_method_t method,
                     });
                 }
             }
-        } break;
-        case DPM2_SAMPLE_METHOD: {
+            return true;
+}
+
+static bool dpm2_sample_method(denoise_cb_t model, ggml_context* work_ctx, ggml_tensor* x,
+                               std::vector<float> sigmas) {
+
+    size_t steps = sigmas.size() - 1;
             ggml_tensor* d  = ggml_dup_tensor(work_ctx, x);
             ggml_tensor* x2 = ggml_dup_tensor(work_ctx, x);
 
@@ -994,9 +1002,14 @@ static bool sample_k_diffusion(sample_method_t method,
                     });
                 }
             }
+            return true;
+}
 
-        } break;
-        case DPMPP2S_A_SAMPLE_METHOD: {
+static bool dpmpp2s_a_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                    ggml_tensor* x, std::vector<float> sigmas,
+                                    std::shared_ptr<RNG> rng, float eta) {
+
+    size_t steps = sigmas.size() - 1;
             ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
             ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
 
@@ -1052,9 +1065,14 @@ static bool sample_k_diffusion(sample_method_t method,
                     });
                 }
             }
-        } break;
-        case DPMPP2M_SAMPLE_METHOD:  // DPM++ (2M) from Karras et al (2022)
-        {
+    return true;
+}
+
+// DPM++ (2M) from Karras et al (2022)
+static bool dpmpp2m_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                  ggml_tensor* x, std::vector<float> sigmas) {
+
+    size_t steps = sigmas.size() - 1;
             ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
             auto t_fn = [](float sigma) -> float { return -log(sigma); };
@@ -1089,9 +1107,14 @@ static bool sample_k_diffusion(sample_method_t method,
 
                 copy_ggml_tensor(old_denoised, denoised);
             }
-        } break;
-        case DPMPP2Mv2_SAMPLE_METHOD:  // Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
-        {
+    return true;
+}
+
+// Modified DPM++ (2M) from https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457
+static bool dpmpp2mv2_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                    ggml_tensor* x, std::vector<float> sigmas) {
+
+    size_t steps = sigmas.size() - 1;
             ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
             auto t_fn = [](float sigma) -> float { return -log(sigma); };
@@ -1130,9 +1153,13 @@ static bool sample_k_diffusion(sample_method_t method,
 
                 copy_ggml_tensor(old_denoised, denoised);
             }
-        } break;
-        case IPNDM_SAMPLE_METHOD:  // iPNDM sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
-        {
+    return true;
+}
+// iPNDM sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
+static bool ipndm_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                ggml_tensor* x, std::vector<float> sigmas) {
+
+    size_t steps = sigmas.size() - 1;
             int max_order       = 4;
             ggml_tensor* x_next = x;
             std::vector<ggml_tensor*> buffer_model;
@@ -1203,9 +1230,14 @@ static bool sample_k_diffusion(sample_method_t method,
                     buffer_model.push_back(d_cur);
                 }
             }
-        } break;
-        case IPNDM_V_SAMPLE_METHOD:  // iPNDM_v sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
-        {
+
+    return true;
+}
+// iPNDM_v sampler from https://github.com/zju-pi/diff-sampler/tree/main/diff-solvers-main
+static bool ipndm_v_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                  ggml_tensor* x, std::vector<float> sigmas) {
+
+    size_t steps = sigmas.size() - 1;
             int max_order = 4;
             std::vector<ggml_tensor*> buffer_model;
             ggml_tensor* x_next = x;
@@ -1276,9 +1308,15 @@ static bool sample_k_diffusion(sample_method_t method,
                 // Prepare the next d tensor
                 d_cur = ggml_dup_tensor(work_ctx, x_next);
             }
-        } break;
-        case LCM_SAMPLE_METHOD:  // Latent Consistency Models
-        {
+    return true;
+}
+
+// Latent Consistency Models
+static bool lcm_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                              ggml_tensor* x, std::vector<float> sigmas,
+                              std::shared_ptr<RNG> rng) {
+
+    size_t steps = sigmas.size() - 1;
             ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
 
             for (int i = 0; i < steps; i++) {
@@ -1303,10 +1341,15 @@ static bool sample_k_diffusion(sample_method_t method,
                     });
                 }
             }
-        } break;
-        case DDIM_TRAILING_SAMPLE_METHOD:  // Denoising Diffusion Implicit Models
-                                           // with the "trailing" timestep spacing
-        {
+    return true;
+}
+
+// Denoising Diffusion Implicit Models
+// with the "trailing" timestep spacing
+static bool ddim_trailing_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                        ggml_tensor* x, std::vector<float> sigmas,
+                                        std::shared_ptr<RNG> rng, float eta) {
+    size_t steps = sigmas.size() - 1;
             // See J. Song et al., "Denoising Diffusion Implicit
             // Models", arXiv:2010.02502 [cs.LG]
             //
@@ -1469,10 +1512,16 @@ static bool sample_k_diffusion(sample_method_t method,
                 // model() differes from the bare U-net F_theta by the
                 // factor c_in.
             }
-        } break;
-        case TCD_SAMPLE_METHOD:  // Strategic Stochastic Sampling (Algorithm 4) in
-                                 // Trajectory Consistency Distillation
-        {
+    return true;
+}
+
+// Strategic Stochastic Sampling (Algorithm 4) in Trajectory Consistency Distillation
+static bool tcd_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                              ggml_tensor* x, std::vector<float> sigmas,
+                              std::shared_ptr<RNG> rng, float eta) {
+
+    size_t steps = sigmas.size() - 1;
+
             // See J. Zheng et al., "Trajectory Consistency
             // Distillation: Improved Latent Consistency Distillation
             // by Semi-Linear Consistency Function with Trajectory
@@ -1608,9 +1657,15 @@ static bool sample_k_diffusion(sample_method_t method,
                    });
                 }
             }
-        } break;
-        case RES_MULTISTEP_SAMPLE_METHOD:  // Res Multistep sampler
-        {
+    return true;
+}
+
+// Res Multistep sampler
+static bool res_multistep_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                        ggml_tensor* x, std::vector<float> sigmas,
+                                        std::shared_ptr<RNG> rng, float eta) {
+
+    size_t steps = sigmas.size() - 1;
             ggml_tensor* noise        = ggml_dup_tensor(work_ctx, x);
             ggml_tensor* old_denoised = ggml_dup_tensor(work_ctx, x);
 
@@ -1688,9 +1743,15 @@ static bool sample_k_diffusion(sample_method_t method,
                 old_sigma_down = sigma_down;
                 have_old_sigma = true;
             }
-        } break;
-        case RES_2S_SAMPLE_METHOD:  // Res 2s sampler
-        {
+    return true;
+}
+
+// Res 2s sampler
+static bool res_2s_sample_method(denoise_cb_t model, ggml_context* work_ctx,
+                                 ggml_tensor* x, std::vector<float> sigmas,
+                                 std::shared_ptr<RNG> rng, float eta) {
+
+    size_t steps = sigmas.size() - 1;
             ggml_tensor* noise = ggml_dup_tensor(work_ctx, x);
             ggml_tensor* x0    = ggml_dup_tensor(work_ctx, x);
             ggml_tensor* x2    = ggml_dup_tensor(work_ctx, x);
@@ -1766,13 +1827,50 @@ static bool sample_k_diffusion(sample_method_t method,
                     });
                 }
             }
-        } break;
 
+    return true;
+}
+
+// k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
+static bool sample_k_diffusion(sample_method_t method,
+                               denoise_cb_t model,
+                               ggml_context* work_ctx,
+                               ggml_tensor* x,
+                               std::vector<float> sigmas,
+                               std::shared_ptr<RNG> rng,
+                               float eta) {
+    switch (method) {
+        case EULER_A_SAMPLE_METHOD:
+            return euler_a_sample_method(model, work_ctx, x, sigmas, rng, eta);
+        case EULER_SAMPLE_METHOD:
+            return euler_sample_method(model, work_ctx, x, sigmas);
+        case HEUN_SAMPLE_METHOD:
+            return heun_sample_method(model, work_ctx, x, sigmas);
+        case DPM2_SAMPLE_METHOD:
+            return dpm2_sample_method(model, work_ctx, x, sigmas);
+        case DPMPP2S_A_SAMPLE_METHOD:
+            return dpmpp2s_a_sample_method(model, work_ctx, x, sigmas, rng, eta);
+        case DPMPP2M_SAMPLE_METHOD:
+            return dpmpp2m_sample_method(model, work_ctx, x, sigmas);
+        case DPMPP2Mv2_SAMPLE_METHOD:
+            return dpmpp2mv2_sample_method(model, work_ctx, x, sigmas);
+        case IPNDM_SAMPLE_METHOD:
+            return ipndm_sample_method(model, work_ctx, x, sigmas);
+        case IPNDM_V_SAMPLE_METHOD:
+            return ipndm_v_sample_method(model, work_ctx, x, sigmas);
+        case LCM_SAMPLE_METHOD:
+            return lcm_sample_method(model, work_ctx, x, sigmas, rng);
+        case DDIM_TRAILING_SAMPLE_METHOD:
+            return ddim_trailing_sample_method(model, work_ctx, x, sigmas, rng, eta);
+        case TCD_SAMPLE_METHOD:
+            return tcd_sample_method(model, work_ctx, x, sigmas, rng, eta);
+        case RES_MULTISTEP_SAMPLE_METHOD:
+            return res_multistep_sample_method(model, work_ctx, x, sigmas, rng, eta);
+        case RES_2S_SAMPLE_METHOD:
+            return res_2s_sample_method(model, work_ctx, x, sigmas, rng, eta);
         default:
             LOG_ERROR("Attempting to sample with nonexisting sample method %i", method);
             return false;
     }
-    return true;
 }
-
 #endif  // __DENOISER_HPP__
