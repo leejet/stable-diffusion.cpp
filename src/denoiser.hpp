@@ -761,6 +761,26 @@ struct Flux2FlowDenoiser : public FluxFlowDenoiser {
 
 typedef std::function<ggml_tensor*(ggml_tensor*, float, int)> denoise_cb_t;
 
+static void generate_ancestral_step(float& sigma_up, float& sigma_down, float sigma_from, float sigma_to, float eta = 1.0f) {
+    // sigma_up   = min(sigma_to, eta * √(sigma_to² * (sigma_from² - sigma_to²) / sigma_from²))
+    // sigma_down = √(sigma_to² - sigma_sup²)
+    sigma_up   = 0.0f;
+    sigma_down = sigma_to;
+    if (eta > 0.0f) {
+        float sigma_from_sq = sigma_from * sigma_from;
+        float sigma_to_sq   = sigma_to * sigma_to;
+        if (sigma_from_sq > 0.0f) {
+            float term = sigma_to_sq * (sigma_from_sq - sigma_to_sq) / sigma_from_sq;
+            if (term > 0.0f) {
+                sigma_up = eta * std::sqrt(term);
+            }
+        }
+        sigma_up            = std::min(sigma_up, sigma_to);
+        float sigma_down_sq = sigma_to_sq - sigma_up * sigma_up;
+        sigma_down          = sigma_down_sq > 0.0f ? std::sqrt(sigma_down_sq) : 0.0f;
+    }
+}
+
 // k diffusion reverse ODE: dx = (x - D(x;\sigma)) / \sigma dt; \sigma(t) = t
 static bool sample_k_diffusion(sample_method_t method,
                                denoise_cb_t model,
@@ -797,9 +817,8 @@ static bool sample_k_diffusion(sample_method_t method,
                 }
 
                 // get_ancestral_step
-                float sigma_up   = std::min(sigmas[i + 1],
-                                            std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
-                float sigma_down = std::sqrt(sigmas[i + 1] * sigmas[i + 1] - sigma_up * sigma_up);
+                float sigma_up, sigma_down;
+                generate_ancestral_step(sigma_up, sigma_down, sigmas[i], sigmas[i + 1]);
 
                 // Euler method
                 float dt = sigma_down - sigmas[i];
@@ -990,9 +1009,8 @@ static bool sample_k_diffusion(sample_method_t method,
                 }
 
                 // get_ancestral_step
-                float sigma_up   = std::min(sigmas[i + 1],
-                                            std::sqrt(sigmas[i + 1] * sigmas[i + 1] * (sigmas[i] * sigmas[i] - sigmas[i + 1] * sigmas[i + 1]) / (sigmas[i] * sigmas[i])));
-                float sigma_down = std::sqrt(sigmas[i + 1] * sigmas[i + 1] - sigma_up * sigma_up);
+                float sigma_up, sigma_down;
+                generate_ancestral_step(sigma_up, sigma_down, sigmas[i], sigmas[i + 1]);
                 auto t_fn        = [](float sigma) -> float { return -log(sigma); };
                 auto sigma_fn    = [](float t) -> float { return exp(-t); };
 
@@ -1719,22 +1737,8 @@ static bool sample_k_diffusion(sample_method_t method,
 
                 float sigma_from = sigmas[i];
                 float sigma_to   = sigmas[i + 1];
-                float sigma_up   = 0.0f;
-                float sigma_down = sigma_to;
-
-                if (eta > 0.0f) {
-                    float sigma_from_sq = sigma_from * sigma_from;
-                    float sigma_to_sq   = sigma_to * sigma_to;
-                    if (sigma_from_sq > 0.0f) {
-                        float term = sigma_to_sq * (sigma_from_sq - sigma_to_sq) / sigma_from_sq;
-                        if (term > 0.0f) {
-                            sigma_up = eta * std::sqrt(term);
-                        }
-                    }
-                    sigma_up            = std::min(sigma_up, sigma_to);
-                    float sigma_down_sq = sigma_to_sq - sigma_up * sigma_up;
-                    sigma_down          = sigma_down_sq > 0.0f ? std::sqrt(sigma_down_sq) : 0.0f;
-                }
+                float sigma_up, sigma_down;
+                generate_ancestral_step(sigma_up, sigma_down, sigma_from, sigma_to, eta);
 
                 if (sigma_down == 0.0f || !have_old_sigma) {
                     float dt            = sigma_down - sigma_from;
@@ -1826,21 +1830,8 @@ static bool sample_k_diffusion(sample_method_t method,
                     return false;
                 }
 
-                float sigma_up   = 0.0f;
-                float sigma_down = sigma_to;
-                if (eta > 0.0f) {
-                    float sigma_from_sq = sigma_from * sigma_from;
-                    float sigma_to_sq   = sigma_to * sigma_to;
-                    if (sigma_from_sq > 0.0f) {
-                        float term = sigma_to_sq * (sigma_from_sq - sigma_to_sq) / sigma_from_sq;
-                        if (term > 0.0f) {
-                            sigma_up = eta * std::sqrt(term);
-                        }
-                    }
-                    sigma_up            = std::min(sigma_up, sigma_to);
-                    float sigma_down_sq = sigma_to_sq - sigma_up * sigma_up;
-                    sigma_down          = sigma_down_sq > 0.0f ? std::sqrt(sigma_down_sq) : 0.0f;
-                }
+                float sigma_up, sigma_down;
+                generate_ancestral_step(sigma_up, sigma_down, sigma_from, sigma_to, eta);
 
                 float* vec_x  = (float*)x->data;
                 float* vec_x0 = (float*)x0->data;
