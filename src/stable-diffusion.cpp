@@ -2777,6 +2777,7 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->scheduler                   = SCHEDULER_COUNT;
     sample_params->sample_method               = SAMPLE_METHOD_COUNT;
     sample_params->sample_steps                = 20;
+    sample_params->eta                         = INFINITY;
     sample_params->custom_sigmas               = nullptr;
     sample_params->custom_sigmas_count         = 0;
     sample_params->flow_shift                  = INFINITY;
@@ -2951,6 +2952,21 @@ enum sample_method_t sd_get_default_sample_method(const sd_ctx_t* sd_ctx) {
         }
     }
     return EULER_A_SAMPLE_METHOD;
+}
+
+static float sd_get_default_eta(enum sample_method_t sample_method) {
+    switch(sample_method) {
+        case DDIM_TRAILING_SAMPLE_METHOD:
+        case TCD_SAMPLE_METHOD:
+        case RES_MULTISTEP_SAMPLE_METHOD:
+        case RES_2S_SAMPLE_METHOD:
+             return 0.0f;
+        case EULER_A_SAMPLE_METHOD:
+        case DPMPP2S_A_SAMPLE_METHOD:
+             return 1.0f;
+        default:
+            return INFINITY;
+    }
 }
 
 enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_method_t sample_method) {
@@ -3331,7 +3347,16 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
     if (sample_method == SAMPLE_METHOD_COUNT) {
         sample_method = sd_get_default_sample_method(sd_ctx);
     }
-    LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
+    float eta         = sd_img_gen_params->sample_params.eta;
+    float default_eta = sd_get_default_eta(sample_method);
+    if (default_eta != INFINITY) {
+        if (eta == INFINITY) {
+            eta = default_eta;
+        }
+        LOG_INFO("sampling using %s method (eta %g)", sampling_methods_str[sample_method], eta);
+    } else {
+        LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
+    }
 
     int sample_steps = sd_img_gen_params->sample_params.sample_steps;
     std::vector<float> sigmas;
@@ -3546,7 +3571,7 @@ sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* sd_img_g
                                                         SAFE_STR(sd_img_gen_params->negative_prompt),
                                                         sd_img_gen_params->clip_skip,
                                                         guidance,
-                                                        sd_img_gen_params->sample_params.eta,
+                                                        eta,
                                                         sd_img_gen_params->sample_params.shifted_timestep,
                                                         width,
                                                         height,

@@ -818,7 +818,7 @@ static bool sample_k_diffusion(sample_method_t method,
 
                 // get_ancestral_step
                 float sigma_up, sigma_down;
-                generate_ancestral_step(sigma_up, sigma_down, sigmas[i], sigmas[i + 1]);
+                generate_ancestral_step(sigma_up, sigma_down, sigmas[i], sigmas[i + 1], eta);
 
                 // Euler method
                 float dt = sigma_down - sigmas[i];
@@ -832,7 +832,7 @@ static bool sample_k_diffusion(sample_method_t method,
                     }
                 }
 
-                if (sigmas[i + 1] > 0) {
+                if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
                     // x = x + noise_sampler(sigmas[i], sigmas[i + 1]) * s_noise * sigma_up
                     ggml_ext_im_set_randn_f32(noise, rng);
                     // noise = load_tensor_from_file(work_ctx, "./rand" + std::to_string(i+1) + ".bin");
@@ -1010,7 +1010,7 @@ static bool sample_k_diffusion(sample_method_t method,
 
                 // get_ancestral_step
                 float sigma_up, sigma_down;
-                generate_ancestral_step(sigma_up, sigma_down, sigmas[i], sigmas[i + 1]);
+                generate_ancestral_step(sigma_up, sigma_down, sigmas[i], sigmas[i + 1], eta);
                 auto t_fn        = [](float sigma) -> float { return -log(sigma); };
                 auto sigma_fn    = [](float t) -> float { return exp(-t); };
 
@@ -1053,7 +1053,7 @@ static bool sample_k_diffusion(sample_method_t method,
                 }
 
                 // Noise addition
-                if (sigmas[i + 1] > 0) {
+                if (sigmas[i + 1] > 0 && sigma_up > 0.0f) {
                     ggml_ext_im_set_randn_f32(noise, rng);
                     {
                         float* vec_x     = (float*)x->data;
