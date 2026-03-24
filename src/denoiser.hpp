@@ -1256,7 +1256,6 @@ static bool sample_k_diffusion(sample_method_t method,
                     }
 
                     case 3: {
-                        float h_n_2        = (i > 1) ? (sigmas[i - 1] - sigmas[i - 2]) : h_n_1;
                         float* vec_d_prev1 = (float*)buffer_model.back()->data;
                         float* vec_d_prev2 = (buffer_model.size() > 1) ? (float*)buffer_model[buffer_model.size() - 2]->data : vec_d_prev1;
                         for (int j = 0; j < ggml_nelements(x_next); j++) {
@@ -1266,8 +1265,6 @@ static bool sample_k_diffusion(sample_method_t method,
                     }
 
                     case 4: {
-                        float h_n_2        = (i > 1) ? (sigmas[i - 1] - sigmas[i - 2]) : h_n_1;
-                        float h_n_3        = (i > 2) ? (sigmas[i - 2] - sigmas[i - 3]) : h_n_2;
                         float* vec_d_prev1 = (float*)buffer_model.back()->data;
                         float* vec_d_prev2 = (buffer_model.size() > 1) ? (float*)buffer_model[buffer_model.size() - 2]->data : vec_d_prev1;
                         float* vec_d_prev3 = (buffer_model.size() > 2) ? (float*)buffer_model[buffer_model.size() - 3]->data : vec_d_prev2;
