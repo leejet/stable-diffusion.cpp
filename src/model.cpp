@@ -1063,7 +1063,13 @@ SDVersion ModelLoader::get_sd_version() {
             if (tensor_storage.name.find("model.diffusion_model.double_stream_modulation_img.lin.weight") != std::string::npos) {
                 is_flux2 = true;
             }
+            if (tensor_storage.name.find("double_stream_modulation_img.linear.weight") != std::string::npos) {
+                is_flux2 = true;
+            }
             if (tensor_storage.name.find("single_blocks.47.linear1.weight") != std::string::npos) {
+                has_single_block_47 = true;
+            }
+            if (tensor_storage.name.find("single_transformer_blocks.47.") != std::string::npos) {
                 has_single_block_47 = true;
             }
             if (tensor_storage.name.find("model.diffusion_model.double_blocks.0.img_mlp.gate_proj.weight") != std::string::npos) {
