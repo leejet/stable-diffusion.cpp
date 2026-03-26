@@ -13,7 +13,7 @@ RUN mkdir build && cd build && \
     cmake .. -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DCMAKE_C_FLAGS="${CMAKE_C_FLAGS} -fopenmp -I/usr/lib/llvm-14/lib/clang/14.0.0/include -L/usr/lib/llvm-14/lib" \
         -DCMAKE_CXX_FLAGS="${CMAKE_CXX_FLAGS} -fopenmp -I/usr/lib/llvm-14/lib/clang/14.0.0/include -L/usr/lib/llvm-14/lib" \
-        -DSD_MUSA=ON -DCMAKE_BUILD_TYPE=Release && \
+        -DGGML_MUSA=ON -DCMAKE_BUILD_TYPE=Release && \
     cmake --build . --config Release
 
 FROM mthreads/musa:${MUSA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}-amd64 as runtime

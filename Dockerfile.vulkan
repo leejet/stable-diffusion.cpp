@@ -8,7 +8,7 @@ WORKDIR /sd.cpp
 
 COPY . .
 
-RUN cmake . -B ./build -DSD_VULKAN=ON
+RUN cmake . -B ./build -DGGML_VULKAN=ON
 RUN cmake --build ./build --config Release --parallel
 
 FROM ubuntu:$UBUNTU_VERSION AS runtime
