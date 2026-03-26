@@ -1020,6 +1020,10 @@ public:
                 if (diffusion_model->get_desc() == "Wan2.1-I2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-I2V-1.3B") {
+                    if (!vision_backend) {
+                        LOG_ERROR("WAN2.1 Need a vision_backend");
+                        return false;
+                    }
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(vision_backend,
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map);
