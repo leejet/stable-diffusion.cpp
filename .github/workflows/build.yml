@@ -81,7 +81,7 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
-            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON
           cmake --build build -j $(nproc)
 
       - name: Get commit hash
@@ -143,7 +143,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
@@ -289,7 +289,7 @@ jobs:
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_METAL=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON
           cmake --build build -j $(sysctl -n hw.logicalcpu)
 
       - name: Get commit hash
@@ -645,7 +645,7 @@ jobs:
             -DGPU_TARGETS="${{ env.GPU_TARGETS }}" \
             -DAMDGPU_TARGETS="${{ env.GPU_TARGETS }}" \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           cmake --build . --config Release
 
       - name: Get commit hash
