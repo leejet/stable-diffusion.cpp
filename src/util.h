@@ -6,8 +6,8 @@
 #include <string>
 #include <vector>
 
-#include "stable-diffusion.h"
 #include "ggml-backend.h"
+#include "stable-diffusion.h"
 
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")

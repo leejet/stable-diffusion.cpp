@@ -48,11 +48,10 @@ namespace ZImage {
             auto qkv_proj   = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
             auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks["out"]);
 
-            if (sd_backend_is(ctx->backend,"ROCm"))
-            {
+            if (sd_backend_is(ctx->backend, "ROCm")) {
                 out_proj->set_scale(1.f / 16.f);
             }
-            
+
             auto qkv = qkv_proj->forward(ctx, x);                                                                            // [N, n_token, (num_heads + num_kv_heads*2)*head_dim]
             qkv      = ggml_reshape_4d(ctx->ggml_ctx, qkv, head_dim, num_heads + num_kv_heads * 2, qkv->ne[1], qkv->ne[2]);  // [N, n_token, num_heads + num_kv_heads*2, head_dim]
 
@@ -128,8 +127,7 @@ namespace ZImage {
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
 
-            if (sd_backend_is(ctx->backend,"Vulkan"))
-            {
+            if (sd_backend_is(ctx->backend, "Vulkan")) {
                 w2->set_force_prec_f32(true);
             }
 

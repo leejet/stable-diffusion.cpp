@@ -48,7 +48,7 @@ struct SDCliParams {
     bool color               = false;
 
     bool normal_exit = false;
-    bool skip_usage = false;
+    bool skip_usage  = false;
 
     ArgOptions get_options() {
         ArgOptions options;
@@ -155,7 +155,7 @@ struct SDCliParams {
             }
             const char* rpc_device = argv[index];
             add_rpc_device(rpc_device);
-            return 1; 
+            return 1;
         };
 
         auto on_list_devices_arg = [&](int argc, const char** argv, int index) {
@@ -166,7 +166,7 @@ struct SDCliParams {
             printf("List of available GGML devices:\nName\tDescription\n-------------------\n%s\n", buff);
             free(buff);
             normal_exit = true;
-            skip_usage = true;
+            skip_usage  = true;
             return VALID_BREAK_OPT;
         };
 
@@ -185,12 +185,12 @@ struct SDCliParams {
              on_help_arg},
             {"",
              "--rpc",
-             "add a rpc device", 
+             "add a rpc device",
              on_rpc_arg},
-             {"",
-              "--list-devices",
-              "list available ggml compute devices",
-              on_list_devices_arg},
+            {"",
+             "--list-devices",
+             "list available ggml compute devices",
+             on_list_devices_arg},
         };
 
         return options;
@@ -245,7 +245,7 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
     std::vector<ArgOptions> options_vec = {cli_params.get_options(), ctx_params.get_options(), gen_params.get_options()};
 
     if (!parse_options(argc, argv, options_vec)) {
-        if (!cli_params.skip_usage){
+        if (!cli_params.skip_usage) {
             print_usage(argc, argv, options_vec);
         }
         exit(cli_params.normal_exit ? 0 : 1);

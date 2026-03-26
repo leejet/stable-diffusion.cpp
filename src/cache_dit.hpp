@@ -839,7 +839,7 @@ struct CacheDitConditionState {
 
         float* input_data = (float*)input->data;
         float diff        = CacheDitState::calculate_residual_diff(
-                   it->second.prev_input.data(), input_data, ne);
+            it->second.prev_input.data(), input_data, ne);
 
         float effective_threshold = config.residual_diff_threshold;
         if (config.Fn_compute_blocks > 0) {

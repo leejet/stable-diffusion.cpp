@@ -25,7 +25,7 @@ struct UpscalerGGML {
                         int n_threads,
                         std::string device = "") {
         ggml_log_set(ggml_log_callback_default, nullptr);
-        device = sanitize_backend_name(device);
+        device  = sanitize_backend_name(device);
         backend = init_named_backend(device);
         ModelLoader model_loader;
         if (!model_loader.init_from_file_and_convert_name(esrgan_path)) {

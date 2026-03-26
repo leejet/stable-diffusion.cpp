@@ -750,7 +750,8 @@ bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
         return false;
     }
     ggml_backend_dev_t dev = ggml_backend_get_device(backend);
-    if (!dev) return false;
-     std::string  dev_name = ggml_backend_dev_name(dev);
+    if (!dev)
+        return false;
+    std::string dev_name = ggml_backend_dev_name(dev);
     return dev_name.find(name) != std::string::npos;
 }

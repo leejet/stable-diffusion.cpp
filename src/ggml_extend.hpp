@@ -1299,27 +1299,25 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_ones_like(ggml_context* ctx,
     return ggml_ext_ones(ctx, x->ne[0], x->ne[1], x->ne[2], x->ne[3]);
 }
 
-__STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx,ggml_backend_t backend, ggml_tensor* a) {
-if (sd_backend_is(backend, "Vulkan"))
-{
-    auto zero_index = ggml_get_tensor(ctx, "ggml_runner_build_in_tensor:zero_int");
-    auto out        = ggml_reshape_1d(ctx, a, ggml_nelements(a));
-    out             = ggml_get_rows(ctx, out, zero_index);
-    out             = ggml_reshape(ctx, out, a);
-    // auto out = ggml_cast(ctx, a, GGML_TYPE_F32);
-    return out;
-}else{
-       auto out         = ggml_reshape_2d(ctx, a, 1, ggml_nelements(a));
-    ggml_tensor* one = ggml_ext_ones(ctx, 1, 1, 1, 1);  // [1,]
-    if (ggml_is_transposed(out)) {
-        out = ggml_mul_mat(ctx, one, out);
+__STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* a) {
+    if (sd_backend_is(backend, "Vulkan")) {
+        auto zero_index = ggml_get_tensor(ctx, "ggml_runner_build_in_tensor:zero_int");
+        auto out        = ggml_reshape_1d(ctx, a, ggml_nelements(a));
+        out             = ggml_get_rows(ctx, out, zero_index);
+        out             = ggml_reshape(ctx, out, a);
+        // auto out = ggml_cast(ctx, a, GGML_TYPE_F32);
+        return out;
     } else {
-        out = ggml_mul_mat(ctx, out, one);
+        auto out         = ggml_reshape_2d(ctx, a, 1, ggml_nelements(a));
+        ggml_tensor* one = ggml_ext_ones(ctx, 1, 1, 1, 1);  // [1,]
+        if (ggml_is_transposed(out)) {
+            out = ggml_mul_mat(ctx, one, out);
+        } else {
+            out = ggml_mul_mat(ctx, out, one);
+        }
+        out = ggml_reshape(ctx, out, a);
+        return out;
     }
-    out = ggml_reshape(ctx, out, a);
-     return out;
-}
-
 }
 
 // q: [N, L_q, C(n_head*d_head)] or [N*n_head, L_q, d_head]
@@ -1672,8 +1670,8 @@ struct WeightAdapter {
                                            ggml_tensor* w,
                                            ggml_tensor* b,
                                            const std::string& prefix,
-                                           ForwardParams forward_params)                                      = 0;
-    virtual size_t get_extra_graph_size()                                                                     = 0;
+                                           ForwardParams forward_params)                                                              = 0;
+    virtual size_t get_extra_graph_size()                                                                                             = 0;
 };
 
 struct GGMLRunnerContext {
@@ -2304,11 +2302,11 @@ public:
           force_prec_f32(force_prec_f32),
           scale(scale) {}
 
-    void set_scale(float scale_){
+    void set_scale(float scale_) {
         scale = scale_;
     }
 
-    void set_force_prec_f32(bool force_prec_f32_){
+    void set_force_prec_f32(bool force_prec_f32_) {
         force_prec_f32 = force_prec_f32_;
     }
 
@@ -2323,7 +2321,7 @@ public:
             forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
             forward_params.linear.force_prec_f32 = force_prec_f32;
             forward_params.linear.scale          = scale;
-            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx,ctx->backend, x, w, b, prefix, forward_params);
+            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
         }
         return ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
     }
@@ -2503,7 +2501,7 @@ public:
         ggml_tensor* w = params["weight"];
         ggml_tensor* b = nullptr;
         if (ctx->weight_adapter) {
-            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx,ctx->backend, w, prefix + "weight");
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
             if (w->type != GGML_TYPE_F16) {
                 w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F16);
             }

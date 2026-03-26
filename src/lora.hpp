@@ -761,7 +761,7 @@ struct LoraModel : public GGMLRunner {
             ggml_tensor* model_tensor     = it.second;
 
             // lora
-            ggml_tensor* diff = get_weight_diff(model_tensor_name,runtime_backend, compute_ctx, model_tensor);
+            ggml_tensor* diff = get_weight_diff(model_tensor_name, runtime_backend, compute_ctx, model_tensor);
             if (diff == nullptr) {
                 continue;
             }
@@ -774,7 +774,7 @@ struct LoraModel : public GGMLRunner {
 
             ggml_tensor* final_tensor;
             if (model_tensor->type != GGML_TYPE_F32 && model_tensor->type != GGML_TYPE_F16) {
-                final_tensor = ggml_ext_cast_f32(compute_ctx,runtime_backend ,model_tensor);
+                final_tensor = ggml_ext_cast_f32(compute_ctx, runtime_backend, model_tensor);
                 final_tensor = ggml_add_inplace(compute_ctx, final_tensor, diff);
                 final_tensor = ggml_cpy(compute_ctx, final_tensor, model_tensor);
             } else {

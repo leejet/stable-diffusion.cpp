@@ -909,9 +909,10 @@ int main(int argc, const char** argv) {
                 }
             }
 
-            auto get_sample_method = [](std::string name) -> enum sample_method_t {
+            auto get_sample_method = [](std::string name)->enum sample_method_t {
                 enum sample_method_t result = str_to_sample_method(name.c_str());
-                if (result != SAMPLE_METHOD_COUNT) return result;
+                if (result != SAMPLE_METHOD_COUNT)
+                    return result;
                 // some applications use a hardcoded sampler list
                 std::transform(name.begin(), name.end(), name.begin(),
                                [](unsigned char c) { return std::tolower(c); });
@@ -932,8 +933,9 @@ int main(int argc, const char** argv) {
                     {"k_res_multistep", RES_MULTISTEP_SAMPLE_METHOD},
                     {"res 2s", RES_2S_SAMPLE_METHOD},
                     {"k_res_2s", RES_2S_SAMPLE_METHOD}};
-                auto it            = hardcoded.find(name);
-                if (it != hardcoded.end()) return it->second;
+                auto it = hardcoded.find(name);
+                if (it != hardcoded.end())
+                    return it->second;
                 return SAMPLE_METHOD_COUNT;
             };
 

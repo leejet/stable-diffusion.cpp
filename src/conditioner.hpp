@@ -57,7 +57,7 @@ struct Conditioner {
     virtual bool is_cond_stage_model_name_at_index(const std::string& name, int index) {
         return true;
     }
-    virtual ggml_backend_t get_params_backend_at_index(int index) = 0;
+    virtual ggml_backend_t get_params_backend_at_index(int index)  = 0;
     virtual ggml_backend_t get_runtime_backend_at_index(int index) = 0;
 };
 
@@ -686,9 +686,9 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         return true;
     }
 
-    ggml_backend_t get_params_backend_at_index(int index){
-        if (sd_version_is_sdxl(version) && index == 1){
-            if(text_model2) {
+    ggml_backend_t get_params_backend_at_index(int index) {
+        if (sd_version_is_sdxl(version) && index == 1) {
+            if (text_model2) {
                 return text_model2->get_params_backend();
             }
         } else if (text_model) {
@@ -697,9 +697,9 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         return nullptr;
     }
 
-    ggml_backend_t get_runtime_backend_at_index(int index){
-        if (sd_version_is_sdxl(version) && index == 1){
-            if(text_model2) {
+    ggml_backend_t get_runtime_backend_at_index(int index) {
+        if (sd_version_is_sdxl(version) && index == 1) {
+            if (text_model2) {
                 return text_model2->get_runtime_backend();
             }
         } else if (text_model) {
@@ -707,7 +707,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
         return nullptr;
     }
-
 };
 
 struct FrozenCLIPVisionEmbedder : public GGMLRunner {
@@ -1233,7 +1232,7 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
-    ggml_backend_t get_params_backend_at_index(int index){
+    ggml_backend_t get_params_backend_at_index(int index) {
         if (index == 0 && clip_l) {
             return clip_l->get_params_backend();
         } else if (index == 1 && clip_g) {
@@ -1245,7 +1244,7 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
-    ggml_backend_t get_runtime_backend_at_index(int index){
+    ggml_backend_t get_runtime_backend_at_index(int index) {
         if (index == 0 && clip_l) {
             return clip_l->get_runtime_backend();
         } else if (index == 1 && clip_g) {
@@ -1560,7 +1559,7 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
     }
 
-    ggml_backend_t get_params_backend_at_index(int index){
+    ggml_backend_t get_params_backend_at_index(int index) {
         if (index == 0 && clip_l) {
             return clip_l->get_params_backend();
         } else if (index == 1 && t5) {
@@ -1570,7 +1569,7 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
     }
 
-    ggml_backend_t get_runtime_backend_at_index(int index){
+    ggml_backend_t get_runtime_backend_at_index(int index) {
         if (index == 0 && clip_l) {
             return clip_l->get_runtime_backend();
         } else if (index == 1 && t5) {
@@ -1803,15 +1802,15 @@ struct T5CLIPEmbedder : public Conditioner {
                                             conditioner_params.zero_out_masked);
     }
 
-    ggml_backend_t get_params_backend_at_index(int index){
-        if (t5){
+    ggml_backend_t get_params_backend_at_index(int index) {
+        if (t5) {
             return t5->get_params_backend();
         }
         return nullptr;
     }
 
-    ggml_backend_t get_runtime_backend_at_index(int index){
-        if (t5){
+    ggml_backend_t get_runtime_backend_at_index(int index) {
+        if (t5) {
             return t5->get_runtime_backend();
         }
         return nullptr;
@@ -1953,15 +1952,15 @@ struct AnimaConditioner : public Conditioner {
         return {hidden_states, t5_weight_tensor, t5_ids_tensor};
     }
 
-    ggml_backend_t get_params_backend_at_index(int index){
-        if (llm){
+    ggml_backend_t get_params_backend_at_index(int index) {
+        if (llm) {
             return llm->get_params_backend();
         }
         return nullptr;
     }
 
-    ggml_backend_t get_runtime_backend_at_index(int index){
-        if (llm){
+    ggml_backend_t get_runtime_backend_at_index(int index) {
+        if (llm) {
             return llm->get_runtime_backend();
         }
         return nullptr;
@@ -2341,15 +2340,15 @@ struct LLMEmbedder : public Conditioner {
         return {hidden_states, nullptr, nullptr, extra_hidden_states_vec};
     }
 
-    ggml_backend_t get_params_backend_at_index(int index){
-        if (llm){
+    ggml_backend_t get_params_backend_at_index(int index) {
+        if (llm) {
             return llm->get_params_backend();
         }
         return nullptr;
     }
 
-    ggml_backend_t get_runtime_backend_at_index(int index){
-        if (llm){
+    ggml_backend_t get_runtime_backend_at_index(int index) {
+        if (llm) {
             return llm->get_runtime_backend();
         }
         return nullptr;

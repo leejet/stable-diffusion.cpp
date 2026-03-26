@@ -1,12 +1,12 @@
 #include "ggml-cpu.h"
 #include "ggml_extend.hpp"
 
+#include <vector>
 #include "model.h"
 #include "rng.hpp"
 #include "rng_mt19937.hpp"
 #include "rng_philox.hpp"
 #include "stable-diffusion.h"
-#include <vector>
 #include "util.h"
 
 #include "auto_encoder_kl.hpp"
@@ -482,45 +482,44 @@ static void log_sample_cache_summary(const SampleCacheRuntime& runtime, size_t t
     }
 }
 
-std::vector<std::string> string_split(const std::string & input, char separator)
-{
+std::vector<std::string> string_split(const std::string& input, char separator) {
     std::vector<std::string> parts;
-    size_t begin_pos = 0;
+    size_t begin_pos     = 0;
     size_t separator_pos = input.find(separator);
     while (separator_pos != std::string::npos) {
         std::string part = input.substr(begin_pos, separator_pos - begin_pos);
         parts.emplace_back(part);
-        begin_pos = separator_pos + 1;
+        begin_pos     = separator_pos + 1;
         separator_pos = input.find(separator, begin_pos);
     }
     parts.emplace_back(input.substr(begin_pos, separator_pos - begin_pos));
     return parts;
 }
 
-static void add_rpc_devices(const std::string & servers) {
+static void add_rpc_devices(const std::string& servers) {
     auto rpc_servers = string_split(servers, ',');
     if (rpc_servers.empty()) {
-       LOG_ERROR("no RPC servers specified");
-         return;
+        LOG_ERROR("no RPC servers specified");
+        return;
     }
     ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
     if (!rpc_reg) {
         LOG_ERROR("failed to find RPC backend");
-         return;
+        return;
     }
-    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char * endpoint);
-    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char* endpoint);
+    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t)ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
     if (!ggml_backend_rpc_add_server_fn) {
         LOG_ERROR("failed to find RPC add server function");
-         return;
+        return;
     }
-    for (const auto & server : rpc_servers) {
+    for (const auto& server : rpc_servers) {
         auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
         ggml_backend_register(reg);
     }
 }
 
-void add_rpc_device(const char* servers_cstr){
+void add_rpc_device(const char* servers_cstr) {
     std::string servers(servers_cstr);
     add_rpc_devices(servers);
 }
@@ -558,14 +557,14 @@ std::vector<std::pair<std::string, std::string>> list_backends_vector() {
     return backends;
 }
 
-SD_API size_t backend_list_size(){
+SD_API size_t backend_list_size() {
     // for C API
     size_t buffer_size = 0;
-    auto backends = list_backends_vector();
+    auto backends      = list_backends_vector();
     for (auto& backend : backends) {
         auto dev_name_size = backend.first.size();
         auto dev_desc_size = backend.second.size();
-        buffer_size+=dev_name_size+dev_desc_size+2; // +2 for the separators
+        buffer_size += dev_name_size + dev_desc_size + 2;  // +2 for the separators
     }
     return buffer_size;
 }
@@ -578,17 +577,17 @@ SD_API void list_backends_to_buffer(char* buffer, size_t buffer_size) {
         size_t name_size = backend.first.size();
         size_t desc_size = backend.second.size();
         if (offset + name_size + desc_size + 2 > buffer_size) {
-            break; // Not enough space in the buffer
+            break;  // Not enough space in the buffer
         }
         memcpy(buffer + offset, backend.first.c_str(), name_size);
         offset += name_size;
         buffer[offset++] = '\t';
         memcpy(buffer + offset, backend.second.c_str(), desc_size);
         offset += desc_size;
-        buffer[offset++] = '\n'; 
+        buffer[offset++] = '\n';
     }
     if (offset < buffer_size) {
-        buffer[offset] = '\0'; // Ensure the buffer is null-terminated at the end
+        buffer[offset] = '\0';  // Ensure the buffer is null-terminated at the end
     } else {
         LOG_WARN("Provided buffer size is too small to contain details of all devices.");
         buffer[buffer_size - 1] = '\0';  // Ensure the buffer is null-terminated at the end
@@ -607,7 +606,7 @@ public:
     ggml_backend_t pmid_backend        = nullptr;
     ggml_backend_t vision_backend      = nullptr;
 
-    std::vector<ggml_backend_t> clip_backends        = {nullptr};
+    std::vector<ggml_backend_t> clip_backends = {nullptr};
 
     SDVersion version;
     bool vae_decode_only         = false;
@@ -655,10 +654,10 @@ public:
     StableDiffusionGGML() = default;
 
     ~StableDiffusionGGML() {
-       if (diffusion_backend && diffusion_backend != backend) {
+        if (diffusion_backend && diffusion_backend != backend) {
             ggml_backend_free(diffusion_backend);
         }
-        for(auto clip_backend : clip_backends) {
+        for (auto clip_backend : clip_backends) {
             if (clip_backend && clip_backend != backend) {
                 ggml_backend_free(clip_backend);
             }
@@ -676,7 +675,6 @@ public:
             ggml_backend_free(backend);
         }
     }
-
 
     void log_backends() {
         const int device_count = ggml_backend_dev_count();
@@ -724,16 +722,16 @@ public:
             default_backend_name = override_default_backend_name;
         }
 
-        std::string diffusion_backend_name   = sanitize_backend_name(SAFE_STR(sd_ctx_params->diffusion_device));
-        std::vector<std::string> clip_backend_names        = sanitize_backend_name_list(SAFE_STR(sd_ctx_params->clip_device));
-        std::string control_net_backend_name = sanitize_backend_name(SAFE_STR(sd_ctx_params->control_net_device));
-        std::string vae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->vae_device));
-        std::string tae_backend_name         = sanitize_backend_name(SAFE_STR(sd_ctx_params->tae_device));
-        std::string pmid_backend_name        = sanitize_backend_name(SAFE_STR(sd_ctx_params->photomaker_device));
-        std::string vision_backend_name      = sanitize_backend_name(SAFE_STR(sd_ctx_params->vision_device));
+        std::string diffusion_backend_name          = sanitize_backend_name(SAFE_STR(sd_ctx_params->diffusion_device));
+        std::vector<std::string> clip_backend_names = sanitize_backend_name_list(SAFE_STR(sd_ctx_params->clip_device));
+        std::string control_net_backend_name        = sanitize_backend_name(SAFE_STR(sd_ctx_params->control_net_device));
+        std::string vae_backend_name                = sanitize_backend_name(SAFE_STR(sd_ctx_params->vae_device));
+        std::string tae_backend_name                = sanitize_backend_name(SAFE_STR(sd_ctx_params->tae_device));
+        std::string pmid_backend_name               = sanitize_backend_name(SAFE_STR(sd_ctx_params->photomaker_device));
+        std::string vision_backend_name             = sanitize_backend_name(SAFE_STR(sd_ctx_params->vision_device));
 
-        bool diffusion_backend_is_default   = diffusion_backend_name.empty() || diffusion_backend_name == default_backend_name;
-        bool clip_backends_are_default = true;
+        bool diffusion_backend_is_default = diffusion_backend_name.empty() || diffusion_backend_name == default_backend_name;
+        bool clip_backends_are_default    = true;
         for (const auto& clip_backend_name : clip_backend_names) {
             if (!clip_backend_name.empty() && clip_backend_name != default_backend_name) {
                 clip_backends_are_default = false;
@@ -743,8 +741,8 @@ public:
         bool control_net_backend_is_default = (control_net_backend_name.empty() || control_net_backend_name == default_backend_name);
         bool vae_backend_is_default         = (vae_backend_name.empty() || vae_backend_name == default_backend_name);
         // if tae_backend_name is empty, it will use the same backend as vae
-        bool tae_backend_is_default = (tae_backend_name.empty() && vae_backend_is_default) || tae_backend_name == default_backend_name;
-        bool pmid_backend_is_default = (pmid_backend_name.empty() || pmid_backend_name == default_backend_name);
+        bool tae_backend_is_default    = (tae_backend_name.empty() && vae_backend_is_default) || tae_backend_name == default_backend_name;
+        bool pmid_backend_is_default   = (pmid_backend_name.empty() || pmid_backend_name == default_backend_name);
         bool vision_backend_is_default = (vision_backend_name.empty() || vision_backend_name == default_backend_name);
 
         // if some backend is not specified or is the same as the default backend, use the default backend
@@ -934,12 +932,12 @@ public:
         {
             if (!clip_backends_are_default) {
                 clip_backends.clear();
-                for(auto clip_backend_name : clip_backend_names){
+                for (auto clip_backend_name : clip_backend_names) {
                     auto clip_backend = init_named_backend(clip_backend_name);
                     LOG_INFO("CLIP: Using %s backend", ggml_backend_name(clip_backend));
-                    clip_backends.push_back(clip_backend); 
+                    clip_backends.push_back(clip_backend);
                 }
-            }else{
+            } else {
                 clip_backends = {backend};
             }
             if (sd_version_is_sd3(version)) {
@@ -1050,9 +1048,9 @@ public:
                                                                       offload_params_to_cpu,
                                                                       tensor_storage_map);
                 diffusion_model  = std::make_shared<AnimaModel>(backend,
-                                                               offload_params_to_cpu,
-                                                               tensor_storage_map,
-                                                               "model.diffusion_model");
+                                                                offload_params_to_cpu,
+                                                                tensor_storage_map,
+                                                                "model.diffusion_model");
             } else if (sd_version_is_z_image(version)) {
                 cond_stage_model = std::make_shared<LLMEmbedder>(clip_backends[0],
                                                                  offload_params_to_cpu,
@@ -1218,7 +1216,7 @@ public:
                     control_net->set_conv2d_direct_enabled(true);
                 }
             }
-             pmid_backend = backend;
+            pmid_backend = backend;
             if (!pmid_backend_is_default) {
                 pmid_backend = init_named_backend(pmid_backend_name);
                 LOG_INFO("PhotoMaker: Using %s backend", ggml_backend_name(pmid_backend));
@@ -1401,7 +1399,7 @@ public:
 
             size_t total_params_ram_size  = 0;
             size_t total_params_vram_size = 0;
-            
+
             // TODO: split by individual text encoders
             if (ggml_backend_is_cpu(clip_backends[0])) {
                 total_params_ram_size += clip_params_mem_size + pmid_params_mem_size;
@@ -1640,8 +1638,8 @@ public:
         }
 
         for (auto& kv : lora_state_diff) {
-            bool applied = false;
-            int64_t t0 = ggml_time_ms();
+            bool applied                 = false;
+            int64_t t0                   = ggml_time_ms();
             auto lora_tensor_filter_diff = [&](const std::string& tensor_name) {
                 if (is_diffusion_model_name(tensor_name)) {
                     return true;
@@ -1681,7 +1679,7 @@ public:
                 }
                 return false;
             };
-            LOG_INFO("applying lora to first stage model"); 
+            LOG_INFO("applying lora to first stage model");
             auto first_stage_backend = first_stage_model->get_params_backend();
             lora                     = load_lora_model_from_file(kv.first, kv.second, first_stage_backend, lora_tensor_filter_first);
             if (lora && !lora->lora_tensors.empty()) {
@@ -1733,10 +1731,9 @@ public:
                     lora_state_diff.erase(iter);
                 }
             }
-            cond_stage_lora_models  = lora_models;
+            cond_stage_lora_models = lora_models;
 
-            
-            for(int i=0;i<cond_stage_model->model_count;i++){
+            for (int i = 0; i < cond_stage_model->model_count; i++) {
                 auto lora_tensor_filter_cond = [&](const std::string& tensor_name) {
                     if (is_cond_stage_model_name(tensor_name)) {
                         return cond_stage_model->is_cond_stage_model_name_at_index(tensor_name, i);
@@ -1746,8 +1743,8 @@ public:
                 for (auto& kv : lora_state_diff) {
                     const std::string& lora_id = kv.first;
                     float multiplier           = kv.second;
-                    auto backend = cond_stage_model->get_runtime_backend_at_index(i);
-                    auto lora = load_lora_model_from_file(kv.first, kv.second, backend, lora_tensor_filter_cond);
+                    auto backend               = cond_stage_model->get_runtime_backend_at_index(i);
+                    auto lora                  = load_lora_model_from_file(kv.first, kv.second, backend, lora_tensor_filter_cond);
                     if (lora && !lora->lora_tensors.empty()) {
                         lora->preprocess_lora_tensors(tensors);
                         cond_stage_lora_models.push_back(lora);
@@ -2101,9 +2098,9 @@ public:
         uint32_t dim           = static_cast<uint32_t>(latents->ne[ggml_n_dims(latents) - 1]);
 
         if (preview_mode == PREVIEW_PROJ) {
-            int patch_sz                           = 1;
-            const float(*latent_rgb_proj)[channel] = nullptr;
-            float* latent_rgb_bias                 = nullptr;
+            int patch_sz                            = 1;
+            const float (*latent_rgb_proj)[channel] = nullptr;
+            float* latent_rgb_bias                  = nullptr;
 
             if (dim == 128) {
                 if (sd_version_is_flux2(version)) {
