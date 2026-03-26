@@ -81,7 +81,7 @@ jobs:
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
-          cmake --build build --config Release -j $(nproc)
+          cmake --build build --config Release
 
       - name: Get commit hash
         id: commit
@@ -148,7 +148,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON
-          cmake --build build --config Release -j $(nproc)
+          cmake --build build --config Release
 
       - name: Get commit hash
         id: commit
@@ -287,7 +287,7 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_METAL=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          cmake --build build --config Release
 
       - name: Get commit hash
         id: commit
@@ -643,7 +643,7 @@ jobs:
             -DAMDGPU_TARGETS="${{ env.GPU_TARGETS }}" \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-          cmake --build . --config Release -j $(nproc)
+          cmake --build . --config Release
 
       - name: Get commit hash
         id: commit
