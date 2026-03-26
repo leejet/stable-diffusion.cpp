@@ -6,10 +6,6 @@
 #include "common_block.hpp"
 #include "flux.hpp"
 
-#ifdef SD_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-
 namespace Qwen {
     constexpr int QWEN_IMAGE_GRAPH_SIZE = 20480;
 
@@ -125,12 +121,13 @@ namespace Qwen {
             auto to_k     = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
             auto to_v     = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
             auto to_out_0 = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
-#ifdef SD_USE_VULKAN
-            if(ggml_backend_is_vk(ctx->backend)){
+
+
+            if (sd_backend_is(ctx->backend,"Vulkan"))
+            {
                 to_out_0->set_force_prec_f32(true);
             }
-#endif
-
+            
             auto norm_added_q = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_q"]);
             auto norm_added_k = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_k"]);
 

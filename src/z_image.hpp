@@ -7,14 +7,6 @@
 #include "ggml_extend.hpp"
 #include "mmdit.hpp"
 
-#ifdef SD_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-
-#if GGML_USE_HIP
-#include "ggml-cuda.h"
-#endif
-
 // Ref: https://github.com/Alpha-VLLM/Lumina-Image-2.0/blob/main/models/model.py
 // Ref: https://github.com/huggingface/diffusers/pull/12703
 
@@ -55,13 +47,12 @@ namespace ZImage {
             int64_t N       = x->ne[2];
             auto qkv_proj   = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
             auto out_proj   = std::dynamic_pointer_cast<Linear>(blocks["out"]);
-#if GGML_USE_HIP
-            // Prevent NaN issues with certain ROCm setups
-            if (ggml_backend_is_cuda(ctx->backend)) {
+
+            if (sd_backend_is(ctx->backend,"ROCm"))
+            {
                 out_proj->set_scale(1.f / 16.f);
             }
-#endif
-
+            
             auto qkv = qkv_proj->forward(ctx, x);                                                                            // [N, n_token, (num_heads + num_kv_heads*2)*head_dim]
             qkv      = ggml_reshape_4d(ctx->ggml_ctx, qkv, head_dim, num_heads + num_kv_heads * 2, qkv->ne[1], qkv->ne[2]);  // [N, n_token, num_heads + num_kv_heads*2, head_dim]
 
@@ -136,11 +127,11 @@ namespace ZImage {
             auto w1 = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
-#ifdef SD_USE_VULKAN
-            if(ggml_backend_is_vk(ctx->backend)){
+
+            if (sd_backend_is(ctx->backend,"Vulkan"))
+            {
                 w2->set_force_prec_f32(true);
             }
-#endif
 
             auto x1 = w1->forward(ctx, x);
             auto x3 = w3->forward(ctx, x);

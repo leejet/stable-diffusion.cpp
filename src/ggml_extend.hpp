@@ -1299,16 +1299,17 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_ones_like(ggml_context* ctx,
     return ggml_ext_ones(ctx, x->ne[0], x->ne[1], x->ne[2], x->ne[3]);
 }
 
-__STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_tensor* a) {
-#ifdef SD_USE_VULKAN
+__STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx,ggml_backend_t backend, ggml_tensor* a) {
+if (sd_backend_is(backend, "Vulkan"))
+{
     auto zero_index = ggml_get_tensor(ctx, "ggml_runner_build_in_tensor:zero_int");
     auto out        = ggml_reshape_1d(ctx, a, ggml_nelements(a));
     out             = ggml_get_rows(ctx, out, zero_index);
     out             = ggml_reshape(ctx, out, a);
     // auto out = ggml_cast(ctx, a, GGML_TYPE_F32);
     return out;
-#else
-    auto out         = ggml_reshape_2d(ctx, a, 1, ggml_nelements(a));
+}else{
+       auto out         = ggml_reshape_2d(ctx, a, 1, ggml_nelements(a));
     ggml_tensor* one = ggml_ext_ones(ctx, 1, 1, 1, 1);  // [1,]
     if (ggml_is_transposed(out)) {
         out = ggml_mul_mat(ctx, one, out);
@@ -1316,8 +1317,9 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_cast_f32(ggml_context* ctx, ggml_tensor*
         out = ggml_mul_mat(ctx, out, one);
     }
     out = ggml_reshape(ctx, out, a);
-#endif
-    return out;
+     return out;
+}
+
 }
 
 // q: [N, L_q, C(n_head*d_head)] or [N*n_head, L_q, d_head]
