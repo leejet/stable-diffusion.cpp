@@ -745,7 +745,7 @@ std::vector<std::pair<std::string, float>> parse_prompt_attention(const std::str
 }
 
 // test if the backend is a specific one, e.g. "CUDA", "ROCm", "Vulkan" etc.
-static inline bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
+bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
     ggml_backend_dev_t dev = ggml_backend_get_device(backend);
     if (!dev) return false;
      std::string  dev_name = ggml_backend_dev_name(dev);

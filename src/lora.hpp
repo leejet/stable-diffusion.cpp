@@ -129,7 +129,7 @@ struct LoraModel : public GGMLRunner {
         }
     }
 
-    ggml_tensor* get_lora_weight_diff(const std::string& model_tensor_name, ggml_context* ctx) {
+    ggml_tensor* get_lora_weight_diff(const std::string& model_tensor_name, ggml_context* ctx, ggml_backend_t backend) {
         ggml_tensor* updown = nullptr;
         int index           = 0;
         while (true) {
@@ -152,17 +152,17 @@ struct LoraModel : public GGMLRunner {
 
             auto iter = lora_tensors.find(lora_up_name);
             if (iter != lora_tensors.end()) {
-                lora_up = ggml_ext_cast_f32(ctx, iter->second);
+                lora_up = ggml_ext_cast_f32(ctx, backend, iter->second);
             }
 
             iter = lora_tensors.find(lora_mid_name);
             if (iter != lora_tensors.end()) {
-                lora_mid = ggml_ext_cast_f32(ctx, iter->second);
+                lora_mid = ggml_ext_cast_f32(ctx, backend, iter->second);
             }
 
             iter = lora_tensors.find(lora_down_name);
             if (iter != lora_tensors.end()) {
-                lora_down = ggml_ext_cast_f32(ctx, iter->second);
+                lora_down = ggml_ext_cast_f32(ctx, backend, iter->second);
             }
 
             if (lora_up == nullptr || lora_down == nullptr) {
@@ -208,7 +208,7 @@ struct LoraModel : public GGMLRunner {
         return updown;
     }
 
-    ggml_tensor* get_raw_weight_diff(const std::string& model_tensor_name, ggml_context* ctx) {
+    ggml_tensor* get_raw_weight_diff(const std::string& model_tensor_name, ggml_context* ctx, ggml_backend_t backend) {
         ggml_tensor* updown = nullptr;
         int index           = 0;
         while (true) {
@@ -225,7 +225,7 @@ struct LoraModel : public GGMLRunner {
 
             auto iter = lora_tensors.find(diff_name);
             if (iter != lora_tensors.end()) {
-                curr_updown = ggml_ext_cast_f32(ctx, iter->second);
+                curr_updown = ggml_ext_cast_f32(ctx, backend, iter->second);
             } else {
                 break;
             }
@@ -248,7 +248,7 @@ struct LoraModel : public GGMLRunner {
         return updown;
     }
 
-    ggml_tensor* get_loha_weight_diff(const std::string& model_tensor_name, ggml_context* ctx) {
+    ggml_tensor* get_loha_weight_diff(const std::string& model_tensor_name, ggml_context* ctx, ggml_backend_t backend) {
         ggml_tensor* updown = nullptr;
         int index           = 0;
         while (true) {
@@ -276,33 +276,33 @@ struct LoraModel : public GGMLRunner {
 
             auto iter = lora_tensors.find(hada_1_down_name);
             if (iter != lora_tensors.end()) {
-                hada_1_down = ggml_ext_cast_f32(ctx, iter->second);
+                hada_1_down = ggml_ext_cast_f32(ctx, backend, iter->second);
             }
 
             iter = lora_tensors.find(hada_1_up_name);
             if (iter != lora_tensors.end()) {
-                hada_1_up = ggml_ext_cast_f32(ctx, iter->second);
+                hada_1_up = ggml_ext_cast_f32(ctx, backend, iter->second);
             }
 
             iter = lora_tensors.find(hada_1_mid_name);
             if (iter != lora_tensors.end()) {
-                hada_1_mid = ggml_ext_cast_f32(ctx, iter->second);
+                hada_1_mid = ggml_ext_cast_f32(ctx, backend, iter->second);
                 hada_1_up  = ggml_cont(ctx, ggml_transpose(ctx, hada_1_up));
             }
 
             iter = lora_tensors.find(hada_2_down_name);
             if (iter != lora_tensors.end()) {
-                hada_2_down = ggml_ext_cast_f32(ctx, iter->second);
+                hada_2_down = ggml_ext_cast_f32(ctx, backend, iter->second);
             }
 
             iter = lora_tensors.find(hada_2_up_name);
             if (iter != lora_tensors.end()) {
-                hada_2_up = ggml_ext_cast_f32(ctx, iter->second);
+                hada_2_up = ggml_ext_cast_f32(ctx, backend, iter->second);
             }
 
             iter = lora_tensors.find(hada_2_mid_name);
             if (iter != lora_tensors.end()) {
-                hada_2_mid = ggml_ext_cast_f32(ctx, iter->second);
+                hada_2_mid = ggml_ext_cast_f32(ctx, backend, iter->second);
                 hada_2_up  = ggml_cont(ctx, ggml_transpose(ctx, hada_2_up));
             }
 
@@ -351,7 +351,7 @@ struct LoraModel : public GGMLRunner {
         return updown;
     }
 
-    ggml_tensor* get_lokr_weight_diff(const std::string& model_tensor_name, ggml_context* ctx) {
+    ggml_tensor* get_lokr_weight_diff(const std::string& model_tensor_name, ggml_context* ctx, ggml_backend_t backend) {
         ggml_tensor* updown = nullptr;
         int index           = 0;
         while (true) {
@@ -378,24 +378,24 @@ struct LoraModel : public GGMLRunner {
 
             auto iter = lora_tensors.find(lokr_w1_name);
             if (iter != lora_tensors.end()) {
-                lokr_w1 = ggml_ext_cast_f32(ctx, iter->second);
+                lokr_w1 = ggml_ext_cast_f32(ctx, backend, iter->second);
             }
 
             iter = lora_tensors.find(lokr_w2_name);
             if (iter != lora_tensors.end()) {
-                lokr_w2 = ggml_ext_cast_f32(ctx, iter->second);
+                lokr_w2 = ggml_ext_cast_f32(ctx, backend, iter->second);
             }
 
             int64_t rank = 1;
             if (lokr_w1 == nullptr) {
                 iter = lora_tensors.find(lokr_w1_a_name);
                 if (iter != lora_tensors.end()) {
-                    lokr_w1_a = ggml_ext_cast_f32(ctx, iter->second);
+                    lokr_w1_a = ggml_ext_cast_f32(ctx, backend, iter->second);
                 }
 
                 iter = lora_tensors.find(lokr_w1_b_name);
                 if (iter != lora_tensors.end()) {
-                    lokr_w1_b = ggml_ext_cast_f32(ctx, iter->second);
+                    lokr_w1_b = ggml_ext_cast_f32(ctx, backend, iter->second);
                 }
 
                 if (lokr_w1_a == nullptr || lokr_w1_b == nullptr) {
@@ -410,12 +410,12 @@ struct LoraModel : public GGMLRunner {
             if (lokr_w2 == nullptr) {
                 iter = lora_tensors.find(lokr_w2_a_name);
                 if (iter != lora_tensors.end()) {
-                    lokr_w2_a = ggml_ext_cast_f32(ctx, iter->second);
+                    lokr_w2_a = ggml_ext_cast_f32(ctx, backend, iter->second);
                 }
 
                 iter = lora_tensors.find(lokr_w2_b_name);
                 if (iter != lora_tensors.end()) {
-                    lokr_w2_b = ggml_ext_cast_f32(ctx, iter->second);
+                    lokr_w2_b = ggml_ext_cast_f32(ctx, backend, iter->second);
                 }
 
                 if (lokr_w2_a == nullptr || lokr_w2_b == nullptr) {
@@ -468,23 +468,23 @@ struct LoraModel : public GGMLRunner {
         return updown;
     }
 
-    ggml_tensor* get_weight_diff(const std::string& model_tensor_name, ggml_context* ctx, ggml_tensor* model_tensor, bool with_lora_and_lokr = true) {
+    ggml_tensor* get_weight_diff(const std::string& model_tensor_name, ggml_backend_t backend, ggml_context* ctx, ggml_tensor* model_tensor, bool with_lora_and_lokr = true) {
         // lora
         ggml_tensor* diff = nullptr;
         if (with_lora_and_lokr) {
-            diff = get_lora_weight_diff(model_tensor_name, ctx);
+            diff = get_lora_weight_diff(model_tensor_name, ctx, backend);
         }
         // diff
         if (diff == nullptr) {
-            diff = get_raw_weight_diff(model_tensor_name, ctx);
+            diff = get_raw_weight_diff(model_tensor_name, ctx, backend);
         }
         // loha
         if (diff == nullptr) {
-            diff = get_loha_weight_diff(model_tensor_name, ctx);
+            diff = get_loha_weight_diff(model_tensor_name, ctx, backend);
         }
         // lokr
         if (diff == nullptr && with_lora_and_lokr) {
-            diff = get_lokr_weight_diff(model_tensor_name, ctx);
+            diff = get_lokr_weight_diff(model_tensor_name, ctx, backend);
         }
         if (diff != nullptr) {
             if (ggml_nelements(diff) < ggml_nelements(model_tensor)) {
@@ -761,7 +761,7 @@ struct LoraModel : public GGMLRunner {
             ggml_tensor* model_tensor     = it.second;
 
             // lora
-            ggml_tensor* diff = get_weight_diff(model_tensor_name, compute_ctx, model_tensor);
+            ggml_tensor* diff = get_weight_diff(model_tensor_name,runtime_backend, compute_ctx, model_tensor);
             if (diff == nullptr) {
                 continue;
             }
@@ -774,7 +774,7 @@ struct LoraModel : public GGMLRunner {
 
             ggml_tensor* final_tensor;
             if (model_tensor->type != GGML_TYPE_F32 && model_tensor->type != GGML_TYPE_F16) {
-                final_tensor = ggml_ext_cast_f32(compute_ctx, model_tensor);
+                final_tensor = ggml_ext_cast_f32(compute_ctx,runtime_backend ,model_tensor);
                 final_tensor = ggml_add_inplace(compute_ctx, final_tensor, diff);
                 final_tensor = ggml_cpy(compute_ctx, final_tensor, model_tensor);
             } else {
@@ -841,34 +841,35 @@ public:
         : lora_models(lora_models) {
     }
 
-    ggml_tensor* patch_weight(ggml_context* ctx, ggml_tensor* weight, const std::string& weight_name, bool with_lora_and_lokr) {
+    ggml_tensor* patch_weight(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* weight, const std::string& weight_name, bool with_lora_and_lokr) {
         for (auto& lora_model : lora_models) {
-            ggml_tensor* diff = lora_model->get_weight_diff(weight_name, ctx, weight, with_lora_and_lokr);
+            ggml_tensor* diff = lora_model->get_weight_diff(weight_name, backend, ctx, weight, with_lora_and_lokr);
             if (diff == nullptr) {
                 continue;
             }
 
             if (weight->type != GGML_TYPE_F32 && weight->type != GGML_TYPE_F16) {
-                weight = ggml_ext_cast_f32(ctx, weight);
+                weight = ggml_ext_cast_f32(ctx, backend, weight);
             }
             weight = ggml_add(ctx, weight, diff);
         }
         return weight;
     }
 
-    ggml_tensor* patch_weight(ggml_context* ctx, ggml_tensor* weight, const std::string& weight_name) override {
-        return patch_weight(ctx, weight, weight_name, true);
+    ggml_tensor* patch_weight(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* weight, const std::string& weight_name) override {
+        return patch_weight(ctx, backend, weight, weight_name, true);
     }
 
     ggml_tensor* forward_with_lora(ggml_context* ctx,
+                                   ggml_backend_t backend,
                                    ggml_tensor* x,
                                    ggml_tensor* w,
                                    ggml_tensor* b,
                                    const std::string& prefix,
                                    WeightAdapter::ForwardParams forward_params) override {
-        w = patch_weight(ctx, w, prefix + "weight", false);
+        w = patch_weight(ctx, backend, w, prefix + "weight", false);
         if (b) {
-            b = patch_weight(ctx, b, prefix + "bias", false);
+            b = patch_weight(ctx, backend, b, prefix + "bias", false);
         }
         ggml_tensor* out;
         if (forward_params.op_type == ForwardParams::op_type_t::OP_LINEAR) {

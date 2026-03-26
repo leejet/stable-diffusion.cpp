@@ -27,7 +27,7 @@
 #include "latent-preview.h"
 #include "name_conversion.h"
 
-#if SD_USE_RPC
+#if GGML_RPC
 #include "ggml-rpc.h"
 #endif
 
@@ -1244,7 +1244,7 @@ public:
                     return false;
                 };
                 int n_th = n_threads;
-#ifdef SD_USE_RPC
+#ifdef GGML_RPC
                 if (ggml_backend_is_rpc(diffusion_backend)) {
                     n_th = 1;  // avoid multi-thread for loading to remote
                 }
@@ -1342,7 +1342,7 @@ public:
             ignore_tensors.insert("conditioner.embedders.3");
         }
         int n_th = n_threads;
-#ifdef SD_USE_RPC
+#ifdef GGML_RPC
         // TODO: maybe set it to 1 threads only for model parts that are on remote?
         bool is_any_clip_rpc = false;
         for (auto& backend : clip_backends) {
@@ -1379,7 +1379,7 @@ public:
             size_t control_net_params_mem_size = 0;
             if (control_net) {
                 int n_th = n_threads;
-#ifdef SD_USE_RPC
+#ifdef GGML_RPC
                 if (ggml_backend_is_rpc(control_net_backend)) {
                     n_th = 1;  // avoid multi-thread for loading to remote
                 }
@@ -1594,7 +1594,7 @@ public:
         }
         auto lora = std::make_shared<LoraModel>(lora_id, backend, lora_path, is_high_noise ? "model.high_noise_" : "", version);
         int n_th  = n_threads;
-#ifdef SD_USE_RPC
+#ifdef GGML_RPC
         if (ggml_backend_is_rpc(backend)) {
             n_th = 1;  // avoid multi-thread for loading to remote
         }

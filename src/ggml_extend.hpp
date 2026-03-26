@@ -1511,16 +1511,15 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_group_norm(ggml_context* ctx,
 }
 
 __STATIC_INLINE__ void ggml_ext_backend_tensor_get_and_sync(ggml_backend_t backend, const ggml_tensor* tensor, void* data, size_t offset, size_t size) {
-#if defined(SD_USE_CUDA) || defined(SD_USE_SYCL)
+    if (sd_backend_is(backend, "ROCm") || sd_backend_is(backend, "CUDA") || sd_backend_is(backend, "SYCL")) {
     if (!ggml_backend_is_cpu(backend)) {
         ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
         ggml_backend_synchronize(backend);
     } else {
         ggml_backend_tensor_get(tensor, data, offset, size);
     }
-#else
+}
     ggml_backend_tensor_get(tensor, data, offset, size);
-#endif
 }
 
 __STATIC_INLINE__ float ggml_ext_backend_tensor_get_f32(ggml_tensor* tensor) {
@@ -1667,8 +1666,9 @@ struct WeightAdapter {
             float scale     = 1.f;
         } conv2d;
     };
-    virtual ggml_tensor* patch_weight(ggml_context* ctx, ggml_tensor* weight, const std::string& weight_name) = 0;
+    virtual ggml_tensor* patch_weight(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* weight, const std::string& weight_name) = 0;
     virtual ggml_tensor* forward_with_lora(ggml_context* ctx,
+                                           ggml_backend_t backend,
                                            ggml_tensor* x,
                                            ggml_tensor* w,
                                            ggml_tensor* b,
@@ -2324,7 +2324,7 @@ public:
             forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
             forward_params.linear.force_prec_f32 = force_prec_f32;
             forward_params.linear.scale          = scale;
-            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
+            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx,ctx->backend, x, w, b, prefix, forward_params);
         }
         return ggml_ext_linear(ctx->ggml_ctx, x, w, b, force_prec_f32, scale);
     }
@@ -2440,7 +2440,7 @@ public:
             forward_params.conv2d.circular_x = ctx->circular_x_enabled;
             forward_params.conv2d.circular_y = ctx->circular_y_enabled;
             forward_params.conv2d.scale      = scale;
-            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, x, w, b, prefix, forward_params);
+            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
         }
         return ggml_ext_conv_2d(ctx->ggml_ctx,
                                 x,
@@ -2504,7 +2504,7 @@ public:
         ggml_tensor* w = params["weight"];
         ggml_tensor* b = nullptr;
         if (ctx->weight_adapter) {
-            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx,ctx->backend, w, prefix + "weight");
             if (w->type != GGML_TYPE_F16) {
                 w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F16);
             }
@@ -2512,7 +2512,7 @@ public:
         if (bias) {
             b = params["bias"];
             if (ctx->weight_adapter) {
-                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
             }
         }
         return ggml_ext_conv_3d(ctx->ggml_ctx, x, w, b, in_channels,
@@ -2559,12 +2559,12 @@ public:
         if (elementwise_affine) {
             w = params["weight"];
             if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
             }
             if (bias) {
                 b = params["bias"];
                 if (ctx->weight_adapter) {
-                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
                 }
             }
         }
@@ -2607,8 +2607,8 @@ public:
             w = params["weight"];
             b = params["bias"];
             if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
-                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, b, prefix + "bias");
+                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
             }
         }
         return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups);
@@ -2642,7 +2642,7 @@ public:
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
         ggml_tensor* w = params["weight"];
         if (ctx->weight_adapter) {
-            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, w, prefix + "weight");
+            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
         }
         x = ggml_rms_norm(ctx->ggml_ctx, x, eps);
         x = ggml_mul_inplace(ctx->ggml_ctx, x, w);

@@ -8,6 +8,8 @@ if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
+
 if (MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
@@ -22,66 +24,84 @@ else()
     set(SD_STANDALONE OFF)
 endif()
 
+if (MINGW)
+        set(BUILD_SHARED_LIBS_DEFAULT OFF)
+    else()
+        set(BUILD_SHARED_LIBS_DEFAULT ON)
+endif()
+
+option(BUILD_SHARED_LIBS "build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
+
+if (WIN32)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+endif()
+
+if (MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/bigobj>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
+endif()
+
+if (SD_STANDALONE)
+    # enable parallel builds for msbuild
+    list(APPEND CMAKE_VS_GLOBALS UseMultiToolTask=true)
+    list(APPEND CMAKE_VS_GLOBALS EnforceProcessCountAcrossBuilds=true)
+endif()
+
+
 #
 # Option list
 #
-
 # general
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
-option(SD_CUDA                       "sd: cuda backend" OFF)
-option(SD_HIPBLAS                    "sd: rocm backend" OFF)
-option(SD_METAL                      "sd: metal backend" OFF)
-option(SD_VULKAN                     "sd: vulkan backend" OFF)
-option(SD_OPENCL                     "sd: opencl backend" OFF)
-option(SD_SYCL                       "sd: sycl backend" OFF)
-option(SD_MUSA                       "sd: musa backend" OFF)
-option(SD_BUILD_SHARED_LIBS          "sd: build shared libs" OFF)
-option(SD_BUILD_SHARED_GGML_LIB      "sd: build ggml as a separate shared lib" OFF)
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
-if(SD_CUDA)
-    message("-- Use CUDA as backend stable-diffusion")
-    set(GGML_CUDA ON)
-    add_definitions(-DSD_USE_CUDA)
+# Required for relocatable CMake package
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)
+
+if (NOT DEFINED SD_BUILD_NUMBER)
+    set(SD_BUILD_NUMBER        ${BUILD_NUMBER})
+endif()
+if (NOT DEFINED SD_BUILD_COMMIT)
+    set(SD_BUILD_COMMIT        ${BUILD_COMMIT})
+endif()
+set(SD_INSTALL_VERSION 0.0.${SD_BUILD_NUMBER})
+
+# override ggml options
+set(GGML_ALL_WARNINGS   ${SD_ALL_WARNINGS})
+set(GGML_FATAL_WARNINGS ${SD_FATAL_WARNINGS})
+
+if (NOT DEFINED GGML_CUDA_GRAPHS)
+    set(GGML_CUDA_GRAPHS_DEFAULT ON)
 endif()
 
-if(SD_METAL)
-    message("-- Use Metal as backend stable-diffusion")
-    set(GGML_METAL ON)
-    add_definitions(-DSD_USE_METAL)
-endif()
+# Ref: https://github.com/ggml-org/llama.cpp/blob/master/CMakeLists.txt#L145
+# transition helpers
+function (sd_option_depr TYPE OLD)
+    if (${OLD})
+        set(NEW "${ARGV2}")
+        if(NEW)
+            message(${TYPE} "${OLD} is deprecated, use ${NEW} instead")
+            set(${NEW} ON PARENT_SCOPE)
+        else()
+            message(${TYPE} "${OLD} is deprecated and will be ignored")
+        endif()
+    endif()
+endfunction()
 
-if (SD_VULKAN)
-    message("-- Use Vulkan as backend stable-diffusion")
-    set(GGML_VULKAN ON)
-    add_definitions(-DSD_USE_VULKAN)
-endif ()
-
-if (SD_OPENCL)
-    message("-- Use OpenCL as backend stable-diffusion")
-    set(GGML_OPENCL ON)
-    add_definitions(-DSD_USE_OPENCL)
-endif ()
-
-if (SD_HIPBLAS)
-    message("-- Use HIPBLAS as backend stable-diffusion")
-    set(GGML_HIP ON)
-    add_definitions(-DSD_USE_CUDA)
-endif ()
-
-if(SD_MUSA)
-    message("-- Use MUSA as backend stable-diffusion")
-    set(GGML_MUSA ON)
-    add_definitions(-DSD_USE_CUDA)
-endif()
-
-if (SD_RPC)
-    message("-- Use RPC as backend stable-diffusion")
-    set(GGML_RPC ON)
-    add_definitions(-DSD_USE_RPC)
-endif ()
+sd_option_depr(FATAL_ERROR SD_HIPBLAS               GGML_CUDA)
+sd_option_depr(FATAL_ERROR SD_BUILD_SHARED_LIBS     BUILD_SHARED_LIBS)
+sd_option_depr(FATAL_ERROR SD_BUILD_SHARED_GGML_LIB BUILD_SHARED_LIBS)
+sd_option_depr(WARNING     SD_CUDA                  GGML_CUDA)
+sd_option_depr(WARNING     SD_METAL                 GGML_METAL)
+sd_option_depr(WARNING     SD_VULKAN                GGML_VULKAN)
+sd_option_depr(WARNING     SD_OPENCL                GGML_OPENCL)
+sd_option_depr(WARNING     SD_SYCL                  GGML_SYCL)
+sd_option_depr(WARNING     SD_MUSA                  GGML_MUSA)
 
 set(SD_LIB stable-diffusion)
 
@@ -125,29 +145,9 @@ set_property(
   SDCPP_BUILD_COMMIT=${SDCPP_BUILD_COMMIT} SDCPP_BUILD_VERSION=${SDCPP_BUILD_VERSION}
 )
 
-if(SD_BUILD_SHARED_LIBS)
-    message("-- Build shared library")
-    message(${SD_LIB_SOURCES})
-    if(NOT SD_BUILD_SHARED_GGML_LIB)
-        set(BUILD_SHARED_LIBS OFF)
-    endif()
-    add_library(${SD_LIB} SHARED ${SD_LIB_SOURCES})
-    add_definitions(-DSD_BUILD_SHARED_LIB)
-    target_compile_definitions(${SD_LIB} PRIVATE -DSD_BUILD_DLL)
-    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-else()
-    message("-- Build static library")
-    if(NOT SD_BUILD_SHARED_GGML_LIB)
-        set(BUILD_SHARED_LIBS OFF)
-    endif()
-    add_library(${SD_LIB} STATIC ${SD_LIB_SOURCES})
-endif()
-
-if(SD_SYCL)
-    message("-- Use SYCL as backend stable-diffusion")
-    set(GGML_SYCL ON)
+# Is this needed?
+if(GGML_SYCL)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing -fsycl")
-    add_definitions(-DSD_USE_SYCL)
     # disable fast-math on host, see:
     # https://www.intel.com/content/www/us/en/docs/cpp-compiler/developer-guide-reference/2021-10/fp-model-fp.html
     if (WIN32)
@@ -181,18 +181,48 @@ if (NOT TARGET ggml)
 endif()
 
 add_subdirectory(thirdparty)
-
-target_link_libraries(${SD_LIB} PUBLIC ggml zip)
-target_include_directories(${SD_LIB} PUBLIC . include)
-target_include_directories(${SD_LIB} PUBLIC . thirdparty)
-target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
-
+add_subdirectory(src)
 
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-set(SD_PUBLIC_HEADERS include/stable-diffusion.h)
-set_target_properties(${SD_LIB} PROPERTIES PUBLIC_HEADER "${SD_PUBLIC_HEADERS}")
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+set(SD_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
+set(SD_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
+set(SD_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
+set(SD_PUBLIC_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/stable-diffusion.h
+)
+
+set_target_properties(${SD_LIB}
+    PROPERTIES
+        PUBLIC_HEADER "${SD_PUBLIC_HEADERS}")
 
 install(TARGETS ${SD_LIB} LIBRARY PUBLIC_HEADER)
+
+configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sd-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/sd-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/sd
+    PATH_VARS SD_INCLUDE_INSTALL_DIR
+              SD_LIB_INSTALL_DIR
+              SD_BIN_INSTALL_DIR )
+
+write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/sd-version.cmake
+    VERSION ${SD_INSTALL_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/sd-config.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/sd-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/sd)
+
+configure_file(cmake/sd.pc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/sd.pc"
+        @ONLY)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/sd.pc"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
