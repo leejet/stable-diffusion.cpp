@@ -500,16 +500,19 @@ std::vector<std::string> string_split(const std::string & input, char separator)
 static void add_rpc_devices(const std::string & servers) {
     auto rpc_servers = string_split(servers, ',');
     if (rpc_servers.empty()) {
-        throw std::invalid_argument("no RPC servers specified");
+       LOG_ERROR("no RPC servers specified");
+         return;
     }
     ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
     if (!rpc_reg) {
-        throw std::invalid_argument("failed to find RPC backend");
+        LOG_ERROR("failed to find RPC backend");
+         return;
     }
     typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char * endpoint);
     ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
     if (!ggml_backend_rpc_add_server_fn) {
-        throw std::invalid_argument("failed to find RPC add server function");
+        LOG_ERROR("failed to find RPC add server function");
+         return;
     }
     for (const auto & server : rpc_servers) {
         auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
@@ -652,24 +655,26 @@ public:
     StableDiffusionGGML() = default;
 
     ~StableDiffusionGGML() {
-        if (diffusion_backend != backend) {
+       if (diffusion_backend && diffusion_backend != backend) {
             ggml_backend_free(diffusion_backend);
         }
         for(auto clip_backend : clip_backends) {
-            if (clip_backend != backend) {
+            if (clip_backend && clip_backend != backend) {
                 ggml_backend_free(clip_backend);
             }
         }
-        if (control_net_backend != backend) {
+        if (control_net_backend && control_net_backend != backend) {
             ggml_backend_free(control_net_backend);
         }
-        if (tae_backend != vae_backend) {
+        if (tae_backend && tae_backend != vae_backend) {
             ggml_backend_free(tae_backend);
         }
-        if (vae_backend != backend) {
+        if (vae_backend && vae_backend != backend) {
             ggml_backend_free(vae_backend);
         }
-        ggml_backend_free(backend);
+        if (backend) {
+            ggml_backend_free(backend);
+        }
     }
 
 

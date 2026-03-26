@@ -1511,14 +1511,13 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_group_norm(ggml_context* ctx,
 }
 
 __STATIC_INLINE__ void ggml_ext_backend_tensor_get_and_sync(ggml_backend_t backend, const ggml_tensor* tensor, void* data, size_t offset, size_t size) {
-    if (sd_backend_is(backend, "ROCm") || sd_backend_is(backend, "CUDA") || sd_backend_is(backend, "SYCL")) {
-    if (!ggml_backend_is_cpu(backend)) {
+    if ((sd_backend_is(backend, "ROCm") || sd_backend_is(backend, "CUDA") || sd_backend_is(backend, "SYCL")) &&
+        !ggml_backend_is_cpu(backend)) {
         ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
         ggml_backend_synchronize(backend);
-    } else {
-        ggml_backend_tensor_get(tensor, data, offset, size);
+        return;
     }
-}
+
     ggml_backend_tensor_get(tensor, data, offset, size);
 }
 

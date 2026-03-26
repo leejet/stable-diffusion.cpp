@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "ggml.h"
+
 // #include "preprocessing.hpp"
 #include "stable-diffusion.h"
 
@@ -158,6 +160,7 @@ struct SDCliParams {
 
         auto on_list_devices_arg = [&](int argc, const char** argv, int index) {
             size_t buff_size = backend_list_size();
+            GGML_ASSERT(buff_size > 0);
             char* buff = (char*)malloc(buff_size);
             list_backends_to_buffer(buff, buff_size);
             printf("List of available GGML devices:\nName\tDescription\n-------------------\n%s\n", buff);

@@ -1304,7 +1304,7 @@ struct FluxCLIPEmbedder : public Conditioner {
             LOG_WARN("clip_l text encoder not found! Prompt adherence might be degraded.");
         }
         if (use_t5) {
-            LOG_INFO("T5-XXL: using %s backend", ggml_backend_name(clip_l_backend));
+            LOG_INFO("T5-XXL: using %s backend", ggml_backend_name(t5_backend));
             t5 = std::make_shared<T5Runner>(t5_backend, offload_params_to_cpu, tensor_storage_map, "text_encoders.t5xxl.transformer");
         } else {
             LOG_WARN("t5xxl text encoder not found! Prompt adherence might be degraded.");

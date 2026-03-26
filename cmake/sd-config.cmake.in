@@ -17,14 +17,14 @@ find_library(stable-diffusion_LIBRARY stable-diffusion
     NO_CMAKE_FIND_ROOT_PATH
 )
 
-add_library(llama UNKNOWN IMPORTED)
+add_library(stable-diffusion UNKNOWN IMPORTED)
 set_target_properties(stable-diffusion
     PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES "${LLAMA_INCLUDE_DIR}"
+        INTERFACE_INCLUDE_DIRECTORIES "${SD_INCLUDE_DIR}"
         INTERFACE_LINK_LIBRARIES "ggml::ggml;ggml::ggml-base;"
         IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
         IMPORTED_LOCATION "${stable-diffusion_LIBRARY}"
-        INTERFACE_COMPILE_FEATURES c_std_90
+        INTERFACE_COMPILE_FEATURES "c_std_11;cxx_std_17"
         POSITION_INDEPENDENT_CODE ON)
 
 check_required_components(Stable-diffusion)
