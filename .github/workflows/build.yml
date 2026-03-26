@@ -76,12 +76,13 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
-          cmake --build build --config Release
+          cmake --build build -j $(nproc)
 
       - name: Get commit hash
         id: commit
@@ -142,13 +143,14 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON
-          cmake --build build --config Release
+          cmake --build build -j $(nproc)
 
       - name: Get commit hash
         id: commit
@@ -283,11 +285,12 @@ jobs:
         run: |
           sysctl -a
           cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_METAL=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
-          cmake --build build --config Release
+          cmake --build build -j $(sysctl -n hw.logicalcpu)
 
       - name: Get commit hash
         id: commit
@@ -332,7 +335,7 @@ jobs:
           - build: "cuda12"
             defines: "-DGGML_NATIVE=OFF -DGGML_CUDA=ON -DGGML_BACKEND_DL=ON -DCMAKE_CUDA_ARCHITECTURES='61;70;75;80;86;89;90;100;120' -DCMAKE_CUDA_FLAGS='-Xcudafe \"--diag_suppress=177\" -Xcudafe \"--diag_suppress=550\"'"
           - build: "vulkan"
-            defines: "-DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON"
+            defines: "-DGGML_NATIVE=OFF -DGGML_CPU=ON -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON"
     steps:
       - name: Clone
         id: checkout
@@ -506,7 +509,7 @@ jobs:
             -G "Unix Makefiles" `
             -DGGML_HIP=ON `
             -DGGML_NATIVE=OFF `
-            -DGGML_CPU=OFF `
+            -DGGML_CPU=ON `
             -DGGML_BACKEND_DL=ON `
             -DCMAKE_C_COMPILER=clang `
             -DCMAKE_CXX_COMPILER=clang++ `
@@ -638,7 +641,7 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DGGML_CPU_ALL_VARIANTS=ON \
-            -DSD_HIPBLAS=ON \
+            -DGGML_HIP=ON \
             -DGPU_TARGETS="${{ env.GPU_TARGETS }}" \
             -DAMDGPU_TARGETS="${{ env.GPU_TARGETS }}" \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
