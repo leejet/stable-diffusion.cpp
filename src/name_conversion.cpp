@@ -615,6 +615,79 @@ std::string convert_diffusers_dit_to_original_flux(std::string name) {
     return name;
 }
 
+std::string convert_diffusers_dit_to_original_flux2(std::string name) {
+    int max_double_blocks = 100;
+    int max_single_blocks = 200;
+    static std::unordered_map<std::string, std::string> flux2_name_map;
+
+    if (flux2_name_map.empty()) {
+        // --- time_guidance_embed ---
+        flux2_name_map["time_guidance_embed.timestep_embedder.linear_1.weight"] = "time_in.in_layer.weight";
+        flux2_name_map["time_guidance_embed.timestep_embedder.linear_2.weight"] = "time_in.out_layer.weight";
+
+        // --- context_embedder / x_embedder ---
+        flux2_name_map["context_embedder.weight"] = "txt_in.weight";
+        flux2_name_map["x_embedder.weight"]       = "img_in.weight";
+
+        // --- shared modulations (.linear. → .lin.) ---
+        flux2_name_map["double_stream_modulation_img.linear.weight"] = "double_stream_modulation_img.lin.weight";
+        flux2_name_map["double_stream_modulation_img.linear.bias"]   = "double_stream_modulation_img.lin.bias";
+        flux2_name_map["double_stream_modulation_txt.linear.weight"] = "double_stream_modulation_txt.lin.weight";
+        flux2_name_map["double_stream_modulation_txt.linear.bias"]   = "double_stream_modulation_txt.lin.bias";
+        flux2_name_map["single_stream_modulation.linear.weight"]     = "single_stream_modulation.lin.weight";
+        flux2_name_map["single_stream_modulation.linear.bias"]       = "single_stream_modulation.lin.bias";
+
+        // --- double transformer blocks ---
+        for (int i = 0; i < max_double_blocks; ++i) {
+            std::string block_prefix = "transformer_blocks." + std::to_string(i) + ".";
+            std::string dst_prefix   = "double_blocks." + std::to_string(i) + ".";
+
+            // img attention
+            flux2_name_map[block_prefix + "attn.to_q.weight"]     = dst_prefix + "img_attn.qkv.weight";
+            flux2_name_map[block_prefix + "attn.to_k.weight"]     = dst_prefix + "img_attn.qkv.weight.1";
+            flux2_name_map[block_prefix + "attn.to_v.weight"]     = dst_prefix + "img_attn.qkv.weight.2";
+            flux2_name_map[block_prefix + "attn.to_out.0.weight"] = dst_prefix + "img_attn.proj.weight";
+            flux2_name_map[block_prefix + "attn.norm_q.weight"]   = dst_prefix + "img_attn.norm.query_norm.scale";
+            flux2_name_map[block_prefix + "attn.norm_k.weight"]   = dst_prefix + "img_attn.norm.key_norm.scale";
+
+            // txt attention
+            flux2_name_map[block_prefix + "attn.add_q_proj.weight"]   = dst_prefix + "txt_attn.qkv.weight";
+            flux2_name_map[block_prefix + "attn.add_k_proj.weight"]   = dst_prefix + "txt_attn.qkv.weight.1";
+            flux2_name_map[block_prefix + "attn.add_v_proj.weight"]   = dst_prefix + "txt_attn.qkv.weight.2";
+            flux2_name_map[block_prefix + "attn.to_add_out.weight"]   = dst_prefix + "txt_attn.proj.weight";
+            flux2_name_map[block_prefix + "attn.norm_added_q.weight"] = dst_prefix + "txt_attn.norm.query_norm.scale";
+            flux2_name_map[block_prefix + "attn.norm_added_k.weight"] = dst_prefix + "txt_attn.norm.key_norm.scale";
+
+            // img mlp (SwiGLU: linear_in/linear_out)
+            flux2_name_map[block_prefix + "ff.linear_in.weight"]  = dst_prefix + "img_mlp.0.weight";
+            flux2_name_map[block_prefix + "ff.linear_out.weight"] = dst_prefix + "img_mlp.2.weight";
+
+            // txt mlp (SwiGLU: linear_in/linear_out)
+            flux2_name_map[block_prefix + "ff_context.linear_in.weight"]  = dst_prefix + "txt_mlp.0.weight";
+            flux2_name_map[block_prefix + "ff_context.linear_out.weight"] = dst_prefix + "txt_mlp.2.weight";
+        }
+
+        // --- single transformer blocks ---
+        for (int i = 0; i < max_single_blocks; ++i) {
+            std::string block_prefix = "single_transformer_blocks." + std::to_string(i) + ".";
+            std::string dst_prefix   = "single_blocks." + std::to_string(i) + ".";
+
+            flux2_name_map[block_prefix + "attn.to_qkv_mlp_proj.weight"] = dst_prefix + "linear1.weight";
+            flux2_name_map[block_prefix + "attn.to_out.weight"]          = dst_prefix + "linear2.weight";
+            flux2_name_map[block_prefix + "attn.norm_q.weight"]          = dst_prefix + "norm.query_norm.scale";
+            flux2_name_map[block_prefix + "attn.norm_k.weight"]          = dst_prefix + "norm.key_norm.scale";
+        }
+
+        // --- final layers ---
+        flux2_name_map["proj_out.weight"]        = "final_layer.linear.weight";
+        flux2_name_map["norm_out.linear.weight"] = "final_layer.adaLN_modulation.1.weight";
+    }
+
+    replace_with_prefix_map(name, flux2_name_map);
+
+    return name;
+}
+
 std::string convert_diffusers_dit_to_original_lumina2(std::string name) {
     int num_layers         = 30;
     int num_refiner_layers = 2;
@@ -668,8 +741,10 @@ std::string convert_diffusion_model_name(std::string name, std::string prefix, S
         name = convert_diffusers_unet_to_original_sdxl(name);
     } else if (sd_version_is_sd3(version)) {
         name = convert_diffusers_dit_to_original_sd3(name);
-    } else if (sd_version_is_flux(version) || sd_version_is_flux2(version)) {
+    } else if (sd_version_is_flux(version)) {
         name = convert_diffusers_dit_to_original_flux(name);
+    } else if (sd_version_is_flux2(version)) {
+        name = convert_diffusers_dit_to_original_flux2(name);
     } else if (sd_version_is_z_image(version)) {
         name = convert_diffusers_dit_to_original_lumina2(name);
     } else if (sd_version_is_anima(version)) {
