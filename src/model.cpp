@@ -1864,30 +1864,6 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
         return false;
     }
 
-    // DEBUG: compute checksum of all diffusion model tensors for comparison
-    {
-        const char* dump_env = getenv("SD_DUMP_CHECKSUMS");
-        if (dump_env) {
-            FILE* fp = fopen(dump_env, "w");
-            if (fp) {
-                for (const auto& [name, t] : tensors) {
-                    if (name.find("model.diffusion_model.") == std::string::npos) continue;
-                    size_t nbytes = ggml_nbytes(t);
-                    std::vector<uint8_t> buf(nbytes);
-                    ggml_backend_tensor_get(t, buf.data(), 0, nbytes);
-                    // Simple checksum: sum of all bytes + first 8 bytes hex
-                    uint64_t sum = 0;
-                    for (size_t i = 0; i < nbytes; i++) sum += buf[i];
-                    fprintf(fp, "%s: nbytes=%zu sum=%llu first8=", name.c_str(), nbytes, (unsigned long long)sum);
-                    for (size_t i = 0; i < std::min(nbytes, (size_t)8); i++) fprintf(fp, "%02x", buf[i]);
-                    fprintf(fp, "\n");
-                }
-                fclose(fp);
-                LOG_INFO("DUMP: wrote checksums to '%s'", dump_env);
-            }
-        }
-    }
-
     bool some_tensor_not_init = false;
 
     for (auto pair : tensors) {
