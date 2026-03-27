@@ -368,6 +368,12 @@ bool ModelLoader::init_from_file(const std::string& file_path, const std::string
     } else if (is_safetensors_file(file_path)) {
         LOG_INFO("load %s using safetensors format", file_path.c_str());
         return init_from_safetensors_file(file_path, prefix);
+    } else if (ends_with(file_path, ".safetensors.index.json") && file_exists(file_path)) {
+        LOG_INFO("load %s using sharded safetensors format", file_path.c_str());
+        return init_from_safetensors_index(file_path, prefix);
+    } else if (ends_with(file_path, ".safetensors") && file_exists(file_path + ".index.json")) {
+        LOG_INFO("load %s using sharded safetensors format (index found)", file_path.c_str());
+        return init_from_safetensors_index(file_path + ".index.json", prefix);
     } else if (is_zip_file(file_path)) {
         LOG_INFO("load %s using checkpoint format", file_path.c_str());
         return init_from_ckpt_file(file_path, prefix);
@@ -533,8 +539,62 @@ ggml_type str_to_ggml_type(const std::string& dtype) {
     return ttype;
 }
 
+// Load sharded safetensors via model.safetensors.index.json
+bool ModelLoader::init_from_safetensors_index(const std::string& index_path, const std::string& prefix) {
+    LOG_INFO("loading sharded safetensors from index '%s'", index_path.c_str());
+    std::ifstream index_file(index_path);
+    if (!index_file.is_open()) {
+        LOG_ERROR("failed to open index file '%s'", index_path.c_str());
+        return false;
+    }
+
+    nlohmann::json index;
+    try {
+        index = nlohmann::json::parse(index_file);
+    } catch (const std::exception& e) {
+        LOG_ERROR("failed to parse index file '%s': %s", index_path.c_str(), e.what());
+        return false;
+    }
+
+    if (!index.contains("weight_map") || !index["weight_map"].is_object()) {
+        LOG_ERROR("invalid index file '%s': missing weight_map", index_path.c_str());
+        return false;
+    }
+
+    // Collect unique shard filenames preserving order
+    std::vector<std::string> shard_files;
+    std::set<std::string> seen;
+    for (auto& [tensor_name, shard_file] : index["weight_map"].items()) {
+        std::string fname = shard_file.get<std::string>();
+        if (seen.insert(fname).second) {
+            shard_files.push_back(fname);
+        }
+    }
+
+    // Resolve shard paths relative to index file directory
+    std::string dir = index_path.substr(0, index_path.find_last_of("/\\"));
+    int loaded = 0;
+    for (const auto& shard : shard_files) {
+        std::string shard_path = path_join(dir, shard);
+        if (!init_from_safetensors_file(shard_path, prefix)) {
+            LOG_ERROR("failed to load shard '%s'", shard_path.c_str());
+            return false;
+        }
+        loaded++;
+    }
+
+    LOG_INFO("loaded %d shards from '%s'", loaded, index_path.c_str());
+    return true;
+}
+
 // https://huggingface.co/docs/safetensors/index
 bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const std::string& prefix) {
+    // Check for sharded safetensors (model.safetensors.index.json alongside)
+    std::string index_path = file_path + ".index.json";
+    if (!file_exists(file_path) && file_exists(index_path)) {
+        return init_from_safetensors_index(index_path, prefix);
+    }
+
     LOG_DEBUG("init from '%s', prefix = '%s'", file_path.c_str(), prefix.c_str());
     file_paths_.push_back(file_path);
     size_t file_index = file_paths_.size() - 1;
@@ -677,23 +737,33 @@ bool ModelLoader::init_from_safetensors_file(const std::string& file_path, const
 /*================================================= DiffusersModelLoader ==================================================*/
 
 bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const std::string& prefix) {
-    std::string unet_path   = path_join(file_path, "unet/diffusion_pytorch_model.safetensors");
-    std::string vae_path    = path_join(file_path, "vae/diffusion_pytorch_model.safetensors");
-    std::string clip_path   = path_join(file_path, "text_encoder/model.safetensors");
-    std::string clip_g_path = path_join(file_path, "text_encoder_2/model.safetensors");
+    // Diffusion model: try transformer/ (DiT models: FLUX, SD3) then unet/ (SD1/SDXL)
+    std::string dit_path  = path_join(file_path, "transformer/diffusion_pytorch_model.safetensors");
+    std::string unet_path = path_join(file_path, "unet/diffusion_pytorch_model.safetensors");
+    std::string vae_path  = path_join(file_path, "vae/diffusion_pytorch_model.safetensors");
 
-    if (!init_from_safetensors_file(unet_path, "unet.")) {
+    bool diffusion_loaded = false;
+    if (file_exists(dit_path) || file_exists(dit_path + ".index.json")) {
+        diffusion_loaded = init_from_safetensors_file(dit_path, "unet.");
+    } else {
+        diffusion_loaded = init_from_safetensors_file(unet_path, "unet.");
+    }
+
+    if (!diffusion_loaded) {
         return false;
     }
 
     if (!init_from_safetensors_file(vae_path, "vae.")) {
         LOG_WARN("Couldn't find working VAE in %s", file_path.c_str());
-        // return false;
     }
+
+    // Text encoder: try single file first, fall back to sharded index
+    std::string clip_path   = path_join(file_path, "text_encoder/model.safetensors");
     if (!init_from_safetensors_file(clip_path, "te.")) {
         LOG_WARN("Couldn't find working text encoder in %s", file_path.c_str());
-        // return false;
     }
+
+    std::string clip_g_path = path_join(file_path, "text_encoder_2/model.safetensors");
     if (!init_from_safetensors_file(clip_g_path, "te.1.")) {
         LOG_DEBUG("Couldn't find working second text encoder in %s", file_path.c_str());
     }

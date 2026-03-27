@@ -307,6 +307,7 @@ protected:
 
     bool init_from_gguf_file(const std::string& file_path, const std::string& prefix = "");
     bool init_from_safetensors_file(const std::string& file_path, const std::string& prefix = "");
+    bool init_from_safetensors_index(const std::string& index_path, const std::string& prefix = "");
     bool init_from_ckpt_file(const std::string& file_path, const std::string& prefix = "");
     bool init_from_diffusers_file(const std::string& file_path, const std::string& prefix = "");
 
