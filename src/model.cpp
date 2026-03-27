@@ -757,9 +757,33 @@ bool ModelLoader::init_from_diffusers_file(const std::string& file_path, const s
         LOG_WARN("Couldn't find working VAE in %s", file_path.c_str());
     }
 
-    // Text encoder: try single file first, fall back to sharded index
-    std::string clip_path   = path_join(file_path, "text_encoder/model.safetensors");
-    if (!init_from_safetensors_file(clip_path, "te.")) {
+    // Determine text encoder type from model_index.json
+    // LLM-based encoders (Qwen, Llama) need "text_encoders.llm." prefix,
+    // CLIP-based encoders need "te." prefix
+    std::string te_prefix = "te.";
+    std::string model_index_path = path_join(file_path, "model_index.json");
+    if (file_exists(model_index_path)) {
+        std::ifstream mi_file(model_index_path);
+        if (mi_file.is_open()) {
+            try {
+                nlohmann::json mi = nlohmann::json::parse(mi_file);
+                if (mi.contains("text_encoder") && mi["text_encoder"].is_array() && mi["text_encoder"].size() >= 2) {
+                    std::string te_class = mi["text_encoder"][1].get<std::string>();
+                    // LLM-based text encoders: Qwen, Llama, Gemma, etc.
+                    if (te_class.find("ForCausalLM") != std::string::npos ||
+                        te_class.find("LlamaModel") != std::string::npos) {
+                        te_prefix = "text_encoders.llm.";
+                        LOG_INFO("detected LLM text encoder: %s, using prefix '%s'", te_class.c_str(), te_prefix.c_str());
+                    }
+                }
+            } catch (...) {
+                LOG_DEBUG("failed to parse model_index.json, using default te prefix");
+            }
+        }
+    }
+
+    std::string clip_path = path_join(file_path, "text_encoder/model.safetensors");
+    if (!init_from_safetensors_file(clip_path, te_prefix)) {
         LOG_WARN("Couldn't find working text encoder in %s", file_path.c_str());
     }
 
