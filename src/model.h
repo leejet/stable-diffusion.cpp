@@ -192,6 +192,7 @@ struct TensorStorage {
     size_t file_index = 0;
     int index_in_zip  = -1;  // >= means stored in a zip file
     uint64_t offset   = 0;   // offset in file
+    mutable size_t dst_offset = 0;  // byte offset within destination tensor for split→fuse loading
 
     TensorStorage() = default;
 

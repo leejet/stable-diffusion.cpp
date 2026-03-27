@@ -386,10 +386,45 @@ void ModelLoader::convert_tensors_name() {
     String2TensorStorage new_map;
 
     for (auto& [_, tensor_storage] : tensor_storage_map) {
-        auto new_name = convert_tensor_name(tensor_storage.name, version);
-        // LOG_DEBUG("%s -> %s", tensor_storage.name.c_str(), new_name.c_str());
-        tensor_storage.name = new_name;
-        new_map[new_name]   = std::move(tensor_storage);
+        std::string old_name = tensor_storage.name;
+        auto new_name = convert_tensor_name(old_name, version);
+        // LOG_DEBUG("%s -> %s", old_name.c_str(), new_name.c_str());
+
+        // FLUX.2 diffusers fix: norm_out.linear.weight stores [shift, scale] while
+        // BFL's final_layer.adaLN_modulation.1.weight stores [scale, shift] (swapped halves).
+        // When loading from diffusers (name changed), split into two halves and swap their
+        // file offsets so the split-fuse mechanism loads them in the correct order.
+        bool needs_half_swap = (old_name != new_name &&
+                                sd_version_is_flux2(version) &&
+                                ends_with(new_name, "final_layer.adaLN_modulation.1.weight") &&
+                                tensor_storage.n_dims == 2 &&
+                                tensor_storage.ne[1] % 2 == 0);
+
+        if (needs_half_swap) {
+            int64_t half_ne1 = tensor_storage.ne[1] / 2;
+            size_t half_bytes = (size_t)(half_ne1 * tensor_storage.ne[0]) *
+                                ggml_type_size(tensor_storage.type) / ggml_blck_size(tensor_storage.type);
+
+            // Base: second half of file data (shift→scale in BFL order) → dst offset 0
+            TensorStorage base = tensor_storage;
+            base.name  = new_name;
+            base.ne[1] = half_ne1;
+            base.offset = tensor_storage.offset + half_bytes;
+
+            // Part 1: first half of file data (scale→shift in BFL order) → dst offset = half
+            TensorStorage part1 = tensor_storage;
+            part1.name  = new_name + ".1";
+            part1.ne[1] = half_ne1;
+            // part1.offset stays at original (first half of file data)
+
+            new_map[base.name]  = std::move(base);
+            new_map[part1.name] = std::move(part1);
+            LOG_INFO("diffusers fix: split-swap '%s' -> '%s' + '%s.1' (adaLN halves reordered)",
+                     old_name.c_str(), new_name.c_str(), new_name.c_str());
+        } else {
+            tensor_storage.name = new_name;
+            new_map[new_name]   = std::move(tensor_storage);
+        }
     }
 
     tensor_storage_map.swap(new_map);
@@ -1465,6 +1500,20 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
                     size_t nbytes_to_read = tensor_storage.nbytes_to_read();
 
+                    // Split→fuse support: detect partial tensor loads
+                    bool is_split = (tensor_storage.nelements() < ggml_nelements(dst_tensor));
+                    size_t write_nbytes = is_split
+                        ? ((size_t)tensor_storage.nelements() * ggml_type_size(dst_tensor->type) / ggml_blck_size(dst_tensor->type))
+                        : ggml_nbytes(dst_tensor);
+
+                    if (is_split) {
+                        LOG_INFO("split-fuse write: '%s' is_host=%d, dst_offset=%zu, write_nbytes=%zu, read_nbytes=%zu, src_type=%s, dst_type=%s",
+                                 tensor_storage.name.c_str(),
+                                 (dst_tensor->buffer == nullptr || ggml_backend_buffer_is_host(dst_tensor->buffer)) ? 1 : 0,
+                                 tensor_storage.dst_offset, write_nbytes, nbytes_to_read,
+                                 ggml_type_name(tensor_storage.type), ggml_type_name(dst_tensor->type));
+                    }
+
                     auto read_data = [&](char* buf, size_t n) {
                         if (zip != nullptr) {
                             zip_entry_openbyindex(zip, tensor_storage.index_in_zip);
@@ -1499,20 +1548,23 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     char* target_buf  = nullptr;
                     char* convert_buf = nullptr;
                     if (dst_tensor->buffer == nullptr || ggml_backend_buffer_is_host(dst_tensor->buffer)) {
+                        char* dst_data_ptr = (char*)dst_tensor->data + tensor_storage.dst_offset;
                         if (tensor_storage.type == dst_tensor->type) {
-                            GGML_ASSERT(ggml_nbytes(dst_tensor) == tensor_storage.nbytes());
+                            if (!is_split) {
+                                GGML_ASSERT(ggml_nbytes(dst_tensor) == tensor_storage.nbytes());
+                            }
                             if (tensor_storage.is_f64 || tensor_storage.is_i64) {
                                 read_buffer.resize(tensor_storage.nbytes_to_read());
                                 read_buf = (char*)read_buffer.data();
                             } else {
-                                read_buf = (char*)dst_tensor->data;
+                                read_buf = dst_data_ptr;
                             }
-                            target_buf = (char*)dst_tensor->data;
+                            target_buf = dst_data_ptr;
                         } else {
                             read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
                             read_buf    = (char*)read_buffer.data();
                             target_buf  = read_buf;
-                            convert_buf = (char*)dst_tensor->data;
+                            convert_buf = dst_data_ptr;
                         }
                     } else {
                         read_buffer.resize(std::max(tensor_storage.nbytes(), tensor_storage.nbytes_to_read()));
@@ -1520,7 +1572,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         target_buf = read_buf;
 
                         if (tensor_storage.type != dst_tensor->type) {
-                            convert_buffer.resize(ggml_nbytes(dst_tensor));
+                            convert_buffer.resize(write_nbytes);
                             convert_buf = (char*)convert_buffer.data();
                         }
                     }
@@ -1560,7 +1612,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
                     if (dst_tensor->buffer != nullptr && !ggml_backend_buffer_is_host(dst_tensor->buffer)) {
                         t0 = ggml_time_ms();
-                        ggml_backend_tensor_set(dst_tensor, convert_buf, 0, ggml_nbytes(dst_tensor));
+                        ggml_backend_tensor_set(dst_tensor, convert_buf, tensor_storage.dst_offset, write_nbytes);
                         t1 = ggml_time_ms();
                         copy_to_backend_time_ms.fetch_add(t1 - t0);
                     }
@@ -1621,10 +1673,46 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
             tensor_names_in_file.insert(name);
         }
 
-        ggml_tensor* real;
+        ggml_tensor* real = nullptr;
         if (tensors.find(name) != tensors.end()) {
             real = tensors[name];
         } else {
+            // Check if this is a split tensor part (e.g., qkv.weight.1, qkv.weight.2)
+            // Convention: split parts have suffix .N where N is a positive integer
+            size_t last_dot = name.rfind('.');
+            if (last_dot != std::string::npos) {
+                const std::string suffix = name.substr(last_dot + 1);
+                if (!suffix.empty() && suffix.find_first_not_of("0123456789") == std::string::npos) {
+                    int split_idx = std::stoi(suffix);
+                    if (split_idx > 0) {
+                        const std::string base_name = name.substr(0, last_dot);
+                        if (tensors.find(base_name) != tensors.end()) {
+                            real = tensors[base_name];
+                            // Verify dimensions are consistent with being a split part
+                            if (tensor_storage.ne[0] == real->ne[0] &&
+                                real->ne[1] >= tensor_storage.ne[1]) {
+                                // Compute dst_offset by summing sizes of preceding parts
+                                size_t dst_off = 0;
+                                for (int j = 0; j < split_idx; j++) {
+                                    std::string part_name = (j == 0) ? base_name : (base_name + "." + std::to_string(j));
+                                    auto it = tensor_storage_map.find(part_name);
+                                    if (it != tensor_storage_map.end()) {
+                                        dst_off += (size_t)it->second.nelements() * ggml_type_size(real->type) / ggml_blck_size(real->type);
+                                    }
+                                }
+                                tensor_storage.dst_offset = dst_off;
+                                LOG_INFO("split-fuse part %d: '%s' -> base '%s', dst_offset=%zu, part_bytes=%zu, dst_total=%zu",
+                                         split_idx, name.c_str(), base_name.c_str(), dst_off,
+                                         (size_t)tensor_storage.nelements() * ggml_type_size(real->type) / ggml_blck_size(real->type),
+                                         ggml_nbytes(real));
+                                *dst_tensor = real;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+
             for (auto& ignore_tensor : ignore_tensors) {
                 if (starts_with(name, ignore_tensor)) {
                     return true;
@@ -1639,6 +1727,29 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
             real->ne[1] != tensor_storage.ne[1] ||
             real->ne[2] != tensor_storage.ne[2] ||
             real->ne[3] != tensor_storage.ne[3]) {
+            // Check if this is the base (part 0) of a split tensor group
+            bool is_split_base = false;
+            if (tensor_storage.ne[0] == real->ne[0] &&
+                real->ne[1] > tensor_storage.ne[1] &&
+                real->ne[1] % tensor_storage.ne[1] == 0) {
+                std::string name_1 = name + ".1";
+                if (tensor_storage_map.find(name_1) != tensor_storage_map.end()) {
+                    is_split_base = true;
+                }
+            }
+
+            if (is_split_base) {
+                tensor_storage.dst_offset = 0;
+                LOG_INFO("split-fuse base: '%s', file_ne=[%lld,%lld], dst_ne=[%lld,%lld], dst_offset=0, part_bytes=%zu, dst_total=%zu",
+                         name.c_str(),
+                         (long long)tensor_storage.ne[0], (long long)tensor_storage.ne[1],
+                         (long long)real->ne[0], (long long)real->ne[1],
+                         (size_t)tensor_storage.nelements() * ggml_type_size(real->type) / ggml_blck_size(real->type),
+                         ggml_nbytes(real));
+                *dst_tensor = real;
+                return true;
+            }
+
             LOG_ERROR(
                 "tensor '%s' has wrong shape in model file: "
                 "got [%d, %d, %d, %d], expected [%d, %d, %d, %d]",
@@ -1657,6 +1768,30 @@ bool ModelLoader::load_tensors(std::map<std::string, ggml_tensor*>& tensors,
     if (!success) {
         LOG_ERROR("load tensors from file failed");
         return false;
+    }
+
+    // DEBUG: compute checksum of all diffusion model tensors for comparison
+    {
+        const char* dump_env = getenv("SD_DUMP_CHECKSUMS");
+        if (dump_env) {
+            FILE* fp = fopen(dump_env, "w");
+            if (fp) {
+                for (const auto& [name, t] : tensors) {
+                    if (name.find("model.diffusion_model.") == std::string::npos) continue;
+                    size_t nbytes = ggml_nbytes(t);
+                    std::vector<uint8_t> buf(nbytes);
+                    ggml_backend_tensor_get(t, buf.data(), 0, nbytes);
+                    // Simple checksum: sum of all bytes + first 8 bytes hex
+                    uint64_t sum = 0;
+                    for (size_t i = 0; i < nbytes; i++) sum += buf[i];
+                    fprintf(fp, "%s: nbytes=%zu sum=%llu first8=", name.c_str(), nbytes, (unsigned long long)sum);
+                    for (size_t i = 0; i < std::min(nbytes, (size_t)8); i++) fprintf(fp, "%02x", buf[i]);
+                    fprintf(fp, "\n");
+                }
+                fclose(fp);
+                LOG_INFO("DUMP: wrote checksums to '%s'", dump_env);
+            }
+        }
     }
 
     bool some_tensor_not_init = false;
