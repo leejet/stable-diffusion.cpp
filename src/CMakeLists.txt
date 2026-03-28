@@ -5,7 +5,7 @@ sd_add_compile_flags()
 #
 
 # stable-diffusion
-file(GLOB SD_SOURCES "*.cpp" "*.hpp" "*.h" "*.hpp")
+file(GLOB SD_SOURCES "*.cpp" "*.hpp" "*.h")
 file(GLOB SD_VOCAB_SOURCES "vocab/*.h" "vocab/*.cpp")
 
 add_library(${SD_LIB}

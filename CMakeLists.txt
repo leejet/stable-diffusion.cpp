@@ -93,7 +93,7 @@ function (sd_option_depr TYPE OLD)
     endif()
 endfunction()
 
-sd_option_depr(FATAL_ERROR SD_HIPBLAS               GGML_CUDA)
+sd_option_depr(FATAL_ERROR SD_HIPBLAS               GGML_HIP)
 sd_option_depr(FATAL_ERROR SD_BUILD_SHARED_LIBS     BUILD_SHARED_LIBS)
 sd_option_depr(FATAL_ERROR SD_BUILD_SHARED_GGML_LIB BUILD_SHARED_LIBS)
 sd_option_depr(WARNING     SD_CUDA                  GGML_CUDA)

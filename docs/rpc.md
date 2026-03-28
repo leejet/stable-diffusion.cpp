@@ -12,12 +12,12 @@ First, you should build the client application from source. It requires `SD_RPC=
 mkdir build
 cd build
 cmake .. \
-    -DSD_RPC=ON \
-    # Add other build flags here (e.g., -DSD_VULKAN=ON)
+    -DGGML_RPC=ON \
+    # Add other build flags here (e.g., -DGGML_VULKAN=ON)
 cmake --build . --config Release -j $(nproc)
 ```
 
-> **Note:** Ensure you add the other flags you would normally use (e.g., `-DSD_VULKAN=ON`, `-DSD_CUDA=ON`, `-DSD_HIPBLAS=ON`, or `-DGGML_METAL=ON`), for more information about building `stable-diffusion.cpp` from source, please refer to the [build.md](build.md) documentation.
+> **Note:** Ensure you add the other flags you would normally use (e.g., `-DGGML_VULKAN=ON`, `-DGGML_CUDA=ON`, `-DGGML_HIP=ON`, or `-DGGML_METAL=ON`), for more information about building `stable-diffusion.cpp` from source, please refer to the [build.md](build.md) documentation.
 
 ## 2. Ensure `llama.cpp` is at the correct commit
 

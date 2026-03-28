@@ -531,11 +531,11 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DGGML_BACKEND_DL=ON `
             -DGGML_NATIVE=OFF `
-            -DGPU_TARGETS="${{ matrix.gpu_targets }}" `
+            -DGPU_TARGETS="${{ matrix.GPU_TARGETS }}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
             -DLLAMA_BUILD_BORINGSSL=ON
-          cmake --build build --target ggml-hip -j ${env:NUMBER_OF_PROCESSORS}
+          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
           md "build\bin\hipblaslt\library"
           cp "${env:HIP_PATH}\bin\libhipblas.dll" "build\bin\"
@@ -572,10 +572,10 @@ jobs:
       matrix:
         include:
           - ROCM_VERSION: "7.2"
-            gpu_targets: "gfx908;gfx90a;gfx942;gfx1100;gfx1101;gfx1151;gfx1150;gfx1200;gfx1201"
+            GPU_TARGETS: "gfx908;gfx90a;gfx942;gfx1100;gfx1101;gfx1151;gfx1150;gfx1200;gfx1201"
             build: 'x64'
           - ROCM_VERSION: "7.11.0"
-            gpu_targets: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+            GPU_TARGETS: "gfx906;gfx908;gfx90a;gfx942;gfx950;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
             build: x64
 
     steps:
@@ -650,7 +650,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
-            -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
+            -DGPU_TARGETS="${{ matrix.GPU_TARGETS }}" \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DGGML_BACKEND_DL=ON \

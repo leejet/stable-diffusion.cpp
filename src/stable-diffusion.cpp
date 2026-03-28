@@ -497,6 +497,7 @@ std::vector<std::string> string_split(const std::string& input, char separator) 
 }
 
 static void add_rpc_devices(const std::string& servers) {
+    ggml_backend_load_all_once();
     auto rpc_servers = string_split(servers, ',');
     if (rpc_servers.empty()) {
         LOG_ERROR("no RPC servers specified");
@@ -520,6 +521,11 @@ static void add_rpc_devices(const std::string& servers) {
 }
 
 void add_rpc_device(const char* servers_cstr) {
+    if (servers_cstr == nullptr || strlen(servers_cstr) == 0)
+    {
+        LOG_ERROR("no RPC servers specified");
+        return;
+    }
     std::string servers(servers_cstr);
     add_rpc_devices(servers);
 }
@@ -548,6 +554,7 @@ std::vector<std::string> sanitize_backend_name_list(std::string name) {
 }
 
 std::vector<std::pair<std::string, std::string>> list_backends_vector() {
+    ggml_backend_load_all_once();
     std::vector<std::pair<std::string, std::string>> backends;
     const int device_count = ggml_backend_dev_count();
     for (int i = 0; i < device_count; i++) {
@@ -566,7 +573,7 @@ SD_API size_t backend_list_size() {
         auto dev_desc_size = backend.second.size();
         buffer_size += dev_name_size + dev_desc_size + 2;  // +2 for the separators
     }
-    return buffer_size;
+    return buffer_size + 1;  // +1 for the final null terminator
 }
 
 // devices are separated by \n and name and description are separated by \t
@@ -1440,7 +1447,7 @@ public:
                 // TODO: split
                 ggml_backend_is_cpu(clip_backends[0]) ? "RAM" : "VRAM",
                 unet_params_mem_size / 1024.0 / 1024.0,
-                ggml_backend_is_cpu(backend) ? "RAM" : "VRAM",
+                ggml_backend_is_cpu(diffusion_backend) ? "RAM" : "VRAM",
                 vae_params_mem_size / 1024.0 / 1024.0,
                 ggml_backend_is_cpu(vae_backend) ? "RAM" : "VRAM",
                 control_net_params_mem_size / 1024.0 / 1024.0,
