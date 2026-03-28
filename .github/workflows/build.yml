@@ -480,7 +480,7 @@ jobs:
         id: cache-rocm
         uses: actions/cache@v4
         with:
-          path: C:\TheRock\build
+          path: C:\Program Files\AMD\ROCm
           key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
 
       - name: ccache
