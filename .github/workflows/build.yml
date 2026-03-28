@@ -405,7 +405,8 @@ jobs:
           mkdir build
           cd build
           cmake .. -DCMAKE_CXX_FLAGS='/bigobj' -G Ninja -DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe ${{ matrix.defines }}
-          cmake --build . --config Release
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build . --config Release -j %NINJA_JOBS%
 
       - name: Get commit hash
         id: commit
