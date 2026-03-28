@@ -486,14 +486,15 @@ jobs:
           cmake .. `
             -G "Unix Makefiles" `
             -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
-            -DSD_HIPBLAS=ON `
-            -DSD_BUILD_SHARED_LIBS=ON `
+            -DGGML_HIP=ON  `
             -DGGML_NATIVE=OFF `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
             -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DHIP_PATH="${env:HIP_PATH}" `
-            -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_CPU=ON `
+            -DGGML_RPC=ON `
+            -DGGML_BACKEND_DL=ON `
             -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
           cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
 
@@ -508,116 +509,6 @@ jobs:
           cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\libhipblaslt.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
-          7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
-
-      - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
-          path: |
-            sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip
-
-  windows-latest-cmake-hip:
-    runs-on: windows-2022
-
-    env:
-      HIPSDK_INSTALLER_VERSION: "26.Q1"
-      ROCM_VERSION: "7.1.1"
-      GPU_TARGETS: "gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
-
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: recursive
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Cache ROCm Installation
-        id: cache-rocm
-        uses: actions/cache@v4
-        with:
-          path: C:\Program Files\AMD\ROCm
-          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.16
-        with:
-          key: windows-latest-cmake-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-x64
-          evict-old-files: 1d
-
-      - name: Install ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
-        run: |
-          $ErrorActionPreference = "Stop"
-          write-host "Downloading AMD HIP SDK Installer"
-          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ env.HIPSDK_INSTALLER_VERSION }}-Win11-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
-          write-host "Installing AMD HIP SDK"
-          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
-          $completed = $proc.WaitForExit(600000)
-          if (-not $completed) {
-              Write-Error "ROCm installation timed out after 10 minutes. Killing the process"
-              $proc.Kill()
-              exit 1
-          }
-          if ($proc.ExitCode -ne 0) {
-              Write-Error "ROCm installation failed with exit code $($proc.ExitCode)"
-              exit 1
-          }
-          write-host "Completed AMD HIP SDK installation"
-
-      - name: Verify ROCm
-        run: |
-          # Find and test ROCm installation
-          $clangPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Select-Object -First 1
-          if (-not $clangPath) {
-            Write-Error "ROCm installation not found"
-            exit 1
-          }
-          & $clangPath.FullName --version
-          # Set HIP_PATH environment variable for later steps
-          echo "HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)" >> $env:GITHUB_ENV
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
-          cmake .. `
-            -G "Unix Makefiles" `
-            -DGGML_HIP=ON `
-            -DGGML_NATIVE=OFF `
-            -DGGML_CPU=ON `
-            -DGGML_RPC=ON `
-            -DGGML_BACKEND_DL=ON `
-            -DCMAKE_C_COMPILER=clang `
-            -DCMAKE_CXX_COMPILER=clang++ `
-            -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
-          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
-
-      - name: Get commit hash
-        id: commit
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: prompt/actions-commit-hash@v2
-
-      - name: Pack artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        run: |
-          md "build\bin\rocblas\library\"
-          md "build\bin\hipblaslt\library"
-          cp "${env:HIP_PATH}\bin\libhipblas.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\libhipblaslt.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
-          cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
-          cp "${env:HIP_PATH}\bin\hipblaslt\library\*" "build\bin\hipblaslt\library\"
           7z a sd-${{ env.BRANCH_NAME }}-${{ steps.commit.outputs.short }}-bin-win-rocm-${{ env.ROCM_VERSION }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
@@ -651,7 +542,6 @@ jobs:
         with:
           submodules: recursive
 
-<<<<<<< HEAD
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -674,13 +564,12 @@ jobs:
           # Remove old package lists and caches
           sudo rm -rf /var/lib/apt/lists/* || true
           sudo apt clean
-=======
+
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-rocm-cmake-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
->>>>>>> Switch over ROCm builds to artifacts both for stable and preview releases
 
       - name: Dependencies
         id: depends
@@ -726,27 +615,16 @@ jobs:
           mkdir build
           cd build
           cmake .. -G Ninja \
-<<<<<<< HEAD
-            -DCMAKE_CXX_COMPILER=amdclang++ \
-            -DCMAKE_C_COMPILER=amdclang \
-            -DGGML_BACKEND_DL=ON \
-            -DGGML_NATIVE=OFF \
-            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-            -DGGML_CPU_ALL_VARIANTS=ON \
-            -DGGML_HIP=ON \
-            -DGPU_TARGETS="${{ env.GPU_TARGETS }}" \
-            -DAMDGPU_TARGETS="${{ env.GPU_TARGETS }}" \
-=======
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DCMAKE_HIP_FLAGS="-mllvm --amdgpu-unroll-threshold-local=600" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DSD_HIPBLAS=ON \
+            -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
->>>>>>> Switch over ROCm builds to artifacts both for stable and preview releases
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DGGML_CPU=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
             -DGGML_RPC=ON
           cmake --build . --config Release
 
@@ -799,7 +677,6 @@ jobs:
       - build-and-push-docker-images
       - macOS-latest-cmake
       - windows-latest-cmake
-      - windows-latest-cmake-hip
       - windows-latest-rocm
 
     steps:
