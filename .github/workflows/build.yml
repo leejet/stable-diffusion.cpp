@@ -82,7 +82,6 @@ jobs:
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
-            -DGGML_CPU=ON \
             -DGGML_RPC=ON
           cmake --build build -j $(nproc)
 
@@ -152,7 +151,6 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
-            -DGGML_CPU=ON \ 
             -DGGML_RPC=ON
           cmake --build build -j $(nproc)
 
@@ -294,8 +292,6 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_METAL=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DGGML_BACKEND_DL=ON \
-            -DGGML_CPU=ON \
             -DGGML_RPC=ON
           cmake --build build -j $(sysctl -n hw.logicalcpu)
 
@@ -338,11 +334,11 @@ jobs:
       matrix:
         include:
           - build: "cpu"
-            defines: "-DGGML_NATIVE=OFF -DGGML_RPC=ON -DGGML_CPU=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON"
+            defines: "-DGGML_NATIVE=OFF -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=ON"
           - build: "cuda12"
-            defines: "-DGGML_NATIVE=OFF -DGGML_RPC=ON -DGGML_CPU=ON -DGGML_CUDA=ON -DGGML_BACKEND_DL=ON -DCMAKE_CUDA_ARCHITECTURES='61;70;75;80;86;89;90;100;120' -DCMAKE_CUDA_FLAGS='-Xcudafe \"--diag_suppress=177\" -Xcudafe \"--diag_suppress=550\"'"
+            defines: "-DGGML_NATIVE=OFF -DGGML_RPC=ON -DGGML_CUDA=ON -DGGML_BACKEND_DL=ON -DCMAKE_CUDA_ARCHITECTURES='61;70;75;80;86;89;90;100;120' -DCMAKE_CUDA_FLAGS='-Xcudafe \"--diag_suppress=177\" -Xcudafe \"--diag_suppress=550\"'"
           - build: "vulkan"
-            defines: "-DGGML_NATIVE=OFF -DGGML_RPC=ON -DGGML_CPU=ON -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON"
+            defines: "-DGGML_NATIVE=OFF -DGGML_RPC=ON -DGGML_VULKAN=ON -DGGML_BACKEND_DL=ON"
     steps:
       - name: Clone
         id: checkout

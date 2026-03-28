@@ -9,7 +9,7 @@ WORKDIR /sd.cpp
 COPY . .
 
 RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_CPU=ON -DGGML_SYCL=ON -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release && \
+    cmake .. -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL=ON -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release && \
     cmake --build . --config Release -j$(nproc)
 
 FROM intel/oneapi-basekit:${SYCL_VERSION}-devel-ubuntu24.04 AS runtime
