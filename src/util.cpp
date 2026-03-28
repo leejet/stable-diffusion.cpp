@@ -24,6 +24,7 @@
 #endif
 
 #include "ggml.h"
+#include "ggml-cpu.h"
 #include "ggml-backend.h"
 #include "stable-diffusion.h"
 
