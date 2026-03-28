@@ -1,5 +1,5 @@
-#include "ggml-cpu.h"
 #include "ggml_extend.hpp"
+#include "ggml_extend_backend.hpp"
 
 #include <vector>
 #include "model.h"

@@ -23,8 +23,8 @@
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 #include "ggml.h"
+#include "ggml_extend_backend.hpp"
 
 #include "model.h"
 
@@ -69,6 +69,7 @@ __STATIC_INLINE__ void ggml_log_callback_default(ggml_log_level level, const cha
 }
 
 __STATIC_INLINE__ bool backend_name_exists(std::string name) {
+    ggml_backend_load_all_once();
     const int device_count = ggml_backend_dev_count();
     for (int i = 0; i < device_count; i++) {
         if (name == ggml_backend_dev_name(ggml_backend_dev_get(i))) {
@@ -88,6 +89,7 @@ __STATIC_INLINE__ std::string sanitize_backend_name(std::string name) {
 }
 
 __STATIC_INLINE__ std::string get_default_backend_name() {
+    ggml_backend_load_all_once();
     // should pick the same backend as ggml_backend_init_best
     ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
     dev                    = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
@@ -96,6 +98,7 @@ __STATIC_INLINE__ std::string get_default_backend_name() {
 }
 
 __STATIC_INLINE__ ggml_backend_t init_named_backend(std::string name = "") {
+    ggml_backend_load_all_once();
     LOG_DEBUG("Initializing backend: %s", name.c_str());
     if (name.empty()) {
         return ggml_backend_init_best();

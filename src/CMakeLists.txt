@@ -33,3 +33,7 @@ if (BUILD_SHARED_LIBS)
     target_compile_definitions(${SD_LIB} PRIVATE SD_BUILD_DLL)
     target_compile_definitions(${SD_LIB} PUBLIC  SD_BUILD_SHARED_LIB )
 endif()
+
+message(STATUS "变量 GGML_BACKEND_DL 的值是: ${GGML_BACKEND_DL}")
+message(STATUS "变量 GGML_CPU 的值是: ${GGML_CPU}")
+message(STATUS "变量 GGML_CPU_ALL_VARIANTS 的值是: ${GGML_CPU_ALL_VARIANTS}")

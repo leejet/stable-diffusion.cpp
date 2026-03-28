@@ -76,14 +76,13 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_RPC=ON
-          cmake --build build -j $(nproc)
+          cmake --build build --config Release -j $(nproc)
 
       - name: Get commit hash
         id: commit
@@ -144,7 +143,6 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
@@ -152,7 +150,7 @@ jobs:
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
             -DGGML_RPC=ON
-          cmake --build build -j $(nproc)
+          cmake --build build --config Release -j $(nproc)
 
       - name: Get commit hash
         id: commit
@@ -287,13 +285,12 @@ jobs:
         run: |
           sysctl -a
           cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_METAL=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DGGML_RPC=ON
-          cmake --build build -j $(sysctl -n hw.logicalcpu)
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Get commit hash
         id: commit
@@ -383,8 +380,8 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake .. -DCMAKE_CXX_FLAGS='/bigobj' -G Ninja -DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe -DCMAKE_BUILD_TYPE=Release ${{ matrix.defines }}
-          cmake --build .
+          cmake .. -DCMAKE_CXX_FLAGS='/bigobj' -G Ninja -DCMAKE_C_COMPILER=cl.exe -DCMAKE_CXX_COMPILER=cl.exe ${{ matrix.defines }}
+          cmake --build . --config Release
 
       - name: Get commit hash
         id: commit
@@ -517,7 +514,6 @@ jobs:
             -DGGML_BACKEND_DL=ON `
             -DCMAKE_C_COMPILER=clang `
             -DCMAKE_CXX_COMPILER=clang++ `
-            -DCMAKE_BUILD_TYPE=Release `
             -DGPU_TARGETS="${{ env.GPU_TARGETS }}"
           cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
 
@@ -640,7 +636,6 @@ jobs:
           cmake .. -G Ninja \
             -DCMAKE_CXX_COMPILER=amdclang++ \
             -DCMAKE_C_COMPILER=amdclang \
-            -DCMAKE_BUILD_TYPE=Release \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \

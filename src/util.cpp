@@ -23,9 +23,9 @@
 #include <unistd.h>
 #endif
 
-#include "ggml.h"
-#include "ggml-cpu.h"
 #include "ggml-backend.h"
+#include "ggml.h"
+#include "ggml_extend_backend.hpp"
 #include "stable-diffusion.h"
 
 bool ends_with(const std::string& str, const std::string& ending) {
@@ -460,16 +460,16 @@ void* sd_get_progress_callback_data() {
     return sd_progress_cb_data;
 }
 
-//Reference: https://github.com/ggml-org/llama.cpp/blob/c46758d28fa9846893f37e8cec03b73fee120604/src/llama.cpp#L1198
+// Reference: https://github.com/ggml-org/llama.cpp/blob/c46758d28fa9846893f37e8cec03b73fee120604/src/llama.cpp#L1198
 const char* sd_get_system_info() {
-  static std::string s;
-    s.clear(); // Clear the string, since it's static, otherwise it will accumulate data from previous calls.
+    static std::string s;
+    s.clear();  // Clear the string, since it's static, otherwise it will accumulate data from previous calls.
 
     for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
-        auto * reg = ggml_backend_reg_get(i);
-        auto * get_features_fn = (ggml_backend_get_features_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
+        auto* reg             = ggml_backend_reg_get(i);
+        auto* get_features_fn = (ggml_backend_get_features_t)ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
         if (get_features_fn) {
-            ggml_backend_feature * features = get_features_fn(reg);
+            ggml_backend_feature* features = get_features_fn(reg);
             s += ggml_backend_reg_name(reg);
             s += " : ";
             for (; features->name; features++) {
