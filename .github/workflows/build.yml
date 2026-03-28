@@ -72,6 +72,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install build-essential
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-cmake-cpu
+          evict-old-files: 1d
+
       - name: Build
         id: cmake_build
         run: |
@@ -138,6 +144,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install build-essential libvulkan-dev glslc
+      
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-cmake-vulkan
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -280,6 +292,12 @@ jobs:
         run: |
           brew install zip
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: macos-cmake
+          evict-old-files: 1d
+
       - name: Build
         id: cmake_build
         run: |
@@ -375,6 +393,12 @@ jobs:
         id: msvc_dev_cmd
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: windows-cmake-${{ matrix.build }}
+          evict-old-files: 1d
+
       - name: Build
         id: cmake_build
         run: |
@@ -455,7 +479,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
         with:
-          key: windows-latest-rocm-${{ env.ROCM_VERSION }}-x64
+          key: windows-latest-rocm-${{ env.ROCM_VERSION }}
           evict-old-files: 1d
 
       - name: Install ROCm
@@ -551,19 +575,6 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: 9
-
-      - name: Free disk space
-        run: |
-          # Remove preinstalled SDKs and caches not needed for this job
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/.ghcup || true
-          sudo rm -rf /opt/hostedtoolcache || true
-
-          # Remove old package lists and caches
-          sudo rm -rf /var/lib/apt/lists/* || true
-          sudo apt clean
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
