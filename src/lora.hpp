@@ -502,6 +502,7 @@ struct LoraModel : public GGMLRunner {
     }
 
     ggml_tensor* get_out_diff(ggml_context* ctx,
+                              ggml_backend_t backend,
                               ggml_tensor* x,
                               WeightAdapter::ForwardParams forward_params,
                               const std::string& model_tensor_name) {
@@ -590,7 +591,7 @@ struct LoraModel : public GGMLRunner {
                 }
                 scale_value *= multiplier;
 
-                auto curr_out_diff = ggml_ext_lokr_forward(ctx, x, lokr_w1, lokr_w1_a, lokr_w1_b, lokr_w2, lokr_w2_a, lokr_w2_b, is_conv2d, forward_params.conv2d, scale_value);
+                auto curr_out_diff = ggml_ext_lokr_forward(ctx, backend, x, lokr_w1, lokr_w1_a, lokr_w1_b, lokr_w2, lokr_w2_a, lokr_w2_b, is_conv2d, forward_params.conv2d, scale_value);
                 if (out_diff == nullptr) {
                     out_diff = curr_out_diff;
                 } else {
@@ -891,7 +892,7 @@ public:
                                    forward_params.conv2d.scale);
         }
         for (auto& lora_model : lora_models) {
-            ggml_tensor* out_diff = lora_model->get_out_diff(ctx, x, forward_params, prefix + "weight");
+            ggml_tensor* out_diff = lora_model->get_out_diff(ctx, backend, x, forward_params, prefix + "weight");
             if (out_diff == nullptr) {
                 continue;
             }

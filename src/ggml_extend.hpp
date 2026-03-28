@@ -2725,6 +2725,7 @@ public:
 
 __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
     ggml_context* ctx,
+    ggml_backend_t backend,
     ggml_tensor* h,    // Input: [q, batch] or [W, H, q, batch]
     ggml_tensor* w1,   // Outer C (Full rank)
     ggml_tensor* w1a,  // Outer A (Low rank part 1)
@@ -2755,29 +2756,29 @@ __STATIC_INLINE__ ggml_tensor* ggml_ext_lokr_forward(
         int merge_batch_uq = batch;
         int merge_batch_vp = batch;
 
-#if SD_USE_VULKAN
-        if (batch > 1) {
-            // no access to backend here, worst case is slightly worse perfs for other backends when built alongside Vulkan backend
-            int max_batch    = 65535;
-            int max_batch_uq = max_batch / uq;
-            merge_batch_uq   = 1;
-            for (int i = max_batch_uq; i > 0; i--) {
-                if (batch % i == 0) {
-                    merge_batch_uq = i;
-                    break;
+        if (sd_backend_is(backend, "Vulkan")) {
+            if (batch > 1) {
+                // no access to backend here, worst case is slightly worse perfs for other backends when built alongside Vulkan backend
+                int max_batch    = 65535;
+                int max_batch_uq = max_batch / uq;
+                merge_batch_uq   = 1;
+                for (int i = max_batch_uq; i > 0; i--) {
+                    if (batch % i == 0) {
+                        merge_batch_uq = i;
+                        break;
+                    }
                 }
-            }
 
-            int max_batch_vp = max_batch / vp;
-            merge_batch_vp   = 1;
-            for (int i = max_batch_vp; i > 0; i--) {
-                if (batch % i == 0) {
-                    merge_batch_vp = i;
-                    break;
+                int max_batch_vp = max_batch / vp;
+                merge_batch_vp   = 1;
+                for (int i = max_batch_vp; i > 0; i--) {
+                    if (batch % i == 0) {
+                        merge_batch_vp = i;
+                        break;
+                    }
                 }
             }
         }
-#endif
 
         ggml_tensor* h_split = ggml_reshape_3d(ctx, h, vq, uq * merge_batch_uq, batch / merge_batch_uq);
         if (w2 != NULL) {
