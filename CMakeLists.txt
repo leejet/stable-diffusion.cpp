@@ -156,7 +156,7 @@ if(GGML_SYCL)
         set(SYCL_COMPILE_OPTIONS -fp-model=precise)
     endif()
     message("-- Turn off fast-math for host in SYCL backend")
-    target_compile_options(${SD_LIB} PRIVATE ${SYCL_COMPILE_OPTIONS})
+    list(APPEND SD_TARGET_PRIVATE_COMPILE_OPTIONS ${SYCL_COMPILE_OPTIONS})
 endif()
 
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)

@@ -26,6 +26,10 @@ target_include_directories(${SD_LIB} PRIVATE .)
 target_include_directories(${SD_LIB} PUBLIC ../include)
 target_compile_features(${SD_LIB} PRIVATE c_std_11 cxx_std_17)
 
+if (SD_TARGET_PRIVATE_COMPILE_OPTIONS)
+    target_compile_options(${SD_LIB} PRIVATE ${SD_TARGET_PRIVATE_COMPILE_OPTIONS})
+endif()
+
 target_link_libraries(${SD_LIB} PUBLIC ggml PRIVATE zip)
 
 if (BUILD_SHARED_LIBS)
@@ -33,7 +37,3 @@ if (BUILD_SHARED_LIBS)
     target_compile_definitions(${SD_LIB} PRIVATE SD_BUILD_DLL)
     target_compile_definitions(${SD_LIB} PUBLIC  SD_BUILD_SHARED_LIB )
 endif()
-
-message(STATUS "变量 GGML_BACKEND_DL 的值是: ${GGML_BACKEND_DL}")
-message(STATUS "变量 GGML_CPU 的值是: ${GGML_CPU}")
-message(STATUS "变量 GGML_CPU_ALL_VARIANTS 的值是: ${GGML_CPU_ALL_VARIANTS}")
