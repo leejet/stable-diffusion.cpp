@@ -738,7 +738,7 @@ public:
         std::string tae_backend_name                = sanitize_backend_name(SAFE_STR(sd_ctx_params->tae_device));
         std::string pmid_backend_name               = sanitize_backend_name(SAFE_STR(sd_ctx_params->photomaker_device));
         std::string vision_backend_name             = sanitize_backend_name(SAFE_STR(sd_ctx_params->vision_device));
-       
+
         bool diffusion_backend_is_default = diffusion_backend_name.empty() || diffusion_backend_name == default_backend_name;
         bool clip_backends_are_default    = true;
         for (const auto& clip_backend_name : clip_backend_names) {
@@ -1030,11 +1030,11 @@ public:
                     diffusion_model->get_desc() == "Wan2.1-FLF2V-14B" ||
                     diffusion_model->get_desc() == "Wan2.1-I2V-1.3B") {
                     if (!vision_backend) {
-                        if(vision_backend_name.length() > 0 && !vision_backend_is_default) {
+                        if (vision_backend_name.length() > 0 && !vision_backend_is_default) {
                             vision_backend = init_named_backend(vision_backend_name);
                             LOG_INFO("Vision model: Using %s backend", ggml_backend_name(vision_backend));
                         } else {
-                            vision_backend =clip_backends[0];
+                            vision_backend = clip_backends[0];
                         }
                     }
                     clip_vision = std::make_shared<FrozenCLIPVisionEmbedder>(clip_backends[0],
