@@ -521,8 +521,7 @@ static void add_rpc_devices(const std::string& servers) {
 }
 
 void add_rpc_device(const char* servers_cstr) {
-    if (servers_cstr == nullptr || strlen(servers_cstr) == 0)
-    {
+    if (servers_cstr == nullptr || strlen(servers_cstr) == 0) {
         LOG_ERROR("no RPC servers specified");
         return;
     }

@@ -20,7 +20,6 @@ inline void ggml_backend_load_all_once() {
         ggml_backend_load_all();
     });
 #endif
-
 }
 
 #if defined(GGML_BACKEND_DL)
@@ -224,35 +223,35 @@ __STATIC_INLINE__ ggml_tensor* ggml_set_f32(struct ggml_tensor* tensor, float va
 
         switch (tensor->type) {
             case GGML_TYPE_I8: {
-                auto* data   = reinterpret_cast<int8_t*>(tensor->data);
+                auto* data     = reinterpret_cast<int8_t*>(tensor->data);
                 const int8_t v = static_cast<int8_t>(value);
                 for (int64_t i = 0; i < nelements; ++i) {
                     data[i] = v;
                 }
             } break;
             case GGML_TYPE_I16: {
-                auto* data    = reinterpret_cast<int16_t*>(tensor->data);
+                auto* data      = reinterpret_cast<int16_t*>(tensor->data);
                 const int16_t v = static_cast<int16_t>(value);
                 for (int64_t i = 0; i < nelements; ++i) {
                     data[i] = v;
                 }
             } break;
             case GGML_TYPE_I32: {
-                auto* data    = reinterpret_cast<int32_t*>(tensor->data);
+                auto* data      = reinterpret_cast<int32_t*>(tensor->data);
                 const int32_t v = static_cast<int32_t>(value);
                 for (int64_t i = 0; i < nelements; ++i) {
                     data[i] = v;
                 }
             } break;
             case GGML_TYPE_F16: {
-                auto* data        = reinterpret_cast<ggml_fp16_t*>(tensor->data);
+                auto* data          = reinterpret_cast<ggml_fp16_t*>(tensor->data);
                 const ggml_fp16_t v = ggml_fp32_to_fp16(value);
                 for (int64_t i = 0; i < nelements; ++i) {
                     data[i] = v;
                 }
             } break;
             case GGML_TYPE_BF16: {
-                auto* data        = reinterpret_cast<ggml_bf16_t*>(tensor->data);
+                auto* data          = reinterpret_cast<ggml_bf16_t*>(tensor->data);
                 const ggml_bf16_t v = ggml_fp32_to_bf16(value);
                 for (int64_t i = 0; i < nelements; ++i) {
                     data[i] = v;
