@@ -1178,6 +1178,7 @@ namespace Flux {
         std::vector<float> pe_vec;
         std::vector<float> mod_index_arange_vec;
         std::vector<float> dct_vec;
+        sd::Tensor<float> guidance_tensor;
         SDVersion version;
         bool use_mask = false;
 
@@ -1353,29 +1354,42 @@ namespace Flux {
             return dct;
         }
 
-        ggml_cgraph* build_graph(ggml_tensor* x,
-                                 ggml_tensor* timesteps,
-                                 ggml_tensor* context,
-                                 ggml_tensor* c_concat,
-                                 ggml_tensor* y,
-                                 ggml_tensor* guidance,
-                                 std::vector<ggml_tensor*> ref_latents = {},
-                                 bool increase_ref_index               = false,
-                                 std::vector<int> skip_layers          = {}) {
+        ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
+                                 const sd::Tensor<float>& timesteps_tensor,
+                                 const sd::Tensor<float>& context_tensor                  = {},
+                                 const sd::Tensor<float>& c_concat_tensor                 = {},
+                                 const sd::Tensor<float>& y_tensor                        = {},
+                                 const sd::Tensor<float>& guidance_tensor                 = {},
+                                 const std::vector<sd::Tensor<float>>& ref_latents_tensor = {},
+                                 bool increase_ref_index                                  = false,
+                                 std::vector<int> skip_layers                             = {}) {
+            ggml_tensor* x         = make_input(x_tensor);
+            ggml_tensor* timesteps = make_input(timesteps_tensor);
+            ggml_tensor* context   = make_optional_input(context_tensor);
+            ggml_tensor* c_concat  = make_optional_input(c_concat_tensor);
+            ggml_tensor* y         = make_optional_input(y_tensor);
+            if (flux_params.guidance_embed || flux_params.is_chroma) {
+                if (!guidance_tensor.empty()) {
+                    this->guidance_tensor = guidance_tensor;
+                    if (flux_params.is_chroma) {
+                        this->guidance_tensor.fill_(0.f);
+                    }
+                }
+            }
+            ggml_tensor* guidance = make_optional_input(this->guidance_tensor);
+            std::vector<ggml_tensor*> ref_latents;
+            ref_latents.reserve(ref_latents_tensor.size());
+            for (const auto& ref_latent_tensor : ref_latents_tensor) {
+                ref_latents.push_back(make_input(ref_latent_tensor));
+            }
+
             GGML_ASSERT(x->ne[3] == 1);
             ggml_cgraph* gf = new_graph_custom(FLUX_GRAPH_SIZE);
 
             ggml_tensor* mod_index_arange = nullptr;
             ggml_tensor* dct              = nullptr;  // for chroma radiance
 
-            x       = to_backend(x);
-            context = to_backend(context);
-            if (c_concat != nullptr) {
-                c_concat = to_backend(c_concat);
-            }
             if (flux_params.is_chroma) {
-                guidance = ggml_set_f32(guidance, 0);
-
                 if (!use_mask) {
                     y = nullptr;
                 }
@@ -1385,16 +1399,6 @@ namespace Flux {
                 mod_index_arange     = ggml_new_tensor_1d(compute_ctx, GGML_TYPE_F32, mod_index_arange_vec.size());
                 set_backend_tensor_data(mod_index_arange, mod_index_arange_vec.data());
             }
-            y = to_backend(y);
-
-            timesteps = to_backend(timesteps);
-            if (flux_params.guidance_embed || flux_params.is_chroma) {
-                guidance = to_backend(guidance);
-            }
-            for (int i = 0; i < ref_latents.size(); i++) {
-                ref_latents[i] = to_backend(ref_latents[i]);
-            }
-
             std::set<int> txt_arange_dims;
             if (sd_version_is_flux2(version)) {
                 txt_arange_dims    = {3};
@@ -1455,18 +1459,16 @@ namespace Flux {
             return gf;
         }
 
-        bool compute(int n_threads,
-                     ggml_tensor* x,
-                     ggml_tensor* timesteps,
-                     ggml_tensor* context,
-                     ggml_tensor* c_concat,
-                     ggml_tensor* y,
-                     ggml_tensor* guidance,
-                     std::vector<ggml_tensor*> ref_latents = {},
-                     bool increase_ref_index               = false,
-                     ggml_tensor** output                  = nullptr,
-                     ggml_context* output_ctx              = nullptr,
-                     std::vector<int> skip_layers          = std::vector<int>()) {
+        sd::Tensor<float> compute(int n_threads,
+                                  const sd::Tensor<float>& x,
+                                  const sd::Tensor<float>& timesteps,
+                                  const sd::Tensor<float>& context                  = {},
+                                  const sd::Tensor<float>& c_concat                 = {},
+                                  const sd::Tensor<float>& y                        = {},
+                                  const sd::Tensor<float>& guidance                 = {},
+                                  const std::vector<sd::Tensor<float>>& ref_latents = {},
+                                  bool increase_ref_index                           = false,
+                                  std::vector<int> skip_layers                      = std::vector<int>()) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
@@ -1476,7 +1478,8 @@ namespace Flux {
                 return build_graph(x, timesteps, context, c_concat, y, guidance, ref_latents, increase_ref_index, skip_layers);
             };
 
-            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            auto result = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+            return result;
         }
 
         void test() {
@@ -1485,41 +1488,51 @@ namespace Flux {
             params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
-            ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != nullptr);
+            ggml_context* ctx = ggml_init(params);
+            GGML_ASSERT(ctx != nullptr);
 
             {
                 // cpu f16:
                 // cuda f16: nan
                 // cuda q8_0: pass
-                auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 16, 16, 128, 1);
+                sd::Tensor<float> x({16, 16, 128, 1});
                 // ggml_set_f32(x, 0.01f);
-                // auto x = load_tensor_from_file(work_ctx, "chroma_x.bin");
+                // auto x = load_tensor_from_file(ctx, "chroma_x.bin");
                 // print_ggml_tensor(x);
 
                 std::vector<float> timesteps_vec(1, 1.f);
-                auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
+                auto timesteps = sd::Tensor<float>::from_vector(timesteps_vec);
 
                 std::vector<float> guidance_vec(1, 0.f);
-                auto guidance = vector_to_ggml_tensor(work_ctx, guidance_vec);
+                auto guidance = sd::Tensor<float>::from_vector(guidance_vec);
 
-                auto context = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 15360, 256, 1);
+                sd::Tensor<float> context({15360, 256, 1});
                 // ggml_set_f32(context, 0.01f);
-                // auto context = load_tensor_from_file(work_ctx, "chroma_context.bin");
+                // auto context = load_tensor_from_file(ctx, "chroma_context.bin");
                 // print_ggml_tensor(context);
 
-                // auto y = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 768, 1);
+                // auto y = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 768, 1);
                 // ggml_set_f32(y, 0.01f);
                 auto y = nullptr;
                 // print_ggml_tensor(y);
 
-                ggml_tensor* out = nullptr;
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, nullptr, y, guidance, {}, false, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = compute(8,
+                                       x,
+                                       timesteps,
+                                       context,
+                                       {},
+                                       {},
+                                       guidance,
+                                       {},
+                                       false);
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("flux test done in %lldms", t1 - t0);
             }
         }

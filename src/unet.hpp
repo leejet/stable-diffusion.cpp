@@ -609,28 +609,29 @@ struct UNetModelRunner : public GGMLRunner {
         unet.get_param_tensors(tensors, prefix);
     }
 
-    ggml_cgraph* build_graph(ggml_tensor* x,
-                             ggml_tensor* timesteps,
-                             ggml_tensor* context,
-                             ggml_tensor* c_concat              = nullptr,
-                             ggml_tensor* y                     = nullptr,
-                             int num_video_frames               = -1,
-                             std::vector<ggml_tensor*> controls = {},
-                             float control_strength             = 0.f) {
+    ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
+                             const sd::Tensor<float>& timesteps_tensor,
+                             const sd::Tensor<float>& context_tensor               = {},
+                             const sd::Tensor<float>& c_concat_tensor              = {},
+                             const sd::Tensor<float>& y_tensor                     = {},
+                             int num_video_frames                                  = -1,
+                             const std::vector<sd::Tensor<float>>& controls_tensor = {},
+                             float control_strength                                = 0.f) {
         ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE);
+
+        ggml_tensor* x         = make_input(x_tensor);
+        ggml_tensor* timesteps = make_input(timesteps_tensor);
+        ggml_tensor* context   = make_optional_input(context_tensor);
+        ggml_tensor* c_concat  = make_optional_input(c_concat_tensor);
+        ggml_tensor* y         = make_optional_input(y_tensor);
+        std::vector<ggml_tensor*> controls;
+        controls.reserve(controls_tensor.size());
+        for (const auto& control_tensor : controls_tensor) {
+            controls.push_back(make_input(control_tensor));
+        }
 
         if (num_video_frames == -1) {
             num_video_frames = static_cast<int>(x->ne[3]);
-        }
-
-        x         = to_backend(x);
-        context   = to_backend(context);
-        y         = to_backend(y);
-        timesteps = to_backend(timesteps);
-        c_concat  = to_backend(c_concat);
-
-        for (int i = 0; i < controls.size(); i++) {
-            controls[i] = to_backend(controls[i]);
         }
 
         auto runner_ctx = get_context();
@@ -650,17 +651,15 @@ struct UNetModelRunner : public GGMLRunner {
         return gf;
     }
 
-    bool compute(int n_threads,
-                 ggml_tensor* x,
-                 ggml_tensor* timesteps,
-                 ggml_tensor* context,
-                 ggml_tensor* c_concat,
-                 ggml_tensor* y,
-                 int num_video_frames               = -1,
-                 std::vector<ggml_tensor*> controls = {},
-                 float control_strength             = 0.f,
-                 ggml_tensor** output               = nullptr,
-                 ggml_context* output_ctx           = nullptr) {
+    sd::Tensor<float> compute(int n_threads,
+                              const sd::Tensor<float>& x,
+                              const sd::Tensor<float>& timesteps,
+                              const sd::Tensor<float>& context               = {},
+                              const sd::Tensor<float>& c_concat              = {},
+                              const sd::Tensor<float>& y                     = {},
+                              int num_video_frames                           = -1,
+                              const std::vector<sd::Tensor<float>>& controls = {},
+                              float control_strength                         = 0.f) {
         // x: [N, in_channels, h, w]
         // timesteps: [N, ]
         // context: [N, max_position, hidden_size]([N, 77, 768]) or [1, max_position, hidden_size]
@@ -670,7 +669,7 @@ struct UNetModelRunner : public GGMLRunner {
             return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength);
         };
 
-        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
     }
 
     void test() {
@@ -679,8 +678,8 @@ struct UNetModelRunner : public GGMLRunner {
         params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
-        ggml_context* work_ctx = ggml_init(params);
-        GGML_ASSERT(work_ctx != nullptr);
+        ggml_context* ctx = ggml_init(params);
+        GGML_ASSERT(ctx != nullptr);
 
         {
             // CPU, num_video_frames = 1, x{num_video_frames, 8, 8, 8}: Pass
@@ -689,27 +688,37 @@ struct UNetModelRunner : public GGMLRunner {
             // CUDA, num_video_frames = 3, x{num_video_frames, 8, 8, 8}: nan
             int num_video_frames = 3;
 
-            auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 8, num_video_frames);
+            sd::Tensor<float> x({8, 8, 8, num_video_frames});
             std::vector<float> timesteps_vec(num_video_frames, 999.f);
-            auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
-            ggml_set_f32(x, 0.5f);
+            auto timesteps = sd::Tensor<float>::from_vector(timesteps_vec);
+            x.fill_(0.5f);
             // print_ggml_tensor(x);
 
-            auto context = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 1024, 1, num_video_frames);
-            ggml_set_f32(context, 0.5f);
+            sd::Tensor<float> context({1024, 1, num_video_frames});
+            context.fill_(0.5f);
             // print_ggml_tensor(context);
 
-            auto y = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 768, num_video_frames);
-            ggml_set_f32(y, 0.5f);
+            sd::Tensor<float> y({768, num_video_frames});
+            y.fill_(0.5f);
             // print_ggml_tensor(y);
 
-            ggml_tensor* out = nullptr;
+            sd::Tensor<float> out;
 
-            int64_t t0 = ggml_time_ms();
-            compute(8, x, timesteps, context, nullptr, y, num_video_frames, {}, 0.f, &out, work_ctx);
-            int64_t t1 = ggml_time_ms();
+            int64_t t0   = ggml_time_ms();
+            auto out_opt = compute(8,
+                                   x,
+                                   timesteps,
+                                   context,
+                                   {},
+                                   y,
+                                   num_video_frames,
+                                   {},
+                                   0.f);
+            int64_t t1   = ggml_time_ms();
 
-            print_ggml_tensor(out);
+            GGML_ASSERT(!out_opt.empty());
+            out = std::move(out_opt);
+            print_sd_tensor(out);
             LOG_DEBUG("unet test done in %lldms", t1 - t0);
         }
     }

@@ -194,6 +194,7 @@ namespace LLM {
                         bool padding      = false) {
             if (add_bos_token) {
                 tokens.insert(tokens.begin(), BOS_TOKEN_ID);
+                weights.insert(weights.begin(), 1.f);
             }
             if (max_length > 0 && padding) {
                 size_t n = static_cast<size_t>(std::ceil(tokens.size() * 1.f / max_length));
@@ -1180,16 +1181,17 @@ namespace LLM {
             return hidden_states;
         }
 
-        ggml_cgraph* build_graph(ggml_tensor* input_ids,
-                                 ggml_tensor* attention_mask,
-                                 std::vector<std::pair<int, ggml_tensor*>> image_embeds,
+        ggml_cgraph* build_graph(const sd::Tensor<int32_t>& input_ids_tensor,
+                                 const sd::Tensor<float>& attention_mask_tensor,
+                                 const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds_tensor,
                                  std::set<int> out_layers) {
-            ggml_cgraph* gf = ggml_new_graph(compute_ctx);
-
-            input_ids = to_backend(input_ids);
-
-            for (auto& image_embed : image_embeds) {
-                image_embed.second = to_backend(image_embed.second);
+            ggml_cgraph* gf        = ggml_new_graph(compute_ctx);
+            ggml_tensor* input_ids = make_input(input_ids_tensor);
+            std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+            image_embeds.reserve(image_embeds_tensor.size());
+            for (const auto& [idx, embed_tensor] : image_embeds_tensor) {
+                ggml_tensor* embed = make_input(embed_tensor);
+                image_embeds.emplace_back(idx, embed);
             }
 
             int64_t n_tokens = input_ids->ne[0];
@@ -1213,8 +1215,9 @@ namespace LLM {
                                                 input_pos_vec.size());
             set_backend_tensor_data(input_pos, input_pos_vec.data());
 
-            if (attention_mask != nullptr) {
-                attention_mask = to_backend(attention_mask);
+            ggml_tensor* attention_mask = nullptr;
+            if (!attention_mask_tensor.empty()) {
+                attention_mask = make_input(attention_mask_tensor);
             } else {
                 attention_mask_vec.resize(n_tokens * n_tokens);
                 for (int i0 = 0; i0 < n_tokens; i0++) {
@@ -1239,17 +1242,15 @@ namespace LLM {
             return gf;
         }
 
-        bool compute(const int n_threads,
-                     ggml_tensor* input_ids,
-                     ggml_tensor* attention_mask,
-                     std::vector<std::pair<int, ggml_tensor*>> image_embeds,
-                     std::set<int> out_layers,
-                     ggml_tensor** output,
-                     ggml_context* output_ctx = nullptr) {
+        sd::Tensor<float> compute(const int n_threads,
+                                  const sd::Tensor<int32_t>& input_ids,
+                                  const sd::Tensor<float>& attention_mask,
+                                  const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds,
+                                  std::set<int> out_layers) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_graph(input_ids, attention_mask, image_embeds, out_layers);
             };
-            return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, true));
         }
 
         int64_t get_num_image_tokens(int64_t t, int64_t h, int64_t w) {
@@ -1288,8 +1289,9 @@ namespace LLM {
             return image;
         }
 
-        ggml_cgraph* build_encode_image_graph(ggml_tensor* image) {
-            ggml_cgraph* gf = new_graph_custom(LLM_GRAPH_SIZE);
+        ggml_cgraph* build_encode_image_graph(const sd::Tensor<float>& image_tensor) {
+            ggml_cgraph* gf    = new_graph_custom(LLM_GRAPH_SIZE);
+            ggml_tensor* image = make_input(image_tensor);
 
             GGML_ASSERT(image->ne[1] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
             GGML_ASSERT(image->ne[0] % (params.vision.patch_size * params.vision.spatial_merge_size) == 0);
@@ -1300,8 +1302,6 @@ namespace LLM {
             int llm_grid_h             = grid_h / params.vision.spatial_merge_size;
             int llm_grid_w             = grid_w / params.vision.spatial_merge_size;
             int vit_merger_window_size = params.vision.window_size / params.vision.patch_size / params.vision.spatial_merge_size;
-
-            image = to_backend(image);
 
             auto pixel_values = process_image(compute_ctx, image);
 
@@ -1411,14 +1411,12 @@ namespace LLM {
             return gf;
         }
 
-        void encode_image(const int n_threads,
-                          ggml_tensor* image,
-                          ggml_tensor** output,
-                          ggml_context* output_ctx = nullptr) {
+        sd::Tensor<float> encode_image(const int n_threads,
+                                       const sd::Tensor<float>& image) {
             auto get_graph = [&]() -> ggml_cgraph* {
                 return build_encode_image_graph(image);
             };
-            GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return take_or_empty(GGMLRunner::compute<float>(get_graph, n_threads, false));
         }
     };
 
@@ -1497,39 +1495,41 @@ namespace LLM {
             params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
-            ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != nullptr);
+            ggml_context* ctx = ggml_init(params);
+            GGML_ASSERT(ctx != nullptr);
             bool test_mistral          = false;
             bool test_qwen3            = true;
             bool test_vit              = false;
             bool test_decoder_with_vit = false;
 
             if (test_decoder_with_vit) {
-                ggml_tensor* image_embed = nullptr;
+                sd::Tensor<float> image_embed;
                 {
-                    auto image = load_tensor_from_file(work_ctx, "qwen2vl_normalized.bin");
-                    print_ggml_tensor(image, false, "image");
-                    ggml_tensor* out = nullptr;
+                    auto image = sd::load_tensor_from_file_as_tensor<float>("qwen2vl_normalized.bin");
+                    print_sd_tensor(image, false, "image");
+                    sd::Tensor<float> out;
 
-                    int64_t t0 = ggml_time_ms();
-                    model.encode_image(8, image, &out, work_ctx);
-                    int64_t t1 = ggml_time_ms();
+                    int64_t t0   = ggml_time_ms();
+                    auto out_opt = model.encode_image(8, image);
+                    int64_t t1   = ggml_time_ms();
 
-                    print_ggml_tensor(out, false, "image_embed");
+                    GGML_ASSERT(!out_opt.empty());
+                    out = std::move(out_opt);
+                    print_sd_tensor(out, false, "image_embed");
                     image_embed = out;
                     LOG_DEBUG("llm encode_image test done in %lldms", t1 - t0);
                 }
 
                 std::string placeholder  = "<|image_pad|>";
                 std::string img_prompt   = "Picture 1: <|vision_start|>";  // [24669, 220, 16, 25, 220, 151652]
-                int64_t num_image_tokens = image_embed->ne[1];
+                int64_t num_image_tokens = image_embed.shape()[1];
                 img_prompt.reserve(num_image_tokens * placeholder.size());
                 for (int i = 0; i < num_image_tokens; i++) {
                     img_prompt += placeholder;
                 }
                 img_prompt += "<|vision_end|>";
 
-                std::vector<std::pair<int, ggml_tensor*>> image_embeds;
+                std::vector<std::pair<int, sd::Tensor<float>>> image_embeds;
                 image_embeds.emplace_back(64, image_embed);
 
                 std::pair<int, int> prompt_attn_range;
@@ -1547,29 +1547,33 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids   = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                ggml_tensor* out = nullptr;
+                auto input_ids = sd::Tensor<int32_t>::from_vector(tokens);
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.compute(8, input_ids, nullptr, image_embeds, {}, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.compute(8, input_ids, sd::Tensor<float>(), image_embeds, {});
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else if (test_vit) {
-                // auto image = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 280, 280, 3);
+                // auto image = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 280, 280, 3);
                 // ggml_set_f32(image, 0.f);
-                auto image = load_tensor_from_file(work_ctx, "qwen2vl_normalized.bin");
-                print_ggml_tensor(image, false, "image");
-                ggml_tensor* out = nullptr;
+                auto image = sd::load_tensor_from_file_as_tensor<float>("qwen2vl_normalized.bin");
+                print_sd_tensor(image, false, "image");
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.encode_image(8, image, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.encode_image(8, image);
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out, false, "out");
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out, false, "out");
 
-                // auto ref_out = load_tensor_from_file(work_ctx, "qwen2vl.bin");
+                // auto ref_out = load_tensor_from_file(ctx, "qwen2vl.bin");
                 // ggml_ext_tensor_diff(ref_out, out, 0.01f);
 
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
@@ -1587,14 +1591,16 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids   = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                ggml_tensor* out = nullptr;
+                auto input_ids = sd::Tensor<int32_t>::from_vector(tokens);
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.compute(8, input_ids, nullptr, {}, {10, 20, 30}, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.compute(8, input_ids, sd::Tensor<float>(), {}, {10, 20, 30});
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else if (test_qwen3) {
                 std::pair<int, int> prompt_attn_range;
@@ -1610,14 +1616,16 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids   = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                ggml_tensor* out = nullptr;
+                auto input_ids = sd::Tensor<int32_t>::from_vector(tokens);
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.compute(8, input_ids, nullptr, {}, {35}, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.compute(8, input_ids, sd::Tensor<float>(), {}, {35});
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
             } else {
                 std::pair<int, int> prompt_attn_range;
@@ -1633,14 +1641,16 @@ namespace LLM {
                     printf("%d ", token);
                 }
                 printf("\n");
-                auto input_ids   = vector_to_ggml_tensor_i32(work_ctx, tokens);
-                ggml_tensor* out = nullptr;
+                auto input_ids = sd::Tensor<int32_t>::from_vector(tokens);
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                model.compute(8, input_ids, nullptr, {}, {}, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = model.compute(8, input_ids, sd::Tensor<float>(), {}, {});
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("llm test done in %lldms", t1 - t0);
             }
         }
