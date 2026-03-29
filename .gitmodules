@@ -1,3 +1,6 @@
 [submodule "ggml"]
     path = ggml
 	url = https://github.com/ggml-org/ggml.git
+[submodule "examples/server/frontend"]
+	path = examples/server/frontend
+	url = https://github.com/leejet/stable-ui.git

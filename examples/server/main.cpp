@@ -13,6 +13,10 @@
 
 #include "common/common.hpp"
 
+#ifdef HAVE_INDEX_HTML
+#include "frontend/dist/gen_index_html.h"
+#endif
+
 namespace fs = std::filesystem;
 
 // ----------------------- helpers -----------------------
@@ -380,7 +384,13 @@ int main(int argc, const char** argv) {
         return httplib::Server::HandlerResponse::Unhandled;
     });
 
-    // root
+    // index html
+    std::string index_html;
+#ifdef HAVE_INDEX_HTML
+    index_html.assign(reinterpret_cast<const char*>(index_html_bytes), index_html_size);
+#else
+    index_html = "Stable Diffusion Server is running";
+#endif
     svr.Get("/", [&](const httplib::Request&, httplib::Response& res) {
         if (!svr_params.serve_html_path.empty()) {
             std::ifstream file(svr_params.serve_html_path);
@@ -392,7 +402,7 @@ int main(int argc, const char** argv) {
                 res.set_content("Error: Unable to read HTML file", "text/plain");
             }
         } else {
-            res.set_content("Stable Diffusion Server is running", "text/plain");
+            res.set_content(index_html, "text/html");
         }
     });
 
