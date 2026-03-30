@@ -475,7 +475,7 @@ struct SDContextParams {
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
-    bool force_sdxl_vae_conv_scale    = false;
+    bool force_sdxl_vae_conv_scale = false;
 
     float flow_shift = INFINITY;
 
@@ -575,8 +575,7 @@ struct SDContextParams {
              &chroma_t5_mask_pad},
         };
 
-        options.float_options = {
-        };
+        options.float_options = {};
 
         options.bool_options = {
             {"",
