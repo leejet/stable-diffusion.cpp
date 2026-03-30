@@ -8,8 +8,8 @@
 #include "ggml-backend.h"
 #include "llm.hpp"
 #include "t5.hpp"
-#include "util.h"
 #include "tensor_ggml.hpp"
+#include "util.h"
 
 struct SDCondition {
     sd::Tensor<float> c_crossattn;
@@ -82,7 +82,7 @@ struct Conditioner {
     virtual ~Conditioner() = default;
 
 public:
-    int model_count = 1;
+    int model_count                                                                        = 1;
     virtual SDCondition get_learned_condition(int n_threads,
                                               const ConditionerParams& conditioner_params) = 0;
     virtual void alloc_params_buffer()                                                     = 0;

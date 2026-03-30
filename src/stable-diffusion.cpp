@@ -106,22 +106,21 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
     return std::max(0.0f, reuse_threshold);
 }
 
-std::vector<std::string> string_split(const std::string & input, char separator)
-{
+std::vector<std::string> string_split(const std::string& input, char separator) {
     std::vector<std::string> parts;
-    size_t begin_pos = 0;
+    size_t begin_pos     = 0;
     size_t separator_pos = input.find(separator);
     while (separator_pos != std::string::npos) {
         std::string part = input.substr(begin_pos, separator_pos - begin_pos);
         parts.emplace_back(part);
-        begin_pos = separator_pos + 1;
+        begin_pos     = separator_pos + 1;
         separator_pos = input.find(separator, begin_pos);
     }
     parts.emplace_back(input.substr(begin_pos, separator_pos - begin_pos));
     return parts;
 }
 
-static void add_rpc_devices(const std::string & servers) {
+static void add_rpc_devices(const std::string& servers) {
     auto rpc_servers = string_split(servers, ',');
     if (rpc_servers.empty()) {
         throw std::invalid_argument("no RPC servers specified");
@@ -130,18 +129,18 @@ static void add_rpc_devices(const std::string & servers) {
     if (!rpc_reg) {
         throw std::invalid_argument("failed to find RPC backend");
     }
-    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char * endpoint);
-    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    typedef ggml_backend_reg_t (*ggml_backend_rpc_add_server_t)(const char* endpoint);
+    ggml_backend_rpc_add_server_t ggml_backend_rpc_add_server_fn = (ggml_backend_rpc_add_server_t)ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
     if (!ggml_backend_rpc_add_server_fn) {
         throw std::invalid_argument("failed to find RPC add server function");
     }
-    for (const auto & server : rpc_servers) {
+    for (const auto& server : rpc_servers) {
         auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
         ggml_backend_register(reg);
     }
 }
 
-void add_rpc_device(const char* servers_cstr){
+void add_rpc_device(const char* servers_cstr) {
     std::string servers(servers_cstr);
     add_rpc_devices(servers);
 }
@@ -179,14 +178,14 @@ std::vector<std::pair<std::string, std::string>> list_backends_vector() {
     return backends;
 }
 
-SD_API size_t backend_list_size(){
+SD_API size_t backend_list_size() {
     // for C API
     size_t buffer_size = 0;
-    auto backends = list_backends_vector();
+    auto backends      = list_backends_vector();
     for (auto& backend : backends) {
         auto dev_name_size = backend.first.size();
         auto dev_desc_size = backend.second.size();
-        buffer_size+=dev_name_size+dev_desc_size+2; // +2 for the separators
+        buffer_size += dev_name_size + dev_desc_size + 2;  // +2 for the separators
     }
     return buffer_size;
 }
@@ -199,17 +198,17 @@ SD_API void list_backends_to_buffer(char* buffer, size_t buffer_size) {
         size_t name_size = backend.first.size();
         size_t desc_size = backend.second.size();
         if (offset + name_size + desc_size + 2 > buffer_size) {
-            break; // Not enough space in the buffer
+            break;  // Not enough space in the buffer
         }
         memcpy(buffer + offset, backend.first.c_str(), name_size);
         offset += name_size;
         buffer[offset++] = '\t';
         memcpy(buffer + offset, backend.second.c_str(), desc_size);
         offset += desc_size;
-        buffer[offset++] = '\n'; 
+        buffer[offset++] = '\n';
     }
     if (offset < buffer_size) {
-        buffer[offset] = '\0'; // Ensure the buffer is null-terminated at the end
+        buffer[offset] = '\0';  // Ensure the buffer is null-terminated at the end
     } else {
         LOG_WARN("Provided buffer size is too small to contain details of all devices.");
         buffer[buffer_size - 1] = '\0';  // Ensure the buffer is null-terminated at the end
@@ -1624,11 +1623,11 @@ public:
                        void* step_callback_data,
                        bool is_noisy) {
         if (preview_mode == PREVIEW_PROJ) {
-            int patch_sz                     = 1;
-            const float(*latent_rgb_proj)[3] = nullptr;
-            float* latent_rgb_bias           = nullptr;
-            bool is_video                    = preview_latent_tensor_is_video(latents);
-            uint32_t dim                     = is_video ? static_cast<uint32_t>(latents.shape()[3]) : static_cast<uint32_t>(latents.shape()[2]);
+            int patch_sz                      = 1;
+            const float (*latent_rgb_proj)[3] = nullptr;
+            float* latent_rgb_bias            = nullptr;
+            bool is_video                     = preview_latent_tensor_is_video(latents);
+            uint32_t dim                      = is_video ? static_cast<uint32_t>(latents.shape()[3]) : static_cast<uint32_t>(latents.shape()[2]);
 
             if (dim == 128) {
                 if (sd_version_is_flux2(version)) {
@@ -2850,7 +2849,7 @@ struct SamplePlan {
 
         if (sample_params->custom_sigmas_count > 0) {
             sigmas      = std::vector<float>(sample_params->custom_sigmas,
-                                        sample_params->custom_sigmas + sample_params->custom_sigmas_count);
+                                             sample_params->custom_sigmas + sample_params->custom_sigmas_count);
             total_steps = static_cast<int>(sigmas.size()) - 1;
             LOG_WARN("total_steps != custom_sigmas_count - 1, set total_steps to %d", total_steps);
             if (sample_steps >= total_steps) {
