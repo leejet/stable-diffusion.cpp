@@ -789,7 +789,8 @@ static std::pair<float, float> get_ancestral_step(float sigma_from,
 static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
                                                 sd::Tensor<float> x,
                                                 const std::vector<float>& sigmas,
-                                                std::shared_ptr<RNG> rng) {
+                                                std::shared_ptr<RNG> rng,
+                                                float eta) {
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
         float sigma       = sigmas[i];
@@ -799,7 +800,7 @@ static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
         }
         sd::Tensor<float> denoised  = std::move(denoised_opt);
         sd::Tensor<float> d         = (x - denoised) / sigma;
-        auto [sigma_down, sigma_up] = get_ancestral_step(sigmas[i], sigmas[i + 1]);
+        auto [sigma_down, sigma_up] = get_ancestral_step(sigmas[i], sigmas[i + 1], eta);
         x += d * (sigma_down - sigmas[i]);
         if (sigmas[i + 1] > 0) {
             x += sd::Tensor<float>::randn_like(x, rng) * sigma_up;
@@ -885,7 +886,8 @@ static sd::Tensor<float> sample_dpm2(denoise_cb_t model,
 static sd::Tensor<float> sample_dpmpp_2s_ancestral(denoise_cb_t model,
                                                    sd::Tensor<float> x,
                                                    const std::vector<float>& sigmas,
-                                                   std::shared_ptr<RNG> rng) {
+                                                   std::shared_ptr<RNG> rng,
+                                                   float eta) {
     auto t_fn     = [](float sigma) -> float { return -log(sigma); };
     auto sigma_fn = [](float t) -> float { return exp(-t); };
 
@@ -896,7 +898,7 @@ static sd::Tensor<float> sample_dpmpp_2s_ancestral(denoise_cb_t model,
             return {};
         }
         sd::Tensor<float> denoised  = std::move(denoised_opt);
-        auto [sigma_down, sigma_up] = get_ancestral_step(sigmas[i], sigmas[i + 1]);
+        auto [sigma_down, sigma_up] = get_ancestral_step(sigmas[i], sigmas[i + 1], eta);
 
         if (sigma_down == 0) {
             x = denoised;
@@ -1371,7 +1373,7 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
                                             float eta) {
     switch (method) {
         case EULER_A_SAMPLE_METHOD:
-            return sample_euler_ancestral(model, std::move(x), sigmas, rng);
+            return sample_euler_ancestral(model, std::move(x), sigmas, rng, eta);
         case EULER_SAMPLE_METHOD:
             return sample_euler(model, std::move(x), sigmas);
         case HEUN_SAMPLE_METHOD:
@@ -1379,7 +1381,7 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
         case DPM2_SAMPLE_METHOD:
             return sample_dpm2(model, std::move(x), sigmas);
         case DPMPP2S_A_SAMPLE_METHOD:
-            return sample_dpmpp_2s_ancestral(model, std::move(x), sigmas, rng);
+            return sample_dpmpp_2s_ancestral(model, std::move(x), sigmas, rng, eta);
         case DPMPP2M_SAMPLE_METHOD:
             return sample_dpmpp_2m(model, std::move(x), sigmas);
         case DPMPP2Mv2_SAMPLE_METHOD:

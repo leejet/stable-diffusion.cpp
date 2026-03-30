@@ -2225,6 +2225,7 @@ void sd_sample_params_init(sd_sample_params_t* sample_params) {
     sample_params->scheduler                   = SCHEDULER_COUNT;
     sample_params->sample_method               = SAMPLE_METHOD_COUNT;
     sample_params->sample_steps                = 20;
+    sample_params->eta                         = INFINITY;
     sample_params->custom_sigmas               = nullptr;
     sample_params->custom_sigmas_count         = 0;
     sample_params->flow_shift                  = INFINITY;
@@ -2438,6 +2439,25 @@ static scheduler_t resolve_scheduler(sd_ctx_t* sd_ctx,
     return scheduler;
 }
 
+static float resolve_eta(sd_ctx_t* sd_ctx,
+                         float eta,
+                         enum sample_method_t sample_method) {
+    if (eta == INFINITY) {
+        switch(sample_method) {
+            case DDIM_TRAILING_SAMPLE_METHOD:
+            case TCD_SAMPLE_METHOD:
+            case RES_MULTISTEP_SAMPLE_METHOD:
+            case RES_2S_SAMPLE_METHOD:
+                 return 0.0f;
+            case EULER_A_SAMPLE_METHOD:
+            case DPMPP2S_A_SAMPLE_METHOD:
+                 return 1.0f;
+            default: ;
+        }
+    }
+    return eta;
+}
+
 struct GenerationRequest {
     std::string prompt;
     std::string negative_prompt;
@@ -2586,6 +2606,7 @@ struct GenerationRequest {
 struct SamplePlan {
     enum sample_method_t sample_method            = SAMPLE_METHOD_COUNT;
     enum sample_method_t high_noise_sample_method = SAMPLE_METHOD_COUNT;
+    float eta                                     = 0.f;
     int sample_steps                              = 0;
     int high_noise_sample_steps                   = 0;
     int total_steps                               = 0;
@@ -2597,6 +2618,7 @@ struct SamplePlan {
                const sd_img_gen_params_t* sd_img_gen_params,
                const GenerationRequest& request) {
         sample_method = sd_img_gen_params->sample_params.sample_method;
+        eta           = sd_img_gen_params->sample_params.eta;
         sample_steps  = sd_img_gen_params->sample_params.sample_steps;
         resolve(sd_ctx, &request, &sd_img_gen_params->sample_params);
     }
@@ -2643,6 +2665,8 @@ struct SamplePlan {
                                                                      scheduler,
                                                                      sd_ctx->sd->version);
         }
+
+        eta = resolve_eta(sd_ctx, eta, sample_method);
 
         if (high_noise_sample_steps < 0) {
             for (size_t i = 0; i < sigmas.size(); ++i) {
@@ -3123,7 +3147,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                    latents.control_image,
                                                    request.control_strength,
                                                    request.guidance,
-                                                   request.eta,
+                                                   plan.eta,
                                                    request.shifted_timestep,
                                                    plan.sample_method,
                                                    plan.sigmas,
