@@ -493,7 +493,7 @@ public:
                                                                     offload_params_to_cpu,
                                                                     tensor_storage_map,
                                                                     true,
-                                                                    1,
+                                                                    0,
                                                                     true);
                 diffusion_model  = std::make_shared<WanModel>(backend,
                                                              offload_params_to_cpu,
