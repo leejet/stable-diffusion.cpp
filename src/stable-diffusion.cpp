@@ -1593,6 +1593,7 @@ public:
                              float eta,
                              int shifted_timestep,
                              sample_method_t method,
+                             bool is_flow_denoiser,
                              const std::vector<float>& sigmas,
                              int start_merge_step,
                              const std::vector<sd::Tensor<float>>& ref_latents,
@@ -1791,7 +1792,7 @@ public:
             return denoised;
         };
 
-        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta);
+        auto x0_opt = sample_k_diffusion(method, denoise, x_t, sigmas, sampler_rng, eta, is_flow_denoiser);
         if (x0_opt.empty()) {
             LOG_ERROR("Diffusion model sampling failed");
             if (control_net) {
@@ -1909,6 +1910,12 @@ public:
             flow_denoiser->set_shift(flow_shift);
         }
     }
+
+    bool is_flow_denoiser() {
+        auto flow_denoiser = std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser);
+        return !!flow_denoiser;
+    }
+
 };
 
 /*================================================= SD API ==================================================*/
@@ -3150,6 +3157,7 @@ SD_API sd_image_t* generate_image(sd_ctx_t* sd_ctx, const sd_img_gen_params_t* s
                                                    plan.eta,
                                                    request.shifted_timestep,
                                                    plan.sample_method,
+                                                   sd_ctx->sd->is_flow_denoiser(),
                                                    plan.sigmas,
                                                    plan.start_merge_step,
                                                    latents.ref_latents,
@@ -3509,6 +3517,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                            sd_vid_gen_params->high_noise_sample_params.eta,
                                                            request.shifted_timestep,
                                                            plan.high_noise_sample_method,
+                                                           sd_ctx->sd->is_flow_denoiser(),
                                                            high_noise_sigmas,
                                                            -1,
                                                            std::vector<sd::Tensor<float>>{},
@@ -3550,6 +3559,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                         sd_vid_gen_params->sample_params.eta,
                                                         sd_vid_gen_params->sample_params.shifted_timestep,
                                                         plan.sample_method,
+                                                        sd_ctx->sd->is_flow_denoiser(),
                                                         plan.sigmas,
                                                         -1,
                                                         std::vector<sd::Tensor<float>>{},

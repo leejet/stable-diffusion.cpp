@@ -809,6 +809,52 @@ static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
     return x;
 }
 
+static sd::Tensor<float> sample_euler_flow(denoise_cb_t model,
+                                           sd::Tensor<float> x,
+                                           const std::vector<float>& sigmas,
+                                           std::shared_ptr<RNG> rng,
+                                           float eta) {
+    int steps = static_cast<int>(sigmas.size()) - 1;
+    for (int i = 0; i < steps; i++) {
+        float sigma       = sigmas[i];
+        float sigma_to    = sigmas[i + 1];
+        auto denoised_opt = model(x, sigma, i + 1);
+        if (denoised_opt.empty()) {
+            return {};
+        }
+        sd::Tensor<float> denoised = std::move(denoised_opt);
+        if (sigma_to == 0) {
+            // x = x × (sigma_to / sigma) + denoised × (1 - (sigma_to / sigma)) // below
+            //   = x × (       0 / sigma) + denoised × (1 - (0 / sigma))
+            //   = denoised
+            x = denoised;
+        } else if (eta == 0) {
+            // x = x + d × (sigma_to - sigma)
+            //   = x + ((x - denoised) / sigma) × (sigma_to - sigma)
+            //   = x + (x - denoised) × (sigma_to / sigma - 1)
+            //   = x + x × (sigma_to / sigma) - x - denoised × (sigma_to / sigma) + denoised
+            //   = x × (sigma_to / sigma) + denoised × (1 - (sigma_to / sigma))
+            float sigma_ratio = sigma_to / sigma;
+            x                 = sigma_ratio * x + (1.0 - sigma_ratio) * denoised;
+        } else {
+            float downstep_ratio = 1.0f + (sigma_to / sigma - 1.0f) * eta;
+            float sigma_down     = sigma_to * downstep_ratio;
+            float sigma_ratio    = sigma_down / sigma;
+            x                    = sigma_ratio * x + (1.0 - sigma_ratio) * denoised;
+
+            float alpha_scale = (1 - sigma_to) / (1 - sigma_down);
+
+            // sigma_up    = √(sigma_to² - sigma_down² × alpha_scale²)
+            //             = √(sigma_to² - sigma_to² × downstep_ratio² × alpha_scale²)
+            //             = sigma_to × √(1 - downstep_ratio² × alpha_scale²)
+            float term     = downstep_ratio * alpha_scale;
+            float sigma_up = sigma_to * std::sqrt((1.0f + term) * (1.0f - term));
+            x              = alpha_scale * x + sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+        }
+    }
+    return x;
+}
+
 static sd::Tensor<float> sample_euler(denoise_cb_t model,
                                       sd::Tensor<float> x,
                                       const std::vector<float>& sigmas) {
@@ -1370,10 +1416,14 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
                                             sd::Tensor<float> x,
                                             std::vector<float> sigmas,
                                             std::shared_ptr<RNG> rng,
-                                            float eta) {
+                                            float eta,
+                                            bool is_flow_denoiser) {
     switch (method) {
         case EULER_A_SAMPLE_METHOD:
-            return sample_euler_ancestral(model, std::move(x), sigmas, rng, eta);
+            if (is_flow_denoiser)
+                return sample_euler_flow(model, std::move(x), sigmas, rng, eta);
+            else
+                return sample_euler_ancestral(model, std::move(x), sigmas, rng, eta);
         case EULER_SAMPLE_METHOD:
             return sample_euler(model, std::move(x), sigmas);
         case HEUN_SAMPLE_METHOD:
