@@ -483,20 +483,21 @@ namespace ZImage {
             z_image.get_param_tensors(tensors, prefix);
         }
 
-        ggml_cgraph* build_graph(ggml_tensor* x,
-                                 ggml_tensor* timesteps,
-                                 ggml_tensor* context,
-                                 std::vector<ggml_tensor*> ref_latents = {},
-                                 bool increase_ref_index               = false) {
+        ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
+                                 const sd::Tensor<float>& timesteps_tensor,
+                                 const sd::Tensor<float>& context_tensor,
+                                 const std::vector<sd::Tensor<float>>& ref_latents_tensor = {},
+                                 bool increase_ref_index                                  = false) {
+            ggml_cgraph* gf        = new_graph_custom(Z_IMAGE_GRAPH_SIZE);
+            ggml_tensor* x         = make_input(x_tensor);
+            ggml_tensor* timesteps = make_input(timesteps_tensor);
             GGML_ASSERT(x->ne[3] == 1);
-            ggml_cgraph* gf = new_graph_custom(Z_IMAGE_GRAPH_SIZE);
-
-            x         = to_backend(x);
-            context   = to_backend(context);
-            timesteps = to_backend(timesteps);
-
-            for (int i = 0; i < ref_latents.size(); i++) {
-                ref_latents[i] = to_backend(ref_latents[i]);
+            GGML_ASSERT(!context_tensor.empty());
+            ggml_tensor* context = make_input(context_tensor);
+            std::vector<ggml_tensor*> ref_latents;
+            ref_latents.reserve(ref_latents_tensor.size());
+            for (const auto& ref_latent_tensor : ref_latents_tensor) {
+                ref_latents.push_back(make_input(ref_latent_tensor));
             }
 
             pe_vec      = Rope::gen_z_image_pe(static_cast<int>(x->ne[1]),
@@ -532,14 +533,12 @@ namespace ZImage {
             return gf;
         }
 
-        bool compute(int n_threads,
-                     ggml_tensor* x,
-                     ggml_tensor* timesteps,
-                     ggml_tensor* context,
-                     std::vector<ggml_tensor*> ref_latents = {},
-                     bool increase_ref_index               = false,
-                     ggml_tensor** output                  = nullptr,
-                     ggml_context* output_ctx              = nullptr) {
+        sd::Tensor<float> compute(int n_threads,
+                                  const sd::Tensor<float>& x,
+                                  const sd::Tensor<float>& timesteps,
+                                  const sd::Tensor<float>& context,
+                                  const std::vector<sd::Tensor<float>>& ref_latents = {},
+                                  bool increase_ref_index                           = false) {
             // x: [N, in_channels, h, w]
             // timesteps: [N, ]
             // context: [N, max_position, hidden_size]
@@ -547,7 +546,7 @@ namespace ZImage {
                 return build_graph(x, timesteps, context, ref_latents, increase_ref_index);
             };
 
-            return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+            return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
         }
 
         void test() {
@@ -556,30 +555,37 @@ namespace ZImage {
             params.mem_buffer = nullptr;
             params.no_alloc   = false;
 
-            ggml_context* work_ctx = ggml_init(params);
-            GGML_ASSERT(work_ctx != nullptr);
+            ggml_context* ctx = ggml_init(params);
+            GGML_ASSERT(ctx != nullptr);
 
             {
-                // auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 16, 16, 16, 1);
+                // auto x = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 16, 16, 16, 1);
                 // ggml_set_f32(x, 0.01f);
-                auto x = load_tensor_from_file(work_ctx, "./z_image_x.bin");
-                print_ggml_tensor(x);
+                auto x = sd::load_tensor_from_file_as_tensor<float>("./z_image_x.bin");
+                print_sd_tensor(x);
 
                 std::vector<float> timesteps_vec(1, 0.f);
-                auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
+                auto timesteps = sd::Tensor<float>::from_vector(timesteps_vec);
 
-                // auto context = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 2560, 256, 1);
+                // auto context = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2560, 256, 1);
                 // ggml_set_f32(context, 0.01f);
-                auto context = load_tensor_from_file(work_ctx, "./z_image_context.bin");
-                print_ggml_tensor(context);
+                auto context = sd::load_tensor_from_file_as_tensor<float>("./z_image_context.bin");
+                print_sd_tensor(context);
 
-                ggml_tensor* out = nullptr;
+                sd::Tensor<float> out;
 
-                int64_t t0 = ggml_time_ms();
-                compute(8, x, timesteps, context, {}, false, &out, work_ctx);
-                int64_t t1 = ggml_time_ms();
+                int64_t t0   = ggml_time_ms();
+                auto out_opt = compute(8,
+                                       x,
+                                       timesteps,
+                                       context,
+                                       {},
+                                       false);
+                int64_t t1   = ggml_time_ms();
 
-                print_ggml_tensor(out);
+                GGML_ASSERT(!out_opt.empty());
+                out = std::move(out_opt);
+                print_sd_tensor(out);
                 LOG_DEBUG("z_image test done in %lldms", t1 - t0);
             }
         }

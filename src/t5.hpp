@@ -211,9 +211,9 @@ protected:
         // implementation. It's based on the following three ideas:
         //
         // 1. Because it uses the *unigram* model:
-        //     best_score(x1, x2, �? xt) = best_score(x1, x2, �? x{t-1}) + score(xt)
+        //     best_score(x1, x2, ... xt) = best_score(x1, x2, ... x{t-1}) + score(xt)
         // Deciding the best path (and score) can be decoupled into two isolated
-        // terms: (a) the best path ended before the last token `best_score(x1, x2, �?
+        // terms: (a) the best path ended before the last token `best_score(x1, x2, ...)`
         // x{t-1})`, and (b) the last token and its `score(xt)`. The two terms are
         // not related to each other at all.
         //
@@ -227,7 +227,7 @@ protected:
         // position, where n is the input length and k is the maximum number of tokens
         // that can be recognized starting at each position.
         //
-        // 2. Again, because it uses the *unigram* model, we don’t need to actually
+        // 2. Again, because it uses the *unigram* model, we don't need to actually
         // store the lattice nodes. We still recognize all the tokens and lattice
         // nodes from the input, but along identifying them, we use and discard them
         // on the fly. There is no need to actually store them for best path Viterbi
@@ -362,7 +362,7 @@ public:
 
         BuildTrie(&pieces);
     }
-    ~T5UniGramTokenizer() {};
+    ~T5UniGramTokenizer(){};
 
     std::string Normalize(const std::string& input) const {
         // Ref: https://github.com/huggingface/tokenizers/blob/1ff56c0c70b045f0cd82da1af9ac08cd4c7a6f9f/bindings/python/py_src/tokenizers/implementations/sentencepiece_unigram.py#L29
@@ -791,12 +791,11 @@ struct T5Runner : public GGMLRunner {
         return hidden_states;
     }
 
-    ggml_cgraph* build_graph(ggml_tensor* input_ids,
-                             ggml_tensor* attention_mask = nullptr) {
-        ggml_cgraph* gf = ggml_new_graph(compute_ctx);
-
-        input_ids      = to_backend(input_ids);
-        attention_mask = to_backend(attention_mask);
+    ggml_cgraph* build_graph(const sd::Tensor<int32_t>& input_ids_tensor,
+                             const sd::Tensor<float>& attention_mask_tensor = {}) {
+        ggml_cgraph* gf             = ggml_new_graph(compute_ctx);
+        ggml_tensor* input_ids      = make_input(input_ids_tensor);
+        ggml_tensor* attention_mask = attention_mask_tensor.empty() ? nullptr : make_input(attention_mask_tensor);
 
         relative_position_bucket_vec = compute_relative_position_bucket(static_cast<int>(input_ids->ne[0]), static_cast<int>(input_ids->ne[0]));
 
@@ -821,15 +820,13 @@ struct T5Runner : public GGMLRunner {
         return gf;
     }
 
-    bool compute(const int n_threads,
-                 ggml_tensor* input_ids,
-                 ggml_tensor* attention_mask,
-                 ggml_tensor** output,
-                 ggml_context* output_ctx = nullptr) {
+    sd::Tensor<float> compute(const int n_threads,
+                              const sd::Tensor<int32_t>& input_ids,
+                              const sd::Tensor<float>& attention_mask) {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input_ids, attention_mask);
         };
-        return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, true), 3);
     }
 
     static std::vector<int> _relative_position_bucket(const std::vector<int>& relative_position,
@@ -967,12 +964,11 @@ struct T5Embedder {
         params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
-        ggml_context* work_ctx = ggml_init(params);
-        GGML_ASSERT(work_ctx != nullptr);
+        ggml_context* ctx = ggml_init(params);
+        GGML_ASSERT(ctx != nullptr);
 
         {
             std::string text("a lovely cat");
-            // std::string text("一只可爱的�?); // umt5 chinease test
             auto tokens_and_weights     = tokenize(text, 512, true);
             std::vector<int>& tokens    = std::get<0>(tokens_and_weights);
             std::vector<float>& weights = std::get<1>(tokens_and_weights);
@@ -981,15 +977,17 @@ struct T5Embedder {
                 printf("%d ", token);
             }
             printf("\n");
-            auto input_ids      = vector_to_ggml_tensor_i32(work_ctx, tokens);
-            auto attention_mask = vector_to_ggml_tensor(work_ctx, masks);
-            ggml_tensor* out    = nullptr;
+            auto input_ids      = sd::Tensor<int32_t>::from_vector(tokens);
+            auto attention_mask = sd::Tensor<float>::from_vector(masks);
+            sd::Tensor<float> out;
 
-            int64_t t0 = ggml_time_ms();
-            model.compute(8, input_ids, attention_mask, &out, work_ctx);
-            int64_t t1 = ggml_time_ms();
+            int64_t t0   = ggml_time_ms();
+            auto out_opt = model.compute(8, input_ids, attention_mask);
+            int64_t t1   = ggml_time_ms();
 
-            print_ggml_tensor(out);
+            GGML_ASSERT(!out_opt.empty());
+            out = std::move(out_opt);
+            print_sd_tensor(out);
             LOG_DEBUG("t5 test done in %lldms", t1 - t0);
         }
     }

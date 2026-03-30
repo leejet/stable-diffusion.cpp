@@ -341,12 +341,12 @@ struct ESRGAN : public GGMLRunner {
         return success;
     }
 
-    ggml_cgraph* build_graph(ggml_tensor* x) {
+    ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor) {
         if (!rrdb_net)
             return nullptr;
         constexpr int kGraphNodes = 1 << 16;  // 65k
         ggml_cgraph* gf           = new_graph_custom(kGraphNodes);
-        x                         = to_backend(x);
+        ggml_tensor* x            = make_input(x_tensor);
 
         auto runner_ctx  = get_context();
         ggml_tensor* out = rrdb_net->forward(&runner_ctx, x);
@@ -354,14 +354,11 @@ struct ESRGAN : public GGMLRunner {
         return gf;
     }
 
-    bool compute(const int n_threads,
-                 ggml_tensor* x,
-                 ggml_tensor** output,
-                 ggml_context* output_ctx = nullptr) {
-        auto get_graph = [&]() -> ggml_cgraph* {
-            return build_graph(x);
-        };
-        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+    sd::Tensor<float> compute(const int n_threads,
+                              const sd::Tensor<float>& x) {
+        auto get_graph = [&]() -> ggml_cgraph* { return build_graph(x); };
+        auto result    = restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+        return result;
     }
 };
 

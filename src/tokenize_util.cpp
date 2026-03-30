@@ -10,9 +10,7 @@ bool is_number(char32_t ch) {
 }
 
 bool is_letter(char32_t ch) {
-    static const struct {
-        char32_t start, end;
-    } ranges[] = {
+    static const struct { char32_t start, end; } ranges[] = {
         {0x41, 0x5A},
         {0x61, 0x7A},
         {0xAA, 0xAA},
@@ -984,7 +982,7 @@ std::vector<std::string> split_with_special_tokens(
 }
 
 // int main() {
-//     std::string text = "I'm testing C++ token_split function. 你好，世界! 123";
+//     std::string text = "I'm testing C++ token_split function. Hello world 123";
 //     auto tokens = token_split(text);
 
 //     for (const auto& t : tokens) {

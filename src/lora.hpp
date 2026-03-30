@@ -793,7 +793,7 @@ struct LoraModel : public GGMLRunner {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_lora_graph(model_tensors, version);
         };
-        GGMLRunner::compute(get_graph, n_threads, false);
+        GGMLRunner::compute<float>(get_graph, n_threads, false, true);
         stat();
         for (auto item : original_tensor_to_final_tensor) {
             ggml_tensor* original_tensor = item.first;
