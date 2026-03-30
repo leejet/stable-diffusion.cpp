@@ -562,41 +562,40 @@ struct TinyImageAutoEncoder : public VAE {
         taesd.get_param_tensors(tensors, prefix);
     }
 
-    ggml_tensor* vae_output_to_latents(ggml_context* work_ctx, ggml_tensor* vae_output, std::shared_ptr<RNG> rng) {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+        SD_UNUSED(rng);
         return vae_output;
     }
 
-    ggml_tensor* diffusion_to_vae_latents(ggml_context* work_ctx, ggml_tensor* latents) {
-        return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
+    sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override {
+        return latents;
     }
 
-    ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
-        return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
+    sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override {
+        return latents;
     }
 
     int get_encoder_output_channels(int input_channels) {
         return taesd.z_channels;
     }
 
-    ggml_cgraph* build_graph(ggml_tensor* z, bool decode_graph) {
+    ggml_cgraph* build_graph(const sd::Tensor<float>& z_tensor, bool decode_graph) {
         ggml_cgraph* gf  = ggml_new_graph(compute_ctx);
-        z                = to_backend(z);
+        ggml_tensor* z   = make_input(z_tensor);
         auto runner_ctx  = get_context();
         ggml_tensor* out = decode_graph ? taesd.decode(&runner_ctx, z) : taesd.encode(&runner_ctx, z);
         ggml_build_forward_expand(gf, out);
         return gf;
     }
 
-    bool _compute(const int n_threads,
-                  ggml_tensor* z,
-                  bool decode_graph,
-                  ggml_tensor** output,
-                  ggml_context* output_ctx = nullptr) {
+    sd::Tensor<float> _compute(const int n_threads,
+                               const sd::Tensor<float>& z_tensor,
+                               bool decode_graph) override {
         auto get_graph = [&]() -> ggml_cgraph* {
-            return build_graph(z, decode_graph);
+            return build_graph(z_tensor, decode_graph);
         };
 
-        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), z_tensor.dim());
     }
 };
 
@@ -625,41 +624,40 @@ struct TinyVideoAutoEncoder : public VAE {
         taehv.get_param_tensors(tensors, prefix);
     }
 
-    ggml_tensor* vae_output_to_latents(ggml_context* work_ctx, ggml_tensor* vae_output, std::shared_ptr<RNG> rng) {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+        SD_UNUSED(rng);
         return vae_output;
     }
 
-    ggml_tensor* diffusion_to_vae_latents(ggml_context* work_ctx, ggml_tensor* latents) {
-        return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
+    sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override {
+        return latents;
     }
 
-    ggml_tensor* vae_to_diffuison_latents(ggml_context* work_ctx, ggml_tensor* latents) {
-        return ggml_ext_dup_and_cpy_tensor(work_ctx, latents);
+    sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) override {
+        return latents;
     }
 
     int get_encoder_output_channels(int input_channels) {
         return taehv.z_channels;
     }
 
-    ggml_cgraph* build_graph(ggml_tensor* z, bool decode_graph) {
+    ggml_cgraph* build_graph(const sd::Tensor<float>& z_tensor, bool decode_graph) {
         ggml_cgraph* gf  = ggml_new_graph(compute_ctx);
-        z                = to_backend(z);
+        ggml_tensor* z   = make_input(z_tensor);
         auto runner_ctx  = get_context();
         ggml_tensor* out = decode_graph ? taehv.decode(&runner_ctx, z) : taehv.encode(&runner_ctx, z);
         ggml_build_forward_expand(gf, out);
         return gf;
     }
 
-    bool _compute(const int n_threads,
-                  ggml_tensor* z,
-                  bool decode_graph,
-                  ggml_tensor** output,
-                  ggml_context* output_ctx = nullptr) {
+    sd::Tensor<float> _compute(const int n_threads,
+                               const sd::Tensor<float>& z_tensor,
+                               bool decode_graph) override {
         auto get_graph = [&]() -> ggml_cgraph* {
-            return build_graph(z, decode_graph);
+            return build_graph(z_tensor, decode_graph);
         };
 
-        return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx);
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), z_tensor.dim());
     }
 };
 

@@ -957,15 +957,14 @@ struct CLIPTextModelRunner : public GGMLRunner {
         return model.forward(ctx, input_ids, embeddings, mask, max_token_idx, return_pooled, clip_skip);
     }
 
-    ggml_cgraph* build_graph(ggml_tensor* input_ids,
+    ggml_cgraph* build_graph(const sd::Tensor<int32_t>& input_ids_tensor,
                              int num_custom_embeddings    = 0,
                              void* custom_embeddings_data = nullptr,
                              size_t max_token_idx         = 0,
                              bool return_pooled           = false,
                              int clip_skip                = -1) {
-        ggml_cgraph* gf = new_graph_custom(2048);
-
-        input_ids = to_backend(input_ids);
+        ggml_cgraph* gf        = new_graph_custom(2048);
+        ggml_tensor* input_ids = make_input(input_ids_tensor);
 
         ggml_tensor* embeddings = nullptr;
 
@@ -1004,19 +1003,21 @@ struct CLIPTextModelRunner : public GGMLRunner {
         return gf;
     }
 
-    bool compute(const int n_threads,
-                 ggml_tensor* input_ids,
-                 int num_custom_embeddings,
-                 void* custom_embeddings_data,
-                 size_t max_token_idx,
-                 bool return_pooled,
-                 int clip_skip,
-                 ggml_tensor** output,
-                 ggml_context* output_ctx = nullptr) {
+    sd::Tensor<float> compute(const int n_threads,
+                              const sd::Tensor<int32_t>& input_ids,
+                              int num_custom_embeddings,
+                              void* custom_embeddings_data,
+                              size_t max_token_idx,
+                              bool return_pooled,
+                              int clip_skip) {
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(input_ids, num_custom_embeddings, custom_embeddings_data, max_token_idx, return_pooled, clip_skip);
         };
-        return GGMLRunner::compute(get_graph, n_threads, true, output, output_ctx);
+        auto result = GGMLRunner::compute<float>(get_graph, n_threads, true);
+        if (return_pooled) {
+            return take_or_empty(std::move(result));
+        }
+        return restore_trailing_singleton_dims(std::move(result), 3);
     }
 };
 
