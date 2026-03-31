@@ -70,4 +70,10 @@ endif()
 
 install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE stable-diffusion ${CMAKE_THREAD_LIBS_INIT})
+
+# due to httplib; it contains a pragma for MSVC, but other things need explicit flags
+if(WIN32 AND NOT MSVC)
+    target_link_libraries(${TARGET} PRIVATE ws2_32)
+endif()
+
 target_compile_features(${TARGET} PUBLIC c_std_11 cxx_std_17)
