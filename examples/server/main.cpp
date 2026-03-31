@@ -509,7 +509,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     continue;
                 }
                 std::string params = gen_params.embed_image_metadata
-                                         ? get_image_params(ctx_params, gen_params, gen_params.seed + i)
+                                         ? get_image_params(*runtime->ctx_params, gen_params, gen_params.seed + i)
                                          : "";
                 auto image_bytes   = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
                                                          results[i].data,
@@ -763,7 +763,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 if (results[i].data == nullptr)
                     continue;
                 std::string params = gen_params.embed_image_metadata
-                                         ? get_image_params(ctx_params, gen_params, gen_params.seed + i)
+                                         ? get_image_params(*runtime->ctx_params, gen_params, gen_params.seed + i)
                                          : "";
                 auto image_bytes   = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
                                                          results[i].data,
@@ -1082,7 +1082,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 }
 
                 std::string params = gen_params.embed_image_metadata
-                                         ? get_image_params(ctx_params, gen_params, gen_params.seed + i)
+                                         ? get_image_params(*runtime->ctx_params, gen_params, gen_params.seed + i)
                                          : "";
                 auto image_bytes   = write_image_to_vector(ImageFormat::PNG,
                                                            results[i].data,
