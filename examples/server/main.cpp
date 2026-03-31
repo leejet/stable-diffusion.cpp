@@ -218,7 +218,8 @@ std::string extract_and_remove_sd_cpp_extra_args(std::string& text) {
 }
 
 enum class ImageFormat { JPEG,
-                         PNG };
+                         PNG,
+                         QOI };
 
 std::vector<uint8_t> write_image_to_vector(
     ImageFormat format,
@@ -251,6 +252,22 @@ std::vector<uint8_t> write_image_to_vector(
         case ImageFormat::PNG:
             result = stbi_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels);
             break;
+        case ImageFormat::QOI: {
+            qoi_desc desc;
+            desc.width = width;
+            desc.height = height;
+            desc.channels = channels;
+            desc.colorspace = QOI_SRGB;
+            
+            int out_len = 0;
+            void* qoi_data = qoi_encode(image, &desc, &out_len);
+            if (qoi_data) {
+                c_func(&ctx, qoi_data, out_len);
+                free(qoi_data);
+                result = 1;
+            }
+            break;
+        }
         default:
             throw std::runtime_error("invalid image format");
     }
@@ -405,9 +422,9 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(prompt);
 
-            if (output_format != "png" && output_format != "jpeg") {
+            if (output_format != "png" && output_format != "jpeg" && output_format != "qoi") {
                 res.status = 400;
-                res.set_content(R"({"error":"invalid output_format, must be one of [png, jpeg]"})", "application/json");
+                res.set_content(R"({"error":"invalid output_format, must be one of [png, jpeg, qoi]"})", "application/json");
                 return;
             }
             if (n <= 0)
@@ -497,7 +514,10 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
-                auto image_bytes = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
+                auto image_bytes = write_image_to_vector(
+                    output_format == "jpeg" ? ImageFormat::JPEG : 
+                    output_format == "qoi" ? ImageFormat::QOI : 
+                    ImageFormat::PNG,
                                                          results[i].data,
                                                          results[i].width,
                                                          results[i].height,
@@ -593,9 +613,9 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             std::string output_format = "png";
             if (req.form.has_field("output_format"))
                 output_format = req.form.get_field("output_format");
-            if (output_format != "png" && output_format != "jpeg") {
+            if (output_format != "png" && output_format != "jpeg" && output_format != "qoi") {
                 res.status = 400;
-                res.set_content(R"({"error":"invalid output_format, must be one of [png, jpeg]"})", "application/json");
+                res.set_content(R"({"error":"invalid output_format, must be one of [png, jpeg, qoi]"})", "application/json");
                 return;
             }
 
@@ -747,7 +767,10 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             for (int i = 0; i < num_results; i++) {
                 if (results[i].data == nullptr)
                     continue;
-                auto image_bytes = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
+                auto image_bytes = write_image_to_vector(
+                    output_format == "jpeg" ? ImageFormat::JPEG : 
+                    output_format == "qoi" ? ImageFormat::QOI : 
+                    ImageFormat::PNG,
                                                          results[i].data,
                                                          results[i].width,
                                                          results[i].height,
