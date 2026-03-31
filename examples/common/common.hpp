@@ -39,14 +39,16 @@ const char* modes_str[] = {
     "vid_gen",
     "convert",
     "upscale",
+    "metadata",
 };
-#define SD_ALL_MODES_STR "img_gen, vid_gen, convert, upscale"
+#define SD_ALL_MODES_STR "img_gen, vid_gen, convert, upscale, metadata"
 
 enum SDMode {
     IMG_GEN,
     VID_GEN,
     CONVERT,
     UPSCALE,
+    METADATA,
     MODE_COUNT
 };
 
@@ -777,7 +779,7 @@ struct SDContextParams {
     }
 
     bool process_and_check(SDMode mode) {
-        if (mode != UPSCALE && model_path.length() == 0 && diffusion_model_path.length() == 0) {
+        if (mode != UPSCALE && mode != METADATA && model_path.length() == 0 && diffusion_model_path.length() == 0) {
             LOG_ERROR("error: the following arguments are required: model_path/diffusion_model\n");
             return false;
         }
