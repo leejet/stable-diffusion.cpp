@@ -18,6 +18,7 @@
 #include "common/common.hpp"
 
 #include "avi_writer.h"
+#include "image_metadata.h"
 
 const char* previews_str[] = {
     "none",
@@ -32,6 +33,8 @@ struct SDCliParams {
     SDMode mode             = IMG_GEN;
     std::string output_path = "output.png";
     int output_begin_idx    = -1;
+    std::string image_path;
+    std::string metadata_format = "text";
 
     bool verbose          = false;
     bool canny_preprocess = false;
@@ -44,6 +47,9 @@ struct SDCliParams {
     bool taesd_preview       = false;
     bool preview_noisy       = false;
     bool color               = false;
+    bool metadata_raw        = false;
+    bool metadata_brief      = false;
+    bool metadata_all        = false;
 
     bool normal_exit = false;
 
@@ -55,6 +61,14 @@ struct SDCliParams {
              "--output",
              "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)",
              &output_path},
+            {"",
+             "--image",
+             "path to the image to inspect (for metadata mode)",
+             &image_path},
+            {"",
+             "--metadata-format",
+             "metadata output format, one of [text, json] (default: text)",
+             &metadata_format},
             {"",
              "--preview-path",
              "path to write preview image to (default: ./preview.png)",
@@ -97,6 +111,18 @@ struct SDCliParams {
              "--preview-noisy",
              "enables previewing noisy inputs of the models rather than the denoised outputs",
              true, &preview_noisy},
+            {"",
+             "--metadata-raw",
+             "include raw hex previews for unparsed metadata payloads",
+             true, &metadata_raw},
+            {"",
+             "--metadata-brief",
+             "truncate long metadata text values in text output",
+             true, &metadata_brief},
+            {"",
+             "--metadata-all",
+             "include structural/container entries such as IHDR, IDAT, and non-metadata JPEG segments",
+             true, &metadata_all},
 
         };
 
@@ -149,7 +175,7 @@ struct SDCliParams {
         options.manual_options = {
             {"-M",
              "--mode",
-             "run mode, one of [img_gen, vid_gen, upscale, convert], default: img_gen",
+             "run mode, one of [img_gen, vid_gen, upscale, convert, metadata], default: img_gen",
              on_mode_arg},
             {"",
              "--preview",
@@ -165,7 +191,7 @@ struct SDCliParams {
     };
 
     bool process_and_check() {
-        if (output_path.length() == 0) {
+        if (mode != METADATA && output_path.length() == 0) {
             LOG_ERROR("error: the following arguments are required: output_path");
             return false;
         }
@@ -173,6 +199,16 @@ struct SDCliParams {
         if (mode == CONVERT) {
             if (output_path == "output.png") {
                 output_path = "output.gguf";
+            }
+        } else if (mode == METADATA) {
+            if (image_path.empty()) {
+                LOG_ERROR("error: metadata mode needs an image path (--image)");
+                return false;
+            }
+            if (metadata_format != "text" && metadata_format != "json") {
+                LOG_ERROR("error: invalid metadata format %s, must be one of [text, json]",
+                          metadata_format.c_str());
+                return false;
             }
         }
         return true;
@@ -183,6 +219,8 @@ struct SDCliParams {
         oss << "SDCliParams {\n"
             << "  mode: " << modes_str[mode] << ",\n"
             << "  output_path: \"" << output_path << "\",\n"
+            << "  image_path: \"" << image_path << "\",\n"
+            << "  metadata_format: \"" << metadata_format << "\",\n"
             << "  verbose: " << (verbose ? "true" : "false") << ",\n"
             << "  color: " << (color ? "true" : "false") << ",\n"
             << "  canny_preprocess: " << (canny_preprocess ? "true" : "false") << ",\n"
@@ -192,7 +230,10 @@ struct SDCliParams {
             << "  preview_path: \"" << preview_path << "\",\n"
             << "  preview_fps: " << preview_fps << ",\n"
             << "  taesd_preview: " << (taesd_preview ? "true" : "false") << ",\n"
-            << "  preview_noisy: " << (preview_noisy ? "true" : "false") << "\n"
+            << "  preview_noisy: " << (preview_noisy ? "true" : "false") << ",\n"
+            << "  metadata_raw: " << (metadata_raw ? "true" : "false") << ",\n"
+            << "  metadata_brief: " << (metadata_brief ? "true" : "false") << ",\n"
+            << "  metadata_all: " << (metadata_all ? "true" : "false") << "\n"
             << "}";
         return oss.str();
     }
@@ -217,9 +258,13 @@ void parse_args(int argc, const char** argv, SDCliParams& cli_params, SDContextP
         exit(cli_params.normal_exit ? 0 : 1);
     }
 
-    if (!cli_params.process_and_check() ||
-        !ctx_params.process_and_check(cli_params.mode) ||
-        !gen_params.process_and_check(cli_params.mode, ctx_params.lora_model_dir)) {
+    bool valid = cli_params.process_and_check();
+    if (valid && cli_params.mode != METADATA) {
+        valid = ctx_params.process_and_check(cli_params.mode) &&
+                gen_params.process_and_check(cli_params.mode, ctx_params.lora_model_dir);
+    }
+
+    if (!valid) {
         print_usage(argc, argv, options_vec);
         exit(1);
     }
@@ -430,6 +475,27 @@ int main(int argc, const char* argv[]) {
     SDGenerationParams gen_params;
 
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
+    sd_set_log_callback(sd_log_cb, (void*)&cli_params);
+    log_verbose = cli_params.verbose;
+    log_color   = cli_params.color;
+
+    if (cli_params.mode == METADATA) {
+        MetadataReadOptions options;
+        options.output_format      = cli_params.metadata_format == "json"
+                                         ? MetadataOutputFormat::JSON
+                                         : MetadataOutputFormat::TEXT;
+        options.include_raw        = cli_params.metadata_raw;
+        options.brief              = cli_params.metadata_brief;
+        options.include_structural = cli_params.metadata_all;
+
+        std::string error;
+        if (!print_image_metadata(cli_params.image_path, options, std::cout, error)) {
+            LOG_ERROR("%s", error.c_str());
+            return 1;
+        }
+        return 0;
+    }
+
     if (gen_params.video_frames > 4) {
         size_t last_dot_pos   = cli_params.preview_path.find_last_of(".");
         std::string base_path = cli_params.preview_path;
@@ -447,9 +513,6 @@ int main(int argc, const char* argv[]) {
     if (cli_params.preview_method == PREVIEW_PROJ)
         cli_params.preview_fps /= 4;
 
-    sd_set_log_callback(sd_log_cb, (void*)&cli_params);
-    log_verbose = cli_params.verbose;
-    log_color   = cli_params.color;
     sd_set_preview_callback(step_callback,
                             cli_params.preview_method,
                             cli_params.preview_interval,

@@ -10,13 +10,18 @@ CLI Options:
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
   --output-begin-idx <int>    starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)
+  --image <string>            path to the image to inspect (for metadata mode)
+  --metadata-format <string>  metadata output format, one of [text, json] (default: text)
   --canny                     apply canny preprocessor (edge detection)
   --convert-name              convert tensor name (for convert mode)
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
   --taesd-preview-only        prevents usage of taesd for decoding the final image. (for use with --preview tae)
   --preview-noisy             enables previewing noisy inputs of the models rather than the denoised outputs
-  -M, --mode                  run mode, one of [img_gen, vid_gen, upscale, convert], default: img_gen
+  --metadata-raw              include raw hex previews for unparsed metadata payloads
+  --metadata-brief            truncate long metadata text values in text output
+  --metadata-all              include structural/container entries such as IHDR, IDAT, and non-metadata JPEG segments
+  -M, --mode                  run mode, one of [img_gen, vid_gen, upscale, convert, metadata], default: img_gen
   --preview                   preview method. must be one of the following [none, proj, tae, vae] (default is none)
   -h, --help                  show this help message and exit
 
@@ -147,4 +152,13 @@ Generation Options:
                                            "threshold=0.25" or "threshold=1.5,reset=0" or "w=0.4,window=2"
   --scm-mask                               SCM steps mask for cache-dit: comma-separated 0/1 (e.g., "1,1,1,0,0,1,0,0,1,0") - 1=compute, 0=can cache
   --scm-policy                             SCM policy: 'dynamic' (default) or 'static'
+```
+
+Metadata mode inspects PNG/JPEG container metadata without loading any model:
+
+```bash
+./bin/sd-cli -M metadata --image ./output.png
+./bin/sd-cli -M metadata --image ./output.jpg --metadata-format json
+./bin/sd-cli -M metadata --image ./output.png --metadata-raw
+./bin/sd-cli -M metadata --image ./output.png --metadata-all
 ```
