@@ -549,8 +549,48 @@ struct Denoiser {
 };
 
 struct CompVisDenoiser : public Denoiser {
-    float sigmas[TIMESTEPS];
-    float log_sigmas[TIMESTEPS];
+
+private:
+    struct Constants {
+        const float beta_start = 0.00085f;
+        const float beta_end = 0.0120f;
+        float alphas_cumprods[TIMESTEPS];
+        float sigmas[TIMESTEPS];
+        float log_sigmas[TIMESTEPS];
+        Constants() {
+            double ls_sqrt        = std::sqrt(static_cast<double>(beta_start));
+            double le_sqrt        = std::sqrt(static_cast<double>(beta_end));
+            double step           = (le_sqrt - ls_sqrt) / (TIMESTEPS - 1);
+            double alphas_cumprod = 1.0;
+
+            for (int i = 0; i < TIMESTEPS; ++i) {
+                double sqrt_beta   = ls_sqrt + step * i;
+                alphas_cumprod    *= (1.0 - (sqrt_beta * sqrt_beta));
+                double sigma       = std::sqrt((1.0 - alphas_cumprod) / alphas_cumprod);
+                alphas_cumprods[i] = static_cast<float>(alphas_cumprod);
+                sigmas[i]          = static_cast<float>(sigma);
+                log_sigmas[i]      = static_cast<float>(std::log(sigma));
+            }
+        }
+        static const Constants& get_instance() {
+            static Constants instance;
+            return instance;
+        }
+    };
+
+    const float *sigmas = get_sigmas();
+    const float *log_sigmas = get_log_sigmas();
+
+public:
+    static const float* get_sigmas() {
+        return Constants::get_instance().sigmas;
+    }
+    static const float* get_log_sigmas() {
+        return Constants::get_instance().log_sigmas;
+    }
+    static const float* get_alphas_cumprods() {
+        return Constants::get_instance().alphas_cumprods;
+    }
 
     float sigma_data = 1.0f;
 
@@ -564,20 +604,12 @@ struct CompVisDenoiser : public Denoiser {
 
     float sigma_to_t(float sigma) override {
         float log_sigma = std::log(sigma);
-        std::vector<float> dists;
-        dists.reserve(TIMESTEPS);
-        for (float log_sigma_val : log_sigmas) {
-            dists.push_back(log_sigma - log_sigma_val);
-        }
+        const float* high_ptr = std::upper_bound(log_sigmas, log_sigmas + TIMESTEPS, log_sigma);
 
-        int low_idx = 0;
-        for (size_t i = 0; i < TIMESTEPS; i++) {
-            if (dists[i] >= 0) {
-                low_idx++;
-            }
-        }
-        low_idx      = std::min(std::max(low_idx - 1, 0), TIMESTEPS - 2);
-        int high_idx = low_idx + 1;
+        int high_idx = static_cast<int>(high_ptr - log_sigmas);
+        int low_idx  = high_idx - 1;
+        low_idx      = std::clamp(low_idx, 0, TIMESTEPS - 2);
+        high_idx     = low_idx + 1;
 
         float low  = log_sigmas[low_idx];
         float high = log_sigmas[high_idx];
@@ -1563,29 +1595,17 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
                                     const std::vector<float>& sigmas,
                                     std::shared_ptr<RNG> rng,
                                     float eta) {
-    float beta_start = 0.00085f;
-    float beta_end   = 0.0120f;
-    std::vector<double> alphas_cumprod(TIMESTEPS);
-    std::vector<double> compvis_sigmas(TIMESTEPS);
-    for (int i = 0; i < TIMESTEPS; i++) {
-        alphas_cumprod[i] =
-            (i == 0 ? 1.0f : alphas_cumprod[i - 1]) *
-            (1.0f -
-             std::pow(sqrtf(beta_start) +
-                          (sqrtf(beta_end) - sqrtf(beta_start)) *
-                              ((float)i / (TIMESTEPS - 1)),
-                      2));
-        compvis_sigmas[i] =
-            std::sqrt((1 - alphas_cumprod[i]) / alphas_cumprod[i]);
-    }
+
+    const float* alphas_cumprod = CompVisDenoiser::get_alphas_cumprods();
+    const float* compvis_sigmas = CompVisDenoiser::get_sigmas();
 
     auto get_timestep_from_sigma = [&](float s) -> int {
-        auto it = std::lower_bound(compvis_sigmas.begin(), compvis_sigmas.end(), s);
-        if (it == compvis_sigmas.begin())
+        auto it = std::lower_bound(compvis_sigmas, compvis_sigmas + TIMESTEPS, s);
+        if (it == compvis_sigmas)
             return 0;
-        if (it == compvis_sigmas.end())
+        if (it == compvis_sigmas + TIMESTEPS)
             return TIMESTEPS - 1;
-        int idx_high = static_cast<int>(std::distance(compvis_sigmas.begin(), it));
+        int idx_high = static_cast<int>(std::distance(compvis_sigmas, it));
         int idx_low  = idx_high - 1;
         if (std::abs(compvis_sigmas[idx_high] - s) < std::abs(compvis_sigmas[idx_low] - s)) {
             return idx_high;
@@ -1610,7 +1630,7 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
         float alpha_prod_t      = 1.0f / (sigma * sigma + 1.0f);
         float beta_prod_t       = 1.0f - alpha_prod_t;
         float alpha_prod_t_prev = 1.0f / (sigma_to * sigma_to + 1.0f);
-        float alpha_prod_s      = static_cast<float>(alphas_cumprod[timestep_s]);
+        float alpha_prod_s      = alphas_cumprod[timestep_s];
         float beta_prod_s       = 1.0f - alpha_prod_s;
 
         sd::Tensor<float> pred_original_sample = ((x / std::sqrt(sigma * sigma + 1)) -
