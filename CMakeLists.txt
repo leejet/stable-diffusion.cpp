@@ -77,6 +77,12 @@ if(SD_MUSA)
     add_definitions(-DSD_USE_CUDA)
 endif()
 
+if (SD_RPC)
+    message("-- Use RPC as backend stable-diffusion")
+    set(GGML_RPC ON)
+    add_definitions(-DSD_USE_RPC)
+endif ()
+
 set(SD_LIB stable-diffusion)
 
 file(GLOB SD_LIB_SOURCES
