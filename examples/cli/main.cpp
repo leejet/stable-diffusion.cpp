@@ -358,8 +358,8 @@ bool save_results(const SDCliParams& cli_params,
             return false;
 
         std::string params = gen_params.embed_image_metadata
-            ? get_image_params(ctx_params, gen_params, gen_params.seed + idx)
-            : "";
+                                 ? get_image_params(ctx_params, gen_params, gen_params.seed + idx)
+                                 : "";
         int ok             = 0;
         if (is_jpg) {
             ok = stbi_write_jpg(path.string().c_str(), img.width, img.height, img.channel, img.data, 90, params.size() > 0 ? params.c_str() : nullptr);
@@ -546,7 +546,7 @@ int main(int argc, const char* argv[]) {
 
     if (gen_params.end_image_path.size() > 0) {
         vae_decode_only = false;
-        if (!load_image_and_update_size(gen_params.init_image_path, end_image)) {
+        if (!load_image_and_update_size(gen_params.end_image_path, end_image)) {
             return 1;
         }
     }
@@ -695,7 +695,7 @@ int main(int argc, const char* argv[]) {
                     gen_params.pm_id_embed_path.c_str(),
                     gen_params.pm_style_strength,
                 },  // pm_params
-                ctx_params.vae_tiling_params,
+                gen_params.vae_tiling_params,
                 gen_params.cache_params,
             };
 
@@ -721,7 +721,7 @@ int main(int argc, const char* argv[]) {
                 gen_params.seed,
                 gen_params.video_frames,
                 gen_params.vace_strength,
-                ctx_params.vae_tiling_params,
+                gen_params.vae_tiling_params,
                 gen_params.cache_params,
             };
 
