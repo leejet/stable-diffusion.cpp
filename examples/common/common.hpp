@@ -19,7 +19,7 @@ namespace fs = std::filesystem;
 #endif  // _WIN32
 
 #include "stable-diffusion.h"
-#include "model.h"  // For SDVersion enum
+#include "src/model.h"  // For SDVersion enum
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
