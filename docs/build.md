@@ -16,6 +16,18 @@ git submodule init
 git submodule update
 ```
 
+## WebP Support in Examples
+
+The example applications (`examples/cli` and `examples/server`) use `libwebp` to support WebP image I/O. This is enabled by default.
+
+If you do not want WebP support, you can disable it at configure time:
+
+```shell
+mkdir build && cd build
+cmake .. -DSD_WEBP=OFF
+cmake --build . --config Release
+```
+
 ## Build (CPU only)
 
 If you don't have a GPU or CUDA installed, you can build a CPU-only version.

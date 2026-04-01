@@ -4,3 +4,6 @@
 [submodule "examples/server/frontend"]
 	path = examples/server/frontend
 	url = https://github.com/leejet/stable-ui.git
+[submodule "thirdparty/libwebp"]
+	path = thirdparty/libwebp
+	url = https://github.com/webmproject/libwebp.git
