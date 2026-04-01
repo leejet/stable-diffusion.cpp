@@ -13,3 +13,7 @@ output*.png
 models*
 *.log
 preview.png
+
+# CLIO (managed automatically)
+.clio/*
+!.clio/instructions.md
