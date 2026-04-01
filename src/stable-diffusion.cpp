@@ -1915,7 +1915,6 @@ public:
         auto flow_denoiser = std::dynamic_pointer_cast<DiscreteFlowDenoiser>(denoiser);
         return !!flow_denoiser;
     }
-
 };
 
 /*================================================= SD API ==================================================*/
@@ -2450,17 +2449,18 @@ static float resolve_eta(sd_ctx_t* sd_ctx,
                          float eta,
                          enum sample_method_t sample_method) {
     if (eta == INFINITY) {
-        switch(sample_method) {
+        switch (sample_method) {
             case DDIM_TRAILING_SAMPLE_METHOD:
             case TCD_SAMPLE_METHOD:
             case RES_MULTISTEP_SAMPLE_METHOD:
             case RES_2S_SAMPLE_METHOD:
-                 return 0.0f;
+                return 0.0f;
             case EULER_A_SAMPLE_METHOD:
             case DPMPP2S_A_SAMPLE_METHOD:
-                 return 1.0f;
-            default: ;
+                return 1.0f;
+            default:;
         }
+        return 0.0f;
     }
     return eta;
 }
@@ -2614,6 +2614,7 @@ struct SamplePlan {
     enum sample_method_t sample_method            = SAMPLE_METHOD_COUNT;
     enum sample_method_t high_noise_sample_method = SAMPLE_METHOD_COUNT;
     float eta                                     = 0.f;
+    float high_noise_eta                          = 0.f;
     int sample_steps                              = 0;
     int high_noise_sample_steps                   = 0;
     int total_steps                               = 0;
@@ -2634,10 +2635,12 @@ struct SamplePlan {
                const sd_vid_gen_params_t* sd_vid_gen_params,
                const GenerationRequest& request) {
         sample_method = sd_vid_gen_params->sample_params.sample_method;
+        eta           = sd_vid_gen_params->sample_params.eta;
         sample_steps  = sd_vid_gen_params->sample_params.sample_steps;
         if (sd_ctx->sd->high_noise_diffusion_model) {
             high_noise_sample_steps  = sd_vid_gen_params->high_noise_sample_params.sample_steps;
             high_noise_sample_method = sd_vid_gen_params->high_noise_sample_params.sample_method;
+            high_noise_eta           = sd_vid_gen_params->high_noise_sample_params.eta;
         }
         moe_boundary = sd_vid_gen_params->moe_boundary;
         resolve(sd_ctx, &request, &sd_vid_gen_params->sample_params);
@@ -2689,6 +2692,7 @@ struct SamplePlan {
         if (high_noise_sample_steps > 0) {
             high_noise_sample_method = resolve_sample_method(sd_ctx,
                                                              high_noise_sample_method);
+            high_noise_eta           = resolve_eta(sd_ctx, high_noise_eta, high_noise_sample_method);
             LOG_INFO("sampling(high noise) using %s method", sampling_methods_str[high_noise_sample_method]);
         }
 
@@ -3514,7 +3518,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                            sd::Tensor<float>(),
                                                            0.f,
                                                            request.high_noise_guidance,
-                                                           sd_vid_gen_params->high_noise_sample_params.eta,
+                                                           plan.high_noise_eta,
                                                            request.shifted_timestep,
                                                            plan.high_noise_sample_method,
                                                            sd_ctx->sd->is_flow_denoiser(),
@@ -3556,7 +3560,7 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
                                                         sd::Tensor<float>(),
                                                         0.f,
                                                         sd_vid_gen_params->sample_params.guidance,
-                                                        sd_vid_gen_params->sample_params.eta,
+                                                        plan.eta,
                                                         sd_vid_gen_params->sample_params.shifted_timestep,
                                                         plan.sample_method,
                                                         sd_ctx->sd->is_flow_denoiser(),

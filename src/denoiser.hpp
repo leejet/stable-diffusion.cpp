@@ -786,6 +786,38 @@ static std::pair<float, float> get_ancestral_step(float sigma_from,
     return {sigma_down, sigma_up};
 }
 
+static std::tuple<float, float, float> get_ancestral_step_flow(float sigma_from,
+                                                               float sigma_to,
+                                                               float eta = 1.0f) {
+    float sigma_down  = sigma_to;
+    float sigma_up    = 0.0f;
+    float alpha_scale = 1.0f;
+
+    if (eta <= 0.0f || sigma_from <= 0.0f || sigma_to <= 0.0f) {
+        return {sigma_down, sigma_up, alpha_scale};
+    }
+
+    // Flow Euler ancestral sampling becomes numerically unstable for eta > 1, so
+    // clamp to the valid maximum-noise regime instead of letting NaNs propagate.
+    eta = std::min(eta, 1.0f);
+
+    float sigma_ratio = sigma_to / sigma_from;
+    sigma_down        = sigma_to * (1.0f + (sigma_ratio - 1.0f) * eta);
+    sigma_down        = std::max(0.0f, std::min(sigma_to, sigma_down));
+
+    float denom = 1.0f - sigma_down;
+    if (denom <= 0.0f) {
+        return {sigma_to, sigma_up, alpha_scale};
+    }
+
+    alpha_scale = (1.0f - sigma_to) / denom;
+
+    float term = (sigma_down / sigma_to) * alpha_scale;
+    term       = std::max(-1.0f, std::min(1.0f, term));
+    sigma_up   = sigma_to * std::sqrt(std::max(1.0f - term * term, 0.0f));
+    return {sigma_down, sigma_up, alpha_scale};
+}
+
 static sd::Tensor<float> sample_euler_ancestral(denoise_cb_t model,
                                                 sd::Tensor<float> x,
                                                 const std::vector<float>& sigmas,
@@ -817,39 +849,17 @@ static sd::Tensor<float> sample_euler_flow(denoise_cb_t model,
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
         float sigma       = sigmas[i];
-        float sigma_to    = sigmas[i + 1];
         auto denoised_opt = model(x, sigma, i + 1);
         if (denoised_opt.empty()) {
             return {};
         }
-        sd::Tensor<float> denoised = std::move(denoised_opt);
-        if (sigma_to == 0) {
-            // x = x × (sigma_to / sigma) + denoised × (1 - (sigma_to / sigma)) // below
-            //   = x × (       0 / sigma) + denoised × (1 - (0 / sigma))
-            //   = denoised
-            x = denoised;
-        } else if (eta == 0) {
-            // x = x + d × (sigma_to - sigma)
-            //   = x + ((x - denoised) / sigma) × (sigma_to - sigma)
-            //   = x + (x - denoised) × (sigma_to / sigma - 1)
-            //   = x + x × (sigma_to / sigma) - x - denoised × (sigma_to / sigma) + denoised
-            //   = x × (sigma_to / sigma) + denoised × (1 - (sigma_to / sigma))
-            float sigma_ratio = sigma_to / sigma;
-            x                 = sigma_ratio * x + (1.0 - sigma_ratio) * denoised;
-        } else {
-            float downstep_ratio = 1.0f + (sigma_to / sigma - 1.0f) * eta;
-            float sigma_down     = sigma_to * downstep_ratio;
-            float sigma_ratio    = sigma_down / sigma;
-            x                    = sigma_ratio * x + (1.0 - sigma_ratio) * denoised;
+        sd::Tensor<float> denoised               = std::move(denoised_opt);
+        auto [sigma_down, sigma_up, alpha_scale] = get_ancestral_step_flow(sigma, sigmas[i + 1], eta);
+        float sigma_ratio                        = sigma_down / sigma;
+        x                                        = sigma_ratio * x + (1.0f - sigma_ratio) * denoised;
 
-            float alpha_scale = (1 - sigma_to) / (1 - sigma_down);
-
-            // sigma_up    = √(sigma_to² - sigma_down² × alpha_scale²)
-            //             = √(sigma_to² - sigma_to² × downstep_ratio² × alpha_scale²)
-            //             = sigma_to × √(1 - downstep_ratio² × alpha_scale²)
-            float term     = downstep_ratio * alpha_scale;
-            float sigma_up = sigma_to * std::sqrt((1.0f + term) * (1.0f - term));
-            x              = alpha_scale * x + sd::Tensor<float>::randn_like(x, rng) * sigma_up;
+        if (sigma_up > 0.0f) {
+            x = alpha_scale * x + sd::Tensor<float>::randn_like(x, rng) * sigma_up;
         }
     }
     return x;
