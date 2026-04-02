@@ -5,18 +5,23 @@ usage: ./bin/sd-cli  [options]
 
 CLI Options:
   -o, --output <string>       path to write result image to. you can use printf-style %d format specifiers for image sequences (default:
-                              ./output.png) (eg. output_%03d.png)
-  --preview-path <string>     path to write preview image to (default: ./preview.png)
+                              ./output.png) (eg. output_%03d.png). For video generation, single-file outputs support .avi and animated .webp
+  --preview-path <string>     path to write preview image to (default: ./preview.png). Multi-frame previews support .avi and animated .webp
   --preview-interval <int>    interval in denoising steps between consecutive updates of the image preview file (default is 1, meaning updating at
                               every step)
   --output-begin-idx <int>    starting index for output image sequence, must be non-negative (default 0 if specified %d in output path, 1 otherwise)
+  --image <string>            path to the image to inspect (for metadata mode)
+  --metadata-format <string>  metadata output format, one of [text, json] (default: text)
   --canny                     apply canny preprocessor (edge detection)
   --convert-name              convert tensor name (for convert mode)
   -v, --verbose               print extra info
   --color                     colors the logging tags according to level
   --taesd-preview-only        prevents usage of taesd for decoding the final image. (for use with --preview tae)
   --preview-noisy             enables previewing noisy inputs of the models rather than the denoised outputs
-  -M, --mode                  run mode, one of [img_gen, vid_gen, upscale, convert], default: img_gen
+  --metadata-raw              include raw hex previews for unparsed metadata payloads
+  --metadata-brief            truncate long metadata text values in text output
+  --metadata-all              include structural/container entries such as IHDR, IDAT, and non-metadata JPEG segments
+  -M, --mode                  run mode, one of [img_gen, vid_gen, upscale, convert, metadata], default: img_gen
   --preview                   preview method. must be one of the following [none, proj, tae, vae] (default is none)
   -h, --help                  show this help message and exit
   --rpc                       add a rpc device
@@ -119,7 +124,7 @@ Generation Options:
                                            medium
   --skip-layer-start <float>               SLG enabling point (default: 0.01)
   --skip-layer-end <float>                 SLG disabling point (default: 0.2)
-  --eta <float>                            eta in DDIM, only for DDIM and TCD (default: 0)
+  --eta <float>                            noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a and dpm++2s_a)
   --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --high-noise-cfg-scale <float>           (high noise) unconditional guidance scale: (default: 7.0)
   --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or instruct-pix2pix models (default: same as --cfg-scale)
@@ -127,7 +132,7 @@ Generation Options:
   --high-noise-slg-scale <float>           (high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)
   --high-noise-skip-layer-start <float>    (high noise) SLG enabling point (default: 0.01)
   --high-noise-skip-layer-end <float>      (high noise) SLG disabling point (default: 0.2)
-  --high-noise-eta <float>                 (high noise) eta in DDIM, only for DDIM and TCD (default: 0)
+  --high-noise-eta <float>                 (high noise) noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a and dpm++2s_a)
   --strength <float>                       strength for noising/unnoising (default: 0.75)
   --pm-style-strength <float>
   --control-strength <float>               strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image
@@ -135,6 +140,7 @@ Generation Options:
   --vace-strength <float>                  wan vace strength
   --increase-ref-index                     automatically increase the indices of references images based on the order they are listed (starting with 1).
   --disable-auto-resize-ref-image          disable auto resize of ref images
+  --disable-image-metadata                 do not embed generation metadata on image files
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
                                            tcd, res_multistep, res_2s] (default: euler for Flux/SD3/Wan, euler_a
@@ -156,4 +162,13 @@ Generation Options:
                                            "threshold=0.25" or "threshold=1.5,reset=0" or "w=0.4,window=2"
   --scm-mask                               SCM steps mask for cache-dit: comma-separated 0/1 (e.g., "1,1,1,0,0,1,0,0,1,0") - 1=compute, 0=can cache
   --scm-policy                             SCM policy: 'dynamic' (default) or 'static'
+```
+
+Metadata mode inspects PNG/JPEG container metadata without loading any model:
+
+```bash
+./bin/sd-cli -M metadata --image ./output.png
+./bin/sd-cli -M metadata --image ./output.jpg --metadata-format json
+./bin/sd-cli -M metadata --image ./output.png --metadata-raw
+./bin/sd-cli -M metadata --image ./output.png --metadata-all
 ```

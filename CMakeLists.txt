@@ -56,6 +56,7 @@ endif()
 # general
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
+option(SD_WEBP                       "sd: enable WebP image I/O support" ON)
 option(SD_USE_SYSTEM_GGML            "sd: use system-installed GGML library" OFF)
 #option(SD_BUILD_SERVER               "sd: build server example"                           ON)
 
@@ -102,6 +103,9 @@ sd_option_depr(WARNING     SD_VULKAN                GGML_VULKAN)
 sd_option_depr(WARNING     SD_OPENCL                GGML_OPENCL)
 sd_option_depr(WARNING     SD_SYCL                  GGML_SYCL)
 sd_option_depr(WARNING     SD_MUSA                  GGML_MUSA)
+if(SD_WEBP)
+    add_compile_definitions(SD_USE_WEBP)
+endif()
 
 set(SD_LIB stable-diffusion)
 

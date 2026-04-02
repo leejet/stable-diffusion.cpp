@@ -12,6 +12,7 @@
 #include "stable-diffusion.h"
 
 #include "common/common.hpp"
+#include "common/media_io.h"
 
 #ifdef HAVE_INDEX_HTML
 #include "frontend/dist/gen_index_html.h"
@@ -217,51 +218,6 @@ std::string extract_and_remove_sd_cpp_extra_args(std::string& text) {
     return extracted;
 }
 
-enum class ImageFormat { JPEG,
-                         PNG };
-
-std::vector<uint8_t> write_image_to_vector(
-    ImageFormat format,
-    const uint8_t* image,
-    int width,
-    int height,
-    int channels,
-    int quality = 90) {
-    std::vector<uint8_t> buffer;
-
-    auto write_func = [&buffer](void* context, void* data, int size) {
-        uint8_t* src = reinterpret_cast<uint8_t*>(data);
-        buffer.insert(buffer.end(), src, src + size);
-    };
-
-    struct ContextWrapper {
-        decltype(write_func)& func;
-    } ctx{write_func};
-
-    auto c_func = [](void* context, void* data, int size) {
-        auto* wrapper = reinterpret_cast<ContextWrapper*>(context);
-        wrapper->func(context, data, size);
-    };
-
-    int result = 0;
-    switch (format) {
-        case ImageFormat::JPEG:
-            result = stbi_write_jpg_to_func(c_func, &ctx, width, height, channels, image, quality);
-            break;
-        case ImageFormat::PNG:
-            result = stbi_write_png_to_func(c_func, &ctx, width, height, channels, image, width * channels);
-            break;
-        default:
-            throw std::runtime_error("invalid image format");
-    }
-
-    if (!result) {
-        throw std::runtime_error("write imgage to mem failed");
-    }
-
-    return buffer;
-}
-
 void sd_log_cb(enum sd_log_level_t level, const char* log, void* data) {
     SDSvrParams* svr_params = (SDSvrParams*)data;
     log_print(level, log, svr_params->verbose, svr_params->color);
@@ -334,7 +290,7 @@ void free_results(sd_image_t* result_images, int num_results) {
     if (result_images) {
         for (int i = 0; i < num_results; ++i) {
             if (result_images[i].data) {
-                stbi_image_free(result_images[i].data);
+                free(result_images[i].data);
                 result_images[i].data = nullptr;
             }
         }
@@ -405,9 +361,9 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             std::string sd_cpp_extra_args_str = extract_and_remove_sd_cpp_extra_args(prompt);
 
-            if (output_format != "png" && output_format != "jpeg") {
+            if (output_format != "png" && output_format != "jpeg" && output_format != "webp") {
                 res.status = 400;
-                res.set_content(R"({"error":"invalid output_format, must be one of [png, jpeg]"})", "application/json");
+                res.set_content(R"({"error":"invalid output_format, must be one of [png, jpeg, webp]"})", "application/json");
                 return;
             }
             if (n <= 0)
@@ -497,12 +453,20 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 if (results[i].data == nullptr) {
                     continue;
                 }
-                auto image_bytes = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
-                                                         results[i].data,
-                                                         results[i].width,
-                                                         results[i].height,
-                                                         results[i].channel,
-                                                         output_compression);
+                std::string params = gen_params.embed_image_metadata
+                                         ? get_image_params(*runtime->ctx_params, gen_params, gen_params.seed + i)
+                                         : "";
+                auto image_bytes   = encode_image_to_vector(output_format == "jpeg"
+                                                                ? EncodedImageFormat::JPEG
+                                                            : output_format == "webp"
+                                                                ? EncodedImageFormat::WEBP
+                                                                : EncodedImageFormat::PNG,
+                                                          results[i].data,
+                                                          results[i].width,
+                                                          results[i].height,
+                                                          results[i].channel,
+                                                          params,
+                                                          output_compression);
                 if (image_bytes.empty()) {
                     LOG_ERROR("write image to mem failed");
                     continue;
@@ -747,12 +711,20 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             for (int i = 0; i < num_results; i++) {
                 if (results[i].data == nullptr)
                     continue;
-                auto image_bytes = write_image_to_vector(output_format == "jpeg" ? ImageFormat::JPEG : ImageFormat::PNG,
-                                                         results[i].data,
-                                                         results[i].width,
-                                                         results[i].height,
-                                                         results[i].channel,
-                                                         output_compression);
+                std::string params = gen_params.embed_image_metadata
+                                         ? get_image_params(*runtime->ctx_params, gen_params, gen_params.seed + i)
+                                         : "";
+                auto image_bytes   = encode_image_to_vector(output_format == "jpeg"
+                                                                ? EncodedImageFormat::JPEG
+                                                            : output_format == "webp"
+                                                                ? EncodedImageFormat::WEBP
+                                                                : EncodedImageFormat::PNG,
+                                                          results[i].data,
+                                                          results[i].width,
+                                                          results[i].height,
+                                                          results[i].channel,
+                                                          params,
+                                                          output_compression);
                 std::string b64 = base64_encode(image_bytes);
                 json item;
                 item["b64_json"] = b64;
@@ -764,13 +736,13 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             res.status = 200;
 
             if (init_image.data) {
-                stbi_image_free(init_image.data);
+                free(init_image.data);
             }
             if (mask_image.data) {
-                stbi_image_free(mask_image.data);
+                free(mask_image.data);
             }
             for (auto ref_image : ref_images) {
-                stbi_image_free(ref_image.data);
+                free(ref_image.data);
             }
         } catch (const std::exception& e) {
             res.status = 500;
@@ -1063,11 +1035,15 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     continue;
                 }
 
-                auto image_bytes = write_image_to_vector(ImageFormat::PNG,
-                                                         results[i].data,
-                                                         results[i].width,
-                                                         results[i].height,
-                                                         results[i].channel);
+                std::string params = gen_params.embed_image_metadata
+                                         ? get_image_params(*runtime->ctx_params, gen_params, gen_params.seed + i)
+                                         : "";
+                auto image_bytes   = encode_image_to_vector(EncodedImageFormat::PNG,
+                                                            results[i].data,
+                                                            results[i].width,
+                                                            results[i].height,
+                                                            results[i].channel,
+                                                            params);
 
                 if (image_bytes.empty()) {
                     LOG_ERROR("write image to mem failed");
@@ -1083,13 +1059,13 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             res.status = 200;
 
             if (init_image.data) {
-                stbi_image_free(init_image.data);
+                free(init_image.data);
             }
             if (mask_image.data && mask_data.empty()) {
-                stbi_image_free(mask_image.data);
+                free(mask_image.data);
             }
             for (auto ref_image : ref_images) {
-                stbi_image_free(ref_image.data);
+                free(ref_image.data);
             }
 
         } catch (const std::exception& e) {

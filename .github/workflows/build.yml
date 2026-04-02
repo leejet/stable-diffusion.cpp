@@ -64,7 +64,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10.15.1
 
       - name: Dependencies
         id: depends
@@ -137,7 +137,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10.15.1
 
       - name: Dependencies
         id: depends
@@ -226,7 +226,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10.15.1
 
       - name: Get commit hash
         id: commit
@@ -285,7 +285,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10.15.1
 
       - name: Dependencies
         id: depends
@@ -369,7 +369,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10.15.1
 
       - name: Install cuda-toolkit
         id: cuda-toolkit
@@ -475,6 +475,16 @@ jobs:
           curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70200-43~24.04_amd64.deb"
           7z x rocwmma.deb
           7z x data.tar
+          
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
 
       - name: Cache ROCm Installation
         id: cache-rocm
@@ -593,7 +603,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10.15.1
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
