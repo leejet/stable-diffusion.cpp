@@ -2,7 +2,7 @@ set(Z_TARGET zip)
 add_library(${Z_TARGET} OBJECT zip.c zip.h miniz.h)
 target_include_directories(${Z_TARGET} PUBLIC .)
 
-if(SD_WEBP)
+if(SD_WEBP AND NOT SD_USE_SYSTEM_WEBP)
     set(WEBP_BUILD_ANIM_UTILS OFF)
     set(WEBP_BUILD_CWEBP OFF)
     set(WEBP_BUILD_DWEBP OFF)

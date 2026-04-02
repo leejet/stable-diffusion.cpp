@@ -22,6 +22,16 @@ else()
     set(SD_STANDALONE OFF)
 endif()
 
+set(SD_SUBMODULE_WEBP FALSE)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libwebp/CMakeLists.txt")
+    set(SD_SUBMODULE_WEBP TRUE)
+endif()
+if(SD_SUBMODULE_WEBP)
+    set(SD_WEBP_DEFAULT ON)
+else()
+    set(SD_WEBP_DEFAULT ${SD_USE_SYSTEM_WEBP})
+endif()
+
 #
 # Option list
 #
@@ -29,7 +39,8 @@ endif()
 # general
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
-option(SD_WEBP                       "sd: enable WebP image I/O support" ON)
+option(SD_WEBP                       "sd: enable WebP image I/O support" ${SD_WEBP_DEFAULT})
+option(SD_USE_SYSTEM_WEBP            "sd: link against system libwebp" OFF)
 option(SD_CUDA                       "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
@@ -79,6 +90,16 @@ if(SD_MUSA)
 endif()
 
 if(SD_WEBP)
+    if(NOT SD_SUBMODULE_WEBP AND NOT SD_USE_SYSTEM_WEBP)
+        message(FATAL_ERROR "WebP support enabled but no source found.
+          Either initialize the submodule:\n  git submodule update --init thirdparty/libwebp\n\n"
+          "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBP=ON")
+    endif()
+    if(SD_USE_SYSTEM_WEBP)
+        find_package(WebP REQUIRED)
+        add_library(webp ALIAS WebP::webp)
+        add_library(libwebpmux ALIAS WebP::libwebpmux)
+    endif()
     add_compile_definitions(SD_USE_WEBP)
 endif()
 
