@@ -839,7 +839,8 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             auto get_sample_method = [](std::string name)->enum sample_method_t {
                 enum sample_method_t result = str_to_sample_method(name.c_str());
-                if (result != SAMPLE_METHOD_COUNT) return result;
+                if (result != SAMPLE_METHOD_COUNT)
+                    return result;
                 std::transform(name.begin(), name.end(), name.begin(),
                                [](unsigned char c) { return std::tolower(c); });
                 static const std::unordered_map<std::string_view, sample_method_t> hardcoded{

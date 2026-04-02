@@ -13,10 +13,19 @@
 
 inline void ggml_backend_load_all_once() {
 #if defined(GGML_BACKEND_DL)
+    // If the host process already preloaded backends explicitly
+    // (for example via ggml_backend_load / ggml_backend_load_all_from_path),
+    // do not rescan the default paths again.
+    if (ggml_backend_dev_count() > 0) {
+        return;
+    }
     // In dynamic-backend mode the backend modules are discovered at runtime,
     // so we must load them before asking for the CPU backend or its proc table.
     static std::once_flag once;
     std::call_once(once, []() {
+        if (ggml_backend_dev_count() > 0) {
+            return;
+        }
         ggml_backend_load_all();
     });
 #endif
