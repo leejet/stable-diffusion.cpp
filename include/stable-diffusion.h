@@ -120,7 +120,8 @@ enum sd_type_t {
     // SD_TYPE_IQ4_NL_4_8 = 37,
     // SD_TYPE_IQ4_NL_8_8 = 38,
     SD_TYPE_MXFP4 = 39,  // MXFP4 (1 block)
-    SD_TYPE_COUNT = 40,
+    SD_TYPE_NVFP4 = 40,  // NVFP4 (4 blocks, E4M3 scale)
+    SD_TYPE_COUNT = 41,
 };
 
 enum sd_log_level_t {
@@ -300,6 +301,7 @@ enum sd_cache_mode_t {
     SD_CACHE_DBCACHE,
     SD_CACHE_TAYLORSEER,
     SD_CACHE_CACHE_DIT,
+    SD_CACHE_SPECTRUM,
 };
 
 typedef struct {
@@ -320,6 +322,13 @@ typedef struct {
     int taylorseer_skip_interval;
     const char* scm_mask;
     bool scm_policy_dynamic;
+    float spectrum_w;
+    int spectrum_m;
+    float spectrum_lam;
+    int spectrum_window_size;
+    float spectrum_flex_window;
+    int spectrum_warmup_steps;
+    float spectrum_stop_percent;
 } sd_cache_params_t;
 
 typedef struct {

@@ -1,3 +1,92 @@
+# Frontend
+
+## Build with Frontend
+
+The server can optionally build the web frontend and embed it into the binary as `gen_index_html.h`.
+
+### Requirements
+
+Install the following tools:
+
+* **Node.js** ≥ 22.18
+  https://nodejs.org/
+
+* **pnpm** ≥ 10
+  Install via npm:
+
+```bash
+npm install -g pnpm
+```
+
+Verify installation:
+
+```bash
+node -v
+pnpm -v
+```
+
+### Install frontend dependencies
+
+Go to the frontend directory and install dependencies:
+
+```bash
+cd examples/server/frontend
+pnpm install
+```
+
+### Build the server with CMake
+
+Enable the frontend build option when configuring CMake:
+
+```bash
+cmake -B build -DSD_SERVER_BUILD_FRONTEND=ON
+cmake --build build --config Release
+```
+
+If `pnpm` is available, the build system will automatically run:
+
+```
+pnpm run build
+pnpm run build:header
+```
+
+and embed the generated frontend into the server binary.
+
+## Frontend Repository
+
+The web frontend is maintained in a **separate repository**, https://github.com/leejet/stable-ui.
+
+If you want to modify the UI or frontend logic, please submit pull requests to the **frontend repository**.
+
+This repository (`stable-diffusion.cpp`) only vendors the frontend periodically. Changes from the frontend repo are synchronized:
+
+* approximately **every 1–2 weeks**, or
+* when there are **major frontend updates**
+
+Because of this, frontend changes will **not appear here immediately** after being merged upstream.
+
+## Using an external frontend
+
+By default, the server uses the **embedded frontend** generated during the build (`gen_index_html.h`).
+
+You can also serve a custom frontend file instead of the embedded one by using:
+
+```bash
+--serve-html-path <path-to-index.html>
+```
+
+For example:
+
+```bash
+sd-server --serve-html-path ./index.html
+```
+
+In this case, the server will load and serve the specified `index.html` file instead of the embedded frontend. This is useful when:
+
+* developing or testing frontend changes
+* using a custom UI
+* avoiding rebuilding the binary after frontend modifications
+
 # Run
 
 ```
@@ -100,7 +189,7 @@ Default Generation Options:
                                            medium
   --skip-layer-start <float>               SLG enabling point (default: 0.01)
   --skip-layer-end <float>                 SLG disabling point (default: 0.2)
-  --eta <float>                            eta in DDIM, only for DDIM and TCD (default: 0)
+  --eta <float>                            noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a and dpm++2s_a)
   --flow-shift <float>                     shift value for Flow models like SD3.x or WAN (default: auto)
   --high-noise-cfg-scale <float>           (high noise) unconditional guidance scale: (default: 7.0)
   --high-noise-img-cfg-scale <float>       (high noise) image guidance scale for inpaint or instruct-pix2pix models (default: same as --cfg-scale)
@@ -108,7 +197,7 @@ Default Generation Options:
   --high-noise-slg-scale <float>           (high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)
   --high-noise-skip-layer-start <float>    (high noise) SLG enabling point (default: 0.01)
   --high-noise-skip-layer-end <float>      (high noise) SLG disabling point (default: 0.2)
-  --high-noise-eta <float>                 (high noise) eta in DDIM, only for DDIM and TCD (default: 0)
+  --high-noise-eta <float>                 (high noise) noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a and dpm++2s_a)
   --strength <float>                       strength for noising/unnoising (default: 0.75)
   --pm-style-strength <float>
   --control-strength <float>               strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image
@@ -116,6 +205,7 @@ Default Generation Options:
   --vace-strength <float>                  wan vace strength
   --increase-ref-index                     automatically increase the indices of references images based on the order they are listed (starting with 1).
   --disable-auto-resize-ref-image          disable auto resize of ref images
+  --disable-image-metadata                 do not embed generation metadata on image files
   -s, --seed                               RNG seed (default: 42, use random seed for < 0)
   --sampling-method                        sampling method, one of [euler, euler_a, heun, dpm2, dpm++2s_a, dpm++2m, dpm++2mv2, ipndm, ipndm_v, lcm, ddim_trailing,
                                            tcd, res_multistep, res_2s] (default: euler for Flux/SD3/Wan, euler_a
@@ -129,11 +219,10 @@ Default Generation Options:
   --skip-layers                            layers to skip for SLG steps (default: [7,8,9])
   --high-noise-skip-layers                 (high noise) layers to skip for SLG steps (default: [7,8,9])
   -r, --ref-image                          reference image for Flux Kontext models (can be used multiple times)
-  --cache-mode                             caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level)
+  --cache-mode                             caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level), 'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)
   --cache-option                           named cache params (key=value format, comma-separated). easycache/ucache:
                                            threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=. Examples:
                                            "threshold=0.25" or "threshold=1.5,reset=0"
-  --cache-preset                           cache-dit preset: 'slow'/'s', 'medium'/'m', 'fast'/'f', 'ultra'/'u'
   --scm-mask                               SCM steps mask for cache-dit: comma-separated 0/1 (e.g., "1,1,1,0,0,1,0,0,1,0") - 1=compute, 0=can cache
   --scm-policy                             SCM policy: 'dynamic' (default) or 'static'
 ```

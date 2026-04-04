@@ -61,10 +61,10 @@ public:
         blocks["time_mixer"] = std::shared_ptr<GGMLBlock>(new AlphaBlender());
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* x,
-                                struct ggml_tensor* context,
-                                int timesteps) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* x,
+                         ggml_tensor* context,
+                         int timesteps) {
         // x: [N, in_channels, h, w] aka [b*t, in_channels, h, w], t == timesteps
         // context: [N, max_position(aka n_context), hidden_size(aka context_dim)] aka [b*t, n_context, context_dim], t == timesteps
         // t_emb: [N, in_channels] aka [b*t, in_channels]
@@ -389,11 +389,11 @@ public:
         blocks["out.2"] = std::shared_ptr<GGMLBlock>(new Conv2d(model_channels, out_channels, {3, 3}, {1, 1}, {1, 1}));
     }
 
-    struct ggml_tensor* resblock_forward(std::string name,
-                                         GGMLRunnerContext* ctx,
-                                         struct ggml_tensor* x,
-                                         struct ggml_tensor* emb,
-                                         int num_video_frames) {
+    ggml_tensor* resblock_forward(std::string name,
+                                  GGMLRunnerContext* ctx,
+                                  ggml_tensor* x,
+                                  ggml_tensor* emb,
+                                  int num_video_frames) {
         if (version == VERSION_SVD) {
             auto block = std::dynamic_pointer_cast<VideoResBlock>(blocks[name]);
 
@@ -405,11 +405,11 @@ public:
         }
     }
 
-    struct ggml_tensor* attention_layer_forward(std::string name,
-                                                GGMLRunnerContext* ctx,
-                                                struct ggml_tensor* x,
-                                                struct ggml_tensor* context,
-                                                int timesteps) {
+    ggml_tensor* attention_layer_forward(std::string name,
+                                         GGMLRunnerContext* ctx,
+                                         ggml_tensor* x,
+                                         ggml_tensor* context,
+                                         int timesteps) {
         if (version == VERSION_SVD) {
             auto block = std::dynamic_pointer_cast<SpatialVideoTransformer>(blocks[name]);
 
@@ -421,15 +421,15 @@ public:
         }
     }
 
-    struct ggml_tensor* forward(GGMLRunnerContext* ctx,
-                                struct ggml_tensor* x,
-                                struct ggml_tensor* timesteps,
-                                struct ggml_tensor* context,
-                                struct ggml_tensor* c_concat              = nullptr,
-                                struct ggml_tensor* y                     = nullptr,
-                                int num_video_frames                      = -1,
-                                std::vector<struct ggml_tensor*> controls = {},
-                                float control_strength                    = 0.f) {
+    ggml_tensor* forward(GGMLRunnerContext* ctx,
+                         ggml_tensor* x,
+                         ggml_tensor* timesteps,
+                         ggml_tensor* context,
+                         ggml_tensor* c_concat              = nullptr,
+                         ggml_tensor* y                     = nullptr,
+                         int num_video_frames               = -1,
+                         std::vector<ggml_tensor*> controls = {},
+                         float control_strength             = 0.f) {
         // x: [N, in_channels, h, w] or [N, in_channels/2, h, w]
         // timesteps: [N,]
         // context: [N, max_position, hidden_size] or [1, max_position, hidden_size]. for example, [N, 77, 768]
@@ -481,7 +481,7 @@ public:
         }
 
         // input_blocks
-        std::vector<struct ggml_tensor*> hs;
+        std::vector<ggml_tensor*> hs;
 
         // input block 0
         auto h = input_blocks_0_0->forward(ctx, x);
@@ -732,16 +732,16 @@ struct UNetModelRunner : public GGMLRunner {
     }
 
     bool compute_streaming(int n_threads,
-                           struct ggml_tensor* x,
-                           struct ggml_tensor* timesteps,
-                           struct ggml_tensor* context,
-                           struct ggml_tensor* c_concat,
-                           struct ggml_tensor* y,
+                           ggml_tensor* x,
+                           ggml_tensor* timesteps,
+                           ggml_tensor* context,
+                           ggml_tensor* c_concat,
+                           ggml_tensor* y,
                            int num_video_frames                      = -1,
-                           std::vector<struct ggml_tensor*> controls = {},
+                           std::vector<ggml_tensor*> controls = {},
                            float control_strength                    = 0.f,
-                           struct ggml_tensor** output               = nullptr,
-                           struct ggml_context* output_ctx           = nullptr) {
+                           ggml_tensor** output               = nullptr,
+                           ggml_context* output_ctx           = nullptr) {
         if (!is_streaming_enabled()) {
             LOG_WARN("%s streaming not enabled, falling back to regular compute", get_desc().c_str());
             return compute(n_threads, x, timesteps, context, c_concat, y,
@@ -771,379 +771,408 @@ struct UNetModelRunner : public GGMLRunner {
                                       num_video_frames, controls, control_strength, output, output_ctx);
     }
 
-        bool compute_streaming_true(int n_threads,
-                                     struct ggml_tensor* x,
-                                     struct ggml_tensor* timesteps,
-                                     struct ggml_tensor* context,
-                                     struct ggml_tensor* c_concat             = nullptr,
-                                     struct ggml_tensor* y                    = nullptr,
-                                     int num_video_frames                     = -1,
-                                     std::vector<struct ggml_tensor*> controls = {},
-                                     float control_strength                   = 0.f,
-                                     struct ggml_tensor** output              = nullptr,
-                                     struct ggml_context* output_ctx          = nullptr) {
-            auto& registry = streaming_engine_->get_registry();
-            int64_t t_start = ggml_time_ms();
+    bool compute_streaming_true(int n_threads,
+                                ggml_tensor* x,
+                                ggml_tensor* timesteps,
+                                ggml_tensor* context,
+                                ggml_tensor* c_concat             = nullptr,
+                                ggml_tensor* y                    = nullptr,
+                                int num_video_frames              = -1,
+                                std::vector<ggml_tensor*> controls = {},
+                                float control_strength            = 0.f,
+                                ggml_tensor** output              = nullptr,
+                                ggml_context* output_ctx          = nullptr) {
+        auto& registry = streaming_engine_->get_registry();
+        int64_t t_start = ggml_time_ms();
 
-            const int num_input_blocks = unet.get_num_input_blocks();
-            const int num_output_blocks = unet.get_num_output_blocks();
+        const int num_input_blocks = unet.get_num_input_blocks();
+        const int num_output_blocks = unet.get_num_output_blocks();
 
-            LOG_INFO("TRUE per-layer streaming - %d input, 1 middle, %d output blocks",
-                     num_input_blocks, num_output_blocks);
+        LOG_INFO("TRUE per-layer streaming - %d input, 1 middle, %d output blocks",
+                 num_input_blocks, num_output_blocks);
 
-            // Load global layers
-            if (!registry.move_layer_to_gpu("_global")) {
-                LOG_ERROR("Failed to load _global to GPU");
+        // Load global layers
+        if (!registry.move_layer_to_gpu("_global")) {
+            LOG_ERROR("Failed to load _global to GPU");
+            return false;
+        }
+
+        // Skip connections storage - stores each input block's output
+        std::vector<std::vector<float>> skip_connections(num_input_blocks);
+        std::vector<std::array<int64_t, 4>> skip_ne(num_input_blocks);
+
+        // Persistent storage for current h and emb
+        std::vector<float> persistent_h;
+        std::vector<float> persistent_emb;
+        int64_t h_ne[4], emb_ne[4];
+
+        // Handle c_concat
+        ggml_tensor* actual_x = x;
+        if (c_concat != nullptr) {
+            // For now, handle c_concat in input stage
+        }
+
+        LOG_DEBUG("Computing embeddings");
+        {
+            ggml_tensor* emb_output = nullptr;
+
+            auto get_emb_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
+                auto runner_ctx = get_context();
+
+                ggml_tensor* timesteps_b = to_backend(timesteps);
+                ggml_tensor* y_b = y ? to_backend(y) : nullptr;
+
+                emb_output = unet.forward_embedding_stage(&runner_ctx, timesteps_b, y_b);
+                ggml_build_forward_expand(gf, emb_output);
+
+                return gf;
+            };
+
+            if (!GGMLRunner::compute(get_emb_graph, n_threads, false, nullptr, nullptr, true)) {
+                LOG_ERROR("Embedding stage failed");
                 return false;
             }
 
-            // Skip connections storage - stores each input block's output
-            std::vector<std::vector<float>> skip_connections(num_input_blocks);
-            std::vector<std::array<int64_t, 4>> skip_ne(num_input_blocks);
+            // Extract emb
+            size_t emb_size = ggml_nelements(emb_output);
+            persistent_emb.resize(emb_size);
+            ggml_backend_tensor_get(emb_output, persistent_emb.data(), 0, emb_size * sizeof(float));
+            for (int i = 0; i < 4; i++) emb_ne[i] = emb_output->ne[i];
 
-            // Persistent storage for current h and emb
-            std::vector<float> persistent_h;
-            std::vector<float> persistent_emb;
-            int64_t h_ne[4], emb_ne[4];
+            free_compute_buffer();
+        }
 
-            // Handle c_concat
-            ggml_tensor* actual_x = x;
-            if (c_concat != nullptr) {
-                // For now, handle c_concat in input stage
+        LOG_DEBUG("Processing input blocks");
+        {
+            ggml_tensor* h_output = nullptr;
+
+            // Initial conv
+            auto get_init_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
+                auto runner_ctx = get_context();
+
+                ggml_tensor* x_b = to_backend(x);
+                if (c_concat != nullptr) {
+                    ggml_tensor* c_b = to_backend(c_concat);
+                    x_b = ggml_concat(compute_ctx, x_b, c_b, 2);
+                }
+
+                h_output = unet.forward_initial_conv(&runner_ctx, x_b);
+                ggml_build_forward_expand(gf, h_output);
+
+                return gf;
+            };
+
+            if (!GGMLRunner::compute(get_init_graph, n_threads, false, nullptr, nullptr, true)) {
+                LOG_ERROR("Initial conv failed");
+                return false;
             }
 
-            LOG_DEBUG("Computing embeddings");
-            {
-                ggml_tensor* emb_output = nullptr;
+            // Save skip connection 0
+            size_t h_size = ggml_nelements(h_output);
+            skip_connections[0].resize(h_size);
+            ggml_backend_tensor_get(h_output, skip_connections[0].data(), 0, h_size * sizeof(float));
+            for (int i = 0; i < 4; i++) {
+                skip_ne[0][i] = h_output->ne[i];
+                h_ne[i] = h_output->ne[i];
+            }
+            persistent_h.resize(h_size);
+            ggml_backend_tensor_get(h_output, persistent_h.data(), 0, h_size * sizeof(float));
 
-                auto get_emb_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
-                    auto runner_ctx = get_context();
+            free_compute_buffer();
+        }
 
-                    ggml_tensor* timesteps_b = to_backend(timesteps);
-                    ggml_tensor* y_b = y ? to_backend(y) : nullptr;
+        // Process input blocks 1-11
+        // Start async prefetch for first block
+        if (num_input_blocks > 1 && streaming_engine_) {
+            std::string first_block = "input_blocks.1";
+            streaming_engine_->prefetch_layer(first_block);
+        }
 
-                    emb_output = unet.forward_embedding_stage(&runner_ctx, timesteps_b, y_b);
-                    ggml_build_forward_expand(gf, emb_output);
+        for (int block_idx = 1; block_idx < num_input_blocks; block_idx++) {
+            std::string block_name = "input_blocks." + std::to_string(block_idx);
+            int64_t t_block = ggml_time_ms();
 
-                    return gf;
-                };
-
-                // Don't free compute buffer immediately - we need to read outputs first
-                if (!GGMLRunner::compute(get_emb_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Embedding stage failed");
-                    return false;
-                }
-
-                // Extract emb
-                size_t emb_size = ggml_nelements(emb_output);
-                persistent_emb.resize(emb_size);
-                ggml_backend_tensor_get(emb_output, persistent_emb.data(), 0, emb_size * sizeof(float));
-                for (int i = 0; i < 4; i++) emb_ne[i] = emb_output->ne[i];
-
-                // Now safe to free compute buffer
-                free_compute_buffer();
+            if (streaming_engine_) {
+                streaming_engine_->wait_for_prefetch(block_name);
             }
 
-            LOG_DEBUG("Processing input blocks");
-            {
-                ggml_tensor* h_output = nullptr;
-
-                // Initial conv
-                auto get_init_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
-                    auto runner_ctx = get_context();
-
-                    ggml_tensor* x_b = to_backend(x);
-                    if (c_concat != nullptr) {
-                        ggml_tensor* c_b = to_backend(c_concat);
-                        x_b = ggml_concat(compute_ctx, x_b, c_b, 2);
-                    }
-
-                    h_output = unet.forward_initial_conv(&runner_ctx, x_b);
-                    ggml_build_forward_expand(gf, h_output);
-
-                    return gf;
-                };
-
-                // Don't free compute buffer immediately - we need to read outputs first
-                if (!GGMLRunner::compute(get_init_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Initial conv failed");
-                    return false;
-                }
-
-                // Save skip connection 0
-                size_t h_size = ggml_nelements(h_output);
-                skip_connections[0].resize(h_size);
-                ggml_backend_tensor_get(h_output, skip_connections[0].data(), 0, h_size * sizeof(float));
-                for (int i = 0; i < 4; i++) {
-                    skip_ne[0][i] = h_output->ne[i];
-                    h_ne[i] = h_output->ne[i];
-                }
-                persistent_h.resize(h_size);
-                ggml_backend_tensor_get(h_output, persistent_h.data(), 0, h_size * sizeof(float));
-
-                // Now safe to free compute buffer
-                free_compute_buffer();
+            if (!registry.move_layer_to_gpu(block_name)) {
+                LOG_ERROR("Failed to load %s", block_name.c_str());
+                return false;
             }
 
-            // Process input blocks 1-11
-            // Start async prefetch for first block
-            if (num_input_blocks > 1 && streaming_engine_) {
-                std::string first_block = "input_blocks.1";
-                streaming_engine_->prefetch_layer(first_block);
+            // Start async prefetch of NEXT block while we compute this one
+            if (streaming_engine_ && block_idx + 1 < num_input_blocks) {
+                std::string next_block = "input_blocks." + std::to_string(block_idx + 1);
+                streaming_engine_->prefetch_layer(next_block);
             }
 
-            for (int block_idx = 1; block_idx < num_input_blocks; block_idx++) {
-                std::string block_name = "input_blocks." + std::to_string(block_idx);
-                int64_t t_block = ggml_time_ms();
+            ggml_tensor* h_output = nullptr;
 
-                // Wait for this block's prefetch to complete (if async prefetch was started)
-                if (streaming_engine_) {
-                    streaming_engine_->wait_for_prefetch(block_name);
-                }
+            auto get_input_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
 
-                // Load this block's weights (sync load if prefetch didn't happen)
-                if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("Failed to load %s", block_name.c_str());
-                    return false;
-                }
+                ggml_tensor* h_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, h_ne[0], h_ne[1], h_ne[2], h_ne[3]);
+                ggml_tensor* emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, emb_ne[0], emb_ne[1], emb_ne[2], emb_ne[3]);
+                ggml_tensor* context_b = context ? to_backend(context) : nullptr;
 
-                // Start async prefetch of NEXT block while we compute this one
-                if (streaming_engine_ && block_idx + 1 < num_input_blocks) {
-                    std::string next_block = "input_blocks." + std::to_string(block_idx + 1);
-                    streaming_engine_->prefetch_layer(next_block);
-                }
+                h_in = to_backend(h_in);
+                emb_in = to_backend(emb_in);
 
-                ggml_tensor* h_output = nullptr;
+                set_backend_tensor_data(h_in, persistent_h.data());
+                set_backend_tensor_data(emb_in, persistent_emb.data());
 
-                auto get_input_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
+                auto runner_ctx = get_context();
+                h_output = unet.forward_input_block(&runner_ctx, block_idx, h_in, emb_in, context_b, num_video_frames);
 
-                    ggml_tensor* h_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, h_ne[0], h_ne[1], h_ne[2], h_ne[3]);
-                    ggml_tensor* emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, emb_ne[0], emb_ne[1], emb_ne[2], emb_ne[3]);
-                    ggml_tensor* context_b = context ? to_backend(context) : nullptr;
+                ggml_build_forward_expand(gf, h_output);
 
-                    h_in = to_backend(h_in);
-                    emb_in = to_backend(emb_in);
+                return gf;
+            };
 
-                    set_backend_tensor_data(h_in, persistent_h.data());
-                    set_backend_tensor_data(emb_in, persistent_emb.data());
-
-                    auto runner_ctx = get_context();
-                    h_output = unet.forward_input_block(&runner_ctx, block_idx, h_in, emb_in, context_b, num_video_frames);
-
-                    ggml_build_forward_expand(gf, h_output);
-
-                    return gf;
-                };
-
-                // Don't free compute buffer immediately - we need to read outputs first
-                if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Input block %d failed", block_idx);
-                    return false;
-                }
-
-                // Save skip connection
-                size_t h_size = ggml_nelements(h_output);
-                skip_connections[block_idx].resize(h_size);
-                ggml_backend_tensor_get(h_output, skip_connections[block_idx].data(), 0, h_size * sizeof(float));
-                for (int i = 0; i < 4; i++) {
-                    skip_ne[block_idx][i] = h_output->ne[i];
-                    h_ne[i] = h_output->ne[i];
-                }
-
-                // Update persistent h
-                persistent_h.resize(h_size);
-                ggml_backend_tensor_get(h_output, persistent_h.data(), 0, h_size * sizeof(float));
-
-                // Now safe to free compute buffer
-                free_compute_buffer();
-
-                registry.move_layer_to_cpu(block_name);
-                LOG_DEBUG("Input block %d/%d done (%.2fms)",
-                          block_idx + 1, num_input_blocks, (ggml_time_ms() - t_block) / 1.0);
+            if (!GGMLRunner::compute(get_input_graph, n_threads, false, nullptr, nullptr, true)) {
+                LOG_ERROR("Input block %d failed", block_idx);
+                return false;
             }
 
-            LOG_DEBUG("Processing middle block");
-            {
-                if (!registry.move_layer_to_gpu("middle_block")) {
-                    LOG_ERROR("Failed to load middle_block");
-                    return false;
-                }
-
-                ggml_tensor* h_output = nullptr;
-
-                auto get_middle_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
-
-                    ggml_tensor* h_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, h_ne[0], h_ne[1], h_ne[2], h_ne[3]);
-                    ggml_tensor* emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, emb_ne[0], emb_ne[1], emb_ne[2], emb_ne[3]);
-                    ggml_tensor* context_b = context ? to_backend(context) : nullptr;
-
-                    h_in = to_backend(h_in);
-                    emb_in = to_backend(emb_in);
-
-                    set_backend_tensor_data(h_in, persistent_h.data());
-                    set_backend_tensor_data(emb_in, persistent_emb.data());
-
-                    auto runner_ctx = get_context();
-                    h_output = unet.forward_middle_block(&runner_ctx, h_in, emb_in, context_b, num_video_frames);
-
-                    ggml_build_forward_expand(gf, h_output);
-
-                    return gf;
-                };
-
-                // Don't free compute buffer immediately - we need to read outputs first
-                if (!GGMLRunner::compute(get_middle_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Middle block failed");
-                    return false;
-                }
-
-                // Update persistent h
-                size_t h_size = ggml_nelements(h_output);
-                persistent_h.resize(h_size);
-                ggml_backend_tensor_get(h_output, persistent_h.data(), 0, h_size * sizeof(float));
-                for (int i = 0; i < 4; i++) h_ne[i] = h_output->ne[i];
-
-                // Now safe to free compute buffer
-                free_compute_buffer();
-
-                registry.move_layer_to_cpu("middle_block");
+            // Save skip connection
+            size_t h_size = ggml_nelements(h_output);
+            skip_connections[block_idx].resize(h_size);
+            ggml_backend_tensor_get(h_output, skip_connections[block_idx].data(), 0, h_size * sizeof(float));
+            for (int i = 0; i < 4; i++) {
+                skip_ne[block_idx][i] = h_output->ne[i];
+                h_ne[i] = h_output->ne[i];
             }
 
-            LOG_DEBUG("Processing output blocks");
+            // Update persistent h
+            persistent_h.resize(h_size);
+            ggml_backend_tensor_get(h_output, persistent_h.data(), 0, h_size * sizeof(float));
 
-            // Start async prefetch for first output block
-            if (num_output_blocks > 0 && streaming_engine_) {
-                std::string first_block = "output_blocks.0";
-                streaming_engine_->prefetch_layer(first_block);
+            free_compute_buffer();
+
+            registry.move_layer_to_cpu(block_name);
+            LOG_DEBUG("Input block %d/%d done (%.2fms)",
+                      block_idx + 1, num_input_blocks, (ggml_time_ms() - t_block) / 1.0);
+        }
+
+        LOG_DEBUG("Processing middle block");
+        {
+            if (!registry.move_layer_to_gpu("middle_block")) {
+                LOG_ERROR("Failed to load middle_block");
+                return false;
             }
 
-            for (int block_idx = 0; block_idx < num_output_blocks; block_idx++) {
-                std::string block_name = "output_blocks." + std::to_string(block_idx);
-                int64_t t_block = ggml_time_ms();
+            ggml_tensor* h_output = nullptr;
 
-                // Skip connection index (reverse order)
-                int skip_idx = num_input_blocks - 1 - block_idx;
+            auto get_middle_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
 
-                // Wait for this block's prefetch to complete (if async prefetch was started)
-                if (streaming_engine_) {
-                    streaming_engine_->wait_for_prefetch(block_name);
-                }
+                ggml_tensor* h_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, h_ne[0], h_ne[1], h_ne[2], h_ne[3]);
+                ggml_tensor* emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, emb_ne[0], emb_ne[1], emb_ne[2], emb_ne[3]);
+                ggml_tensor* context_b = context ? to_backend(context) : nullptr;
 
-                // Load this block's weights (sync load if prefetch didn't happen)
-                if (!registry.move_layer_to_gpu(block_name)) {
-                    LOG_ERROR("Failed to load %s", block_name.c_str());
-                    return false;
-                }
+                h_in = to_backend(h_in);
+                emb_in = to_backend(emb_in);
 
-                // Start async prefetch of NEXT block while we compute this one
-                if (streaming_engine_ && block_idx + 1 < num_output_blocks) {
-                    std::string next_block = "output_blocks." + std::to_string(block_idx + 1);
-                    streaming_engine_->prefetch_layer(next_block);
-                }
+                set_backend_tensor_data(h_in, persistent_h.data());
+                set_backend_tensor_data(emb_in, persistent_emb.data());
 
-                ggml_tensor* h_output = nullptr;
+                auto runner_ctx = get_context();
+                h_output = unet.forward_middle_block(&runner_ctx, h_in, emb_in, context_b, num_video_frames);
 
-                auto get_output_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
+                ggml_build_forward_expand(gf, h_output);
 
-                    ggml_tensor* h_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, h_ne[0], h_ne[1], h_ne[2], h_ne[3]);
-                    ggml_tensor* emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, emb_ne[0], emb_ne[1], emb_ne[2], emb_ne[3]);
+                return gf;
+            };
 
-                    // Create skip connection tensor
-                    ggml_tensor* skip_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
-                                                              skip_ne[skip_idx][0], skip_ne[skip_idx][1],
-                                                              skip_ne[skip_idx][2], skip_ne[skip_idx][3]);
-
-                    ggml_tensor* context_b = context ? to_backend(context) : nullptr;
-
-                    h_in = to_backend(h_in);
-                    emb_in = to_backend(emb_in);
-                    skip_in = to_backend(skip_in);
-
-                    set_backend_tensor_data(h_in, persistent_h.data());
-                    set_backend_tensor_data(emb_in, persistent_emb.data());
-                    set_backend_tensor_data(skip_in, skip_connections[skip_idx].data());
-
-                    auto runner_ctx = get_context();
-                    h_output = unet.forward_output_block(&runner_ctx, block_idx, h_in, skip_in, emb_in,
-                                                          context_b, num_video_frames);
-
-                    ggml_build_forward_expand(gf, h_output);
-
-                    return gf;
-                };
-
-                // Don't free compute buffer immediately - we need to read outputs first
-                if (!GGMLRunner::compute(get_output_graph, n_threads, false, nullptr, nullptr, true)) {
-                    LOG_ERROR("Output block %d failed", block_idx);
-                    return false;
-                }
-
-                // Update persistent h
-                size_t h_size = ggml_nelements(h_output);
-                persistent_h.resize(h_size);
-                ggml_backend_tensor_get(h_output, persistent_h.data(), 0, h_size * sizeof(float));
-                for (int i = 0; i < 4; i++) h_ne[i] = h_output->ne[i];
-
-                // Now safe to free compute buffer
-                free_compute_buffer();
-
-                // Free skip connection memory
-                skip_connections[skip_idx].clear();
-                skip_connections[skip_idx].shrink_to_fit();
-
-                registry.move_layer_to_cpu(block_name);
-                LOG_DEBUG("Output block %d/%d done (%.2fms)",
-                          block_idx + 1, num_output_blocks, (ggml_time_ms() - t_block) / 1.0);
+            if (!GGMLRunner::compute(get_middle_graph, n_threads, false, nullptr, nullptr, true)) {
+                LOG_ERROR("Middle block failed");
+                return false;
             }
 
-            LOG_DEBUG("Applying final output layers");
-            {
-                auto get_final_graph = [&]() -> struct ggml_cgraph* {
-                    struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
+            // Update persistent h
+            size_t h_size = ggml_nelements(h_output);
+            persistent_h.resize(h_size);
+            ggml_backend_tensor_get(h_output, persistent_h.data(), 0, h_size * sizeof(float));
+            for (int i = 0; i < 4; i++) h_ne[i] = h_output->ne[i];
 
-                    ggml_tensor* h_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, h_ne[0], h_ne[1], h_ne[2], h_ne[3]);
-                    h_in = to_backend(h_in);
-                    set_backend_tensor_data(h_in, persistent_h.data());
+            free_compute_buffer();
 
-                    auto runner_ctx = get_context();
-                    auto final_out = unet.forward_output_stage(&runner_ctx, h_in);
+            registry.move_layer_to_cpu("middle_block");
+        }
 
-                    ggml_build_forward_expand(gf, final_out);
+        LOG_DEBUG("Processing output blocks");
 
-                    return gf;
-                };
+        // Start async prefetch for first output block
+        if (num_output_blocks > 0 && streaming_engine_) {
+            std::string first_block = "output_blocks.0";
+            streaming_engine_->prefetch_layer(first_block);
+        }
 
-                if (!GGMLRunner::compute(get_final_graph, n_threads, true, output, output_ctx, true)) {
-                    LOG_ERROR("Final output stage failed");
-                    return false;
-                }
+        for (int block_idx = 0; block_idx < num_output_blocks; block_idx++) {
+            std::string block_name = "output_blocks." + std::to_string(block_idx);
+            int64_t t_block = ggml_time_ms();
+
+            // Skip connection index (reverse order)
+            int skip_idx = num_input_blocks - 1 - block_idx;
+
+            if (streaming_engine_) {
+                streaming_engine_->wait_for_prefetch(block_name);
             }
 
-            int64_t t_end = ggml_time_ms();
-            LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d input + 1 middle + %d output blocks)",
-                     (t_end - t_start) / 1000.0, num_input_blocks, num_output_blocks);
+            if (!registry.move_layer_to_gpu(block_name)) {
+                LOG_ERROR("Failed to load %s", block_name.c_str());
+                return false;
+            }
 
-            return true;
+            // Start async prefetch of NEXT block while we compute this one
+            if (streaming_engine_ && block_idx + 1 < num_output_blocks) {
+                std::string next_block = "output_blocks." + std::to_string(block_idx + 1);
+                streaming_engine_->prefetch_layer(next_block);
+            }
+
+            ggml_tensor* h_output = nullptr;
+
+            auto get_output_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
+
+                ggml_tensor* h_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, h_ne[0], h_ne[1], h_ne[2], h_ne[3]);
+                ggml_tensor* emb_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, emb_ne[0], emb_ne[1], emb_ne[2], emb_ne[3]);
+
+                // Create skip connection tensor
+                ggml_tensor* skip_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32,
+                                                          skip_ne[skip_idx][0], skip_ne[skip_idx][1],
+                                                          skip_ne[skip_idx][2], skip_ne[skip_idx][3]);
+
+                ggml_tensor* context_b = context ? to_backend(context) : nullptr;
+
+                h_in = to_backend(h_in);
+                emb_in = to_backend(emb_in);
+                skip_in = to_backend(skip_in);
+
+                set_backend_tensor_data(h_in, persistent_h.data());
+                set_backend_tensor_data(emb_in, persistent_emb.data());
+                set_backend_tensor_data(skip_in, skip_connections[skip_idx].data());
+
+                auto runner_ctx = get_context();
+                h_output = unet.forward_output_block(&runner_ctx, block_idx, h_in, skip_in, emb_in,
+                                                      context_b, num_video_frames);
+
+                ggml_build_forward_expand(gf, h_output);
+
+                return gf;
+            };
+
+            if (!GGMLRunner::compute(get_output_graph, n_threads, false, nullptr, nullptr, true)) {
+                LOG_ERROR("Output block %d failed", block_idx);
+                return false;
+            }
+
+            // Update persistent h
+            size_t h_size = ggml_nelements(h_output);
+            persistent_h.resize(h_size);
+            ggml_backend_tensor_get(h_output, persistent_h.data(), 0, h_size * sizeof(float));
+            for (int i = 0; i < 4; i++) h_ne[i] = h_output->ne[i];
+
+            free_compute_buffer();
+
+            // Free skip connection memory
+            skip_connections[skip_idx].clear();
+            skip_connections[skip_idx].shrink_to_fit();
+
+            registry.move_layer_to_cpu(block_name);
+            LOG_DEBUG("Output block %d/%d done (%.2fms)",
+                      block_idx + 1, num_output_blocks, (ggml_time_ms() - t_block) / 1.0);
+        }
+
+        LOG_DEBUG("Applying final output layers");
+        {
+            auto get_final_graph = [&]() -> ggml_cgraph* {
+                ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE / 8);
+
+                ggml_tensor* h_in = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, h_ne[0], h_ne[1], h_ne[2], h_ne[3]);
+                h_in = to_backend(h_in);
+                set_backend_tensor_data(h_in, persistent_h.data());
+
+                auto runner_ctx = get_context();
+                auto final_out = unet.forward_output_stage(&runner_ctx, h_in);
+
+                ggml_build_forward_expand(gf, final_out);
+
+                return gf;
+            };
+
+            if (!GGMLRunner::compute(get_final_graph, n_threads, true, output, output_ctx, true)) {
+                LOG_ERROR("Final output stage failed");
+                return false;
+            }
+        }
+
+        int64_t t_end = ggml_time_ms();
+        LOG_INFO("TRUE per-layer streaming completed in %.2fs (%d input + 1 middle + %d output blocks)",
+                 (t_end - t_start) / 1000.0, num_input_blocks, num_output_blocks);
+
+        return true;
     }
 
-    void get_param_tensors(std::map<std::string, struct ggml_tensor*>& tensors, const std::string prefix) {
+    void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string prefix) {
         unet.get_param_tensors(tensors, prefix);
     }
 
-    struct ggml_cgraph* build_graph(struct ggml_tensor* x,
-                                    struct ggml_tensor* timesteps,
-                                    struct ggml_tensor* context,
-                                    struct ggml_tensor* c_concat              = nullptr,
-                                    struct ggml_tensor* y                     = nullptr,
-                                    int num_video_frames                      = -1,
-                                    std::vector<struct ggml_tensor*> controls = {},
-                                    float control_strength                    = 0.f) {
-        struct ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE);
+    ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
+                             const sd::Tensor<float>& timesteps_tensor,
+                             const sd::Tensor<float>& context_tensor               = {},
+                             const sd::Tensor<float>& c_concat_tensor              = {},
+                             const sd::Tensor<float>& y_tensor                     = {},
+                             int num_video_frames                                  = -1,
+                             const std::vector<sd::Tensor<float>>& controls_tensor = {},
+                             float control_strength                                = 0.f) {
+        ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE);
+
+        ggml_tensor* x         = make_input(x_tensor);
+        ggml_tensor* timesteps = make_input(timesteps_tensor);
+        ggml_tensor* context   = make_optional_input(context_tensor);
+        ggml_tensor* c_concat  = make_optional_input(c_concat_tensor);
+        ggml_tensor* y         = make_optional_input(y_tensor);
+        std::vector<ggml_tensor*> controls;
+        controls.reserve(controls_tensor.size());
+        for (const auto& control_tensor : controls_tensor) {
+            controls.push_back(make_input(control_tensor));
+        }
+
+        if (num_video_frames == -1) {
+            num_video_frames = static_cast<int>(x->ne[3]);
+        }
+
+        auto runner_ctx = get_context();
+
+        ggml_tensor* out = unet.forward(&runner_ctx,
+                                        x,
+                                        timesteps,
+                                        context,
+                                        c_concat,
+                                        y,
+                                        num_video_frames,
+                                        controls,
+                                        control_strength);
+
+        ggml_build_forward_expand(gf, out);
+
+        return gf;
+    }
+
+    // Legacy overload used by streaming code paths (takes raw ggml_tensor pointers)
+    ggml_cgraph* build_graph(ggml_tensor* x,
+                             ggml_tensor* timesteps,
+                             ggml_tensor* context,
+                             ggml_tensor* c_concat              = nullptr,
+                             ggml_tensor* y                     = nullptr,
+                             int num_video_frames               = -1,
+                             std::vector<ggml_tensor*> controls = {},
+                             float control_strength             = 0.f) {
+        ggml_cgraph* gf = new_graph_custom(UNET_GRAPH_SIZE);
 
         if (num_video_frames == -1) {
             num_video_frames = static_cast<int>(x->ne[3]);
@@ -1155,59 +1184,77 @@ struct UNetModelRunner : public GGMLRunner {
         timesteps = to_backend(timesteps);
         c_concat  = to_backend(c_concat);
 
-        for (int i = 0; i < controls.size(); i++) {
+        for (size_t i = 0; i < controls.size(); i++) {
             controls[i] = to_backend(controls[i]);
         }
 
         auto runner_ctx = get_context();
 
-        struct ggml_tensor* out = unet.forward(&runner_ctx,
-                                               x,
-                                               timesteps,
-                                               context,
-                                               c_concat,
-                                               y,
-                                               num_video_frames,
-                                               controls,
-                                               control_strength);
+        ggml_tensor* out = unet.forward(&runner_ctx,
+                                        x,
+                                        timesteps,
+                                        context,
+                                        c_concat,
+                                        y,
+                                        num_video_frames,
+                                        controls,
+                                        control_strength);
 
         ggml_build_forward_expand(gf, out);
 
         return gf;
     }
 
+    // Legacy overload used by streaming code paths (takes raw ggml_tensor pointers)
     bool compute(int n_threads,
-                 struct ggml_tensor* x,
-                 struct ggml_tensor* timesteps,
-                 struct ggml_tensor* context,
-                 struct ggml_tensor* c_concat,
-                 struct ggml_tensor* y,
-                 int num_video_frames                      = -1,
-                 std::vector<struct ggml_tensor*> controls = {},
-                 float control_strength                    = 0.f,
-                 struct ggml_tensor** output               = nullptr,
-                 struct ggml_context* output_ctx           = nullptr,
-                 bool skip_param_offload                   = false) {
-        // x: [N, in_channels, h, w]
-        // timesteps: [N, ]
-        // context: [N, max_position, hidden_size]([N, 77, 768]) or [1, max_position, hidden_size]
-        // c_concat: [N, in_channels, h, w] or [1, in_channels, h, w]
-        // y: [N, adm_in_channels] or [1, adm_in_channels]
-        auto get_graph = [&]() -> struct ggml_cgraph* {
+                 ggml_tensor* x,
+                 ggml_tensor* timesteps,
+                 ggml_tensor* context,
+                 ggml_tensor* c_concat,
+                 ggml_tensor* y,
+                 int num_video_frames               = -1,
+                 std::vector<ggml_tensor*> controls = {},
+                 float control_strength             = 0.f,
+                 ggml_tensor** output               = nullptr,
+                 ggml_context* output_ctx           = nullptr,
+                 bool skip_param_offload            = false) {
+        auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength);
         };
 
         return GGMLRunner::compute(get_graph, n_threads, false, output, output_ctx, skip_param_offload);
     }
 
+    // Upstream public API (takes sd::Tensor)
+    sd::Tensor<float> compute(int n_threads,
+                              const sd::Tensor<float>& x,
+                              const sd::Tensor<float>& timesteps,
+                              const sd::Tensor<float>& context               = {},
+                              const sd::Tensor<float>& c_concat              = {},
+                              const sd::Tensor<float>& y                     = {},
+                              int num_video_frames                           = -1,
+                              const std::vector<sd::Tensor<float>>& controls = {},
+                              float control_strength                         = 0.f) {
+        // x: [N, in_channels, h, w]
+        // timesteps: [N, ]
+        // context: [N, max_position, hidden_size]([N, 77, 768]) or [1, max_position, hidden_size]
+        // c_concat: [N, in_channels, h, w] or [1, in_channels, h, w]
+        // y: [N, adm_in_channels] or [1, adm_in_channels]
+        auto get_graph = [&]() -> ggml_cgraph* {
+            return build_graph(x, timesteps, context, c_concat, y, num_video_frames, controls, control_strength);
+        };
+
+        return restore_trailing_singleton_dims(GGMLRunner::compute<float>(get_graph, n_threads, false), x.dim());
+    }
+
     void test() {
-        struct ggml_init_params params;
+        ggml_init_params params;
         params.mem_size   = static_cast<size_t>(10 * 1024 * 1024);  // 10 MB
         params.mem_buffer = nullptr;
         params.no_alloc   = false;
 
-        struct ggml_context* work_ctx = ggml_init(params);
-        GGML_ASSERT(work_ctx != nullptr);
+        ggml_context* ctx = ggml_init(params);
+        GGML_ASSERT(ctx != nullptr);
 
         {
             // CPU, num_video_frames = 1, x{num_video_frames, 8, 8, 8}: Pass
@@ -1216,27 +1263,37 @@ struct UNetModelRunner : public GGMLRunner {
             // CUDA, num_video_frames = 3, x{num_video_frames, 8, 8, 8}: nan
             int num_video_frames = 3;
 
-            auto x = ggml_new_tensor_4d(work_ctx, GGML_TYPE_F32, 8, 8, 8, num_video_frames);
+            sd::Tensor<float> x({8, 8, 8, num_video_frames});
             std::vector<float> timesteps_vec(num_video_frames, 999.f);
-            auto timesteps = vector_to_ggml_tensor(work_ctx, timesteps_vec);
-            ggml_set_f32(x, 0.5f);
+            auto timesteps = sd::Tensor<float>::from_vector(timesteps_vec);
+            x.fill_(0.5f);
             // print_ggml_tensor(x);
 
-            auto context = ggml_new_tensor_3d(work_ctx, GGML_TYPE_F32, 1024, 1, num_video_frames);
-            ggml_set_f32(context, 0.5f);
+            sd::Tensor<float> context({1024, 1, num_video_frames});
+            context.fill_(0.5f);
             // print_ggml_tensor(context);
 
-            auto y = ggml_new_tensor_2d(work_ctx, GGML_TYPE_F32, 768, num_video_frames);
-            ggml_set_f32(y, 0.5f);
+            sd::Tensor<float> y({768, num_video_frames});
+            y.fill_(0.5f);
             // print_ggml_tensor(y);
 
-            struct ggml_tensor* out = nullptr;
+            sd::Tensor<float> out;
 
-            int64_t t0 = ggml_time_ms();
-            compute(8, x, timesteps, context, nullptr, y, num_video_frames, {}, 0.f, &out, work_ctx);
-            int64_t t1 = ggml_time_ms();
+            int64_t t0   = ggml_time_ms();
+            auto out_opt = compute(8,
+                                   x,
+                                   timesteps,
+                                   context,
+                                   {},
+                                   y,
+                                   num_video_frames,
+                                   {},
+                                   0.f);
+            int64_t t1   = ggml_time_ms();
 
-            print_ggml_tensor(out);
+            GGML_ASSERT(!out_opt.empty());
+            out = std::move(out_opt);
+            print_sd_tensor(out);
             LOG_DEBUG("unet test done in %lldms", t1 - t0);
         }
     }
