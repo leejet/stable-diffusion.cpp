@@ -77,6 +77,9 @@ target_link_libraries(${TARGET} PRIVATE stable-diffusion ${CMAKE_THREAD_LIBS_INI
 if(SD_WEBP)
     target_link_libraries(${TARGET} PRIVATE webp libwebpmux)
 endif()
+if(SD_WEBM)
+    target_link_libraries(${TARGET} PRIVATE webm)
+endif()
 
 # due to httplib; it contains a pragma for MSVC, but other things need explicit flags
 if(WIN32 AND NOT MSVC)

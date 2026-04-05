@@ -67,6 +67,14 @@ int create_animated_webp_from_sd_images(const char* filename,
                                         int quality = 90);
 #endif
 
+#ifdef SD_USE_WEBM
+int create_webm_from_sd_images(const char* filename,
+                               sd_image_t* images,
+                               int num_images,
+                               int fps,
+                               int quality = 90);
+#endif
+
 int create_video_from_sd_images(const char* filename,
                                 sd_image_t* images,
                                 int num_images,

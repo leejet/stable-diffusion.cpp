@@ -7,3 +7,6 @@
 [submodule "thirdparty/libwebp"]
 	path = thirdparty/libwebp
 	url = https://github.com/webmproject/libwebp.git
+[submodule "thirdparty/libwebm"]
+	path = thirdparty/libwebm
+	url = https://github.com/webmproject/libwebm.git

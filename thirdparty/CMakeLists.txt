@@ -18,3 +18,17 @@ if(SD_WEBP AND NOT SD_USE_SYSTEM_WEBP)
 
     add_subdirectory(libwebp EXCLUDE_FROM_ALL)
 endif()
+
+if(SD_WEBM AND NOT SD_USE_SYSTEM_WEBM)
+    if(MSVC)
+        set(MSVC_RUNTIME dll)
+    endif()
+    set(ENABLE_WEBMTS OFF)
+    set(ENABLE_WEBMINFO OFF)
+    set(ENABLE_TESTS OFF)
+    set(ENABLE_WEBM_PARSER OFF)
+    set(ENABLE_SAMPLE_PROGRAMS OFF)
+
+    add_subdirectory(libwebm EXCLUDE_FROM_ALL)
+    target_include_directories(webm INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/libwebm)
+endif()

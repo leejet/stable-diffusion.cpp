@@ -58,7 +58,7 @@ struct SDCliParams {
         options.string_options = {
             {"-o",
              "--output",
-             "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png)",
+             "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png). Single-file video outputs support .avi, .webm, and animated .webp",
              &output_path},
             {"",
              "--image",
@@ -70,7 +70,7 @@ struct SDCliParams {
              &metadata_format},
             {"",
              "--preview-path",
-             "path to write preview image to (default: ./preview.png)",
+             "path to write preview image to (default: ./preview.png). Multi-frame previews support .avi, .webm, and animated .webp",
              &preview_path},
         };
 
@@ -396,7 +396,9 @@ bool save_results(const SDCliParams& cli_params,
     if (!ext.empty()) {
         if (output_format == EncodedImageFormat::JPEG ||
             output_format == EncodedImageFormat::PNG ||
-            output_format == EncodedImageFormat::WEBP) {
+            output_format == EncodedImageFormat::WEBP ||
+            ext_lower == ".avi" ||
+            ext_lower == ".webm") {
             base_path.replace_extension();
         }
     }
@@ -438,7 +440,7 @@ bool save_results(const SDCliParams& cli_params,
     }
 
     if (cli_params.mode == VID_GEN && num_results > 1) {
-        if (ext_lower != ".avi" && ext_lower != ".webp")
+        if (ext_lower != ".avi" && ext_lower != ".webp" && ext_lower != ".webm")
             ext = ".avi";
         fs::path video_path = base_path;
         video_path += ext;
