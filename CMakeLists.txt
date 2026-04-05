@@ -98,7 +98,18 @@ if(SD_WEBP)
     if(SD_USE_SYSTEM_WEBP)
         find_package(WebP REQUIRED)
         add_library(webp ALIAS WebP::webp)
-        add_library(libwebpmux ALIAS WebP::libwebpmux)
+        # libwebp CMake target naming is not consistent across versions/distros.
+        # Some export WebP::libwebpmux, others export WebP::webpmux.
+        if(TARGET WebP::libwebpmux)
+            add_library(libwebpmux ALIAS WebP::libwebpmux)
+        elseif(TARGET WebP::webpmux)
+            add_library(libwebpmux ALIAS WebP::webpmux)
+        else()
+            message(FATAL_ERROR
+                "Could not find a compatible webpmux target in system WebP package. "
+                "Expected WebP::libwebpmux or WebP::webpmux."
+            )
+        endif()
     endif()
     add_compile_definitions(SD_USE_WEBP)
 endif()
