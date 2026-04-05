@@ -1,4 +1,6 @@
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -17,19 +19,8 @@ namespace fs = std::filesystem;
 #include <windows.h>
 #endif  // _WIN32
 
+#include "log.h"
 #include "stable-diffusion.h"
-
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_STATIC
-#include "stb_image.h"
-
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_STATIC
-#include "stb_image_write.h"
-
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#define STB_IMAGE_RESIZE_STATIC
-#include "stb_image_resize.h"
 
 #define SAFE_STR(s) ((s) ? (s) : "")
 #define BOOL_STR(b) ((b) ? "true" : "false")
@@ -39,14 +30,16 @@ const char* modes_str[] = {
     "vid_gen",
     "convert",
     "upscale",
+    "metadata",
 };
-#define SD_ALL_MODES_STR "img_gen, vid_gen, convert, upscale"
+#define SD_ALL_MODES_STR "img_gen, vid_gen, convert, upscale, metadata"
 
 enum SDMode {
     IMG_GEN,
     VID_GEN,
     CONVERT,
     UPSCALE,
+    METADATA,
     MODE_COUNT
 };
 
@@ -85,125 +78,6 @@ static std::string argv_to_utf8(int index, const char** argv) {
 }
 
 #endif
-
-static void print_utf8(FILE* stream, const char* utf8) {
-    if (!utf8)
-        return;
-
-#ifdef _WIN32
-    HANDLE h = (stream == stderr)
-                   ? GetStdHandle(STD_ERROR_HANDLE)
-                   : GetStdHandle(STD_OUTPUT_HANDLE);
-
-    DWORD mode;
-    BOOL is_console = GetConsoleMode(h, &mode);
-
-    if (is_console) {
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-        if (wlen <= 0)
-            return;
-
-        wchar_t* wbuf = (wchar_t*)malloc(wlen * sizeof(wchar_t));
-        if (!wbuf)
-            return;
-
-        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wlen);
-
-        DWORD written;
-        WriteConsoleW(h, wbuf, wlen - 1, &written, NULL);
-
-        free(wbuf);
-    } else {
-        DWORD written;
-        WriteFile(h, utf8, (DWORD)strlen(utf8), &written, NULL);
-    }
-#else
-    fputs(utf8, stream);
-#endif
-}
-
-static std::string sd_basename(const std::string& path) {
-    size_t pos = path.find_last_of('/');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    pos = path.find_last_of('\\');
-    if (pos != std::string::npos) {
-        return path.substr(pos + 1);
-    }
-    return path;
-}
-
-static void log_print(enum sd_log_level_t level, const char* log, bool verbose, bool color) {
-    int tag_color;
-    const char* level_str;
-    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
-
-    if (!log || (!verbose && level <= SD_LOG_DEBUG)) {
-        return;
-    }
-
-    switch (level) {
-        case SD_LOG_DEBUG:
-            tag_color = 37;
-            level_str = "DEBUG";
-            break;
-        case SD_LOG_INFO:
-            tag_color = 34;
-            level_str = "INFO";
-            break;
-        case SD_LOG_WARN:
-            tag_color = 35;
-            level_str = "WARN";
-            break;
-        case SD_LOG_ERROR:
-            tag_color = 31;
-            level_str = "ERROR";
-            break;
-        default: /* Potential future-proofing */
-            tag_color = 33;
-            level_str = "?????";
-            break;
-    }
-
-    if (color) {
-        fprintf(out_stream, "\033[%d;1m[%-5s]\033[0m ", tag_color, level_str);
-    } else {
-        fprintf(out_stream, "[%-5s] ", level_str);
-    }
-    print_utf8(out_stream, log);
-    fflush(out_stream);
-}
-
-#define LOG_BUFFER_SIZE 4096
-
-static bool log_verbose = false;
-static bool log_color   = false;
-
-static void log_printf(sd_log_level_t level, const char* file, int line, const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-
-    static char log_buffer[LOG_BUFFER_SIZE + 1];
-    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "%s:%-4d - ", sd_basename(file).c_str(), line);
-
-    if (written >= 0 && written < LOG_BUFFER_SIZE) {
-        vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
-    }
-    size_t len = strlen(log_buffer);
-    if (log_buffer[len - 1] != '\n') {
-        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - len);
-    }
-
-    log_print(level, log_buffer, log_verbose, log_color);
-
-    va_end(args);
-}
-
-#define LOG_DEBUG(format, ...) log_printf(SD_LOG_DEBUG, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_INFO(format, ...) log_printf(SD_LOG_INFO, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_WARN(format, ...) log_printf(SD_LOG_WARN, __FILE__, __LINE__, format, ##__VA_ARGS__)
-#define LOG_ERROR(format, ...) log_printf(SD_LOG_ERROR, __FILE__, __LINE__, format, ##__VA_ARGS__)
 
 struct StringOption {
     std::string short_name;
@@ -475,8 +349,7 @@ struct SDContextParams {
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
 
-    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
-    bool force_sdxl_vae_conv_scale       = false;
+    bool force_sdxl_vae_conv_scale = false;
 
     float flow_shift = INFINITY;
 
@@ -576,18 +449,9 @@ struct SDContextParams {
              &chroma_t5_mask_pad},
         };
 
-        options.float_options = {
-            {"",
-             "--vae-tile-overlap",
-             "tile overlap for vae tiling, in fraction of tile size (default: 0.5)",
-             &vae_tiling_params.target_overlap},
-        };
+        options.float_options = {};
 
         options.bool_options = {
-            {"",
-             "--vae-tiling",
-             "process vae in tiles to reduce memory usage",
-             true, &vae_tiling_params.enabled},
             {"",
              "--force-sdxl-vae-conv-scale",
              "force use of conv scale on sdxl vae",
@@ -724,52 +588,6 @@ struct SDContextParams {
             return 1;
         };
 
-        auto on_tile_size_arg = [&](int argc, const char** argv, int index) {
-            if (++index >= argc) {
-                return -1;
-            }
-            std::string tile_size_str = argv[index];
-            size_t x_pos              = tile_size_str.find('x');
-            try {
-                if (x_pos != std::string::npos) {
-                    std::string tile_x_str        = tile_size_str.substr(0, x_pos);
-                    std::string tile_y_str        = tile_size_str.substr(x_pos + 1);
-                    vae_tiling_params.tile_size_x = std::stoi(tile_x_str);
-                    vae_tiling_params.tile_size_y = std::stoi(tile_y_str);
-                } else {
-                    vae_tiling_params.tile_size_x = vae_tiling_params.tile_size_y = std::stoi(tile_size_str);
-                }
-            } catch (const std::invalid_argument&) {
-                return -1;
-            } catch (const std::out_of_range&) {
-                return -1;
-            }
-            return 1;
-        };
-
-        auto on_relative_tile_size_arg = [&](int argc, const char** argv, int index) {
-            if (++index >= argc) {
-                return -1;
-            }
-            std::string rel_size_str = argv[index];
-            size_t x_pos             = rel_size_str.find('x');
-            try {
-                if (x_pos != std::string::npos) {
-                    std::string rel_x_str        = rel_size_str.substr(0, x_pos);
-                    std::string rel_y_str        = rel_size_str.substr(x_pos + 1);
-                    vae_tiling_params.rel_size_x = std::stof(rel_x_str);
-                    vae_tiling_params.rel_size_y = std::stof(rel_y_str);
-                } else {
-                    vae_tiling_params.rel_size_x = vae_tiling_params.rel_size_y = std::stof(rel_size_str);
-                }
-            } catch (const std::invalid_argument&) {
-                return -1;
-            } catch (const std::out_of_range&) {
-                return -1;
-            }
-            return 1;
-        };
-
         options.manual_options = {
             {"",
              "--type",
@@ -796,14 +614,6 @@ struct SDContextParams {
              "but it usually offers faster inference speed and, in some cases, lower memory usage. "
              "The at_runtime mode, on the other hand, is exactly the opposite.",
              on_lora_apply_mode_arg},
-            {"",
-             "--vae-tile-size",
-             "tile size for vae tiling, format [X]x[Y] (default: 32x32)",
-             on_tile_size_arg},
-            {"",
-             "--vae-relative-tile-size",
-             "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
-             on_relative_tile_size_arg},
         };
 
         return options;
@@ -841,7 +651,7 @@ struct SDContextParams {
     }
 
     bool process_and_check(SDMode mode) {
-        if (mode != UPSCALE && model_path.length() == 0 && diffusion_model_path.length() == 0) {
+        if (mode != UPSCALE && mode != METADATA && model_path.length() == 0 && diffusion_model_path.length() == 0) {
             LOG_ERROR("error: the following arguments are required: model_path/diffusion_model\n");
             return false;
         }
@@ -917,13 +727,6 @@ struct SDContextParams {
             << "  chroma_t5_mask_pad: " << chroma_t5_mask_pad << ",\n"
             << "  prediction: " << sd_prediction_name(prediction) << ",\n"
             << "  lora_apply_mode: " << sd_lora_apply_mode_name(lora_apply_mode) << ",\n"
-            << "  vae_tiling_params: { "
-            << vae_tiling_params.enabled << ", "
-            << vae_tiling_params.tile_size_x << ", "
-            << vae_tiling_params.tile_size_y << ", "
-            << vae_tiling_params.target_overlap << ", "
-            << vae_tiling_params.rel_size_x << ", "
-            << vae_tiling_params.rel_size_y << " },\n"
             << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << "\n"
             << "}";
         return oss.str();
@@ -1036,6 +839,7 @@ struct SDGenerationParams {
     std::string control_video_path;
     bool auto_resize_ref_image = true;
     bool increase_ref_index    = false;
+    bool embed_image_metadata  = true;
 
     std::vector<int> skip_layers = {7, 8, 9};
     sd_sample_params_t sample_params;
@@ -1060,6 +864,8 @@ struct SDGenerationParams {
     float control_strength = 0.9f;
 
     int64_t seed = 42;
+
+    sd_tiling_params_t vae_tiling_params = {false, 0, 0, 0.5f, 0.0f, 0.0f};
 
     // Photo Maker
     std::string pm_id_images_dir;
@@ -1197,7 +1003,7 @@ struct SDGenerationParams {
              &sample_params.guidance.slg.layer_end},
             {"",
              "--eta",
-             "eta in DDIM, only for DDIM and TCD (default: 0)",
+             "noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a and dpm++2s_a)",
              &sample_params.eta},
             {"",
              "--flow-shift",
@@ -1229,7 +1035,7 @@ struct SDGenerationParams {
              &high_noise_sample_params.guidance.slg.layer_end},
             {"",
              "--high-noise-eta",
-             "(high noise) eta in DDIM, only for DDIM and TCD (default: 0)",
+             "(high noise) noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a and dpm++2s_a)",
              &high_noise_sample_params.eta},
             {"",
              "--strength",
@@ -1251,6 +1057,10 @@ struct SDGenerationParams {
              "--vace-strength",
              "wan vace strength",
              &vace_strength},
+            {"",
+             "--vae-tile-overlap",
+             "tile overlap for vae tiling, in fraction of tile size (default: 0.5)",
+             &vae_tiling_params.target_overlap},
         };
 
         options.bool_options = {
@@ -1264,6 +1074,16 @@ struct SDGenerationParams {
              "disable auto resize of ref images",
              false,
              &auto_resize_ref_image},
+            {"",
+             "--disable-image-metadata",
+             "do not embed generation metadata on image files",
+             false,
+             &embed_image_metadata},
+            {"",
+             "--vae-tiling",
+             "process vae in tiles to reduce memory usage",
+             true,
+             &vae_tiling_params.enabled},
         };
 
         auto on_seed_arg = [&](int argc, const char** argv, int index) {
@@ -1460,6 +1280,52 @@ struct SDGenerationParams {
             return 1;
         };
 
+        auto on_tile_size_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            std::string tile_size_str = argv[index];
+            size_t x_pos              = tile_size_str.find('x');
+            try {
+                if (x_pos != std::string::npos) {
+                    std::string tile_x_str        = tile_size_str.substr(0, x_pos);
+                    std::string tile_y_str        = tile_size_str.substr(x_pos + 1);
+                    vae_tiling_params.tile_size_x = std::stoi(tile_x_str);
+                    vae_tiling_params.tile_size_y = std::stoi(tile_y_str);
+                } else {
+                    vae_tiling_params.tile_size_x = vae_tiling_params.tile_size_y = std::stoi(tile_size_str);
+                }
+            } catch (const std::invalid_argument&) {
+                return -1;
+            } catch (const std::out_of_range&) {
+                return -1;
+            }
+            return 1;
+        };
+
+        auto on_relative_tile_size_arg = [&](int argc, const char** argv, int index) {
+            if (++index >= argc) {
+                return -1;
+            }
+            std::string rel_size_str = argv[index];
+            size_t x_pos             = rel_size_str.find('x');
+            try {
+                if (x_pos != std::string::npos) {
+                    std::string rel_x_str        = rel_size_str.substr(0, x_pos);
+                    std::string rel_y_str        = rel_size_str.substr(x_pos + 1);
+                    vae_tiling_params.rel_size_x = std::stof(rel_x_str);
+                    vae_tiling_params.rel_size_y = std::stof(rel_y_str);
+                } else {
+                    vae_tiling_params.rel_size_x = vae_tiling_params.rel_size_y = std::stof(rel_size_str);
+                }
+            } catch (const std::invalid_argument&) {
+                return -1;
+            } catch (const std::out_of_range&) {
+                return -1;
+            }
+            return 1;
+        };
+
         options.manual_options = {
             {"-s",
              "--seed",
@@ -1511,6 +1377,14 @@ struct SDGenerationParams {
              "--scm-policy",
              "SCM policy: 'dynamic' (default) or 'static'",
              on_scm_policy_arg},
+            {"",
+             "--vae-tile-size",
+             "tile size for vae tiling, format [X]x[Y] (default: 32x32)",
+             on_tile_size_arg},
+            {"",
+             "--vae-relative-tile-size",
+             "relative tile size for vae tiling, format [X]x[Y], in fraction of image size if < 1, in number of tiles per dim if >=1 (overrides --vae-tile-size)",
+             on_relative_tile_size_arg},
 
         };
 
@@ -1574,6 +1448,7 @@ struct SDGenerationParams {
 
         load_if_exists("auto_resize_ref_image", auto_resize_ref_image);
         load_if_exists("increase_ref_index", increase_ref_index);
+        load_if_exists("embed_image_metadata", embed_image_metadata);
 
         load_if_exists("skip_layers", skip_layers);
         load_if_exists("high_noise_skip_layers", high_noise_skip_layers);
@@ -1946,6 +1821,13 @@ struct SDGenerationParams {
             << "  seed: " << seed << ",\n"
             << "  upscale_repeats: " << upscale_repeats << ",\n"
             << "  upscale_tile_size: " << upscale_tile_size << ",\n"
+            << "  vae_tiling_params: { "
+            << vae_tiling_params.enabled << ", "
+            << vae_tiling_params.tile_size_x << ", "
+            << vae_tiling_params.tile_size_y << ", "
+            << vae_tiling_params.target_overlap << ", "
+            << vae_tiling_params.rel_size_x << ", "
+            << vae_tiling_params.rel_size_y << " },\n"
             << "}";
         free(sample_params_str);
         free(high_noise_sample_params_str);
@@ -1957,140 +1839,64 @@ static std::string version_string() {
     return std::string("stable-diffusion.cpp version ") + sd_version() + ", commit " + sd_commit();
 }
 
-uint8_t* load_image_common(bool from_memory,
-                           const char* image_path_or_bytes,
-                           int len,
-                           int& width,
-                           int& height,
-                           int expected_width   = 0,
-                           int expected_height  = 0,
-                           int expected_channel = 3) {
-    int c = 0;
-    const char* image_path;
-    uint8_t* image_buffer = nullptr;
-    if (from_memory) {
-        image_path   = "memory";
-        image_buffer = (uint8_t*)stbi_load_from_memory((const stbi_uc*)image_path_or_bytes, len, &width, &height, &c, expected_channel);
+std::string get_image_params(const SDContextParams& ctx_params, const SDGenerationParams& gen_params, int64_t seed) {
+    std::string parameter_string;
+    if (gen_params.prompt_with_lora.size() != 0) {
+        parameter_string += gen_params.prompt_with_lora + "\n";
     } else {
-        image_path   = image_path_or_bytes;
-        image_buffer = (uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel);
+        parameter_string += gen_params.prompt + "\n";
     }
-    if (image_buffer == nullptr) {
-        LOG_ERROR("load image from '%s' failed", image_path);
-        return nullptr;
+    if (gen_params.negative_prompt.size() != 0) {
+        parameter_string += "Negative prompt: " + gen_params.negative_prompt + "\n";
     }
-    if (c < expected_channel) {
-        fprintf(stderr,
-                "the number of channels for the input image must be >= %d,"
-                "but got %d channels, image_path = %s",
-                expected_channel,
-                c,
-                image_path);
-        free(image_buffer);
-        return nullptr;
-    }
-    if (width <= 0) {
-        LOG_ERROR("error: the width of image must be greater than 0, image_path = %s", image_path);
-        free(image_buffer);
-        return nullptr;
-    }
-    if (height <= 0) {
-        LOG_ERROR("error: the height of image must be greater than 0, image_path = %s", image_path);
-        free(image_buffer);
-        return nullptr;
-    }
-
-    // Resize input image ...
-    if ((expected_width > 0 && expected_height > 0) && (height != expected_height || width != expected_width)) {
-        float dst_aspect = (float)expected_width / (float)expected_height;
-        float src_aspect = (float)width / (float)height;
-
-        int crop_x = 0, crop_y = 0;
-        int crop_w = width, crop_h = height;
-
-        if (src_aspect > dst_aspect) {
-            crop_w = (int)(height * dst_aspect);
-            crop_x = (width - crop_w) / 2;
-        } else if (src_aspect < dst_aspect) {
-            crop_h = (int)(width / dst_aspect);
-            crop_y = (height - crop_h) / 2;
+    parameter_string += "Steps: " + std::to_string(gen_params.sample_params.sample_steps) + ", ";
+    parameter_string += "CFG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
+    if (gen_params.sample_params.guidance.slg.scale != 0 && gen_params.skip_layers.size() != 0) {
+        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
+        parameter_string += "Skip layers: [";
+        for (const auto& layer : gen_params.skip_layers) {
+            parameter_string += std::to_string(layer) + ", ";
         }
-
-        if (crop_x != 0 || crop_y != 0) {
-            LOG_INFO("crop input image from %dx%d to %dx%d, image_path = %s", width, height, crop_w, crop_h, image_path);
-            uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
-            if (cropped_image_buffer == nullptr) {
-                LOG_ERROR("error: allocate memory for crop\n");
-                free(image_buffer);
-                return nullptr;
-            }
-            for (int row = 0; row < crop_h; row++) {
-                uint8_t* src = image_buffer + ((crop_y + row) * width + crop_x) * expected_channel;
-                uint8_t* dst = cropped_image_buffer + (row * crop_w) * expected_channel;
-                memcpy(dst, src, crop_w * expected_channel);
-            }
-
-            width  = crop_w;
-            height = crop_h;
-            free(image_buffer);
-            image_buffer = cropped_image_buffer;
-        }
-
-        LOG_INFO("resize input image from %dx%d to %dx%d", width, height, expected_width, expected_height);
-        int resized_height = expected_height;
-        int resized_width  = expected_width;
-
-        uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * expected_channel);
-        if (resized_image_buffer == nullptr) {
-            LOG_ERROR("error: allocate memory for resize input image\n");
-            free(image_buffer);
-            return nullptr;
-        }
-        stbir_resize(image_buffer, width, height, 0,
-                     resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
-                     expected_channel, STBIR_ALPHA_CHANNEL_NONE, 0,
-                     STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
-                     STBIR_FILTER_BOX, STBIR_FILTER_BOX,
-                     STBIR_COLORSPACE_SRGB, nullptr);
-        width  = resized_width;
-        height = resized_height;
-        free(image_buffer);
-        image_buffer = resized_image_buffer;
+        parameter_string += "], ";
+        parameter_string += "Skip layer start: " + std::to_string(gen_params.sample_params.guidance.slg.layer_start) + ", ";
+        parameter_string += "Skip layer end: " + std::to_string(gen_params.sample_params.guidance.slg.layer_end) + ", ";
     }
-    return image_buffer;
-}
-
-uint8_t* load_image_from_file(const char* image_path,
-                              int& width,
-                              int& height,
-                              int expected_width   = 0,
-                              int expected_height  = 0,
-                              int expected_channel = 3) {
-    return load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
-}
-
-bool load_sd_image_from_file(sd_image_t* image,
-                             const char* image_path,
-                             int expected_width   = 0,
-                             int expected_height  = 0,
-                             int expected_channel = 3) {
-    int width;
-    int height;
-    image->data = load_image_common(false, image_path, 0, width, height, expected_width, expected_height, expected_channel);
-    if (image->data == nullptr) {
-        return false;
+    parameter_string += "Guidance: " + std::to_string(gen_params.sample_params.guidance.distilled_guidance) + ", ";
+    parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
+    parameter_string += "Seed: " + std::to_string(seed) + ", ";
+    parameter_string += "Size: " + std::to_string(gen_params.get_resolved_width()) + "x" + std::to_string(gen_params.get_resolved_height()) + ", ";
+    parameter_string += "Model: " + sd_basename(ctx_params.model_path) + ", ";
+    parameter_string += "RNG: " + std::string(sd_rng_type_name(ctx_params.rng_type)) + ", ";
+    if (ctx_params.sampler_rng_type != RNG_TYPE_COUNT) {
+        parameter_string += "Sampler RNG: " + std::string(sd_rng_type_name(ctx_params.sampler_rng_type)) + ", ";
     }
-    image->width  = width;
-    image->height = height;
-    return true;
-}
-
-uint8_t* load_image_from_memory(const char* image_bytes,
-                                int len,
-                                int& width,
-                                int& height,
-                                int expected_width   = 0,
-                                int expected_height  = 0,
-                                int expected_channel = 3) {
-    return load_image_common(true, image_bytes, len, width, height, expected_width, expected_height, expected_channel);
+    parameter_string += "Sampler: " + std::string(sd_sample_method_name(gen_params.sample_params.sample_method));
+    if (!gen_params.custom_sigmas.empty()) {
+        parameter_string += ", Custom Sigmas: [";
+        for (size_t i = 0; i < gen_params.custom_sigmas.size(); ++i) {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(4) << gen_params.custom_sigmas[i];
+            parameter_string += oss.str() + (i == gen_params.custom_sigmas.size() - 1 ? "" : ", ");
+        }
+        parameter_string += "]";
+    } else if (gen_params.sample_params.scheduler != SCHEDULER_COUNT) {  // Only show schedule if not using custom sigmas
+        parameter_string += " " + std::string(sd_scheduler_name(gen_params.sample_params.scheduler));
+    }
+    parameter_string += ", ";
+    for (const auto& te : {ctx_params.clip_l_path, ctx_params.clip_g_path, ctx_params.t5xxl_path, ctx_params.llm_path, ctx_params.llm_vision_path}) {
+        if (!te.empty()) {
+            parameter_string += "TE: " + sd_basename(te) + ", ";
+        }
+    }
+    if (!ctx_params.diffusion_model_path.empty()) {
+        parameter_string += "Unet: " + sd_basename(ctx_params.diffusion_model_path) + ", ";
+    }
+    if (!ctx_params.vae_path.empty()) {
+        parameter_string += "VAE: " + sd_basename(ctx_params.vae_path) + ", ";
+    }
+    if (gen_params.clip_skip != -1) {
+        parameter_string += "Clip skip: " + std::to_string(gen_params.clip_skip) + ", ";
+    }
+    parameter_string += "Version: stable-diffusion.cpp";
+    return parameter_string;
 }

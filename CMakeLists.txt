@@ -29,6 +29,7 @@ endif()
 # general
 #option(SD_BUILD_TESTS                "sd: build tests"    ${SD_STANDALONE})
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
+option(SD_WEBP                       "sd: enable WebP image I/O support" ON)
 option(SD_CUDA                       "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
@@ -75,6 +76,10 @@ if(SD_MUSA)
     message("-- Use MUSA as backend stable-diffusion")
     set(GGML_MUSA ON)
     add_definitions(-DSD_USE_CUDA)
+endif()
+
+if(SD_WEBP)
+    add_compile_definitions(SD_USE_WEBP)
 endif()
 
 set(SD_LIB stable-diffusion)
