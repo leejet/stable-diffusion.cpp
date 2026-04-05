@@ -2992,13 +2992,13 @@ static std::optional<ImageGenerationLatents> prepare_image_generation_latents(sd
     latents.ref_latents          = std::move(ref_latents);
 
     if (sd_version_is_inpaint(sd_ctx->sd->version)) {
-        latent_mask = sd::ops::maxPool2D(latent_mask,
-                                         {3, 3},
-                                         {1, 1},
-                                         {1, 1});
-    } 
+        latent_mask = sd::ops::max_pool_2d(latent_mask,
+                                           {3, 3},
+                                           {1, 1},
+                                           {1, 1});
+    }
     latents.denoise_mask = std::move(latent_mask);
-    
+
     return latents;
 }
 
