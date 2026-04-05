@@ -239,6 +239,7 @@ jobs:
         id: build-push
         uses: docker/build-push-action@v6
         with:
+          context: .
           platforms: linux/amd64
           push: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
           file: Dockerfile.${{ matrix.variant }}

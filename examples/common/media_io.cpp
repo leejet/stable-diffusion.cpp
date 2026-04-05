@@ -30,6 +30,11 @@
 #include "webp/mux.h"
 #endif
 
+#ifdef SD_USE_WEBM
+#include "mkvmuxer/mkvmuxer.h"
+#include "mkvmuxer/mkvwriter.h"
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -69,6 +74,13 @@ bool write_binary_file_bytes(const std::string& path, const std::vector<uint8_t>
         }
     }
     return true;
+}
+
+uint32_t read_u32_le_bytes(const uint8_t* data) {
+    return static_cast<uint32_t>(data[0]) |
+           (static_cast<uint32_t>(data[1]) << 8) |
+           (static_cast<uint32_t>(data[2]) << 16) |
+           (static_cast<uint32_t>(data[3]) << 24);
 }
 
 int stbi_ext_write_png_to_func(stbi_write_func* func,
@@ -289,6 +301,76 @@ bool encode_webp_image_to_vector(const uint8_t* image,
     WebPMuxDelete(mux);
     return ok;
 }
+
+#ifdef SD_USE_WEBM
+bool extract_vp8_frame_from_webp(const std::vector<uint8_t>& webp_data, std::vector<uint8_t>& vp8_frame) {
+    if (!is_webp_signature(webp_data.data(), webp_data.size())) {
+        return false;
+    }
+
+    size_t offset = 12;
+    while (offset + 8 <= webp_data.size()) {
+        const uint8_t* chunk     = webp_data.data() + offset;
+        const uint32_t chunk_len = read_u32_le_bytes(chunk + 4);
+        const size_t chunk_start = offset + 8;
+        const size_t padded_len  = static_cast<size_t>(chunk_len) + (chunk_len & 1u);
+
+        if (chunk_start + chunk_len > webp_data.size()) {
+            return false;
+        }
+
+        if (memcmp(chunk, "VP8 ", 4) == 0) {
+            vp8_frame.assign(webp_data.data() + chunk_start,
+                             webp_data.data() + chunk_start + chunk_len);
+            return !vp8_frame.empty();
+        }
+
+        offset = chunk_start + padded_len;
+    }
+
+    return false;
+}
+
+bool encode_sd_image_to_vp8_frame(const sd_image_t& image, int quality, std::vector<uint8_t>& vp8_frame) {
+    if (image.data == nullptr || image.width == 0 || image.height == 0) {
+        return false;
+    }
+
+    const int width         = static_cast<int>(image.width);
+    const int height        = static_cast<int>(image.height);
+    const int input_channel = static_cast<int>(image.channel);
+    if (input_channel != 1 && input_channel != 3 && input_channel != 4) {
+        return false;
+    }
+
+    std::vector<uint8_t> rgb_buffer;
+    const uint8_t* rgb_data = image.data;
+    if (input_channel == 1) {
+        rgb_buffer.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 3);
+        for (int i = 0; i < width * height; ++i) {
+            rgb_buffer[i * 3 + 0] = image.data[i];
+            rgb_buffer[i * 3 + 1] = image.data[i];
+            rgb_buffer[i * 3 + 2] = image.data[i];
+        }
+        rgb_data = rgb_buffer.data();
+    } else if (input_channel == 4) {
+        rgb_buffer.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 3);
+        for (int i = 0; i < width * height; ++i) {
+            rgb_buffer[i * 3 + 0] = image.data[i * 4 + 0];
+            rgb_buffer[i * 3 + 1] = image.data[i * 4 + 1];
+            rgb_buffer[i * 3 + 2] = image.data[i * 4 + 2];
+        }
+        rgb_data = rgb_buffer.data();
+    }
+
+    std::vector<uint8_t> encoded_webp;
+    if (!encode_webp_image_to_vector(rgb_data, width, height, 3, "", quality, encoded_webp)) {
+        return false;
+    }
+
+    return extract_vp8_frame_from_webp(encoded_webp, vp8_frame);
+}
+#endif
 #endif
 
 uint8_t* load_image_common(bool from_memory,
@@ -861,6 +943,99 @@ cleanup:
 }
 #endif
 
+#ifdef SD_USE_WEBM
+int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
+    if (num_images == 0) {
+        fprintf(stderr, "Error: Image array is empty.\n");
+        return -1;
+    }
+    if (fps <= 0) {
+        fprintf(stderr, "Error: FPS must be positive.\n");
+        return -1;
+    }
+
+    const int width = static_cast<int>(images[0].width);
+    const int height = static_cast<int>(images[0].height);
+    if (width <= 0 || height <= 0) {
+        fprintf(stderr, "Error: Invalid frame dimensions.\n");
+        return -1;
+    }
+
+    mkvmuxer::MkvWriter writer;
+    if (!writer.Open(filename)) {
+        fprintf(stderr, "Error: Could not open WebM file for writing.\n");
+        return -1;
+    }
+
+    const int ret = [&]() -> int {
+        mkvmuxer::Segment segment;
+        if (!segment.Init(&writer)) {
+            fprintf(stderr, "Error: Failed to initialize WebM muxer.\n");
+            return -1;
+        }
+
+        segment.set_mode(mkvmuxer::Segment::kFile);
+        segment.OutputCues(true);
+
+        const uint64_t track_number = segment.AddVideoTrack(width, height, 0);
+        if (track_number == 0) {
+            fprintf(stderr, "Error: Failed to add VP8 video track.\n");
+            return -1;
+        }
+        if (!segment.CuesTrack(track_number)) {
+            fprintf(stderr, "Error: Failed to set WebM cues track.\n");
+            return -1;
+        }
+
+        mkvmuxer::VideoTrack* video_track = static_cast<mkvmuxer::VideoTrack*>(segment.GetTrackByNumber(track_number));
+        if (video_track != nullptr) {
+            video_track->set_display_width(static_cast<uint64_t>(width));
+            video_track->set_display_height(static_cast<uint64_t>(height));
+            video_track->set_frame_rate(static_cast<double>(fps));
+        }
+        segment.GetSegmentInfo()->set_writing_app("stable-diffusion.cpp");
+        segment.GetSegmentInfo()->set_muxing_app("stable-diffusion.cpp");
+
+        const uint64_t frame_duration_ns = std::max<uint64_t>(
+            1, static_cast<uint64_t>(std::llround(1000000000.0 / static_cast<double>(fps))));
+        uint64_t timestamp_ns = 0;
+
+        for (int i = 0; i < num_images; ++i) {
+            const sd_image_t& image = images[i];
+            if (static_cast<int>(image.width) != width || static_cast<int>(image.height) != height) {
+                fprintf(stderr, "Error: Frame dimensions do not match.\n");
+                return -1;
+            }
+
+            std::vector<uint8_t> vp8_frame;
+            if (!encode_sd_image_to_vp8_frame(image, quality, vp8_frame)) {
+                fprintf(stderr, "Error: Failed to encode frame %d as VP8.\n", i);
+                return -1;
+            }
+
+            if (!segment.AddFrame(vp8_frame.data(),
+                                  static_cast<uint64_t>(vp8_frame.size()),
+                                  track_number,
+                                  timestamp_ns,
+                                  true)) {
+                fprintf(stderr, "Error: Failed to mux frame %d into WebM.\n", i);
+                return -1;
+            }
+
+            timestamp_ns += frame_duration_ns;
+        }
+
+        if (!segment.Finalize()) {
+            fprintf(stderr, "Error: Failed to finalize WebM output.\n");
+            return -1;
+        }
+        return 0;
+    }();
+    writer.Close();
+    return ret;
+}
+#endif
+
 int create_video_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality) {
     std::string path = filename ? filename : "";
     auto pos         = path.find_last_of('.');
@@ -868,6 +1043,12 @@ int create_video_from_sd_images(const char* filename, sd_image_t* images, int nu
     for (char& ch : ext) {
         ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
     }
+
+#ifdef SD_USE_WEBM
+    if (ext == ".webm") {
+        return create_webm_from_sd_images(filename, images, num_images, fps, quality);
+    }
+#endif
 
 #ifdef SD_USE_WEBP
     if (ext == ".webp") {

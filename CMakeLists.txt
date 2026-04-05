@@ -32,6 +32,16 @@ else()
     set(SD_WEBP_DEFAULT ${SD_USE_SYSTEM_WEBP})
 endif()
 
+set(SD_SUBMODULE_WEBM FALSE)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libwebm/CMakeLists.txt")
+    set(SD_SUBMODULE_WEBM TRUE)
+endif()
+if(SD_SUBMODULE_WEBM)
+    set(SD_WEBM_DEFAULT ON)
+else()
+    set(SD_WEBM_DEFAULT ${SD_USE_SYSTEM_WEBM})
+endif()
+
 #
 # Option list
 #
@@ -41,6 +51,8 @@ endif()
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_WEBP                       "sd: enable WebP image I/O support" ${SD_WEBP_DEFAULT})
 option(SD_USE_SYSTEM_WEBP            "sd: link against system libwebp" OFF)
+option(SD_WEBM                       "sd: enable WebM video output support" ${SD_WEBM_DEFAULT})
+option(SD_USE_SYSTEM_WEBM            "sd: link against system libwebm" OFF)
 option(SD_CUDA                       "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
 option(SD_METAL                      "sd: metal backend" OFF)
@@ -111,7 +123,31 @@ if(SD_WEBP)
             )
         endif()
     endif()
-    add_compile_definitions(SD_USE_WEBP)
+endif()
+
+if(SD_WEBM)
+    if(NOT SD_WEBP)
+        message(FATAL_ERROR "SD_WEBM requires SD_WEBP because WebM output reuses libwebp VP8 encoding.")
+    endif()
+    if(NOT SD_SUBMODULE_WEBM AND NOT SD_USE_SYSTEM_WEBM)
+        message(FATAL_ERROR "WebM support enabled but no source found.
+          Either initialize the submodule:\n  git submodule update --init thirdparty/libwebm\n\n"
+          "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBM=ON")
+    endif()
+    if(SD_USE_SYSTEM_WEBM)
+        find_path(WEBM_INCLUDE_DIR
+            NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
+            PATH_SUFFIXES webm
+            REQUIRED)
+        find_library(WEBM_LIBRARY
+            NAMES webm libwebm
+            REQUIRED)
+
+        add_library(webm UNKNOWN IMPORTED)
+        set_target_properties(webm PROPERTIES
+            IMPORTED_LOCATION "${WEBM_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${WEBM_INCLUDE_DIR}")
+    endif()
 endif()
 
 set(SD_LIB stable-diffusion)
