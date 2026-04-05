@@ -303,10 +303,6 @@ namespace sd {
             return data_.at(static_cast<size_t>(index));
         }
 
-        int64_t get_flat_index(const std::vector<int64_t>& coord) const {
-            return static_cast<int64_t>(offset_of(coord));
-        }
-
     private:
         size_t offset_of(const std::vector<int64_t>& coord) const {
             if (coord.size() != shape_.size()) {
