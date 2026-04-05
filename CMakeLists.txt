@@ -123,7 +123,6 @@ if(SD_WEBP)
             )
         endif()
     endif()
-    add_compile_definitions(SD_USE_WEBP)
 endif()
 
 if(SD_WEBM)
@@ -149,7 +148,6 @@ if(SD_WEBM)
             IMPORTED_LOCATION "${WEBM_LIBRARY}"
             INTERFACE_INCLUDE_DIRECTORIES "${WEBM_INCLUDE_DIR}")
     endif()
-    add_compile_definitions(SD_USE_WEBM)
 endif()
 
 set(SD_LIB stable-diffusion)
