@@ -8,10 +8,11 @@
 #include <sstream>
 #include <vector>
 
+#include <json.hpp>
 #include "httplib.h"
 #include "stable-diffusion.h"
 
-#include "common/common.hpp"
+#include "common/common.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
 
@@ -19,6 +20,7 @@
 #include "frontend/dist/gen_index_html.h"
 #endif
 
+using json   = nlohmann::json;
 namespace fs = std::filesystem;
 
 // ----------------------- helpers -----------------------
