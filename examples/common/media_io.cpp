@@ -231,7 +231,7 @@ uint8_t* decode_webp_image_to_buffer(const uint8_t* data,
         const int decoded_channels = features.has_alpha ? 4 : 3;
         for (size_t i = 0; i < pixel_count; ++i) {
             const uint8_t* src = decoded.get() + i * decoded_channels;
-            grayscale[i]       = static_cast<uint8_t>((77 * src[0] + 150 * src[1] + 29 * src[2] + 128) >> 8);
+            grayscale.get()[i] = static_cast<uint8_t>((77 * src[0] + 150 * src[1] + 29 * src[2] + 128) >> 8);
         }
 
         return grayscale.release();
