@@ -15,10 +15,12 @@
 // #include "preprocessing.hpp"
 #include "stable-diffusion.h"
 
-#include "common/common.hpp"
+#include "common/common.h"
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
 #include "image_metadata.h"
+
+namespace fs = std::filesystem;
 
 const char* previews_str[] = {
     "none",

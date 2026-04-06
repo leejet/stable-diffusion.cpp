@@ -1,4 +1,6 @@
-for f in src/*.cpp src/*.h src/*.hpp src/vocab/*.h src/vocab/*.cpp examples/cli/*.cpp examples/common/*.hpp examples/cli/*.h examples/server/*.cpp; do
+for f in src/*.cpp src/*.h src/*.hpp src/vocab/*.h src/vocab/*.cpp \
+         examples/cli/*.cpp examples/cli/*.h examples/server/*.cpp \
+         examples/common/*.hpp examples/common/*.h examples/common/*.cpp; do
   [[ "$f" == vocab* ]] && continue
   echo "formatting '$f'"
   # if [ "$f" != "stable-diffusion.h" ]; then

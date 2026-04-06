@@ -1,5 +1,5 @@
-#include "log.h"
 #include "media_io.h"
+#include "log.h"
 #include "resource_owners.hpp"
 
 #include <algorithm>
@@ -38,7 +38,6 @@
 
 namespace fs = std::filesystem;
 
-namespace {
 #ifdef SD_USE_WEBP
 struct WebPFreeDeleter {
     void operator()(void* ptr) const {
@@ -91,8 +90,8 @@ struct WebPPictureGuard {
     bool initialized;
 };
 
-using WebPBufferPtr = std::unique_ptr<uint8_t, WebPFreeDeleter>;
-using WebPMuxPtr = std::unique_ptr<WebPMux, WebPMuxDeleter>;
+using WebPBufferPtr      = std::unique_ptr<uint8_t, WebPFreeDeleter>;
+using WebPMuxPtr         = std::unique_ptr<WebPMux, WebPMuxDeleter>;
 using WebPAnimEncoderPtr = std::unique_ptr<WebPAnimEncoder, WebPAnimEncoderDeleter>;
 #endif
 
@@ -472,14 +471,14 @@ uint8_t* load_image_common(bool from_memory,
     if (from_memory) {
         image_path = "memory";
         if (image_buffer == nullptr) {
-            int c                = 0;
+            int c = 0;
             image_buffer.reset((uint8_t*)stbi_load_from_memory((const stbi_uc*)image_path_or_bytes, len, &width, &height, &c, expected_channel));
             source_channel_count = c;
         }
     } else {
         image_path = image_path_or_bytes;
         if (image_buffer == nullptr) {
-            int c                = 0;
+            int c = 0;
             image_buffer.reset((uint8_t*)stbi_load(image_path_or_bytes, &width, &height, &c, expected_channel));
             source_channel_count = c;
         }
@@ -534,8 +533,8 @@ uint8_t* load_image_common(bool from_memory,
                 memcpy(dst, src, crop_w * expected_channel);
             }
 
-            width  = crop_w;
-            height = crop_h;
+            width        = crop_w;
+            height       = crop_h;
             image_buffer = std::move(cropped_image_buffer);
         }
 
@@ -551,8 +550,8 @@ uint8_t* load_image_common(bool from_memory,
                      STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
                      STBIR_FILTER_BOX, STBIR_FILTER_BOX,
                      STBIR_COLORSPACE_SRGB, nullptr);
-        width  = expected_width;
-        height = expected_height;
+        width        = expected_width;
+        height       = expected_height;
         image_buffer = std::move(resized_image_buffer);
     }
     return image_buffer.release();
@@ -570,8 +569,6 @@ void write_u32_le(FILE* f, uint32_t val) {
 void write_u16_le(FILE* f, uint16_t val) {
     fwrite(&val, 2, 1, f);
 }
-}  // namespace
-
 EncodedImageFormat encoded_image_format_from_path(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -797,7 +794,7 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
         jpeg_data.clear();
 
         auto write_to_buf = [](void* context, void* data, int size) {
-            auto* buffer      = reinterpret_cast<std::vector<uint8_t>*>(context);
+            auto* buffer       = reinterpret_cast<std::vector<uint8_t>*>(context);
             const uint8_t* src = reinterpret_cast<const uint8_t*>(data);
             buffer->insert(buffer->end(), src, src + size);
         };
@@ -886,7 +883,7 @@ int create_animated_webp_from_sd_images(const char* filename, sd_image_t* images
     }
 
     const int frame_duration_ms = std::max(1, static_cast<int>(std::lround(1000.0 / static_cast<double>(fps))));
-    int timestamp_ms = 0;
+    int timestamp_ms            = 0;
 
     for (int i = 0; i < num_images; ++i) {
         const sd_image_t& image = images[i];
@@ -969,7 +966,7 @@ int create_webm_from_sd_images(const char* filename, sd_image_t* images, int num
         return -1;
     }
 
-    const int width = static_cast<int>(images[0].width);
+    const int width  = static_cast<int>(images[0].width);
     const int height = static_cast<int>(images[0].height);
     if (width <= 0 || height <= 0) {
         fprintf(stderr, "Error: Invalid frame dimensions.\n");
