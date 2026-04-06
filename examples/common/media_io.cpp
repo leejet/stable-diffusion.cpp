@@ -706,11 +706,12 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
         return -1;
     }
 
-    FilePtr f(fopen(filename, "wb"));
-    if (!f) {
+    FilePtr file(fopen(filename, "wb"));
+    if (!file) {
         perror("Error opening file for writing");
         return -1;
     }
+    FILE* f = file.get();
 
     uint32_t width    = images[0].width;
     uint32_t height   = images[0].height;
@@ -720,74 +721,74 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
         return -1;
     }
 
-    fwrite("RIFF", 4, 1, f.get());
-    long riff_size_pos = ftell(f.get());
-    write_u32_le(f.get(), 0);
-    fwrite("AVI ", 4, 1, f.get());
+    fwrite("RIFF", 4, 1, f);
+    long riff_size_pos = ftell(f);
+    write_u32_le(f, 0);
+    fwrite("AVI ", 4, 1, f);
 
-    fwrite("LIST", 4, 1, f.get());
-    write_u32_le(f.get(), 4 + 8 + 56 + 8 + 4 + 8 + 56 + 8 + 40);
-    fwrite("hdrl", 4, 1, f.get());
+    fwrite("LIST", 4, 1, f);
+    write_u32_le(f, 4 + 8 + 56 + 8 + 4 + 8 + 56 + 8 + 40);
+    fwrite("hdrl", 4, 1, f);
 
-    fwrite("avih", 4, 1, f.get());
-    write_u32_le(f.get(), 56);
-    write_u32_le(f.get(), 1000000 / fps);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 0x110);
-    write_u32_le(f.get(), num_images);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 1);
-    write_u32_le(f.get(), width * height * 3);
-    write_u32_le(f.get(), width);
-    write_u32_le(f.get(), height);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 0);
+    fwrite("avih", 4, 1, f);
+    write_u32_le(f, 56);
+    write_u32_le(f, 1000000 / fps);
+    write_u32_le(f, 0);
+    write_u32_le(f, 0);
+    write_u32_le(f, 0x110);
+    write_u32_le(f, num_images);
+    write_u32_le(f, 0);
+    write_u32_le(f, 1);
+    write_u32_le(f, width * height * 3);
+    write_u32_le(f, width);
+    write_u32_le(f, height);
+    write_u32_le(f, 0);
+    write_u32_le(f, 0);
+    write_u32_le(f, 0);
+    write_u32_le(f, 0);
 
-    fwrite("LIST", 4, 1, f.get());
-    write_u32_le(f.get(), 4 + 8 + 56 + 8 + 40);
-    fwrite("strl", 4, 1, f.get());
+    fwrite("LIST", 4, 1, f);
+    write_u32_le(f, 4 + 8 + 56 + 8 + 40);
+    fwrite("strl", 4, 1, f);
 
-    fwrite("strh", 4, 1, f.get());
-    write_u32_le(f.get(), 56);
-    fwrite("vids", 4, 1, f.get());
-    fwrite("MJPG", 4, 1, f.get());
-    write_u32_le(f.get(), 0);
-    write_u16_le(f.get(), 0);
-    write_u16_le(f.get(), 0);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 1);
-    write_u32_le(f.get(), fps);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), num_images);
-    write_u32_le(f.get(), width * height * 3);
-    write_u32_le(f.get(), (uint32_t)-1);
-    write_u32_le(f.get(), 0);
-    write_u16_le(f.get(), 0);
-    write_u16_le(f.get(), 0);
-    write_u16_le(f.get(), 0);
-    write_u16_le(f.get(), 0);
+    fwrite("strh", 4, 1, f);
+    write_u32_le(f, 56);
+    fwrite("vids", 4, 1, f);
+    fwrite("MJPG", 4, 1, f);
+    write_u32_le(f, 0);
+    write_u16_le(f, 0);
+    write_u16_le(f, 0);
+    write_u32_le(f, 0);
+    write_u32_le(f, 1);
+    write_u32_le(f, fps);
+    write_u32_le(f, 0);
+    write_u32_le(f, num_images);
+    write_u32_le(f, width * height * 3);
+    write_u32_le(f, (uint32_t)-1);
+    write_u32_le(f, 0);
+    write_u16_le(f, 0);
+    write_u16_le(f, 0);
+    write_u16_le(f, 0);
+    write_u16_le(f, 0);
 
-    fwrite("strf", 4, 1, f.get());
-    write_u32_le(f.get(), 40);
-    write_u32_le(f.get(), 40);
-    write_u32_le(f.get(), width);
-    write_u32_le(f.get(), height);
-    write_u16_le(f.get(), 1);
-    write_u16_le(f.get(), 24);
-    fwrite("MJPG", 4, 1, f.get());
-    write_u32_le(f.get(), width * height * 3);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 0);
-    write_u32_le(f.get(), 0);
+    fwrite("strf", 4, 1, f);
+    write_u32_le(f, 40);
+    write_u32_le(f, 40);
+    write_u32_le(f, width);
+    write_u32_le(f, height);
+    write_u16_le(f, 1);
+    write_u16_le(f, 24);
+    fwrite("MJPG", 4, 1, f);
+    write_u32_le(f, width * height * 3);
+    write_u32_le(f, 0);
+    write_u32_le(f, 0);
+    write_u32_le(f, 0);
+    write_u32_le(f, 0);
 
-    fwrite("LIST", 4, 1, f.get());
-    long movi_size_pos = ftell(f.get());
-    write_u32_le(f.get(), 0);
-    fwrite("movi", 4, 1, f.get());
+    fwrite("LIST", 4, 1, f);
+    long movi_size_pos = ftell(f);
+    write_u32_le(f, 0);
+    fwrite("movi", 4, 1, f);
 
     std::vector<avi_index_entry> index(static_cast<size_t>(num_images));
     std::vector<uint8_t> jpeg_data;
@@ -806,37 +807,37 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
             return -1;
         }
 
-        fwrite("00dc", 4, 1, f.get());
-        write_u32_le(f.get(), (uint32_t)jpeg_data.size());
-        index[i].offset = ftell(f.get()) - 8;
+        fwrite("00dc", 4, 1, f);
+        write_u32_le(f, (uint32_t)jpeg_data.size());
+        index[i].offset = ftell(f) - 8;
         index[i].size   = (uint32_t)jpeg_data.size();
-        fwrite(jpeg_data.data(), 1, jpeg_data.size(), f.get());
+        fwrite(jpeg_data.data(), 1, jpeg_data.size(), f);
 
         if (jpeg_data.size() % 2) {
-            fputc(0, f.get());
+            fputc(0, f);
         }
     }
 
-    long cur_pos   = ftell(f.get());
+    long cur_pos   = ftell(f);
     long movi_size = cur_pos - movi_size_pos - 4;
-    fseek(f.get(), movi_size_pos, SEEK_SET);
-    write_u32_le(f.get(), movi_size);
-    fseek(f.get(), cur_pos, SEEK_SET);
+    fseek(f, movi_size_pos, SEEK_SET);
+    write_u32_le(f, movi_size);
+    fseek(f, cur_pos, SEEK_SET);
 
-    fwrite("idx1", 4, 1, f.get());
-    write_u32_le(f.get(), num_images * 16);
+    fwrite("idx1", 4, 1, f);
+    write_u32_le(f, num_images * 16);
     for (int i = 0; i < num_images; i++) {
-        fwrite("00dc", 4, 1, f.get());
-        write_u32_le(f.get(), 0x10);
-        write_u32_le(f.get(), index[i].offset);
-        write_u32_le(f.get(), index[i].size);
+        fwrite("00dc", 4, 1, f);
+        write_u32_le(f, 0x10);
+        write_u32_le(f, index[i].offset);
+        write_u32_le(f, index[i].size);
     }
 
-    cur_pos        = ftell(f.get());
+    cur_pos        = ftell(f);
     long file_size = cur_pos - riff_size_pos - 4;
-    fseek(f.get(), riff_size_pos, SEEK_SET);
-    write_u32_le(f.get(), file_size);
-    fseek(f.get(), cur_pos, SEEK_SET);
+    fseek(f, riff_size_pos, SEEK_SET);
+    write_u32_le(f, file_size);
+    fseek(f, cur_pos, SEEK_SET);
 
     return 0;
 }
