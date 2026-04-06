@@ -760,7 +760,8 @@ int main(int argc, const char* argv[]) {
                 gen_params.cache_params,
             };
 
-            results.adopt(generate_video(sd_ctx.get(), &vid_gen_params, &num_results), num_results);
+            sd_image_t* generated_video = generate_video(sd_ctx.get(), &vid_gen_params, &num_results);
+            results.adopt(generated_video, num_results);
         }
 
         if (!results) {
