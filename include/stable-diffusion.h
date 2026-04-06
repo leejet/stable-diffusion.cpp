@@ -430,6 +430,9 @@ SD_API void list_backends_to_buffer(char* buffer, size_t buffer_size);
 
 SD_API void add_rpc_device(const char* address);
 
+// for C API, caller needs to call free_sd_images to free the memory after use
+SD_API void free_sd_images(sd_image_t* result_images, int num_images);
+
 #ifdef __cplusplus
 }
 #endif

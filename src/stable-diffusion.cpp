@@ -3827,3 +3827,18 @@ SD_API sd_image_t* generate_video(sd_ctx_t* sd_ctx, const sd_vid_gen_params_t* s
     LOG_INFO("generate_video completed in %.2fs", (t1 - t0) * 1.0f / 1000);
     return result;
 }
+
+SD_API void free_sd_images(sd_image_t* result_images, int num_images) {
+    if (result_images == nullptr) {
+        return;
+    }
+
+    for (int i = 0; i < num_images; ++i) {
+        if (result_images[i].data != nullptr) {
+            free(result_images[i].data);
+            result_images[i].data = nullptr;
+        }
+    }
+
+    free(result_images);
+}
