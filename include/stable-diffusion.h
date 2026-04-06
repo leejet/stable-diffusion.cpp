@@ -431,7 +431,11 @@ SD_API void list_backends_to_buffer(char* buffer, size_t buffer_size);
 SD_API void add_rpc_device(const char* address);
 
 // for C API, caller needs to call free_sd_images to free the memory after use
+// This helps avoid CRT problems on Windows when memory is allocated in the library but freed in the caller, which may use a different CRT.
 SD_API void free_sd_images(sd_image_t* result_images, int num_images);
+
+// free single image data
+SD_API void free_sd_image_data(sd_image_t* image);
 
 #ifdef __cplusplus
 }

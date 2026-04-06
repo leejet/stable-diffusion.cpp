@@ -3842,3 +3842,11 @@ SD_API void free_sd_images(sd_image_t* result_images, int num_images) {
 
     free(result_images);
 }
+
+SD_API void free_sd_image_data(sd_image_t* image) {
+    if (image == nullptr || image->data == nullptr) {
+        return;
+    }
+    free(image->data);
+    image->data = nullptr;
+}
