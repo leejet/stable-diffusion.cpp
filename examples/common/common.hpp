@@ -20,6 +20,7 @@ namespace fs = std::filesystem;
 #endif  // _WIN32
 
 #include "log.h"
+#include "resource_owners.hpp"
 #include "stable-diffusion.h"
 
 #define SAFE_STR(s) ((s) ? (s) : "")
@@ -1751,8 +1752,8 @@ struct SDGenerationParams {
     }
 
     std::string to_string() const {
-        char* sample_params_str            = sd_sample_params_to_str(&sample_params);
-        char* high_noise_sample_params_str = sd_sample_params_to_str(&high_noise_sample_params);
+        FreeUniquePtr<char> sample_params_str(sd_sample_params_to_str(&sample_params));
+        FreeUniquePtr<char> high_noise_sample_params_str(sd_sample_params_to_str(&high_noise_sample_params));
 
         std::ostringstream lora_ss;
         lora_ss << "{\n";
@@ -1801,9 +1802,9 @@ struct SDGenerationParams {
             << "  pm_id_embed_path: \"" << pm_id_embed_path << "\",\n"
             << "  pm_style_strength: " << pm_style_strength << ",\n"
             << "  skip_layers: " << vec_to_string(skip_layers) << ",\n"
-            << "  sample_params: " << sample_params_str << ",\n"
+            << "  sample_params: " << SAFE_STR(sample_params_str.get()) << ",\n"
             << "  high_noise_skip_layers: " << vec_to_string(high_noise_skip_layers) << ",\n"
-            << "  high_noise_sample_params: " << high_noise_sample_params_str << ",\n"
+            << "  high_noise_sample_params: " << SAFE_STR(high_noise_sample_params_str.get()) << ",\n"
             << "  custom_sigmas: " << vec_to_string(custom_sigmas) << ",\n"
             << "  cache_mode: \"" << cache_mode << "\",\n"
             << "  cache_option: \"" << cache_option << "\",\n"
@@ -1829,8 +1830,6 @@ struct SDGenerationParams {
             << vae_tiling_params.rel_size_x << ", "
             << vae_tiling_params.rel_size_y << " },\n"
             << "}";
-        free(sample_params_str);
-        free(high_noise_sample_params_str);
         return oss.str();
     }
 };

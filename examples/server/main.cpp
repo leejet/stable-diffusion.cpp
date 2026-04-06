@@ -13,6 +13,7 @@
 
 #include "common/common.hpp"
 #include "common/media_io.h"
+#include "common/resource_owners.hpp"
 
 #ifdef HAVE_INDEX_HTML
 #include "frontend/dist/gen_index_html.h"
@@ -286,18 +287,6 @@ std::string get_lora_full_path(ServerRuntime& rt, const std::string& path) {
     return (it != rt.lora_cache->end()) ? it->fullpath : "";
 }
 
-void free_results(sd_image_t* result_images, int num_results) {
-    if (result_images) {
-        for (int i = 0; i < num_results; ++i) {
-            if (result_images[i].data) {
-                free(result_images[i].data);
-                result_images[i].data = nullptr;
-            }
-        }
-    }
-    free(result_images);
-}
-
 void register_index_endpoints(httplib::Server& svr, const SDSvrParams& svr_params, const std::string& index_html) {
     const std::string serve_html_path = svr_params.serve_html_path;
     svr.Get("/", [serve_html_path, index_html](const httplib::Request&, httplib::Response& res) {
@@ -405,10 +394,10 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             LOG_DEBUG("%s\n", gen_params.to_string().c_str());
 
-            sd_image_t init_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-            sd_image_t control_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
-            sd_image_t mask_image    = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 1, nullptr};
-            std::vector<sd_image_t> pmid_images;
+            SDImageOwner init_image({(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr});
+            SDImageOwner control_image({(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr});
+            SDImageOwner mask_image({(uint32_t)gen_params.width, (uint32_t)gen_params.height, 1, nullptr});
+            SDImageVec pmid_images;
 
             sd_img_gen_params_t img_gen_params = {
                 gen_params.lora_vec.data(),
@@ -416,19 +405,19 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 gen_params.prompt.c_str(),
                 gen_params.negative_prompt.c_str(),
                 gen_params.clip_skip,
-                init_image,
+                init_image.get(),
                 nullptr,
                 0,
                 gen_params.auto_resize_ref_image,
                 gen_params.increase_ref_index,
-                mask_image,
+                mask_image.get(),
                 gen_params.width,
                 gen_params.height,
                 gen_params.sample_params,
                 gen_params.strength,
                 gen_params.seed,
                 gen_params.batch_count,
-                control_image,
+                control_image.get(),
                 gen_params.control_strength,
                 {
                     pmid_images.data(),
@@ -440,13 +429,19 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 gen_params.cache_params,
             };
 
-            sd_image_t* results = nullptr;
-            int num_results     = 0;
+            SDImageVec results;
+            int num_results = 0;
 
             {
                 std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                results     = generate_image(runtime->sd_ctx, &img_gen_params);
                 num_results = gen_params.batch_count;
+                results.adopt(generate_image(runtime->sd_ctx, &img_gen_params), num_results);
+            }
+
+            if (!results) {
+                res.status = 500;
+                res.set_content(R"({"error":"generate failed"})", "application/json");
+                return;
             }
 
             for (int i = 0; i < num_results; i++) {
@@ -477,8 +472,6 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 item["b64_json"] = b64;
                 out["data"].push_back(item);
             }
-            free_results(results, num_results);
-
             res.set_content(out.dump(), "application/json");
             res.status = 200;
 
@@ -599,9 +592,9 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             LOG_DEBUG("%s\n", gen_params.to_string().c_str());
 
-            sd_image_t init_image    = {0, 0, 3, nullptr};
-            sd_image_t control_image = {0, 0, 3, nullptr};
-            std::vector<sd_image_t> pmid_images;
+            SDImageOwner init_image({0, 0, 3, nullptr});
+            SDImageOwner control_image({0, 0, 3, nullptr});
+            SDImageVec pmid_images;
 
             auto get_resolved_width = [&gen_params, runtime]() -> int {
                 if (gen_params.width > 0)
@@ -618,7 +611,7 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return 512;
             };
 
-            std::vector<sd_image_t> ref_images;
+            SDImageVec ref_images;
             ref_images.reserve(images_bytes.size());
             for (auto& bytes : images_bytes) {
                 int img_w;
@@ -634,12 +627,12 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     continue;
                 }
 
-                sd_image_t img{(uint32_t)img_w, (uint32_t)img_h, 3, raw_pixels};
-                gen_params.set_width_and_height_if_unset(img.width, img.height);
-                ref_images.push_back(img);
+                SDImageOwner img({(uint32_t)img_w, (uint32_t)img_h, 3, raw_pixels});
+                gen_params.set_width_and_height_if_unset(img.get().width, img.get().height);
+                ref_images.push_back(std::move(img));
             }
 
-            sd_image_t mask_image = {0};
+            SDImageOwner mask_image({0, 0, 1, nullptr});
             if (!mask_bytes.empty()) {
                 int expected_width  = 0;
                 int expected_height = 0;
@@ -655,13 +648,10 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     static_cast<int>(mask_bytes.size()),
                     mask_w, mask_h,
                     expected_width, expected_height, 1);
-                mask_image = {(uint32_t)mask_w, (uint32_t)mask_h, 1, mask_raw};
-                gen_params.set_width_and_height_if_unset(mask_image.width, mask_image.height);
+                mask_image.reset({(uint32_t)mask_w, (uint32_t)mask_h, 1, mask_raw});
+                gen_params.set_width_and_height_if_unset(mask_image.get().width, mask_image.get().height);
             } else {
-                mask_image.width   = get_resolved_width();
-                mask_image.height  = get_resolved_height();
-                mask_image.channel = 1;
-                mask_image.data    = nullptr;
+                mask_image.reset({(uint32_t)get_resolved_width(), (uint32_t)get_resolved_height(), 1, nullptr});
             }
 
             sd_img_gen_params_t img_gen_params = {
@@ -670,19 +660,19 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 gen_params.prompt.c_str(),
                 gen_params.negative_prompt.c_str(),
                 gen_params.clip_skip,
-                init_image,
+                init_image.get(),
                 ref_images.data(),
                 (int)ref_images.size(),
                 gen_params.auto_resize_ref_image,
                 gen_params.increase_ref_index,
-                mask_image,
+                mask_image.get(),
                 get_resolved_width(),
                 get_resolved_height(),
                 gen_params.sample_params,
                 gen_params.strength,
                 gen_params.seed,
                 gen_params.batch_count,
-                control_image,
+                control_image.get(),
                 gen_params.control_strength,
                 {
                     pmid_images.data(),
@@ -694,13 +684,19 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 gen_params.cache_params,
             };
 
-            sd_image_t* results = nullptr;
-            int num_results     = 0;
+            SDImageVec results;
+            int num_results = 0;
 
             {
                 std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                results     = generate_image(runtime->sd_ctx, &img_gen_params);
                 num_results = gen_params.batch_count;
+                results.adopt(generate_image(runtime->sd_ctx, &img_gen_params), num_results);
+            }
+
+            if (!results) {
+                res.status = 500;
+                res.set_content(R"({"error":"generate failed"})", "application/json");
+                return;
             }
 
             json out;
@@ -730,20 +726,8 @@ void register_openai_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 item["b64_json"] = b64;
                 out["data"].push_back(item);
             }
-            free_results(results, num_results);
-
             res.set_content(out.dump(), "application/json");
             res.status = 200;
-
-            if (init_image.data) {
-                free(init_image.data);
-            }
-            if (mask_image.data) {
-                free(mask_image.data);
-            }
-            for (auto ref_image : ref_images) {
-                free(ref_image.data);
-            }
         } catch (const std::exception& e) {
             res.status = 500;
             json err;
@@ -892,12 +876,11 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             LOG_DEBUG("%s\n", gen_params.to_string().c_str());
 
-            sd_image_t init_image    = {0, 0, 3, nullptr};
-            sd_image_t control_image = {0, 0, 3, nullptr};
-            sd_image_t mask_image    = {0, 0, 1, nullptr};
-            std::vector<uint8_t> mask_data;
-            std::vector<sd_image_t> pmid_images;
-            std::vector<sd_image_t> ref_images;
+            SDImageOwner init_image({0, 0, 3, nullptr});
+            SDImageOwner control_image({0, 0, 3, nullptr});
+            SDImageOwner mask_image({0, 0, 1, nullptr});
+            SDImageVec pmid_images;
+            SDImageVec ref_images;
 
             auto get_resolved_width = [&gen_params, runtime]() -> int {
                 if (gen_params.width > 0)
@@ -914,7 +897,7 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return 512;
             };
 
-            auto decode_image = [&gen_params](sd_image_t& image, std::string encoded) -> bool {
+            auto decode_image = [&gen_params](SDImageOwner& image, std::string encoded) -> bool {
                 auto comma_pos = encoded.find(',');
                 if (comma_pos != std::string::npos) {
                     encoded = encoded.substr(comma_pos + 1);
@@ -933,10 +916,10 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     uint8_t* raw_data = load_image_from_memory(
                         (const char*)img_data.data(), (int)img_data.size(),
                         img_w, img_h,
-                        expected_width, expected_height, image.channel);
+                        expected_width, expected_height, image.get().channel);
                     if (raw_data) {
-                        image = {(uint32_t)img_w, (uint32_t)img_h, image.channel, raw_data};
-                        gen_params.set_width_and_height_if_unset(image.width, image.height);
+                        image.reset({(uint32_t)img_w, (uint32_t)img_h, image.get().channel, raw_data});
+                        gen_params.set_width_and_height_if_unset(image.get().width, image.get().height);
                         return true;
                     }
                 }
@@ -953,19 +936,21 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                     std::string encoded = j["mask"].get<std::string>();
                     decode_image(mask_image, encoded);
                     bool inpainting_mask_invert = j.value("inpainting_mask_invert", 0) != 0;
-                    if (inpainting_mask_invert && mask_image.data != nullptr) {
-                        for (uint32_t i = 0; i < mask_image.width * mask_image.height; i++) {
-                            mask_image.data[i] = 255 - mask_image.data[i];
+                    if (inpainting_mask_invert && mask_image.get().data != nullptr) {
+                        for (uint32_t i = 0; i < mask_image.get().width * mask_image.get().height; i++) {
+                            mask_image.get().data[i] = 255 - mask_image.get().data[i];
                         }
                     }
                 } else {
-                    int m_width        = get_resolved_width();
-                    int m_height       = get_resolved_height();
-                    mask_data          = std::vector<uint8_t>(m_width * m_height, 255);
-                    mask_image.width   = m_width;
-                    mask_image.height  = m_height;
-                    mask_image.channel = 1;
-                    mask_image.data    = mask_data.data();
+                    int m_width               = get_resolved_width();
+                    int m_height              = get_resolved_height();
+                    sd_image_t generated_mask = {(uint32_t)m_width, (uint32_t)m_height, 1, nullptr};
+                    generated_mask.data       = (uint8_t*)malloc(static_cast<size_t>(m_width) * static_cast<size_t>(m_height));
+                    if (generated_mask.data == nullptr) {
+                        return bad("failed to allocate default mask");
+                    }
+                    memset(generated_mask.data, 255, static_cast<size_t>(m_width) * static_cast<size_t>(m_height));
+                    mask_image.reset(generated_mask);
                 }
 
                 float denoising_strength = j.value("denoising_strength", -1.f);
@@ -977,10 +962,10 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
 
             if (j.contains("extra_images") && j["extra_images"].is_array()) {
                 for (auto extra_image : j["extra_images"]) {
-                    std::string encoded  = extra_image.get<std::string>();
-                    sd_image_t tmp_image = {(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr};
+                    std::string encoded = extra_image.get<std::string>();
+                    SDImageOwner tmp_image({(uint32_t)gen_params.width, (uint32_t)gen_params.height, 3, nullptr});
                     if (decode_image(tmp_image, encoded)) {
-                        ref_images.push_back(tmp_image);
+                        ref_images.push_back(std::move(tmp_image));
                     }
                 }
             }
@@ -991,19 +976,19 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 gen_params.prompt.c_str(),
                 gen_params.negative_prompt.c_str(),
                 gen_params.clip_skip,
-                init_image,
+                init_image.get(),
                 ref_images.data(),
                 (int)ref_images.size(),
                 gen_params.auto_resize_ref_image,
                 gen_params.increase_ref_index,
-                mask_image,
+                mask_image.get(),
                 get_resolved_width(),
                 get_resolved_height(),
                 gen_params.sample_params,
                 gen_params.strength,
                 gen_params.seed,
                 gen_params.batch_count,
-                control_image,
+                control_image.get(),
                 gen_params.control_strength,
                 {
                     pmid_images.data(),
@@ -1015,13 +1000,19 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 gen_params.cache_params,
             };
 
-            sd_image_t* results = nullptr;
-            int num_results     = 0;
+            SDImageVec results;
+            int num_results = 0;
 
             {
                 std::lock_guard<std::mutex> lock(*runtime->sd_ctx_mutex);
-                results     = generate_image(runtime->sd_ctx, &img_gen_params);
                 num_results = gen_params.batch_count;
+                results.adopt(generate_image(runtime->sd_ctx, &img_gen_params), num_results);
+            }
+
+            if (!results) {
+                res.status = 500;
+                res.set_content(R"({"error":"generate failed"})", "application/json");
+                return;
             }
 
             json out;
@@ -1052,20 +1043,8 @@ void register_sdapi_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 std::string b64 = base64_encode(image_bytes);
                 out["images"].push_back(b64);
             }
-            free_results(results, num_results);
-
             res.set_content(out.dump(), "application/json");
             res.status = 200;
-
-            if (init_image.data) {
-                free(init_image.data);
-            }
-            if (mask_image.data && mask_data.empty()) {
-                free(mask_image.data);
-            }
-            for (auto ref_image : ref_images) {
-                free(ref_image.data);
-            }
 
         } catch (const std::exception& e) {
             res.status = 500;
@@ -1178,7 +1157,7 @@ int main(int argc, const char** argv) {
     LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
     sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false, false, false);
-    sd_ctx_t* sd_ctx              = new_sd_ctx(&sd_ctx_params);
+    SDCtxPtr sd_ctx(new_sd_ctx(&sd_ctx_params));
 
     if (sd_ctx == nullptr) {
         LOG_ERROR("new_sd_ctx_t failed");
@@ -1190,7 +1169,7 @@ int main(int argc, const char** argv) {
     std::vector<LoraEntry> lora_cache;
     std::mutex lora_mutex;
     ServerRuntime runtime = {
-        sd_ctx,
+        sd_ctx.get(),
         &sd_ctx_mutex,
         &svr_params,
         &ctx_params,
@@ -1231,6 +1210,5 @@ int main(int argc, const char** argv) {
     LOG_INFO("listening on: %s:%d\n", svr_params.listen_ip.c_str(), svr_params.listen_port);
     svr.listen(svr_params.listen_ip, svr_params.listen_port);
 
-    free_sd_ctx(sd_ctx);
     return 0;
 }
