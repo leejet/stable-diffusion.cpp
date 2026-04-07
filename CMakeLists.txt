@@ -13,6 +13,8 @@ if (MSVC)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
 endif()
 
+find_package(PkgConfig)
+
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
@@ -108,19 +110,24 @@ if(SD_WEBP)
           "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBP=ON")
     endif()
     if(SD_USE_SYSTEM_WEBP)
-        find_package(WebP REQUIRED)
-        add_library(webp ALIAS WebP::webp)
-        # libwebp CMake target naming is not consistent across versions/distros.
-        # Some export WebP::libwebpmux, others export WebP::webpmux.
-        if(TARGET WebP::libwebpmux)
-            add_library(libwebpmux ALIAS WebP::libwebpmux)
-        elseif(TARGET WebP::webpmux)
-            add_library(libwebpmux ALIAS WebP::webpmux)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(WebP REQUIRED IMPORTED_TARGET GLOBAL libwebp)
+	    link_libraries(PkgConfig::WebP)
         else()
-            message(FATAL_ERROR
-                "Could not find a compatible webpmux target in system WebP package. "
-                "Expected WebP::libwebpmux or WebP::webpmux."
-            )
+            find_package(WebP REQUIRED)
+            add_library(webp ALIAS WebP::webp)
+            # libwebp CMake target naming is not consistent across versions/distros.
+            # Some export WebP::libwebpmux, others export WebP::webpmux.
+            if(TARGET WebP::libwebpmux)
+                add_library(libwebpmux ALIAS WebP::libwebpmux)
+            elseif(TARGET WebP::webpmux)
+                add_library(libwebpmux ALIAS WebP::webpmux)
+            else()
+                message(FATAL_ERROR
+                    "Could not find a compatible webpmux target in system WebP package. "
+                    "Expected WebP::libwebpmux or WebP::webpmux."
+                )
+            endif()
         endif()
     endif()
 endif()
@@ -135,18 +142,23 @@ if(SD_WEBM)
           "Or link against system library:\n  cmake (...) -DSD_USE_SYSTEM_WEBM=ON")
     endif()
     if(SD_USE_SYSTEM_WEBM)
-        find_path(WEBM_INCLUDE_DIR
-            NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
-            PATH_SUFFIXES webm
-            REQUIRED)
-        find_library(WEBM_LIBRARY
-            NAMES webm libwebm
-            REQUIRED)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(WebM REQUIRED IMPORTED_TARGET GLOBAL libwebm)
+	    link_libraries(PkgConfig::WebM)
+        else()
+            find_path(WEBM_INCLUDE_DIR
+                NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
+                PATH_SUFFIXES webm
+                REQUIRED)
+            find_library(WEBM_LIBRARY
+                NAMES webm libwebm
+                REQUIRED)
 
-        add_library(webm UNKNOWN IMPORTED)
-        set_target_properties(webm PROPERTIES
-            IMPORTED_LOCATION "${WEBM_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${WEBM_INCLUDE_DIR}")
+            add_library(webm UNKNOWN IMPORTED)
+            set_target_properties(webm PROPERTIES
+                IMPORTED_LOCATION "${WEBM_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${WEBM_INCLUDE_DIR}")
+        endif()
     endif()
 endif()
 
