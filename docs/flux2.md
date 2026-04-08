@@ -8,6 +8,8 @@
     - gguf: https://huggingface.co/city96/FLUX.2-dev-gguf/tree/main
 - Download vae
     - safetensors: https://huggingface.co/black-forest-labs/FLUX.2-dev/tree/main
+- Download FLUX.2-small-decoder (full_encoder_small_decoder.safetensors) as an alternative VAE option
+    - safetensors: https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/tree/main
 - Download Mistral-Small-3.2-24B-Instruct-2506-GGUF
     - gguf: https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF/tree/main
 
@@ -31,6 +33,8 @@
     - gguf: https://huggingface.co/leejet/FLUX.2-klein-base-4B-GGUF/tree/main
 - Download vae
     - safetensors: https://huggingface.co/black-forest-labs/FLUX.2-dev/tree/main
+- Download FLUX.2-small-decoder (full_encoder_small_decoder.safetensors) as an alternative VAE option
+    - safetensors: https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/tree/main
 - Download Qwen3 4b
     - safetensors: https://huggingface.co/Comfy-Org/flux2-klein-4B/tree/main/split_files/text_encoders
     - gguf: https://huggingface.co/unsloth/Qwen3-4B-GGUF/tree/main
