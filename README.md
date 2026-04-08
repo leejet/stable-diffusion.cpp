@@ -93,6 +93,7 @@ API and command-line option may change frequently.***
     - `DPM++ 2M`
     - [`DPM++ 2M v2`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/8457)
     - `DPM++ 2S a`
+    - `ER-SDE`
     - [`LCM`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/issues/13952)
 - Cross-platform reproducibility
     - `--rng cuda`, default, consistent with the `stable-diffusion-webui GPU RNG`
