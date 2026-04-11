@@ -1311,9 +1311,7 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
         int timestep      = static_cast<int>(roundf(TIMESTEPS - i * ((float)TIMESTEPS / steps))) - 1;
         int prev_timestep = timestep - TIMESTEPS / steps;
         float sigma       = static_cast<float>(compvis_sigmas[timestep]);
-        if (i == 0) {
-            x *= std::sqrt(sigma * sigma + 1) / sigma;
-        } else {
+        if (i > 0) {
             x *= std::sqrt(sigma * sigma + 1);
         }
 
@@ -1376,9 +1374,7 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
         int timestep_s    = (int)floor((1 - eta) * prev_timestep);
         float sigma       = static_cast<float>(compvis_sigmas[timestep]);
 
-        if (i == 0) {
-            x *= std::sqrt(sigma * sigma + 1) / sigma;
-        } else {
+        if (i > 0) {
             x *= std::sqrt(sigma * sigma + 1);
         }
 

@@ -1619,8 +1619,15 @@ public:
         }
 
         int64_t t0                   = ggml_time_us();
+
+        // scales the initial noise for DDIM and TCD
+        // NOTE: may not be strictly needed, since with the initial
+        // ~14.6 sigma, its value is very close to 1 (~1.002)
+        float ddim_noise_scale       = ((method == DDIM_TRAILING_SAMPLE_METHOD || method == TCD_SAMPLE_METHOD)
+                                           ? std::sqrt(sigmas[0] * sigmas[0] + 1) / sigmas[0]
+                                           : 1.0);
         sd::Tensor<float> x_t        = !noise.empty()
-                                           ? denoiser->noise_scaling(sigmas[0], noise, init_latent)
+                                           ? denoiser->noise_scaling(sigmas[0] * ddim_noise_scale, noise, init_latent)
                                            : init_latent;
         sd::Tensor<float> denoised   = x_t;
         SamplePreviewContext preview = prepare_sample_preview_context();
