@@ -1317,14 +1317,13 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
                          (1.0f - alpha_prod_t / alpha_prod_t_prev);
         float std_dev_t = eta * std::sqrt(variance);
 
-        x = std::sqrt(alpha_prod_t_prev) * pred_original_sample +
-            std::sqrt(1.0f - alpha_prod_t_prev - std::pow(std_dev_t, 2)) * model_output;
+        x = pred_original_sample +
+            std::sqrt((1.0f - alpha_prod_t_prev - std::pow(std_dev_t, 2))/ alpha_prod_t_prev) * model_output;
 
         if (eta > 0) {
-            x += std_dev_t * sd::Tensor<float>::randn_like(x, rng);
+            x+= std_dev_t / std::sqrt(alpha_prod_t_prev) * sd::Tensor<float>::randn_like(x, rng);
         }
 
-        x *= std::sqrt(1 / alpha_prod_t_prev);
     }
     return x;
 }
@@ -1387,15 +1386,14 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
                                                   std::sqrt(beta_prod_t) * model_output) *
                                                  (1.0f / std::sqrt(alpha_prod_t));
 
-        x = std::sqrt(alpha_prod_s) * pred_original_sample +
-            std::sqrt(beta_prod_s) * model_output;
+        x = std::sqrt(alpha_prod_s / alpha_prod_t_prev) * pred_original_sample +
+            std::sqrt(beta_prod_s / alpha_prod_t_prev) * model_output;
 
         if (eta > 0 && sigma_to > 0.0f) {
             x = std::sqrt(alpha_prod_t_prev / alpha_prod_s) * x +
-                std::sqrt(1.0f - alpha_prod_t_prev / alpha_prod_s) * sd::Tensor<float>::randn_like(x, rng);
+                std::sqrt(1.0f / alpha_prod_t_prev - 1.0f / alpha_prod_s) * sd::Tensor<float>::randn_like(x, rng);
         }
 
-        x *= std::sqrt(1 / alpha_prod_t_prev);
     }
     return x;
 }
