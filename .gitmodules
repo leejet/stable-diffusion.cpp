@@ -3,7 +3,7 @@
 	url = https://github.com/ggml-org/ggml.git
 [submodule "examples/server/frontend"]
 	path = examples/server/frontend
-	url = https://github.com/leejet/stable-ui.git
+	url = https://github.com/leejet/sdcpp-webui.git
 [submodule "thirdparty/libwebp"]
 	path = thirdparty/libwebp
 	url = https://github.com/webmproject/libwebp.git
