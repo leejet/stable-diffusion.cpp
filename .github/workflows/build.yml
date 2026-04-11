@@ -21,6 +21,7 @@ on:
         "**/*.c",
         "**/*.cpp",
         "**/*.cu",
+        "examples/server/frontend",
         "examples/server/frontend/**",
       ]
   pull_request:
@@ -35,6 +36,7 @@ on:
         "**/*.c",
         "**/*.cpp",
         "**/*.cu",
+        "examples/server/frontend",
         "examples/server/frontend/**",
       ]
 
