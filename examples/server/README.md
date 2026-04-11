@@ -8,7 +8,7 @@ The server can optionally build the web frontend and embed it into the binary as
 
 Install the following tools:
 
-* **Node.js** ≥ 22.18
+* **Node.js** ≥ 20
   https://nodejs.org/
 
 * **pnpm** ≥ 10
@@ -54,7 +54,7 @@ and embed the generated frontend into the server binary.
 
 ## Frontend Repository
 
-The web frontend is maintained in a **separate repository**, https://github.com/leejet/stable-ui.
+The web frontend is maintained in a **separate repository**, https://github.com/leejet/sdcpp-webui.
 
 If you want to modify the UI or frontend logic, please submit pull requests to the **frontend repository**.
 
