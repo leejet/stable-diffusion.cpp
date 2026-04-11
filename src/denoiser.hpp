@@ -658,32 +658,22 @@ inline float time_snr_shift(float alpha, float t) {
 }
 
 struct DiscreteFlowDenoiser : public Denoiser {
-    float sigmas[TIMESTEPS];
     float shift = 3.0f;
-
-    float sigma_data = 1.0f;
 
     DiscreteFlowDenoiser(float shift = 3.0f) {
         set_shift(shift);
     }
 
-    void set_parameters() {
-        for (int i = 0; i < TIMESTEPS; i++) {
-            sigmas[i] = t_to_sigma(static_cast<float>(i));
-        }
-    }
-
     void set_shift(float shift) {
         this->shift = shift;
-        set_parameters();
     }
 
     float sigma_min() override {
-        return sigmas[0];
+        return t_to_sigma(0);
     }
 
     float sigma_max() override {
-        return sigmas[TIMESTEPS - 1];
+        return t_to_sigma(TIMESTEPS - 1);
     }
 
     float sigma_to_t(float sigma) override {
