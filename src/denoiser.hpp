@@ -1320,7 +1320,7 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
         model_output                   = (x - model_output) * (1.0f / sigma);
 
         float alpha_prod_t      = static_cast<float>(alphas_cumprod[timestep]);
-        float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
+        float alpha_prod_t_prev = prev_timestep >= 0 ? static_cast<float>(alphas_cumprod[prev_timestep]) : 1.0f;
         float beta_prod_t       = 1.0f - alpha_prod_t;
 
         sd::Tensor<float> pred_original_sample = ((x / std::sqrt(sigma * sigma + 1)) -
@@ -1339,10 +1339,7 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
             x += std_dev_t * sd::Tensor<float>::randn_like(x, rng);
         }
 
-        if (prev_timestep >= 0) {
-            // sigma_prev * sigma_prev + 1 = (1 - alpha_prod_t_prev) / alpha_prod_t_prev + 1
-            x *= std::sqrt(1 / alpha_prod_t_prev);
-        }
+        x *= std::sqrt(1 / alpha_prod_t_prev);
     }
     return x;
 }
@@ -1385,7 +1382,7 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
 
         float alpha_prod_t      = static_cast<float>(alphas_cumprod[timestep]);
         float beta_prod_t       = 1.0f - alpha_prod_t;
-        float alpha_prod_t_prev = static_cast<float>(prev_timestep >= 0 ? alphas_cumprod[prev_timestep] : alphas_cumprod[0]);
+        float alpha_prod_t_prev = prev_timestep >= 0 ? static_cast<float>(alphas_cumprod[prev_timestep]) : 1.0f;
         float alpha_prod_s      = static_cast<float>(alphas_cumprod[timestep_s]);
         float beta_prod_s       = 1.0f - alpha_prod_s;
 
@@ -1401,10 +1398,7 @@ static sd::Tensor<float> sample_tcd(denoise_cb_t model,
                 std::sqrt(1.0f - alpha_prod_t_prev / alpha_prod_s) * sd::Tensor<float>::randn_like(x, rng);
         }
 
-        if (prev_timestep >= 0) {
-            // sigma_prev * sigma_prev + 1 = (1 - alpha_prod_t_prev) / alpha_prod_t_prev + 1
-            x *= std::sqrt(1 / alpha_prod_t_prev);
-        }
+        x *= std::sqrt(1 / alpha_prod_t_prev);
     }
     return x;
 }
