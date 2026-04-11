@@ -569,6 +569,7 @@ void write_u32_le(FILE* f, uint32_t val) {
 void write_u16_le(FILE* f, uint16_t val) {
     fwrite(&val, 2, 1, f);
 }
+
 EncodedImageFormat encoded_image_format_from_path(const std::string& path) {
     std::string ext = fs::path(path).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -684,6 +685,7 @@ bool load_sd_image_from_file(sd_image_t* image,
     }
     image->width  = width;
     image->height = height;
+    image->channel = expected_channel;
     return true;
 }
 
