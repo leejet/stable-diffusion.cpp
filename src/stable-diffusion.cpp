@@ -2424,6 +2424,8 @@ enum scheduler_t sd_get_default_scheduler(const sd_ctx_t* sd_ctx, enum sample_me
     }
     if (sample_method == LCM_SAMPLE_METHOD) {
         return LCM_SCHEDULER;
+    } else if (sample_method == DDIM_TRAILING_SAMPLE_METHOD) {
+        return SIMPLE_SCHEDULER;
     }
     return DISCRETE_SCHEDULER;
 }

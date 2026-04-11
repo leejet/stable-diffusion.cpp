@@ -1290,27 +1290,12 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
                                               const std::vector<float>& sigmas,
                                               std::shared_ptr<RNG> rng,
                                               float eta) {
-    float beta_start = 0.00085f;
-    float beta_end   = 0.0120f;
-    std::vector<double> alphas_cumprod(TIMESTEPS);
-    std::vector<double> compvis_sigmas(TIMESTEPS);
-    for (int i = 0; i < TIMESTEPS; i++) {
-        alphas_cumprod[i] =
-            (i == 0 ? 1.0f : alphas_cumprod[i - 1]) *
-            (1.0f -
-             std::pow(sqrtf(beta_start) +
-                          (sqrtf(beta_end) - sqrtf(beta_start)) *
-                              ((float)i / (TIMESTEPS - 1)),
-                      2));
-        compvis_sigmas[i] =
-            std::sqrt((1 - alphas_cumprod[i]) / alphas_cumprod[i]);
-    }
 
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
-        int timestep      = static_cast<int>(roundf(TIMESTEPS - i * ((float)TIMESTEPS / steps))) - 1;
-        int prev_timestep = timestep - TIMESTEPS / steps;
-        float sigma       = static_cast<float>(compvis_sigmas[timestep]);
+
+        float sigma       = sigmas[i];
+        float sigma_to    = sigmas[i + 1];
 
         auto model_output_opt = model(x, sigma, i + 1);
         if (model_output_opt.empty()) {
@@ -1319,8 +1304,8 @@ static sd::Tensor<float> sample_ddim_trailing(denoise_cb_t model,
         sd::Tensor<float> model_output = std::move(model_output_opt);
         model_output                   = (x - model_output) * (1.0f / sigma);
 
-        float alpha_prod_t      = static_cast<float>(alphas_cumprod[timestep]);
-        float alpha_prod_t_prev = prev_timestep >= 0 ? static_cast<float>(alphas_cumprod[prev_timestep]) : 1.0f;
+        float alpha_prod_t      = 1.0f / (sigma * sigma + 1.0f);
+        float alpha_prod_t_prev = 1.0f / (sigma_to * sigma_to + 1.0f);
         float beta_prod_t       = 1.0f - alpha_prod_t;
 
         sd::Tensor<float> pred_original_sample = ((x / std::sqrt(sigma * sigma + 1)) -
