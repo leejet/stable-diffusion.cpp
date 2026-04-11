@@ -15,7 +15,7 @@ API and command-line option may change frequently.***
 
 ## 🔥Important News
 
-* **2026/04/11** 🚀 stable-diffusion.cpp now uses a brand-new embedded web UI.
+* **2026/04/11** 🚀 stable-diffusion.cpp now uses a brand-new embedded web UI.  
   👉 Details: [PR #1408](https://github.com/leejet/stable-diffusion.cpp/pull/1408)
 
 * **2026/01/18** 🚀 stable-diffusion.cpp now supports **FLUX.2-klein**  
