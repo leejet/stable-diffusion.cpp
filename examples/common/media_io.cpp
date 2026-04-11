@@ -683,8 +683,8 @@ bool load_sd_image_from_file(sd_image_t* image,
     if (image->data == nullptr) {
         return false;
     }
-    image->width  = width;
-    image->height = height;
+    image->width   = width;
+    image->height  = height;
     image->channel = expected_channel;
     return true;
 }

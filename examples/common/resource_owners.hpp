@@ -104,8 +104,8 @@ public:
             free(image_.data);
             image_.data = nullptr;
         }
-        image_.width  = 0;
-        image_.height = 0;
+        image_.width   = 0;
+        image_.height  = 0;
         image_.channel = 0;
         return &image_;
     }
