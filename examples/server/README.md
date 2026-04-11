@@ -1,3 +1,33 @@
+# Example
+
+The following example starts `sd-server` with a standalone diffusion model, VAE, and LLM text encoder:
+
+```
+.\bin\Release\sd-server.exe --diffusion-model  ..\models\diffusion_models\z_image_turbo_bf16.safetensors --vae ..\models\vae\ae.sft  --llm ..\models\text_encoders\qwen_3_4b.safetensors --diffusion-fa --offload-to-cpu -v --cfg-scale 1.0
+```
+
+What this example does:
+
+* `--diffusion-model` selects the standalone diffusion model
+* `--vae` selects the VAE decoder
+* `--llm` selects the text encoder / language model used by this pipeline
+* `--diffusion-fa` enables flash attention in the diffusion model
+* `--offload-to-cpu` reduces VRAM pressure by keeping weights in RAM when possible
+* `-v` enables verbose logging
+* `--cfg-scale 1.0` sets the default CFG scale for generation
+
+After the server starts successfully:
+
+* the web UI is available at `http://127.0.0.1:1234/`
+* the native async API is available under `/sdcpp/v1/...`
+* the compatibility APIs are available under `/v1/...` and `/sdapi/v1/...`
+
+If you want to use a different host or port, pass:
+
+```bash
+--listen-ip <ip> --listen-port <port>
+```
+
 # Frontend
 
 ## Build with Frontend
