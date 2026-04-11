@@ -61,6 +61,12 @@ add_executable(${TARGET}
     ../common/log.cpp
     ../common/media_io.cpp
     main.cpp
+    runtime.cpp
+    async_jobs.cpp
+    routes_index.cpp
+    routes_openai.cpp
+    routes_sdapi.cpp
+    routes_sdcpp.cpp
 )
 
 if(HAVE_FRONTEND_BUILD)
