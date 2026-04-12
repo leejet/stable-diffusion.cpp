@@ -1040,7 +1040,8 @@ static sd::Tensor<float> sample_dpmpp_2m_v2(denoise_cb_t model,
 static sd::Tensor<float> sample_lcm(denoise_cb_t model,
                                     sd::Tensor<float> x,
                                     const std::vector<float>& sigmas,
-                                    std::shared_ptr<RNG> rng) {
+                                    std::shared_ptr<RNG> rng,
+                                    bool is_flow_denoiser) {
     int steps = static_cast<int>(sigmas.size()) - 1;
     for (int i = 0; i < steps; i++) {
         auto denoised_opt = model(x, sigmas[i], i + 1);
@@ -1049,6 +1050,9 @@ static sd::Tensor<float> sample_lcm(denoise_cb_t model,
         }
         x = std::move(denoised_opt);
         if (sigmas[i + 1] > 0) {
+            if (is_flow_denoiser) {
+                x *= (1 - sigmas[i + 1]);
+            }
             x += sd::Tensor<float>::randn_like(x, rng) * sigmas[i + 1];
         }
     }
@@ -1437,7 +1441,7 @@ static sd::Tensor<float> sample_k_diffusion(sample_method_t method,
         case DPMPP2Mv2_SAMPLE_METHOD:
             return sample_dpmpp_2m_v2(model, std::move(x), sigmas);
         case LCM_SAMPLE_METHOD:
-            return sample_lcm(model, std::move(x), sigmas, rng);
+            return sample_lcm(model, std::move(x), sigmas, rng, is_flow_denoiser);
         case IPNDM_SAMPLE_METHOD:
             return sample_ipndm(model, std::move(x), sigmas);
         case IPNDM_V_SAMPLE_METHOD:
