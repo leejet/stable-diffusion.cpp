@@ -19,6 +19,7 @@
 #include "common/media_io.h"
 #include "common/resource_owners.hpp"
 #include "image_metadata.h"
+#include "llm.hpp"
 
 namespace fs = std::filesystem;
 
@@ -497,6 +498,15 @@ int main(int argc, const char* argv[]) {
     SDCliParams cli_params;
     SDContextParams ctx_params;
     SDGenerationParams gen_params;
+
+    cli_params.verbose = true;
+    sd_set_log_callback(sd_log_cb, (void*)&cli_params);
+    LLM::GemmaTokenizer tokenizer;
+    auto tokens = tokenizer.tokenize("<html> 一只可爱的小猫");
+    for (auto token : tokens) {
+        LOG_INFO("%d", token);
+    }
+    return 0;
 
     parse_args(argc, argv, cli_params, ctx_params, gen_params);
     sd_set_log_callback(sd_log_cb, (void*)&cli_params);
