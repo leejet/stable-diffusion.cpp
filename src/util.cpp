@@ -409,14 +409,14 @@ void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float 
 
 std::string ltrim(const std::string& s) {
     auto it = std::find_if(s.begin(), s.end(), [](int ch) {
-        return !std::isspace(ch);
+        return !std::isspace(static_cast<unsigned char>(ch));
     });
     return std::string(it, s.end());
 }
 
 std::string rtrim(const std::string& s) {
     auto it = std::find_if(s.rbegin(), s.rend(), [](int ch) {
-        return !std::isspace(ch);
+        return !std::isspace(static_cast<unsigned char>(ch));
     });
     return std::string(s.begin(), it.base());
 }

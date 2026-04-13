@@ -877,12 +877,12 @@ std::vector<std::string> token_split(const std::string& text) {
         // ` ?[^\s\p{L}\p{N}]+[\r\n]*`
         {
             // ` [^\s\p{L}\p{N}]+[\r\n]*`
-            if (cp == U' ' && i + 1 < cps.size() && !isspace(cps[i + 1]) && !is_letter(cps[i + 1]) && !is_number(cps[i + 1])) {
+            if (cp == U' ' && i + 1 < cps.size() && !is_space(cps[i + 1]) && !is_letter(cps[i + 1]) && !is_number(cps[i + 1])) {
                 std::string token = codepoint_to_utf8(cp);
                 token += codepoint_to_utf8(cps[i + 1]);
                 i += 2;
 
-                while (i < cps.size() && !is_letter(cps[i]) && !is_number(cps[i]) && !isspace(cps[i])) {
+                while (i < cps.size() && !is_letter(cps[i]) && !is_number(cps[i]) && !is_space(cps[i])) {
                     token += codepoint_to_utf8(cps[i]);
                     ++i;
                 }
@@ -898,11 +898,11 @@ std::vector<std::string> token_split(const std::string& text) {
 
             // `[^\s\p{L}\p{N}]+[\r\n]*`
             std::string token;
-            if (!is_letter(cps[i]) && !is_number(cps[i]) && !isspace(cps[i])) {
+            if (!is_letter(cps[i]) && !is_number(cps[i]) && !is_space(cps[i])) {
                 std::string token = codepoint_to_utf8(cp);
                 ++i;
 
-                while (i < cps.size() && !is_letter(cps[i]) && !is_number(cps[i]) && !isspace(cps[i])) {
+                while (i < cps.size() && !is_letter(cps[i]) && !is_number(cps[i]) && !is_space(cps[i])) {
                     token += codepoint_to_utf8(cps[i]);
                     ++i;
                 }
