@@ -199,7 +199,13 @@ struct ModelFileData {
     std::string path;
     std::vector<TensorStorage> tensors;
     std::shared_ptr<MmapWrapper> mmapped;
+    std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
     bool is_zip;
+};
+
+struct MmapTensorStore {
+    std::shared_ptr<MmapWrapper> mmapped;
+    std::shared_ptr<struct ggml_backend_buffer> mmbuffer;
 };
 
 class ModelLoader {
@@ -232,6 +238,8 @@ public:
     String2TensorStorage& get_tensor_storage_map() { return tensor_storage_map; }
     void set_wtype_override(ggml_type wtype, std::string tensor_type_rules = "");
     void process_model_files(bool enable_mmap = false);
+    std::vector<MmapTensorStore> mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
+                                              std::set<std::string> ignore_tensors = {});
     bool load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads = 0, bool use_mmap = false);
     bool load_tensors(std::map<std::string, ggml_tensor*>& tensors,
                       std::set<std::string> ignore_tensors = {},

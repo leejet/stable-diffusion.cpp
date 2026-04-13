@@ -108,6 +108,7 @@ static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
 
 class StableDiffusionGGML {
 public:
+    std::vector<MmapTensorStore> mmap_tensor_store;
     ggml_backend_t backend             = nullptr;  // general backend
     ggml_backend_t clip_backend        = nullptr;
     ggml_backend_t control_net_backend = nullptr;
@@ -784,6 +785,16 @@ public:
         if (sd_version_is_ernie_image(version)) {
             ignore_tensors.insert("text_encoders.llm.vision_tower.");
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
+        }
+
+        if (sd_ctx_params->enable_mmap) {
+            if (!(offload_params_to_cpu || ggml_backend_is_cpu(backend))) {
+                LOG_DEBUG("cannot memory-map model weights: only supported with CPU or --offload-to-cpu");
+            } else if (apply_lora_immediately) {
+                LOG_DEBUG("cannot memory-map model weights: only supported with --lora-apply-mode at_runtime");
+            } else {
+                mmap_tensor_store = model_loader.mmap_tensors(tensors, ignore_tensors);
+            }
         }
 
         if (clip_vision) {

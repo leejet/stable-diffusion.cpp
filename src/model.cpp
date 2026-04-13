@@ -767,20 +767,27 @@ void ModelLoader::process_model_files(bool enable_mmap) {
             }
         }
 
-        std::unique_ptr<MmapWrapper> mmapped;
+        ModelFileData fdata = {};
+        fdata.path    = file_path;
+        fdata.is_zip  = is_zip;
+        fdata.tensors = std::move(file_tensors);
+
         if (enable_mmap && !is_zip) {
             LOG_DEBUG("using mmap for I/O");
-            mmapped = MmapWrapper::create(file_path);
-            if (!mmapped) {
+            std::unique_ptr<MmapWrapper> mmapped = MmapWrapper::create(file_path);
+            if (mmapped) {
+                uint8_t * mmap_data = const_cast<uint8_t*>(mmapped->data());
+                ggml_backend_buffer_t buf_mmap = ggml_backend_cpu_buffer_from_ptr(mmap_data, mmapped->size());
+                if (buf_mmap) {
+                    fdata.mmbuffer = std::shared_ptr<struct ggml_backend_buffer>(buf_mmap, ggml_backend_buffer_free);
+                } else {
+                    LOG_WARN("mmap: failed to create backend buffer for file %s", fdata.path.c_str());
+                }
+                fdata.mmapped = std::shared_ptr<MmapWrapper>(std::move(mmapped));
+            } else {
                 LOG_WARN("failed to memory-map '%s'", file_path.c_str());
             }
         }
-
-        ModelFileData fdata;
-        fdata.path    = file_path;
-        fdata.mmapped = std::shared_ptr<MmapWrapper>(std::move(mmapped));
-        fdata.tensors = std::move(file_tensors);
-        fdata.is_zip  = is_zip;
 
         file_data.push_back(std::move(fdata));
     }
@@ -791,6 +798,91 @@ void ModelLoader::process_model_files(bool enable_mmap) {
     int64_t process_time_ms = end_time - start_time;
 
     LOG_INFO("model files processing completed in %.2fs", process_time_ms / 1000.f);
+}
+
+std::vector<MmapTensorStore> ModelLoader::mmap_tensors(std::map<std::string, ggml_tensor*>& tensors,
+                                                       std::set<std::string> ignore_tensors)
+{
+    process_model_files(true);
+
+    std::vector<MmapTensorStore> result;
+    uint64_t mapped_bytes = 0;
+    size_t mapped_tensors = 0;
+
+    LOG_DEBUG("memory-mapping tensors...");
+
+    int64_t t_start = ggml_time_ms();
+
+    for (auto& fdata : file_data) {
+        if (!fdata.mmbuffer) continue;
+
+        const std::vector<TensorStorage>& file_tensors = fdata.tensors;
+
+        size_t file_mapped_bytes   = 0;
+        size_t file_mapped_tensors = 0;
+
+        for (const auto& tensor_storage : file_tensors) {
+            const std::string& name = tensor_storage.name;
+
+            bool is_ignored = false;
+            for (const auto& ignore_prefix : ignore_tensors) {
+                if (starts_with(name, ignore_prefix)) {
+                    is_ignored = true;
+                    break;
+                }
+            }
+            if (is_ignored)
+                continue;
+
+            auto it = tensors.find(name);
+            if (it == tensors.end())
+                continue;
+
+            ggml_tensor* dst_tensor = it->second;
+            if (dst_tensor == nullptr)
+                continue;
+
+            if (tensor_storage.type != dst_tensor->type)
+                continue;
+
+            size_t tensor_size   = tensor_storage.nbytes();
+            size_t tensor_offset = tensor_storage.offset;
+
+            if (tensor_storage.ne[0] != dst_tensor->ne[0] ||
+                tensor_storage.ne[1] != dst_tensor->ne[1] ||
+                tensor_storage.ne[2] != dst_tensor->ne[2] ||
+                tensor_storage.ne[3] != dst_tensor->ne[3] ||
+                tensor_size          != ggml_nbytes(dst_tensor)) {
+                // let load_tensors worry about this
+                continue;
+            }
+
+            ggml_backend_buffer_t buf_mmap = fdata.mmbuffer.get();
+            uint8_t * mmap_data = static_cast<uint8_t*>(ggml_backend_buffer_get_base(buf_mmap));
+            dst_tensor->buffer = buf_mmap;
+            dst_tensor->data   = mmap_data + tensor_offset;
+
+            file_mapped_bytes += tensor_size;
+            file_mapped_tensors++;
+        }
+
+        if (file_mapped_bytes > 0) {
+            mapped_tensors += file_mapped_tensors;
+            mapped_bytes   += file_mapped_bytes;
+            result.push_back({fdata.mmapped, fdata.mmbuffer});
+        }
+    }
+
+    int64_t t_end = ggml_time_ms();
+    int64_t duration_ms = t_end - t_start;
+
+    LOG_INFO("memory-mapped %zu tensors in %zu files (%.2f MB), taking %.2fs",
+             mapped_tensors,
+             result.size(),
+             mapped_bytes / (1024.0 * 1024.0),
+             duration_ms / 1000.0);
+
+    return result;
 }
 
 bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool enable_mmap) {
@@ -882,6 +974,11 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                     if (dst_tensor == nullptr) {
                         t1 = ggml_time_ms();
                         read_time_ms.fetch_add(t1 - t0);
+                        continue;
+                    }
+
+                    // skip mmapped tensors
+                    if (dst_tensor->buffer != nullptr && dst_tensor->buffer == fdata.mmbuffer.get()) {
                         continue;
                     }
 
