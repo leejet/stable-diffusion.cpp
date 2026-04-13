@@ -471,7 +471,6 @@ public:
                                                                              offload_params_to_cpu,
                                                                              tensor_storage_map);
                     clip_vision->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                    clip_vision->alloc_params_buffer();
                     clip_vision->get_param_tensors(tensors);
                 }
             } else if (sd_version_is_qwen_image(version)) {
@@ -548,11 +547,9 @@ public:
             }
 
             cond_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-            cond_stage_model->alloc_params_buffer();
             cond_stage_model->get_param_tensors(tensors);
 
             diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-            diffusion_model->alloc_params_buffer();
             diffusion_model->get_param_tensors(tensors);
 
             if (sd_version_is_unet_edit(version)) {
@@ -561,7 +558,6 @@ public:
 
             if (high_noise_diffusion_model) {
                 high_noise_diffusion_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                high_noise_diffusion_model->alloc_params_buffer();
                 high_noise_diffusion_model->get_param_tensors(tensors);
             }
 
@@ -634,19 +630,16 @@ public:
                 LOG_INFO("using TAE for encoding / decoding");
                 first_stage_model = create_tae();
                 first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "tae");
             } else {
                 LOG_INFO("using VAE for encoding / decoding");
                 first_stage_model = create_vae();
                 first_stage_model->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                first_stage_model->alloc_params_buffer();
                 first_stage_model->get_param_tensors(tensors, "first_stage_model");
                 if (use_tae && tae_preview_only) {
                     LOG_INFO("using TAE for preview");
                     preview_vae = create_tae();
                     preview_vae->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                    preview_vae->alloc_params_buffer();
                     preview_vae->get_param_tensors(tensors, "tae");
                 }
             }
@@ -712,10 +705,6 @@ public:
                 }
             }
             if (use_pmid) {
-                if (!pmid_model->alloc_params_buffer()) {
-                    LOG_ERROR(" pmid model params buffer allocation failed");
-                    return false;
-                }
                 pmid_model->get_param_tensors(tensors, "pmid");
             }
 
@@ -796,6 +785,33 @@ public:
             ignore_tensors.insert("text_encoders.llm.vision_tower.");
             ignore_tensors.insert("text_encoders.llm.multi_modal_projector.");
         }
+
+        if (clip_vision) {
+            clip_vision->alloc_params_buffer();
+        }
+        if (cond_stage_model) {
+            cond_stage_model->alloc_params_buffer();
+        }
+        if (diffusion_model) {
+            diffusion_model->alloc_params_buffer();
+        }
+        if (high_noise_diffusion_model) {
+            high_noise_diffusion_model->alloc_params_buffer();
+        }
+        if (first_stage_model) {
+            first_stage_model->alloc_params_buffer();
+        }
+        if (preview_vae) {
+            preview_vae->alloc_params_buffer();
+        }
+        if (use_pmid && pmid_model) {
+            if (!pmid_model->alloc_params_buffer()) {
+                LOG_ERROR(" pmid model params buffer allocation failed");
+                ggml_free(ctx);
+                return false;
+            }
+        }
+
         bool success = model_loader.load_tensors(tensors, ignore_tensors, n_threads, sd_ctx_params->enable_mmap);
         if (!success) {
             LOG_ERROR("load tensors from model loader failed");
