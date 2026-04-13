@@ -730,16 +730,11 @@ void ModelLoader::set_wtype_override(ggml_type wtype, std::string tensor_type_ru
     }
 }
 
-bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool enable_mmap) {
-    int64_t process_time_ms = 0;
-    std::atomic<int64_t> read_time_ms(0);
-    std::atomic<int64_t> memcpy_time_ms(0);
-    std::atomic<int64_t> copy_to_backend_time_ms(0);
-    std::atomic<int64_t> convert_time_ms(0);
-    std::atomic<uint64_t> bytes_processed(0);
+void ModelLoader::process_model_files(bool enable_mmap) {
 
-    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : sd_get_num_physical_cores();
-    LOG_DEBUG("using %d threads for model loading", num_threads_to_use);
+    if (model_files_processed) {
+        return;
+    }
 
     int64_t start_time = ggml_time_ms();
 
@@ -751,22 +746,13 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
         processed_tensor_storages.push_back(tensor_storage);
     }
 
-    process_time_ms = ggml_time_ms() - start_time;
-
-    bool success                          = true;
-    size_t total_tensors_processed        = 0;
-    const size_t total_tensors_to_process = processed_tensor_storages.size();
-    const int64_t t_start                 = ggml_time_ms();
-    int last_n_threads                    = 1;
-
     for (size_t file_index = 0; file_index < file_paths_.size(); file_index++) {
         std::string file_path = file_paths_[file_index];
-        LOG_DEBUG("loading tensors from %s", file_path.c_str());
 
-        std::vector<const TensorStorage*> file_tensors;
+        std::vector<TensorStorage> file_tensors;
         for (const auto& ts : processed_tensor_storages) {
             if (ts.file_index == file_index) {
-                file_tensors.push_back(&ts);
+                file_tensors.push_back(ts);
             }
         }
         if (file_tensors.empty()) {
@@ -775,7 +761,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
 
         bool is_zip = false;
         for (auto const& ts : file_tensors) {
-            if (ts->index_in_zip >= 0) {
+            if (ts.index_in_zip >= 0) {
                 is_zip = true;
                 break;
             }
@@ -789,6 +775,58 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                 LOG_WARN("failed to memory-map '%s'", file_path.c_str());
             }
         }
+
+        ModelFileData fdata;
+        fdata.path    = file_path;
+        fdata.mmapped = std::shared_ptr<MmapWrapper>(std::move(mmapped));
+        fdata.tensors = std::move(file_tensors);
+        fdata.is_zip  = is_zip;
+
+        file_data.push_back(std::move(fdata));
+    }
+
+    model_files_processed = true;
+
+    int64_t end_time = ggml_time_ms();
+    int64_t process_time_ms = end_time - start_time;
+
+    LOG_INFO("model files processing completed in %.2fs", process_time_ms / 1000.f);
+}
+
+bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_threads_p, bool enable_mmap) {
+
+    process_model_files(enable_mmap);
+
+    std::atomic<int64_t> read_time_ms(0);
+    std::atomic<int64_t> memcpy_time_ms(0);
+    std::atomic<int64_t> copy_to_backend_time_ms(0);
+    std::atomic<int64_t> convert_time_ms(0);
+    std::atomic<uint64_t> bytes_processed(0);
+
+    int num_threads_to_use = n_threads_p > 0 ? n_threads_p : sd_get_num_physical_cores();
+    LOG_DEBUG("using %d threads for model loading", num_threads_to_use);
+
+    int64_t start_time = ggml_time_ms();
+
+    size_t total_tensors_to_process = 0;
+    for (const auto& fdata : file_data) {
+        total_tensors_to_process += fdata.tensors.size();
+    }
+
+    bool success                          = true;
+    size_t total_tensors_processed        = 0;
+    const int64_t t_start                 = start_time;
+    int last_n_threads                    = 1;
+
+    for (auto & fdata : file_data) {
+        const std::string & file_path = fdata.path;
+        LOG_DEBUG("loading tensors from %s", file_path.c_str());
+
+        const std::vector<TensorStorage> & file_tensors = fdata.tensors;
+
+        bool is_zip = fdata.is_zip;
+
+        std::shared_ptr<MmapWrapper> mmapped = fdata.mmapped;
 
         int n_threads = is_zip ? 1 : std::min(num_threads_to_use, (int)file_tensors.size());
         if (n_threads < 1) {
@@ -830,7 +868,7 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
                         break;
                     }
 
-                    const TensorStorage& tensor_storage = *file_tensors[idx];
+                    const TensorStorage& tensor_storage = file_tensors[idx];
                     ggml_tensor* dst_tensor             = nullptr;
 
                     t0 = ggml_time_ms();
@@ -990,9 +1028,8 @@ bool ModelLoader::load_tensors(on_new_tensor_cb_t on_new_tensor_cb, int n_thread
     }
 
     int64_t end_time = ggml_time_ms();
-    LOG_INFO("loading tensors completed, taking %.2fs (process: %.2fs, read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
+    LOG_INFO("loading tensors completed, taking %.2fs (read: %.2fs, memcpy: %.2fs, convert: %.2fs, copy_to_backend: %.2fs)",
              (end_time - start_time) / 1000.f,
-             process_time_ms / 1000.f,
              (read_time_ms.load() / (float)last_n_threads) / 1000.f,
              (memcpy_time_ms.load() / (float)last_n_threads) / 1000.f,
              (convert_time_ms.load() / (float)last_n_threads) / 1000.f,
